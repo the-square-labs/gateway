@@ -259,8 +259,8 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
           />
         </SettingsRow>
         <SettingsRow
-          label="Nginx node"
-          description="Online nginx node that serves the public status page"
+          label="Ingress node"
+          description="Online Ingress node that serves the public status page"
         >
           <Select
             value={config.nodeId ?? ""}
@@ -268,7 +268,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
             onValueChange={(nodeId) => setConfig((prev) => ({ ...prev, nodeId }))}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select an online nginx node" />
+              <SelectValue placeholder="Select an online Ingress node" />
             </SelectTrigger>
             <SelectContent>
               {onlineNginxNodes.map((node) => (

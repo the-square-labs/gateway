@@ -49,12 +49,23 @@ type ProxyHostRow = typeof proxyHosts.$inferSelect;
 type AssetRow = typeof nginxCertificateAssets.$inferSelect;
 
 type DistributionStatus = {
-  status: 'ready' | 'pending' | 'failed' | 'daemon_update_required';
+  status: 'not_deployed' | 'ready' | 'pending' | 'failed' | 'daemon_update_required';
   replicaCount: number;
   readyReplicaCount: number;
   lastVerifiedAt: Date | null;
   error: string | null;
+  replicas: Array<{
+    nodeId: string;
+    nodeName: string;
+    nodeSlug: string | null;
+    status: 'ready' | 'pending' | 'failed' | 'daemon_update_required';
+    lastVerifiedAt: Date | null;
+    error: string | null;
+  }>;
 };
+
+type ReplicaRow = typeof nginxCertificateReplicas.$inferSelect;
+type ReplicaNode = Pick<typeof nodes.$inferSelect, 'id' | 'hostname' | 'displayName' | 'slug'>;
 
 function daemonCertId(reference: CertificateReference): string {
   return reference.type === 'internal' ? `internal-${reference.id}` : reference.id;
@@ -116,6 +127,10 @@ function nodeHasDistributionCapability(capabilities: unknown): boolean {
 
 function stableNodeOrder(nodeIds: Array<string | null | undefined>): string[] {
   return [...new Set(nodeIds.filter((id): id is string => Boolean(id)))].sort();
+}
+
+function deployedReplicasOnly<T extends Pick<ReplicaRow, 'cleanupAfter' | 'status'>>(replicas: T[]): T[] {
+  return replicas.filter((replica) => replica.cleanupAfter === null && replica.status !== 'cleanup_pending');
 }
 
 /**
@@ -399,8 +414,14 @@ export class NginxCertificateDistributionService {
       asset = await this.upsertGatewayAsset(reference);
     }
     if (asset.format === 'legacy' || asset.state !== 'ready' || !asset.encryptedMaterial || !asset.version) {
-      const fallbackNodeId = await this.nodeDispatch.resolveNodeId(null);
-      const sourceNodeIds = await this.legacySourceNodeIds(reference, fallbackNodeId);
+      const sourceNodeIds = await this.legacySourceNodeIds(reference);
+      if (sourceNodeIds.length === 0) {
+        throw new AppError(
+          409,
+          'NGINX_TLS_LEGACY_SOURCE_UNAVAILABLE',
+          'No assigned Nginx node can provide the legacy certificate material'
+        );
+      }
       asset = await this.importLegacyAsset(reference, asset, sourceNodeIds[0]!);
     }
     this.emitReferenceChanged(reference);
@@ -427,7 +448,7 @@ export class NginxCertificateDistributionService {
       ...status,
       status: replica ? this.uiStatus(replica.status) : status.status,
       lastVerifiedAt: replica?.lastVerifiedAt ?? status.lastVerifiedAt,
-      error: replica?.lastError ?? status.error,
+      error: replica ? replica.lastError : status.error,
     };
   }
 
@@ -446,11 +467,16 @@ export class NginxCertificateDistributionService {
           ),
         })
       : [];
+    const replicaNodes = await this.getReplicaNodes(replicas);
     for (const certId of certIds) {
       const asset = byReference.get(certId);
       result.set(
         certId,
-        this.aggregateStatus(asset, asset ? replicas.filter((replica) => replica.assetId === asset.id) : [])
+        this.aggregateStatus(
+          asset,
+          asset ? replicas.filter((replica) => replica.assetId === asset.id) : [],
+          replicaNodes
+        )
       );
     }
     return result;
@@ -764,7 +790,7 @@ export class NginxCertificateDistributionService {
     );
   }
 
-  private async legacySourceNodeIds(reference: CertificateReference, targetNodeId: string): Promise<string[]> {
+  private async legacySourceNodeIds(reference: CertificateReference, targetNodeId?: string): Promise<string[]> {
     const rows = await this.db
       .select({ nodeId: proxyHosts.nodeId })
       .from(proxyHosts)
@@ -966,36 +992,60 @@ export class NginxCertificateDistributionService {
 
   private async getStatusForReference(reference: CertificateReference): Promise<DistributionStatus> {
     const asset = await this.findAsset(reference);
-    if (!asset) return { status: 'pending', replicaCount: 0, readyReplicaCount: 0, lastVerifiedAt: null, error: null };
+    if (!asset) {
+      return {
+        status: 'not_deployed',
+        replicaCount: 0,
+        readyReplicaCount: 0,
+        lastVerifiedAt: null,
+        error: null,
+        replicas: [],
+      };
+    }
     const replicas = await this.db.query.nginxCertificateReplicas.findMany({
       where: eq(nginxCertificateReplicas.assetId, asset.id),
     });
-    return this.aggregateStatus(asset, replicas);
+    return this.aggregateStatus(asset, replicas, await this.getReplicaNodes(replicas));
   }
 
   private aggregateStatus(
     asset: AssetRow | undefined,
-    replicas: Array<typeof nginxCertificateReplicas.$inferSelect>
+    replicas: ReplicaRow[],
+    replicaNodes: Map<string, ReplicaNode> = new Map()
   ): DistributionStatus {
-    const sorted = [...replicas].sort(
+    const deployedReplicas = deployedReplicasOnly(replicas);
+    const sorted = [...deployedReplicas].sort(
       (left, right) => (right.lastVerifiedAt?.getTime() ?? 0) - (left.lastVerifiedAt?.getTime() ?? 0)
     );
     const firstError = sorted.find((replica) => replica.lastError)?.lastError ?? asset?.migrationError ?? null;
-    const status = replicas.some((replica) => replica.status === 'failed')
+    const status = deployedReplicas.some((replica) => replica.status === 'failed')
       ? 'failed'
-      : replicas.some((replica) => replica.status === 'daemon_update_required')
+      : deployedReplicas.some((replica) => replica.status === 'daemon_update_required')
         ? 'daemon_update_required'
         : asset?.state === 'migration_failed'
           ? 'failed'
-          : replicas.length > 0 && replicas.every((replica) => replica.status === 'ready')
-            ? 'ready'
-            : 'pending';
+          : deployedReplicas.length === 0
+            ? 'not_deployed'
+            : deployedReplicas.every((replica) => replica.status === 'ready')
+              ? 'ready'
+              : 'pending';
     return {
       status,
-      replicaCount: replicas.length,
-      readyReplicaCount: replicas.filter((replica) => replica.status === 'ready').length,
+      replicaCount: deployedReplicas.length,
+      readyReplicaCount: deployedReplicas.filter((replica) => replica.status === 'ready').length,
       lastVerifiedAt: sorted[0]?.lastVerifiedAt ?? null,
       error: firstError,
+      replicas: deployedReplicas.map((replica) => {
+        const node = replicaNodes.get(replica.nodeId);
+        return {
+          nodeId: replica.nodeId,
+          nodeName: node?.displayName || node?.hostname || replica.nodeId,
+          nodeSlug: node?.slug ?? null,
+          status: this.uiStatus(replica.status) as 'ready' | 'pending' | 'failed' | 'daemon_update_required',
+          lastVerifiedAt: replica.lastVerifiedAt,
+          error: replica.lastError,
+        };
+      }),
     };
   }
 
@@ -1003,7 +1053,18 @@ export class NginxCertificateDistributionService {
     if (status === 'daemon_update_required') return 'daemon_update_required';
     if (status === 'failed') return 'failed';
     if (status === 'ready') return 'ready';
+    if (status === 'cleanup_pending') return 'not_deployed';
     return 'pending';
+  }
+
+  private async getReplicaNodes(replicas: ReplicaRow[]): Promise<Map<string, ReplicaNode>> {
+    const nodeIds = [...new Set(replicas.map((replica) => replica.nodeId))];
+    if (nodeIds.length === 0) return new Map();
+    const rows = await this.db.query.nodes.findMany({
+      where: inArray(nodes.id, nodeIds),
+      columns: { id: true, hostname: true, displayName: true, slug: true },
+    });
+    return new Map(rows.map((node) => [node.id, node]));
   }
 
   private parseLegacyExport(data: Buffer, certId: string) {
@@ -1072,4 +1133,5 @@ export const __testOnly = {
   nodeHasDistributionCapability,
   safeError,
   stableNodeOrder,
+  deployedReplicasOnly,
 };

@@ -30,7 +30,7 @@ const prompts: PromptDefinition[] = [
     title: 'Investigate service outage',
     description: 'Triage a service outage using Gateway health, node, Docker, logging, and status data.',
     requiredScopes: ['proxy:view', 'nodes:details', 'docker:containers:view', 'logs:read', 'status-page:view'],
-    text: 'Investigate the reported service outage. Start by reading the Gateway overview, then inspect relevant proxy hosts, nodes, Docker containers, logs, and status page incidents allowed by this token. Summarize likely impact, evidence, and the next safest operator action without assuming permissions you do not have.',
+    text: 'Investigate the reported service outage. Start by reading the Gateway overview, then inspect relevant ingress routes, their nginx node placement, Docker targets, logs, and status page incidents allowed by this token. Summarize likely impact, evidence, and the next safest operator action without assuming permissions you do not have.',
   },
   {
     name: 'rollout-container-image',
@@ -55,17 +55,17 @@ const prompts: PromptDefinition[] = [
   },
   {
     name: 'provision-proxy-host',
-    title: 'Provision proxy host',
-    description: 'Guide reverse proxy provisioning with certificate and node checks.',
+    title: 'Provision ingress route',
+    description: 'Guide route provisioning with domain affinity, target, certificate, and ingress-node checks.',
     requiredScopes: ['proxy:create', 'proxy:view'],
-    text: 'Guide provisioning a reverse proxy host. Verify domain names, target upstream, node placement, SSL requirements, existing certificates, access list needs, and health check settings. Do not invent hostnames, ports, or certificate IDs; request missing operator-specific values.',
+    text: 'Guide provisioning an ingress route through the existing proxy-host tools. Verify that each registered domain is assigned to the selected nginx ingress node, then verify the target upstream, TLS requirements, existing certificates, access list needs, and health check settings. Do not invent hostnames, ports, node IDs, or certificate IDs; request missing operator-specific values.',
   },
   {
     name: 'renew-or-debug-certificate',
     title: 'Renew or debug certificate',
     description: 'Troubleshoot expiring or failed SSL certificate renewal.',
     requiredScopes: ['ssl:cert:view', 'ssl:cert:issue', 'pki:cert:view'],
-    text: 'Troubleshoot certificate renewal. Read expiring certificates and related proxy usage, distinguish ACME SSL certificates from internal PKI certificates, verify domain coverage and challenge assumptions, and recommend renewal or replacement steps allowed by this token.',
+    text: 'Troubleshoot certificate renewal. Read expiring certificates and related route usage, distinguish ACME SSL certificates from internal PKI certificates, verify domain coverage and challenge assumptions, and recommend renewal or replacement steps allowed by this token.',
   },
   {
     name: 'plan-managed-database-access',

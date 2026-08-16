@@ -99,6 +99,17 @@ describe('nodesRoutes list access', () => {
     });
   });
 
+  it('allows a resource-scoped route creator to discover only its Ingress node', async () => {
+    mocks.scopes = ['proxy:create:ingress-1'];
+
+    const response = await createApp().request('/?type=nginx&limit=100');
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'nginx', limit: 100 }), {
+      allowedIds: ['ingress-1'],
+    });
+  });
+
   it('keeps safe Docker runtime metadata in compact node discovery rows', async () => {
     mocks.scopes = ['docker:containers:view'];
     mocks.nodesService.list.mockResolvedValue({
@@ -217,5 +228,47 @@ describe('nodesRoutes service address access', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: 'database.internal' }, 'user-1');
+  });
+
+  it('requires node config edit access for Nginx service address changes', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`];
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAddress: '8.8.8.8' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
+  });
+
+  it('allows Nginx service address changes with node config edit access', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAddress: '8.8.8.8' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: '8.8.8.8' }, 'user-1');
+  });
+
+  it('requires domain edit access before confirming assigned DNS target changes', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAddress: '8.8.8.8', confirmDomainDnsUpdate: true }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
   });
 });

@@ -44,7 +44,7 @@ const typeOptions: { value: CertificateType | "all"; label: string }[] = [
 
 export function Certificates() {
   const navigate = useNavigate();
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
   const showSystemCertificates = canViewSystemCertificates && showSystemCertificatePreference;
@@ -69,7 +69,8 @@ export function Certificates() {
   useEffect(() => {
     void showSystemCertificates;
     fetchCertificates();
-  }, [fetchCertificates, showSystemCertificates]);
+    if (hasScopedAccess("pki:cert:issue")) fetchCAs();
+  }, [fetchCAs, fetchCertificates, hasScopedAccess, showSystemCertificates]);
 
   useRealtime("cert.changed", () => {
     fetchCertificates();
@@ -182,7 +183,7 @@ export function Certificates() {
           </div>
           <ResponsiveHeaderActions
             actions={
-              hasScope("pki:cert:issue")
+              hasScopedAccess("pki:cert:issue")
                 ? [
                     {
                       label: "Issue Certificate",
@@ -193,7 +194,7 @@ export function Certificates() {
                 : []
             }
           >
-            {hasScope("pki:cert:issue") && (
+            {hasScopedAccess("pki:cert:issue") && (
               <Button onClick={() => setIssueDialogOpen(true)}>
                 <Plus className="h-4 w-4" />
                 Issue Certificate
@@ -298,7 +299,7 @@ export function Certificates() {
         ) : (
           <EmptyState
             message="No certificates."
-            {...(hasScope("pki:cert:issue")
+            {...(hasScopedAccess("pki:cert:issue")
               ? { actionLabel: "Issue one", onAction: () => setIssueDialogOpen(true) }
               : {})}
             hasActiveFilters={hasActiveFilters}

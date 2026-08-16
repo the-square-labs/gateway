@@ -1,6 +1,6 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
-import { requireScope } from '@/modules/auth/auth.middleware.js';
+import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   cancelDockerMigrationRoute,
@@ -33,20 +33,20 @@ export function registerDockerMigrationRoutes(router: OpenAPIHono<AppEnv>) {
     return c.json({ data }, 202);
   });
 
-  router.openapi({ ...listDockerMigrationsRoute, middleware: requireScope('docker:tasks') }, async (c) => {
+  router.openapi({ ...listDockerMigrationsRoute, middleware: requireScopeBase('docker:tasks') }, async (c) => {
     const query = DockerMigrationListQuerySchema.parse(c.req.query());
     const data = await container.resolve(DockerMigrationService).list(c.get('effectiveScopes') ?? [], query);
     return c.json({ data });
   });
 
-  router.openapi({ ...getDockerMigrationRoute, middleware: requireScope('docker:tasks') }, async (c) => {
+  router.openapi({ ...getDockerMigrationRoute, middleware: requireScopeBase('docker:tasks') }, async (c) => {
     const data = await container
       .resolve(DockerMigrationService)
       .get(c.req.param('id')!, c.get('effectiveScopes') ?? []);
     return c.json({ data });
   });
 
-  router.openapi({ ...cancelDockerMigrationRoute, middleware: requireScope('docker:tasks:manage') }, async (c) => {
+  router.openapi({ ...cancelDockerMigrationRoute, middleware: requireScopeBase('docker:tasks:manage') }, async (c) => {
     const data = await container
       .resolve(DockerMigrationService)
       .cancel(c.req.param('id')!, c.get('user')!.id, c.get('effectiveScopes') ?? []);
@@ -54,7 +54,7 @@ export function registerDockerMigrationRoutes(router: OpenAPIHono<AppEnv>) {
   });
 
   router.openapi(
-    { ...retryDockerMigrationCleanupRoute, middleware: requireScope('docker:tasks:manage') },
+    { ...retryDockerMigrationCleanupRoute, middleware: requireScopeBase('docker:tasks:manage') },
     async (c) => {
       const data = await container
         .resolve(DockerMigrationService)

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import type { CertificateType, KeyAlgorithm, Template } from "@/types";
 
@@ -38,6 +39,7 @@ export function CertificateIssueDialog({
   onSuccess,
 }: CertificateIssueDialogProps) {
   const { cas } = useCAStore();
+  const hasScope = useAuthStore((state) => state.hasScope);
   const [step, setStep] = useState(1);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [isIssuing, setIsIssuing] = useState(false);
@@ -128,7 +130,12 @@ export function CertificateIssueDialog({
     }
   };
 
-  const activeCAs = (cas || []).filter((ca) => ca.status === "active" && !ca.isSystem);
+  const activeCAs = (cas || []).filter(
+    (ca) =>
+      ca.status === "active" &&
+      !ca.isSystem &&
+      (hasScope("pki:cert:issue") || hasScope(`pki:cert:issue:${ca.id}`))
+  );
   const sansRequired = type === "tls-server" || type === "email";
   const step2Valid =
     commonName.trim() !== "" &&

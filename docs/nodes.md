@@ -8,12 +8,12 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 
 | Type | Daemon | Purpose |
 |------|--------|---------|
-| nginx | `nginx-daemon` | Reverse proxy management for host-native nginx. |
+| nginx | `nginx-daemon` | Public ingress, routes, TLS termination, access lists, configuration, logs, and stats for host-native nginx. |
 | docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, portable and registry-backed `.gwca` archives, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
 | databases | `docker-daemon` | Gateway-managed Postgres, Redis, and ClickHouse instances only; generic workloads are rejected. |
 | monitoring | `monitoring-daemon` | Metrics-only host monitoring without nginx or Docker control. |
 
-Use a monitoring node when you want host metrics but do not want to grant Gateway proxy or Docker management on that host.
+Use a monitoring node when you want host metrics but do not want to grant Gateway ingress or Docker management on that host.
 
 ## Host Resource Sizing
 
@@ -126,9 +126,9 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-da
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT> --nginx-mode integrate
 ```
 
-Use `managed` for fresh proxy hosts where Gateway should own nginx. Use `integrate` when nginx is already used by other workloads on the same host.
+Use `managed` for fresh ingress nodes where Gateway should own nginx. Use `integrate` when nginx is already used by other workloads on the same host.
 
-Gateway proxy hosts require nginx `1.25.1` or newer. On a fresh host, the installer always uses the nginx.org stable package. When it detects an older existing nginx, it asks before upgrading it; declining stops the installation before Gateway changes the nginx configuration or enrolls the daemon. Non-interactive installation refuses an unsupported existing nginx because it cannot ask for that approval.
+Gateway routes require nginx `1.25.1` or newer. On a fresh host, the installer always uses the nginx.org stable package. When it detects an older existing nginx, it asks before upgrading it; declining stops the installation before Gateway changes the nginx configuration or enrolls the daemon. Non-interactive installation refuses an unsupported existing nginx because it cannot ask for that approval.
 
 ## Enrollment Flow
 

@@ -1,6 +1,5 @@
 import {
   Download,
-  EllipsisVertical,
   Folder,
   Save,
   Settings,
@@ -27,12 +26,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -537,37 +530,29 @@ export function DockerVolumeDetail({
                   Rename
                 </Button>
               )}
+              {canRenameVolume && canDeleteVolume && isAnonymousVolume && (
+                <Button
+                  variant="outline"
+                  onClick={handleToggleCleanupProtection}
+                  disabled={isUsed || unavailable}
+                >
+                  {isCleanupProtected ? (
+                    <ShieldOff className="h-4 w-4" />
+                  ) : (
+                    <ShieldCheck className="h-4 w-4" />
+                  )}
+                  {isCleanupProtected ? "Unprotect from cleanup" : "Protect from cleanup"}
+                </Button>
+              )}
               {canDeleteVolume && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon" disabled={actionLoading || unavailable}>
-                      <EllipsisVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    {canRenameVolume && isAnonymousVolume && (
-                      <DropdownMenuItem
-                        onClick={handleToggleCleanupProtection}
-                        disabled={isUsed || unavailable}
-                      >
-                        {isCleanupProtected ? (
-                          <ShieldOff className="h-3.5 w-3.5 mr-2" />
-                        ) : (
-                          <ShieldCheck className="h-3.5 w-3.5 mr-2" />
-                        )}
-                        {isCleanupProtected ? "Unprotect from cleanup" : "Protect from cleanup"}
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem
-                      onClick={handleRemove}
-                      disabled={isUsed || unavailable}
-                      className="text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
-                      Remove
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <Button
+                  variant="destructive"
+                  onClick={handleRemove}
+                  disabled={actionLoading || isUsed || unavailable}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove
+                </Button>
               )}
             </ResponsiveHeaderActions>
           </div>

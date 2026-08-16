@@ -1,10 +1,5 @@
 import { create } from "zustand";
 import { applyForcedGatewayUpdateStatus } from "@/lib/dev-force-updates";
-import {
-  isGatewayUpdateTargetVersion,
-  publishGatewayReload,
-  reloadGatewayClient,
-} from "@/lib/gateway-update-reload";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import type { UpdateStatus } from "@/types";
@@ -20,7 +15,7 @@ interface UpdateState {
   clearUpdating: () => void;
 }
 
-export const useUpdateStore = create<UpdateState>()((set, get) => ({
+export const useUpdateStore = create<UpdateState>()((set) => ({
   status: null,
   isChecking: false,
   isUpdating: false,
@@ -53,31 +48,6 @@ export const useUpdateStore = create<UpdateState>()((set, get) => ({
     try {
       useAppStatusStore.getState().setGatewayUpdatingActive(true, version);
       await api.triggerUpdate(version);
-      // Poll for completion
-      const currentVersion = get().status?.currentVersion;
-      const poll = setInterval(async () => {
-        try {
-          const status = await api.getVersionInfo();
-          if (
-            (currentVersion && status.currentVersion !== currentVersion) ||
-            isGatewayUpdateTargetVersion(status.currentVersion, version)
-          ) {
-            clearInterval(poll);
-            const reload = publishGatewayReload(status.currentVersion, "gateway-update-complete");
-            reloadGatewayClient(reload.id);
-          }
-        } catch {
-          // App still down
-        }
-      }, 3000);
-      // Safety timeout
-      setTimeout(() => {
-        clearInterval(poll);
-        set((s) => {
-          if (s.isUpdating) return { isUpdating: false };
-          return s;
-        });
-      }, 300_000);
     } catch (error) {
       useAppStatusStore
         .getState()

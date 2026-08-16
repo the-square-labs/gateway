@@ -34,15 +34,15 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | pki:templates:edit | Edit templates |
 | pki:templates:delete | Delete templates |
 
-### Reverse Proxy
+### Ingress Routes
 | Scope | Description |
 |-------|-------------|
-| proxy:view | List proxy hosts |
-| proxy:view | View proxy host details (resource-scopable) |
-| proxy:create | Create proxy hosts (resource-scopable) |
-| proxy:edit | Update proxy hosts (resource-scopable) |
-| proxy:delete | Delete proxy hosts (resource-scopable) |
-| proxy:folders:manage | Manage proxy host folders and folder placement |
+| proxy:view | List routes |
+| proxy:view | View route details (resource-scopable) |
+| proxy:create | Create routes (resource-scopable) |
+| proxy:edit | Update routes (resource-scopable) |
+| proxy:delete | Delete routes (resource-scopable) |
+| proxy:folders:manage | Manage route folders and folder placement |
 | proxy:raw:read | View raw nginx config in browser-only raw config workflows (resource-scopable) |
 | proxy:raw:write | Write raw nginx config (resource-scopable) |
 | proxy:raw:toggle | Enable/disable raw config mode (resource-scopable) |

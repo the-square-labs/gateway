@@ -71,7 +71,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
         resourceIds: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Resource UUIDs to move for non-Docker resources, or proxy host UUIDs for proxy_hosts.',
+          description: 'Resource UUIDs to move for non-Docker resources, or route UUIDs for proxy_hosts.',
         },
         items: {
           type: 'array',

@@ -41,6 +41,7 @@ import {
   type DockerUpstreamReference,
   type ProxyDockerUpstreamService,
 } from './proxy-docker-upstream.service.js';
+import { assertRegisteredDomainsUseNode } from './proxy-domain-node.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
 import type { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
 import type {
@@ -60,6 +61,13 @@ const SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES = 10_000;
 const SECURE_LINK_TRAFFIC_WINDOW_SECONDS = 2 * 60;
 const SECURE_LINK_RUNTIME_CACHE_PREFIX = 'proxy-secure-link-runtime:';
 const SECURE_LINK_RUNTIME_CACHE_TTL_SECONDS = 24 * 60 * 60;
+
+function sameDomainNames(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const normalizedLeft = left.map((domain) => domain.toLowerCase()).sort();
+  const normalizedRight = right.map((domain) => domain.toLowerCase()).sort();
+  return normalizedLeft.every((domain, index) => domain === normalizedRight[index]);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -346,6 +354,7 @@ export class ProxyService {
       throw new AppError(400, 'NODE_REQUIRED', 'A node must be selected for the proxy host');
     }
     await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
+    await assertRegisteredDomainsUseNode(this.db, input.domainNames, input.nodeId);
 
     // 0b. Validate advanced config if provided
     if (input.advancedConfig && !options.bypassAdvancedValidation) {
@@ -541,7 +550,9 @@ export class ProxyService {
       where: eq(proxyHosts.id, id),
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
-    if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');
+    if (existing.isSystem && !(options.allowSystemNodeMove && Object.keys(input).every((key) => key === 'nodeId'))) {
+      throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');
+    }
     if (input.advancedConfig !== undefined) {
       await this.secureLinks?.assertAdditionalReferences(existing.id, input.advancedConfig);
     }
@@ -577,6 +588,14 @@ export class ProxyService {
         );
       }
       await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
+    }
+    const effectiveNodeId = input.nodeId ?? existing.nodeId;
+    if (!effectiveNodeId) throw new AppError(400, 'NODE_REQUIRED', 'A node must be selected for the proxy host');
+    const domainAssignmentChanged =
+      (input.nodeId !== undefined && input.nodeId !== existing.nodeId) ||
+      (input.domainNames !== undefined && !sameDomainNames(input.domainNames, existing.domainNames));
+    if (domainAssignmentChanged && !options.skipDomainNodeValidation) {
+      await assertRegisteredDomainsUseNode(this.db, input.domainNames ?? existing.domainNames, effectiveNodeId);
     }
 
     assertSslPrerequisitesForUpdate(existing, input);
@@ -654,7 +673,7 @@ export class ProxyService {
           existing.upstreamKind === 'manual' ||
           existingUsesRawMode ||
           (existing.secureLinkGeneration < 1 && Object.keys(upstreamData).length > 0);
-        updated = await this.secureLinks.prepare(updated, requiresSecureLink);
+        updated = await this.secureLinks.prepare(updated, requiresSecureLink, nodeChanged);
         if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
           // Existing legacy/manual config must stop serving before the durable
           // no-fallback cutover marker is committed.
@@ -688,7 +707,7 @@ export class ProxyService {
 
         // The new target is now known-good. Only then retire the former
         // node's config and begin its certificate replica grace period.
-        if (nodeChanged && existing.enabled) {
+        if (nodeChanged && existing.enabled && !options.preserveFormerNodeConfig) {
           await this.removeConfigFromNode(id, existing.nodeId);
           await this.certificateDistribution.deactivateHost(id, existing.nodeId);
         }
@@ -844,30 +863,45 @@ export class ProxyService {
   // Delete
   // -----------------------------------------------------------------------
 
-  async deleteProxyHost(id: string, userId: string) {
+  async deleteProxyHost(id: string, userId: string, options: { abandonOfflineNode?: boolean } = {}) {
     // 1. Get existing host
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.id, id),
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
-    if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be deleted');
+    if (existing.isSystem && !options.abandonOfflineNode) {
+      throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be deleted');
+    }
 
-    // 2. Preserve the currently active deployment until Nginx has confirmed
-    // the config removal. This avoids GCing a certificate for a still-serving host.
-    try {
-      await this.removeConfigFromNode(id, existing.nodeId);
-      await this.certificateDistribution.deactivateHost(id, existing.nodeId);
-    } catch (error) {
-      throw new AppError(
-        500,
-        'NGINX_CONFIG_FAILED',
-        `Failed to remove Nginx config: ${error instanceof Error ? error.message : 'unknown error'}`
-      );
+    const abandoningOfflineNode = options.abandonOfflineNode === true;
+    if (abandoningOfflineNode) {
+      if (this.nodeDispatch.isNodeConnected(existing.nodeId)) {
+        throw new AppError(409, 'NGINX_NODE_CONNECTED', 'Connected Nginx nodes require confirmed config cleanup');
+      }
+      if (existing.nodeId) {
+        await this.certificateDistribution.deactivateHost(id, existing.nodeId);
+      }
+      await this.secureLinks?.abandonOfflineSource(existing);
+    } else {
+      // Preserve the currently active deployment until Nginx has confirmed
+      // the config removal. This avoids GCing a certificate for a still-serving host.
+      try {
+        await this.removeConfigFromNode(id, existing.nodeId);
+        await this.certificateDistribution.deactivateHost(id, existing.nodeId);
+      } catch (error) {
+        throw new AppError(
+          500,
+          'NGINX_CONFIG_FAILED',
+          `Failed to remove Nginx config: ${error instanceof Error ? error.message : 'unknown error'}`
+        );
+      }
     }
 
     // 3. Delete the database row only after the active deployment is safely gone.
-    await this.secureLinks?.cleanupAdditionalForHost(existing);
-    await this.secureLinks?.cleanup(existing);
+    if (!abandoningOfflineNode) {
+      await this.secureLinks?.cleanupAdditionalForHost(existing);
+      await this.secureLinks?.cleanup(existing);
+    }
     await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
 
     // 5. Audit log
@@ -876,7 +910,11 @@ export class ProxyService {
       action: 'proxy_host.delete',
       resourceType: 'proxy_host',
       resourceId: id,
-      details: { domainNames: existing.domainNames },
+      details: {
+        domainNames: existing.domainNames,
+        abandonedOfflineNode: abandoningOfflineNode,
+        ...(abandoningOfflineNode ? { nodeId: existing.nodeId, orphanedNginxConfigPossible: true } : {}),
+      },
     });
 
     logger.info('Deleted proxy host', { hostId: id, domains: existing.domainNames });
@@ -2008,6 +2046,22 @@ export class ProxyService {
     });
     this.emitHost(host.id, 'tls_distribution_resynced', host.domainNames?.[0]);
     return { distribution };
+  }
+
+  async cleanupMigratedHostSource(id: string, sourceNodeId: string): Promise<{ orphanedConfigPossible: boolean }> {
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+    if (!host) return { orphanedConfigPossible: false };
+    if (host.nodeId === sourceNodeId) {
+      throw new AppError(409, 'PROXY_HOST_NOT_MIGRATED', 'Proxy host still belongs to the source Nginx node');
+    }
+
+    const connected = this.nodeDispatch.isNodeConnected(sourceNodeId);
+    if (connected) {
+      await this.removeConfigFromNode(id, sourceNodeId);
+    }
+    await this.certificateDistribution.deactivateHost(id, sourceNodeId);
+    await this.secureLinks?.reconcileSourceNode(sourceNodeId);
+    return { orphanedConfigPossible: !connected };
   }
 
   // -----------------------------------------------------------------------

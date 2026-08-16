@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { DnsRecords } from '@/db/schema/domains.js';
-import { computeDnsStatus, detectPublicIP } from './dns.utils.js';
+import { computeDnsStatus, detectPublicIP, dnsProbeName } from './dns.utils.js';
 
 function makeRecords(overrides?: Partial<DnsRecords>): DnsRecords {
   return {
@@ -51,5 +51,15 @@ describe('computeDnsStatus', () => {
     );
 
     expect(status).toBe('invalid');
+  });
+});
+
+describe('dnsProbeName', () => {
+  it('checks exact domains directly', () => {
+    expect(dnsProbeName('App.Example.com', 'fixed')).toBe('app.example.com');
+  });
+
+  it('checks wildcard DNS through a random child inside the wildcard', () => {
+    expect(dnsProbeName('*.Example.com', 'fixed')).toBe('_gateway-check-fixed.example.com');
   });
 });

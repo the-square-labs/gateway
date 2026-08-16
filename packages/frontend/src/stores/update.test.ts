@@ -48,4 +48,20 @@ describe("useUpdateStore", () => {
       },
     });
   });
+
+  it("leaves update recovery polling to the application status gate", async () => {
+    vi.mocked(api.triggerUpdate).mockResolvedValueOnce({
+      status: "started",
+      targetVersion: "v2.3.1",
+    });
+
+    await useUpdateStore.getState().triggerUpdate("v2.3.1");
+
+    expect(api.triggerUpdate).toHaveBeenCalledWith("v2.3.1");
+    expect(api.getVersionInfo).not.toHaveBeenCalled();
+    expect(useAppStatusStore.getState()).toMatchObject({
+      gatewayUpdatingActive: true,
+      gatewayUpdatingTargetVersion: "v2.3.1",
+    });
+  });
 });

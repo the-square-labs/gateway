@@ -22,7 +22,7 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 | Feature | Status | Community | Personal | Business | Enterprise |
 |---|---|:---:|:---:|:---:|:---:|
 | Infrastructure Node Management | Ready | ✅ | ✅ | ✅ | ✅ |
-| Nginx Reverse Proxy Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker Container Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker ↔ Nginx Secure Links | Ready | ✅ | ✅ | ✅ | ✅ |
 | SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |

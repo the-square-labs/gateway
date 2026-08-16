@@ -8,6 +8,10 @@ export type ProxyValidationOptions = {
   bypassAdvancedValidation?: boolean;
   bypassRawValidation?: boolean;
   actorScopes?: string[];
+  /** Internal-only placement migration controls. Never populated from an API request. */
+  skipDomainNodeValidation?: boolean;
+  preserveFormerNodeConfig?: boolean;
+  allowSystemNodeMove?: boolean;
 };
 
 export type ProxyValidationInput = boolean | ProxyValidationOptions;

@@ -378,10 +378,6 @@ export class ApiClientBase {
       });
     }
 
-    if (response.status < 500 && !suppressGlobalStatus) {
-      useAppStatusStore.getState().setMaintenanceActive(false);
-    }
-
     this.assertSessionGeneration(generation);
 
     if (!response.ok) {
@@ -547,10 +543,6 @@ export class ApiClientBase {
       });
     }
 
-    if (response.status < 500) {
-      useAppStatusStore.getState().setMaintenanceActive(false);
-    }
-
     this.assertSessionGeneration(generation);
 
     if (!response.ok) {
@@ -682,10 +674,6 @@ export class ApiClientBase {
       };
 
       xhr.onload = () => {
-        if (xhr.status < 500) {
-          useAppStatusStore.getState().setMaintenanceActive(false);
-        }
-
         try {
           this.assertSessionGeneration(generation);
         } catch (err) {

@@ -33,6 +33,7 @@ export async function executeDomainTool(
           ttl: typeof a.ttl === 'number' ? a.ttl : undefined,
           proxied: typeof a.proxied === 'boolean' ? a.proxied : undefined,
           overwriteDns: a.overwriteDns === true,
+          nginxNodeId: typeof a.nginxNodeId === 'string' ? a.nginxNodeId : undefined,
         },
         user.id
       );

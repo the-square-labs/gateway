@@ -139,7 +139,7 @@ describe('AIService system prompt', () => {
     expect(prompt).toContain('User: Admin (admin). Date:');
     expect(prompt).toContain('- Certificate Authorities: 2 total (2 active)');
     expect(prompt).toContain('- PKI Certificates: 5 total (4 active, 1 revoked, 0 expired)');
-    expect(prompt).toContain('- Proxy Hosts: 7 total (6 enabled, 5 online)');
+    expect(prompt).toContain('- Routes: 7 total (6 enabled, 5 online)');
     expect(prompt).toContain('- SSL Certificates: 3 total (2 active, 1 expiring soon)');
     expect(prompt).toContain('- Nodes: 4 total (3 online, 1 offline, 0 pending)');
     expect(prompt).toContain('  - Root CA (root, active, id: root-1)');

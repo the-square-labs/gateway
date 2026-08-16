@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -340,17 +341,31 @@ export function PkiTemplatesTab({
     <>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
         {!embedded && (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
               <h1 className="text-2xl font-bold">Templates</h1>
               <p className="text-sm text-muted-foreground">Certificate issuance templates</p>
             </div>
-            {canCreateTemplates && (
-              <Button onClick={openCreate}>
-                <Plus className="h-4 w-4" />
-                Create Template
-              </Button>
-            )}
+            <ResponsiveHeaderActions
+              actions={
+                canCreateTemplates
+                  ? [
+                      {
+                        label: "Create Template",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: openCreate,
+                      },
+                    ]
+                  : []
+              }
+            >
+              {canCreateTemplates && (
+                <Button onClick={openCreate}>
+                  <Plus className="h-4 w-4" />
+                  Create Template
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
           </div>
         )}
 

@@ -12,6 +12,7 @@ function parentResourceId(baseScope: string, resourceId: string | null): string 
   return separator > 0 ? resourceId.slice(0, separator) : null;
 }
 const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
+  "domains:view": ["domains:edit"],
   "pki:templates:view": ["pki:templates:edit"],
   "proxy:view": ["proxy:edit"],
   "proxy:templates:view": ["proxy:templates:edit"],
@@ -222,10 +223,7 @@ export function canonicalizeScopeSelection(scopes: readonly string[]): string[] 
 export function requiresResourceSelection(
   scope: string,
   allowedResourceIdsByScope: Record<string, string[]>,
-  initialResourceLimitedScopes: readonly string[]
+  _initialResourceLimitedScopes: readonly string[]
 ) {
-  return (
-    (allowedResourceIdsByScope[scope]?.length ?? 0) > 0 ||
-    initialResourceLimitedScopes.includes(scope)
-  );
+  return (allowedResourceIdsByScope[scope]?.length ?? 0) > 0;
 }

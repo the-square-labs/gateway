@@ -43,6 +43,7 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     await next();
   },
   requireScope: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireScopeBase: () => async (_c: any, next: () => Promise<void>) => next(),
   requireScopeForResource: () => async (_c: any, next: () => Promise<void>) => next(),
 }));
 

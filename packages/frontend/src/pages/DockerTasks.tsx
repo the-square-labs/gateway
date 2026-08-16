@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -126,7 +127,12 @@ function formatTime(dateStr: string): string {
 
 export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
   const { tasks, fetchTasks, selectedNodeId } = useDockerStore();
-  const canManageTasks = useAuthStore((s) => s.hasScope("docker:tasks:manage"));
+  const hasScope = useAuthStore((s) => s.hasScope);
+  const canManageTask = (task: DockerTaskRow) =>
+    hasScope("docker:tasks:manage") ||
+    hasScope(`docker:tasks:manage:${task.nodeId}`) ||
+    (!!task.migration?.targetNodeId &&
+      hasScope(`docker:tasks:manage:${task.migration.targetNodeId}`));
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
   const [migrations, setMigrations] = useState<DockerMigration[]>([]);
@@ -394,8 +400,8 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Docker Tasks</h1>
               <Badge variant="secondary" size="inline">
@@ -406,7 +412,25 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
               View pending and completed Docker operations (auto-refreshes every 5s)
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions
+            actions={[
+              {
+                label: "Refresh",
+                icon: <RefreshCw className="h-4 w-4" />,
+                onClick: () => void loadTasks(),
+                disabled: isLoading,
+              },
+              ...(taskRows.some((task) => task.status === "succeeded" || task.status === "failed")
+                ? [
+                    {
+                      label: "Hide Completed",
+                      icon: <Trash2 className="h-4 w-4" />,
+                      onClick: () => void handleClearCompleted(),
+                    },
+                  ]
+                : []),
+            ]}
+          >
             <Button variant="outline" size="icon" onClick={loadTasks} disabled={isLoading}>
               <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             </Button>
@@ -416,7 +440,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
                 Hide Completed
               </Button>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
       )}
 
@@ -625,6 +649,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
             </DialogFooter>
           )}
           {selectedTask?.migration &&
+            canManageTask(selectedTask) &&
             ["pending", "running", "waiting", "cancelling"].includes(
               selectedTask.migration.status
             ) &&
@@ -644,7 +669,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
             )}
           {selectedTask &&
             !selectedTask.migration &&
-            canManageTasks &&
+            canManageTask(selectedTask) &&
             ACTIVE_TASK_STATUSES.has(selectedTask.status) && (
               <DialogFooter>
                 <Button

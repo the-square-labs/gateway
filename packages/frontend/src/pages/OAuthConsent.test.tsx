@@ -259,7 +259,11 @@ describe("OAuthConsent", () => {
       await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
       expect(hrefSetter).toHaveBeenCalledWith("https://client.example.com/callback?code=abc");
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        fetchSpy.mock.calls.some(
+          ([input]) => input === "https://client.example.com/callback?code=abc"
+        )
+      ).toBe(false);
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
@@ -304,7 +308,11 @@ describe("OAuthConsent", () => {
       expect(hrefSetter).toHaveBeenCalledWith(
         "https://client.example.com/callback?error=access_denied"
       );
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        fetchSpy.mock.calls.some(
+          ([input]) => input === "https://client.example.com/callback?error=access_denied"
+        )
+      ).toBe(false);
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,

@@ -61,7 +61,8 @@ describe('AIService SSL tool routing', () => {
         dnsProvider: 'cloudflare',
         autoRenew: true,
       },
-      'user-1'
+      'user-1',
+      'admin@example.com'
     );
   });
 
@@ -88,7 +89,8 @@ describe('AIService SSL tool routing', () => {
         provider: 'letsencrypt',
         autoRenew: false,
       },
-      'user-1'
+      'user-1',
+      'admin@example.com'
     );
   });
 

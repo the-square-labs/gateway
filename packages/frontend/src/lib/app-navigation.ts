@@ -93,23 +93,23 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
   },
   {
     id: "reverse-proxy",
-    label: "Reverse Proxy",
+    label: "Ingress",
     items: [
-      {
-        id: "proxy-hosts",
-        name: "Proxy Hosts",
-        href: "/proxy-hosts",
-        icon: Globe,
-        shortcutKey: "2",
-        keywords: ["nginx", "upstream", "reverse proxy"],
-      },
       {
         id: "domains",
         name: "Domains",
         href: "/domains",
         icon: Globe2,
-        shortcutKey: "3",
+        shortcutKey: "2",
         keywords: ["dns", "cloudflare"],
+      },
+      {
+        id: "proxy-hosts",
+        name: "Routes",
+        href: "/proxy-hosts",
+        icon: Globe,
+        shortcutKey: "3",
+        keywords: ["nginx", "upstream", "reverse proxy", "route"],
       },
       {
         id: "ssl-certificates",
@@ -313,7 +313,7 @@ export function canAccessNavigationItem(
     case "proxy-hosts":
       return hasScopeBase(scopes, "proxy:view") || scopeMatches(scopes, "proxy:folders:manage");
     case "domains":
-      return hasScopeBase(scopes, "domains:view") && context.hasCloudflareIntegration === true;
+      return hasScopeBase(scopes, "domains:view");
     case "ssl-certificates":
       return hasScopeBase(scopes, "ssl:cert:view");
     case "authorities":
@@ -328,7 +328,7 @@ export function canAccessNavigationItem(
         hasScopeBase(scopes, "docker:images:view") ||
         hasScopeBase(scopes, "docker:volumes:view") ||
         hasScopeBase(scopes, "docker:networks:view") ||
-        scopeMatches(scopes, "docker:tasks") ||
+        hasScopeBase(scopes, "docker:tasks") ||
         scopeMatches(scopes, "docker:containers:folders:manage");
       return (
         canAccess &&

@@ -410,6 +410,20 @@ describe("ApiClientBase", () => {
     expect(useAppStatusStore.getState().maintenanceActive).toBe(true);
   });
 
+  it("keeps maintenance latched when an unrelated request succeeds", async () => {
+    const client = new TestApiClient();
+    useAppStatusStore.setState({ maintenanceActive: true });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ value: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await expect(client.getThing()).resolves.toEqual({ value: 1 });
+    expect(useAppStatusStore.getState().maintenanceActive).toBe(true);
+  });
+
   it("keeps route-context failures local instead of opening global blockers", async () => {
     const client = new TestApiClient();
     useAppStatusStore.setState({ maintenanceActive: false, rateLimitedUntil: null });

@@ -246,9 +246,6 @@ export function AlertsTab({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Alerts define conditions that trigger notifications to webhooks.
-      </p>
       {isLoading && visibleRules.length === 0 ? (
         <Skeleton />
       ) : visibleRules.length > 0 ? (
@@ -263,7 +260,11 @@ export function AlertsTab({
           />
         </div>
       ) : (
-        <EmptyState message="No alerts configured. Create an alert to start receiving notifications." />
+        <EmptyState
+          message="No alerts configured."
+          actionLabel={canManage ? "Create an alert" : undefined}
+          onAction={canManage ? openCreate : undefined}
+        />
       )}
       <AlertDialog
         open={dialogOpen}

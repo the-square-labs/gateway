@@ -1,4 +1,4 @@
-import { Download, HardDrive, Trash2 } from "lucide-react";
+import { Download, HardDrive, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { DockerFolderedResourceList } from "@/components/docker/DockerFolderedResourceList";
 import { Badge } from "@/components/ui/badge";
@@ -441,7 +442,8 @@ export function DockerImages({
               className="flex items-center justify-end pr-1"
               onClick={(e) => e.stopPropagation()}
             >
-              {hasScope("docker:images:delete") &&
+              {(hasScope("docker:images:delete") ||
+                hasScope(`docker:images:delete:${img._nodeId}`)) &&
                 canDelete &&
                 img.availability !== "unavailable" && (
                   <Button
@@ -463,7 +465,7 @@ export function DockerImages({
   );
   const imageColumns = allImageColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
-    if (!hasScope("docker:images:delete") && c.id === "actions") return false;
+    if (!hasScopedAccess("docker:images:delete") && c.id === "actions") return false;
     return true;
   });
 
@@ -471,8 +473,8 @@ export function DockerImages({
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Docker Images</h1>
               {!isLoading && visibleNodeId && (
@@ -483,7 +485,49 @@ export function DockerImages({
             </div>
             <p className="text-sm text-muted-foreground">Manage Docker images across your nodes</p>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions
+            actions={
+              selectedNodeId
+                ? [
+                    {
+                      label: "Refresh",
+                      icon: <RefreshCw className="h-4 w-4" />,
+                      onClick: () => requestSnapshotRefresh("images", visibleNodeId),
+                      disabled: isLoading,
+                    },
+                    ...(canManageFolders
+                      ? [
+                          {
+                            label: "New Folder",
+                            onClick: () => createFolderRef.current?.(),
+                          },
+                        ]
+                      : []),
+                    ...(hasScope("docker:images:delete") ||
+                    hasScope(`docker:images:delete:${selectedNodeId}`)
+                      ? [
+                          {
+                            label: pruning ? "Pruning..." : "Prune Unused",
+                            icon: <Trash2 className="h-4 w-4" />,
+                            onClick: handlePrune,
+                            disabled: pruning,
+                          },
+                        ]
+                      : []),
+                    ...(hasScope("docker:images:pull") ||
+                    hasScope(`docker:images:pull:${selectedNodeId}`)
+                      ? [
+                          {
+                            label: "Pull Image",
+                            icon: <Download className="h-4 w-4" />,
+                            onClick: () => openPull(),
+                          },
+                        ]
+                      : []),
+                  ]
+                : []
+            }
+          >
             {selectedNodeId && (
               <>
                 <RefreshButton
@@ -495,13 +539,15 @@ export function DockerImages({
                     New Folder
                   </Button>
                 )}
-                {hasScope("docker:images:delete") && (
+                {(hasScope("docker:images:delete") ||
+                  hasScope(`docker:images:delete:${selectedNodeId}`)) && (
                   <Button variant="outline" onClick={handlePrune} disabled={pruning}>
                     <Trash2 className="h-4 w-4 mr-1" />
                     {pruning ? "Pruning..." : "Prune Unused"}
                   </Button>
                 )}
-                {hasScope("docker:images:pull") && (
+                {(hasScope("docker:images:pull") ||
+                  hasScope(`docker:images:pull:${selectedNodeId}`)) && (
                   <Button onClick={() => openPull()}>
                     <Download className="h-4 w-4 mr-1" />
                     Pull Image
@@ -509,7 +555,7 @@ export function DockerImages({
                 )}
               </>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
       )}
 

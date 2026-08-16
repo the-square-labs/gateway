@@ -28,8 +28,8 @@ const RenderedConfigResponseSchema = dataResponseSchema(
 export const listProxyHostsRoute = appRoute({
   method: 'get',
   path: '/',
-  tags: ['Proxy Hosts'],
-  summary: 'List proxy hosts',
+  tags: ['Routes'],
+  summary: 'List ingress routes',
   request: { query: ProxyHostListQuerySchema },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -37,8 +37,8 @@ export const listProxyHostsRoute = appRoute({
 export const getProxyHostRoute = appRoute({
   method: 'get',
   path: '/{id}',
-  tags: ['Proxy Hosts'],
-  summary: 'Get proxy host details',
+  tags: ['Routes'],
+  summary: 'Get ingress route details',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -46,8 +46,8 @@ export const getProxyHostRoute = appRoute({
 export const getProxyHostBySlugRoute = appRoute({
   method: 'get',
   path: '/by-slug/{slug}',
-  tags: ['Proxy Hosts'],
-  summary: 'Resolve proxy host by slug',
+  tags: ['Routes'],
+  summary: 'Resolve ingress route by slug',
   request: { params: pathParamSchema('slug') },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -55,8 +55,8 @@ export const getProxyHostBySlugRoute = appRoute({
 export const getProxyHostHealthHistoryRoute = appRoute({
   method: 'get',
   path: '/{id}/health-history',
-  tags: ['Proxy Hosts'],
-  summary: 'Get proxy host health history',
+  tags: ['Routes'],
+  summary: 'Get ingress route health history',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -64,8 +64,8 @@ export const getProxyHostHealthHistoryRoute = appRoute({
 export const createProxyHostRoute = appRoute({
   method: 'post',
   path: '/',
-  tags: ['Proxy Hosts'],
-  summary: 'Create a proxy host',
+  tags: ['Routes'],
+  summary: 'Create an ingress route',
   request: jsonBody(CreateProxyHostSchema),
   responses: createdJson(UnknownDataResponseSchema),
 });
@@ -73,8 +73,8 @@ export const createProxyHostRoute = appRoute({
 export const updateProxyHostRoute = appRoute({
   method: 'put',
   path: '/{id}',
-  tags: ['Proxy Hosts'],
-  summary: 'Update a proxy host',
+  tags: ['Routes'],
+  summary: 'Update an ingress route',
   request: { params: IdParamSchema, ...jsonBody(UpdateProxyHostSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -82,8 +82,8 @@ export const updateProxyHostRoute = appRoute({
 export const deleteProxyHostRoute = appRoute({
   method: 'delete',
   path: '/{id}',
-  tags: ['Proxy Hosts'],
-  summary: 'Delete a proxy host',
+  tags: ['Routes'],
+  summary: 'Delete an ingress route',
   request: { params: IdParamSchema },
   responses: { 204: { description: 'No content' } },
 });
@@ -91,8 +91,8 @@ export const deleteProxyHostRoute = appRoute({
 export const toggleProxyHostRoute = appRoute({
   method: 'post',
   path: '/{id}/toggle',
-  tags: ['Proxy Hosts'],
-  summary: 'Enable or disable a proxy host',
+  tags: ['Routes'],
+  summary: 'Enable or disable an ingress route',
   request: { params: IdParamSchema, ...jsonBody(ToggleProxyHostSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -100,8 +100,8 @@ export const toggleProxyHostRoute = appRoute({
 export const toggleProxyMaintenanceRoute = appRoute({
   method: 'post',
   path: '/{id}/maintenance',
-  tags: ['Proxy Hosts'],
-  summary: 'Enter or exit maintenance mode for a proxy host',
+  tags: ['Routes'],
+  summary: 'Enter or exit maintenance mode for an ingress route',
   request: { params: IdParamSchema, ...jsonBody(ToggleProxyMaintenanceSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -109,8 +109,8 @@ export const toggleProxyMaintenanceRoute = appRoute({
 export const resyncProxyHostTlsRoute = appRoute({
   method: 'post',
   path: '/{id}/tls/resync',
-  tags: ['Proxy Hosts'],
-  summary: 'Resynchronize a proxy host TLS certificate',
+  tags: ['Routes'],
+  summary: 'Retry TLS deployment for an ingress route',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -118,8 +118,8 @@ export const resyncProxyHostTlsRoute = appRoute({
 export const renderedProxyConfigRoute = appRoute({
   method: 'get',
   path: '/{id}/rendered-config',
-  tags: ['Proxy Hosts'],
-  summary: 'Get rendered nginx config for a proxy host',
+  tags: ['Routes'],
+  summary: 'Get rendered nginx config for an ingress route',
   request: { params: IdParamSchema },
   responses: okJson(RenderedConfigResponseSchema),
 });
@@ -127,7 +127,7 @@ export const renderedProxyConfigRoute = appRoute({
 export const validateProxyConfigRoute = appRoute({
   method: 'post',
   path: '/validate-config',
-  tags: ['Proxy Hosts'],
+  tags: ['Routes'],
   summary: 'Validate advanced nginx config',
   request: jsonBody(ValidateAdvancedConfigSchema),
   responses: okJson(UnknownDataResponseSchema),

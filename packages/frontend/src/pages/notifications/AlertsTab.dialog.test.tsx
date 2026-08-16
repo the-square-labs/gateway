@@ -284,4 +284,24 @@ describe("AlertDialog", () => {
     await screen.findByText("CPU High");
     expect(screen.queryByRole("heading", { name: "New Alert" })).not.toBeInTheDocument();
   });
+
+  it("uses the shared empty state with a create CTA and no duplicate description", async () => {
+    vi.spyOn(api, "listAlertRules").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+
+    renderWithRouter(<AlertsTab canRead canManage openCreateToken={0} />, {
+      path: "/notifications",
+      route: "/notifications",
+    });
+
+    expect(await screen.findByRole("button", { name: "Create an alert" })).toBeInTheDocument();
+    expect(
+      screen.queryByText("Alerts define conditions that trigger notifications to webhooks.")
+    ).not.toBeInTheDocument();
+  });
 });

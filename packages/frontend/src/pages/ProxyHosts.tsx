@@ -1,7 +1,7 @@
 import { type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { FolderPlus, MoreVertical, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { ArrowRight, FolderPlus, MoreVertical, Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -16,6 +16,13 @@ import { MoveToFolderDialog } from "@/components/proxy/MoveToFolderDialog";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,6 +44,7 @@ import { proxyHostRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useFolderStore } from "@/stores/folders";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { FolderTreeNode, HealthStatus, ProxyHost, ProxyHostType } from "@/types";
 
 const typeOptions: { value: ProxyHostType | "all"; label: string }[] = [
@@ -84,7 +92,6 @@ export function ProxyHosts({
   const {
     folders,
     ungroupedHosts,
-    totalHosts,
     isLoading,
     filters,
     expandedFolderIds,
@@ -106,18 +113,48 @@ export function ProxyHosts({
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [moveDialogHostId, setMoveDialogHostId] = useState<string | null>(null);
   const [activeDrag, setActiveDrag] = useState<DragEndEvent["active"] | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(initialCreateDialogOpen);
-
-  useEffect(() => {
-    if (initialCreateDialogOpen) setCreateDialogOpen(true);
-  }, [initialCreateDialogOpen]);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [nginxNodeRequiredOpen, setNginxNodeRequiredOpen] = useState(false);
+  const [checkingCreateNodes, setCheckingCreateNodes] = useState(false);
+  const initialCreateHandledRef = useRef(false);
   const isMobile = useIsMobile();
   const canManageFolders = hasScope("proxy:folders:manage");
   const isSearchFiltering = filters.search.trim() !== "";
   const canReorderFolders = canManageFolders && !isMobile && !isSearchFiltering;
-  const canCreateProxyHost = hasScope("proxy:create");
+  const canCreateProxyHost = hasScopedAccess("proxy:create");
   const canShowHostActions =
     canManageFolders || hasScopedAccess("proxy:edit") || hasScopedAccess("proxy:delete");
+  const ingressNodes = useUIBootstrapStore((state) => state.snapshot?.navigation.nodes.data);
+  const ingressNodeNames = useMemo(
+    () =>
+      new Map(
+        (ingressNodes ?? []).map((node) => [node.id, node.displayName || node.hostname] as const)
+      ),
+    [ingressNodes]
+  );
+
+  const openCreateProxyHost = useCallback(async () => {
+    if (checkingCreateNodes) return;
+    setCheckingCreateNodes(true);
+    try {
+      const response = await api.listNodes({ type: "nginx", limit: 1 });
+      if ((response.data ?? []).length === 0) {
+        setNginxNodeRequiredOpen(true);
+        return;
+      }
+      setCreateDialogOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to check Ingress nodes");
+    } finally {
+      setCheckingCreateNodes(false);
+    }
+  }, [checkingCreateNodes]);
+
+  useEffect(() => {
+    if (!initialCreateDialogOpen || initialCreateHandledRef.current) return;
+    initialCreateHandledRef.current = true;
+    void openCreateProxyHost();
+  }, [initialCreateDialogOpen, openCreateProxyHost]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -152,7 +189,7 @@ export function ProxyHosts({
       toast.success(currentEnabled ? "Proxy host disabled" : "Proxy host enabled");
       await fetchGroupedHosts();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to toggle proxy host");
+      toast.error(err instanceof Error ? err.message : "Failed to toggle route");
     } finally {
       setTogglingIds((prev) => {
         const next = new Set(prev);
@@ -168,7 +205,7 @@ export function ProxyHosts({
       const ok = await confirm({
         title: "Enable Maintenance Mode",
         description:
-          "All requests to this proxy host will receive HTTP 503 and managed health checks will pause until maintenance ends.",
+          "All requests to this route will receive HTTP 503 and managed health checks will pause until maintenance ends.",
         confirmLabel: "Enable Maintenance",
       });
       if (!ok) return;
@@ -379,8 +416,8 @@ export function ProxyHosts({
   const columns: ResourceListColumn<ProxyHost>[] = [
     {
       id: "domain-names",
-      label: "Domain Names",
-      width: "24%",
+      label: "Domains",
+      width: "20%",
       renderCell: (host) => (
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{host.domainNames[0]}</p>
@@ -394,8 +431,8 @@ export function ProxyHosts({
     },
     {
       id: "upstream",
-      label: "Upstream",
-      width: "22%",
+      label: "Target",
+      width: "18%",
       cellContentClassName: "text-sm text-muted-foreground",
       renderCell: (host) =>
         host.type === "proxy" ? (
@@ -407,6 +444,14 @@ export function ProxyHosts({
         ),
     },
     {
+      id: "ingress-node",
+      label: "Ingress Node",
+      width: "13%",
+      cellContentClassName: "text-sm text-muted-foreground",
+      renderCell: (host) =>
+        host.nodeId ? ingressNodeNames.get(host.nodeId) || "Unknown node" : "Unassigned",
+    },
+    {
       id: "type",
       label: "Type",
       width: "10%",
@@ -414,7 +459,7 @@ export function ProxyHosts({
     },
     {
       id: "ssl",
-      label: "SSL",
+      label: "TLS",
       width: "8%",
       renderCell: (host) =>
         host.sslEnabled ? (
@@ -536,8 +581,10 @@ export function ProxyHosts({
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
-              <h1 className="text-2xl font-bold">Proxy Hosts</h1>
-              <p className="text-sm text-muted-foreground">{totalHosts} proxy hosts total</p>
+              <h1 className="text-2xl font-bold">Routes</h1>
+              <p className="text-sm text-muted-foreground">
+                Route incoming domain traffic to services
+              </p>
             </div>
           </div>
           <ResponsiveHeaderActions
@@ -557,9 +604,9 @@ export function ProxyHosts({
               ...(canCreateProxyHost
                 ? [
                     {
-                      label: "Add Proxy Host",
+                      label: "Add Route",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setCreateDialogOpen(true),
+                      onClick: () => void openCreateProxyHost(),
                     },
                   ]
                 : []),
@@ -578,9 +625,9 @@ export function ProxyHosts({
               </Button>
             )}
             {canCreateProxyHost && (
-              <Button onClick={() => setCreateDialogOpen(true)}>
+              <Button onClick={() => void openCreateProxyHost()} disabled={checkingCreateNodes}>
                 <Plus className="h-4 w-4" />
-                Add Proxy Host
+                Add Route
               </Button>
             )}
           </ResponsiveHeaderActions>
@@ -638,13 +685,13 @@ export function ProxyHosts({
             ),
           }}
           loading={isLoading}
-          loadingLabel="Loading proxy hosts..."
+          loadingLabel="Loading routes..."
           hasContent={visibleFolders.length > 0 || ungroupedHosts.length > 0}
           emptyState={
             <EmptyState
-              message="No proxy hosts."
+              message="No routes."
               {...(canCreateProxyHost
-                ? { actionLabel: "Add one", onAction: () => setCreateDialogOpen(true) }
+                ? { actionLabel: "Add one", onAction: () => void openCreateProxyHost() }
                 : {})}
               hasActiveFilters={hasActiveFilters}
               onReset={() => {
@@ -739,6 +786,40 @@ export function ProxyHosts({
           if (host) navigate(proxyHostRoute(host.slug));
         }}
       />
+      <Dialog
+        open={nginxNodeRequiredOpen}
+        onOpenChange={(open) => {
+          if (open) return;
+          setNginxNodeRequiredOpen(false);
+          if (initialCreateDialogOpen) navigate("/proxy-hosts", { replace: true });
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>No Ingress nodes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Routes must be deployed to an Ingress node. Add and connect an Ingress node first, then
+            return here to create the route.
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setNginxNodeRequiredOpen(false);
+                if (initialCreateDialogOpen) navigate("/proxy-hosts", { replace: true });
+              }}
+            >
+              Close
+            </Button>
+            <Button asChild>
+              <Link to="/nodes" onClick={() => setNginxNodeRequiredOpen(false)}>
+                Open Nodes <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PageTransition>
   );
 }

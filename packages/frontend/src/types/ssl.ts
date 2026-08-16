@@ -3,6 +3,7 @@ export type SSLCertType = "acme" | "upload" | "internal";
 export type SSLCertStatus = "active" | "expired" | "pending" | "error";
 export type ACMEChallengeType = "http-01" | "dns-01";
 export type CertificateDistributionStatus =
+  | "not_deployed"
   | "ready"
   | "pending"
   | "failed"
@@ -14,6 +15,14 @@ export interface CertificateDistributionState {
   readyReplicaCount: number;
   lastVerifiedAt: string | null;
   error: string | null;
+  replicas?: Array<{
+    nodeId: string;
+    nodeName: string;
+    nodeSlug: string | null;
+    status: Exclude<CertificateDistributionStatus, "not_deployed">;
+    lastVerifiedAt: string | null;
+    error: string | null;
+  }>;
 }
 
 export interface SSLCertificate {
@@ -52,6 +61,7 @@ export interface RequestACMECertRequest {
   domains: string[];
   challengeType: ACMEChallengeType;
   provider?: string;
+  dnsProvider?: "cloudflare";
   autoRenew?: boolean;
 }
 

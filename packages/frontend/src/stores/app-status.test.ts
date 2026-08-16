@@ -4,6 +4,7 @@ import { syncGatewayOperationStatus, useAppStatusStore } from "./app-status";
 describe("app status cross-tab synchronization", () => {
   beforeEach(() => {
     useAppStatusStore.setState({
+      maintenanceActive: false,
       gatewayUpdatingActive: false,
       gatewayUpdatingTargetVersion: null,
       gatewayRestartingActive: false,
@@ -41,5 +42,26 @@ describe("app status cross-tab synchronization", () => {
     expect(syncGatewayOperationStatus(cleared)).toBe(true);
     expect(syncGatewayOperationStatus(cleared)).toBe(false);
     expect(useAppStatusStore.getState()).toMatchObject(cleared);
+  });
+
+  it("does not latch maintenance while a known restart is active", () => {
+    useAppStatusStore.getState().setGatewayRestartingActive(true);
+    useAppStatusStore.getState().setMaintenanceActive(true);
+
+    expect(useAppStatusStore.getState()).toMatchObject({
+      gatewayRestartingActive: true,
+      maintenanceActive: false,
+    });
+  });
+
+  it("clears a previously latched maintenance state when restart begins", () => {
+    useAppStatusStore.setState({ maintenanceActive: true });
+
+    useAppStatusStore.getState().setGatewayRestartingActive(true);
+
+    expect(useAppStatusStore.getState()).toMatchObject({
+      gatewayRestartingActive: true,
+      maintenanceActive: false,
+    });
   });
 });

@@ -342,7 +342,8 @@ export class RelayPolicyService {
 
   async revokeOwner(
     ownerKind: 'managed_database_binding' | 'managed_database_gateway' | 'managed_database' | 'proxy_host_secure_link',
-    ownerId: string
+    ownerId: string,
+    options: { allowDeferredSnapshot?: boolean } = {}
   ): Promise<void> {
     const [ownedRoutes, ownedEndpoints] = await Promise.all([
       this.db
@@ -370,7 +371,16 @@ export class RelayPolicyService {
           : [];
       if (routes.length || endpoints.length) await bumpRelayPolicyRevision(tx);
     });
-    await this.syncSnapshot();
+    try {
+      await this.syncSnapshot();
+    } catch (error) {
+      if (!options.allowDeferredSnapshot) throw error;
+      logger.warn('Relay owner revocation persisted; runtime snapshot update deferred', {
+        ownerKind,
+        ownerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const affectedNodes = [
       ...new Set([
         ...(await this.grantIssuer.policyNodeIds()),

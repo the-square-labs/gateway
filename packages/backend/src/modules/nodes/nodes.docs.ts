@@ -333,7 +333,10 @@ export const deleteNodeRoute = appRoute({
   path: '/{id}',
   tags: ['Nodes'],
   summary: 'Delete a node',
-  request: { params: IdParamSchema },
+  request: {
+    params: IdParamSchema,
+    query: z.object({ cascadeProxyHosts: z.enum(['true']).optional() }),
+  },
   responses: successJson,
 });
 

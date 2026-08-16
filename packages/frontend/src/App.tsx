@@ -9,7 +9,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { AppStatusGate } from "@/components/common/AppStatusGate";
+import { AppStatusGate, clearMaintenanceAutoReloadGuard } from "@/components/common/AppStatusGate";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { RequireScope } from "@/components/common/RequireScope";
@@ -467,21 +467,21 @@ function CertificateDetailGuard() {
   return <CertificateDetail />;
 }
 
-function CertificatesPageGuard() {
-  const hasScope = useAuthStore((s) => s.hasScope);
+export function CertificatesPageGuard() {
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
 
-  if (!pkiEnabled || !hasScope("pki:cert:view")) {
+  if (!pkiEnabled || !hasScopedAccess("pki:cert:view")) {
     return <Navigate to="/" replace />;
   }
 
   return <Certificates />;
 }
 
-function DomainsPageGuard() {
-  const hasScope = useAuthStore((s) => s.hasScope);
+export function DomainsPageGuard() {
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
 
-  if (!hasScope("domains:view")) {
+  if (!hasScopedAccess("domains:view")) {
     return <Navigate to="/" replace />;
   }
 
@@ -784,7 +784,7 @@ function RealtimeBridge() {
       "docker:networks:view",
     ].some((scope) => auth.hasScopedAccess(scope));
     const channels: Array<[boolean, string]> = [
-      [auth.hasScope("domains:view"), "domain.changed"],
+      [auth.hasScopedAccess("domains:view"), "domain.changed"],
       [auth.hasScope("pki:templates:view"), "pki.template.changed"],
       [auth.hasScopedAccess("proxy:templates:view"), "nginx.template.changed"],
       [auth.hasScopedAccess("acl:view"), "access-list.changed"],
@@ -1073,6 +1073,12 @@ export default function App() {
     : "anonymous";
 
   useEffect(() => {
+    if (maintenanceActive) return;
+    const timer = window.setTimeout(clearMaintenanceAutoReloadGuard, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [maintenanceActive]);
+
+  useEffect(() => {
     localStorage.removeItem("gateway-auth");
 
     let cancelled = false;
@@ -1080,7 +1086,10 @@ export default function App() {
     const checkHealth = async () => {
       try {
         const [response, setupResponse] = await Promise.all([
-          fetch("/health", { cache: "no-store" }),
+          fetch("/health", {
+            cache: "no-store",
+            headers: { "X-Gateway-Health-Probe": "startup" },
+          }),
           fetch("/api/setup/status", { cache: "no-store", credentials: "include" }),
         ]);
         const setup = setupResponse.ok

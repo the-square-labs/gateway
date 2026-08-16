@@ -1,10 +1,11 @@
 import { Server } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
@@ -100,7 +101,7 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             <Server className="h-5 w-5 text-muted-foreground" />
             <div>
               <p className="text-sm font-medium">{nodeInfo.name}</p>
-              <p className="text-xs text-muted-foreground">Deployed on this node</p>
+              <p className="text-xs text-muted-foreground">Ingress node</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -127,7 +128,7 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Host Info Card */}
         <PanelShell
-          title="Host Information"
+          title="Route Information"
           className={!host.healthCheckEnabled ? "md:col-span-2" : ""}
           bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
         >
@@ -136,9 +137,9 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             value={
               <div className="flex flex-wrap justify-end gap-1">
                 {host.domainNames.map((d) => (
-                  <Badge key={d} variant="secondary">
-                    {d}
-                  </Badge>
+                  <Button key={d} variant="link" size="sm" asChild>
+                    <Link to={`/domains?domain=${encodeURIComponent(d)}`}>{d}</Link>
+                  </Button>
                 ))}
               </div>
             }
@@ -192,7 +193,16 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
           title="SSL Certificate"
           bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
         >
-          <DetailRow label="Name" value={host.sslCertificate.name} />
+          <DetailRow
+            label="Name"
+            value={
+              <Button variant="link" size="sm" asChild>
+                <Link to={`/ssl-certificates?certificate=${host.sslCertificate.id}`}>
+                  {host.sslCertificate.name}
+                </Link>
+              </Button>
+            }
+          />
           <DetailRow
             label="Type"
             value={<Badge variant="secondary">{host.sslCertificate.type}</Badge>}

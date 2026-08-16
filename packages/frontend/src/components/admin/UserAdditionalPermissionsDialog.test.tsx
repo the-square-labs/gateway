@@ -129,4 +129,43 @@ describe("UserAdditionalPermissionsDialog", () => {
       expect(mocks.updateUserAdditionalPermissions).toHaveBeenCalledWith("user-1", []);
     });
   });
+
+  it("keeps the base scope enabled after removing its last resource restriction", async () => {
+    const target: User = {
+      id: "user-1",
+      oidcSubject: "target",
+      email: "target@example.com",
+      name: "Target",
+      avatarUrl: null,
+      groupId: "viewer-group",
+      groupName: "viewer",
+      groupScopes: [],
+      additionalScopes: ["nodes:console:node-2"],
+      scopes: ["nodes:console:node-2"],
+      isBlocked: false,
+    };
+    mocks.updateUserAdditionalPermissions.mockResolvedValue({
+      ...target,
+      additionalScopes: ["nodes:console"],
+      scopes: ["nodes:console"],
+    });
+
+    render(
+      <UserAdditionalPermissionsDialog
+        open
+        user={target}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Grant node 2 console" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save permissions" }));
+
+    await waitFor(() => {
+      expect(mocks.updateUserAdditionalPermissions).toHaveBeenCalledWith("user-1", [
+        "nodes:console",
+      ]);
+    });
+  });
 });

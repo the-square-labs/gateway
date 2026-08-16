@@ -1,13 +1,13 @@
-import { Copy, Download, MoreVertical, ShieldOff } from "lucide-react";
+import { Copy, Download, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,13 +19,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -160,65 +153,13 @@ export function CertificateDetail() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-6">
-        <CommandPalettePageActions
-          actions={[
-            ...(canExportCertificate
-              ? [
-                  {
-                    id: "certificate:download-pem",
-                    label: "Download certificate as PEM",
-                    icon: <Download className="h-4 w-4" />,
-                    action: () => void handleDownload("pem"),
-                  },
-                  {
-                    id: "certificate:download-der",
-                    label: "Download certificate as DER",
-                    icon: <Download className="h-4 w-4" />,
-                    action: () => void handleDownload("der"),
-                  },
-                  {
-                    id: "certificate:download-pkcs12",
-                    label: "Download certificate as PKCS#12",
-                    icon: <Download className="h-4 w-4" />,
-                    action: () => setPkcs12DialogOpen(true),
-                  },
-                ]
-              : []),
-            {
-              id: "certificate:copy-serial",
-              label: "Copy certificate serial",
-              icon: <Copy className="h-4 w-4" />,
-              action: copySerial,
-            },
-            ...(canExportCertificate && cert.certificatePem
-              ? [
-                  {
-                    id: "certificate:copy-pem",
-                    label: "Copy certificate PEM",
-                    icon: <Copy className="h-4 w-4" />,
-                    action: copyPem,
-                  },
-                ]
-              : []),
-            ...(canRevokeCertificate && cert.status === "active" && !cert.isSystem
-              ? [
-                  {
-                    id: "certificate:revoke",
-                    label: "Revoke certificate",
-                    icon: <ShieldOff className="h-4 w-4" />,
-                    action: () => setRevokeDialogOpen(true),
-                  },
-                ]
-              : []),
-          ]}
-        />
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <PageBackButton onClick={() => navigate("/certificates")} />
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">{cert.commonName}</h1>
+                <h1 className="truncate text-2xl font-bold">{cert.commonName}</h1>
                 <StatusBadge status={cert.status} size="inline" />
                 {cert.isSystem && (
                   <Badge variant="outline" size="inline">
@@ -226,62 +167,99 @@ export function CertificateDetail() {
                   </Badge>
                 )}
               </div>
-              <p className="text-sm text-muted-foreground">
+              <p className="truncate text-sm text-muted-foreground">
                 {cert.type} certificate &middot; Issuer: {cert.issuerDn || cert.caId}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon">
-                  <MoreVertical className="h-4 w-4" />
+          <ResponsiveHeaderActions
+            actions={[
+              ...(canExportCertificate
+                ? [
+                    {
+                      id: "certificate:download-pem",
+                      label: "Download certificate as PEM",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => void handleDownload("pem"),
+                    },
+                    {
+                      id: "certificate:download-der",
+                      label: "Download certificate as DER",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => void handleDownload("der"),
+                    },
+                    {
+                      id: "certificate:download-pkcs12",
+                      label: "Download certificate as PKCS#12",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => setPkcs12DialogOpen(true),
+                    },
+                  ]
+                : []),
+              {
+                id: "certificate:copy-serial",
+                label: "Copy certificate serial",
+                icon: <Copy className="h-4 w-4" />,
+                onClick: copySerial,
+              },
+              ...(canExportCertificate && cert.certificatePem
+                ? [
+                    {
+                      id: "certificate:copy-pem",
+                      label: "Copy certificate PEM",
+                      icon: <Copy className="h-4 w-4" />,
+                      onClick: copyPem,
+                    },
+                  ]
+                : []),
+              ...(canRevokeCertificate && cert.status === "active" && !cert.isSystem
+                ? [
+                    {
+                      id: "certificate:revoke",
+                      label: "Revoke certificate",
+                      icon: <ShieldOff className="h-4 w-4" />,
+                      onClick: () => setRevokeDialogOpen(true),
+                      destructive: true,
+                      separatorBefore: true,
+                    },
+                  ]
+                : []),
+            ]}
+          >
+            {canExportCertificate && (
+              <>
+                <Button variant="outline" onClick={() => void handleDownload("pem")}>
+                  <Download className="h-4 w-4" />
+                  Download PEM
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {canExportCertificate && (
-                  <>
-                    <DropdownMenuItem onClick={() => handleDownload("pem")}>
-                      <Download className="h-4 w-4" />
-                      Download PEM
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleDownload("der")}>
-                      <Download className="h-4 w-4" />
-                      Download DER
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setPkcs12DialogOpen(true)}>
-                      <Download className="h-4 w-4" />
-                      Download PKCS#12
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem onClick={copySerial}>
-                  <Copy className="h-4 w-4" />
-                  Copy Serial Number
-                </DropdownMenuItem>
-                {canExportCertificate && cert.certificatePem && (
-                  <DropdownMenuItem onClick={copyPem}>
-                    <Copy className="h-4 w-4" />
-                    Copy PEM
-                  </DropdownMenuItem>
-                )}
-                {canRevokeCertificate && cert.status === "active" && !cert.isSystem && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => setRevokeDialogOpen(true)}
-                      className="text-destructive"
-                    >
-                      <ShieldOff className="h-4 w-4" />
-                      Revoke Certificate
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+                <Button variant="outline" onClick={() => void handleDownload("der")}>
+                  <Download className="h-4 w-4" />
+                  Download DER
+                </Button>
+                <Button variant="outline" onClick={() => setPkcs12DialogOpen(true)}>
+                  <Download className="h-4 w-4" />
+                  Download PKCS#12
+                </Button>
+              </>
+            )}
+            <Button variant="outline" onClick={copySerial}>
+              <Copy className="h-4 w-4" />
+              Copy Serial Number
+            </Button>
+            {canExportCertificate && cert.certificatePem && (
+              <Button variant="outline" onClick={copyPem}>
+                <Copy className="h-4 w-4" />
+                Copy PEM
+              </Button>
+            )}
+            {canRevokeCertificate && cert.status === "active" && !cert.isSystem && (
+              <Button variant="destructive" onClick={() => setRevokeDialogOpen(true)}>
+                <ShieldOff className="h-4 w-4" />
+                Revoke Certificate
+              </Button>
+            )}
+          </ResponsiveHeaderActions>
         </div>
 
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">

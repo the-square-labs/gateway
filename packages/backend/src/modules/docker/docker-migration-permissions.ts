@@ -1,4 +1,4 @@
-import { hasScope } from '@/lib/permissions.js';
+import { hasScope, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 
@@ -63,7 +63,10 @@ export function assertDockerMigrationReadAccess(
   const canViewResource =
     hasDockerResourceScope(scopes, 'docker:containers:view', sourceNodeId, resourceId) ||
     hasDockerResourceScope(scopes, 'docker:containers:view', targetNodeId, resourceId);
-  if (!hasScope(scopes, 'docker:tasks') || !canViewResource) {
+  const canViewTasks =
+    hasScopeForResource(scopes, 'docker:tasks', sourceNodeId) ||
+    hasScopeForResource(scopes, 'docker:tasks', targetNodeId);
+  if (!canViewTasks || !canViewResource) {
     throw new AppError(403, 'FORBIDDEN', 'Docker migration history requires task and node visibility');
   }
 }
@@ -78,7 +81,10 @@ export function assertDockerMigrationManageAccess(
   const canMigrateResource =
     hasDockerResourceScope(scopes, 'docker:containers:migrate', sourceNodeId, resourceId) ||
     hasDockerResourceScope(scopes, 'docker:containers:migrate', targetNodeId, resourceId);
-  if (!hasScope(scopes, 'docker:tasks:manage') || !canMigrateResource) {
+  const canManageTasks =
+    hasScopeForResource(scopes, 'docker:tasks:manage', sourceNodeId) ||
+    hasScopeForResource(scopes, 'docker:tasks:manage', targetNodeId);
+  if (!canManageTasks || !canMigrateResource) {
     throw new AppError(403, 'FORBIDDEN', 'Managing a migration requires task management and migration permissions');
   }
 }

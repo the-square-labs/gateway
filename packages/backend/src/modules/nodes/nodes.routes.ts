@@ -251,18 +251,34 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
     query.type === 'docker' ? dockerScopedNodeIds(scopes, RESOURCE_SCOPED_DOCKER_NODE_SCOPES) : [];
   const canListAllDockerNodes = query.type === 'docker' && hasBroadDockerNodeListAccess(scopes);
   const canListDockerNodes = canListAllDockerNodes || allowedDockerNodeIds.length > 0;
-  if (!hasNodeDetails && !canManageFolders && allowedNodeIds.length === 0 && !canListDockerNodes) {
+  const allowedIngressNodeIds = query.type === 'nginx' ? getResourceScopedIds(scopes, 'proxy:create') : [];
+  const canListAllIngressNodes = query.type === 'nginx' && hasScope(scopes, 'proxy:create');
+  const canListIngressNodes = canListAllIngressNodes || allowedIngressNodeIds.length > 0;
+  if (
+    !hasNodeDetails &&
+    !canManageFolders &&
+    allowedNodeIds.length === 0 &&
+    !canListDockerNodes &&
+    !canListIngressNodes
+  ) {
     throw new AppError(403, 'FORBIDDEN', 'Missing required node access scope');
   }
   const scopedNodeIds =
     query.type === 'docker' && !canListAllDockerNodes
       ? [...new Set([...allowedNodeIds, ...allowedDockerNodeIds])]
-      : allowedNodeIds;
+      : query.type === 'nginx' && !canListAllIngressNodes
+        ? [...new Set([...allowedNodeIds, ...allowedIngressNodeIds])]
+        : allowedNodeIds;
   const result = await service.list(
     query,
-    hasNodeDetails || canManageFolders || canListAllDockerNodes ? undefined : { allowedIds: scopedNodeIds }
+    hasNodeDetails || canManageFolders || canListAllDockerNodes || canListAllIngressNodes
+      ? undefined
+      : { allowedIds: scopedNodeIds }
   );
   if (query.type === 'docker' && canListDockerNodes && !hasNodeDetails) {
+    return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
+  }
+  if (query.type === 'nginx' && canListIngressNodes && !hasNodeDetails && !canManageFolders) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
   return c.json(result);
@@ -526,11 +542,17 @@ nodesRoutes.openapi({ ...updateNodeRoute, middleware: requireScopeForResource('n
     if (current.type === 'docker' && !hasScope(scopes, `docker:containers:config:${id}`)) {
       throw new AppError(403, 'FORBIDDEN', 'Editing the Docker service address requires Docker config access');
     }
-    if (current.type !== 'docker' && current.type !== 'databases') {
+    if (current.type === 'nginx' && !hasScope(scopes, `nodes:config:edit:${id}`)) {
+      throw new AppError(403, 'FORBIDDEN', 'Editing the Nginx service address requires node config edit access');
+    }
+    if (current.type === 'nginx' && input.confirmDomainDnsUpdate && !hasScope(scopes, 'domains:edit')) {
+      throw new AppError(403, 'FORBIDDEN', 'Updating assigned domain DNS targets requires domain edit access');
+    }
+    if (current.type !== 'docker' && current.type !== 'databases' && current.type !== 'nginx') {
       throw new AppError(
         400,
         'INVALID_SERVICE_ADDRESS_NODE',
-        'Service address is only supported for Docker and database nodes'
+        'Service address is only supported for Docker, database, and Nginx nodes'
       );
     }
   }
@@ -554,7 +576,7 @@ nodesRoutes.openapi({ ...deleteNodeRoute, middleware: requireScopeForResource('n
   const service = container.resolve(NodesService);
   const user = c.get('user')!;
   const id = c.req.param('id')!;
-  await service.remove(id, user.id);
+  await service.remove(id, user.id, { cascadeOfflineProxyHosts: c.req.query('cascadeProxyHosts') === 'true' });
   return c.json({ success: true });
 });
 

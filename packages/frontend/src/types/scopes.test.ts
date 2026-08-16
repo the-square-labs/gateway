@@ -22,6 +22,8 @@ describe("scope constants", () => {
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("logs:read");
     expect(RESOURCE_SCOPABLE_SCOPES).not.toContain("admin:system");
     expect(RESOURCE_SCOPABLE_SCOPES).not.toContain("feat:ai:use");
+    expect(RESOURCE_SCOPABLE_SCOPES).not.toContain("nodes:folders:manage");
+    expect(RESOURCE_SCOPABLE_SCOPES).not.toContain("databases:folders:manage");
   });
 
   it("filters API-token scopes more strictly than group-assignable scopes", () => {

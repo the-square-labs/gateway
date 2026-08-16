@@ -1038,3 +1038,65 @@ describe('ProxyService legacy Docker link compatibility', () => {
     expect(writes).toHaveLength(1);
   });
 });
+
+describe('ProxyService offline Nginx abandonment', () => {
+  function setup(connected: boolean, overrides: Record<string, unknown> = {}) {
+    const existing = makeActiveSecureHost(overrides);
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(existing) } },
+      delete: vi.fn(() => ({ where: deleteWhere })),
+    } as any;
+    const auditService = { log: vi.fn().mockResolvedValue(undefined) } as any;
+    const nodeDispatch = { isNodeConnected: vi.fn(() => connected) } as any;
+    const certificateDistribution = { deactivateHost: vi.fn().mockResolvedValue(undefined) } as any;
+    const secureLinks = {
+      abandonOfflineSource: vi.fn().mockResolvedValue(undefined),
+      cleanupAdditionalForHost: vi.fn(),
+      cleanup: vi.fn(),
+    } as any;
+    const service = new ProxyService(
+      db,
+      {} as any,
+      auditService,
+      {} as any,
+      nodeDispatch,
+      certificateDistribution,
+      undefined,
+      secureLinks
+    );
+    return { service, existing, deleteWhere, auditService, nodeDispatch, certificateDistribution, secureLinks };
+  }
+
+  it('removes Gateway state without contacting an abandoned offline Nginx source', async () => {
+    const { service, existing, deleteWhere, auditService, certificateDistribution, secureLinks } = setup(false, {
+      isSystem: true,
+    });
+
+    await service.deleteProxyHost(existing.id, 'user-1', { abandonOfflineNode: true });
+
+    expect(certificateDistribution.deactivateHost).toHaveBeenCalledWith(existing.id, existing.nodeId);
+    expect(secureLinks.abandonOfflineSource).toHaveBeenCalledWith(existing);
+    expect(secureLinks.cleanupAdditionalForHost).not.toHaveBeenCalled();
+    expect(secureLinks.cleanup).not.toHaveBeenCalled();
+    expect(deleteWhere).toHaveBeenCalledOnce();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'proxy_host.delete',
+        details: expect.objectContaining({ abandonedOfflineNode: true, orphanedNginxConfigPossible: true }),
+      })
+    );
+  });
+
+  it('refuses to abandon proxy config while the Nginx source is connected', async () => {
+    const { service, existing, deleteWhere, certificateDistribution, secureLinks } = setup(true);
+
+    await expect(service.deleteProxyHost(existing.id, 'user-1', { abandonOfflineNode: true })).rejects.toMatchObject({
+      code: 'NGINX_NODE_CONNECTED',
+      statusCode: 409,
+    });
+    expect(certificateDistribution.deactivateHost).not.toHaveBeenCalled();
+    expect(secureLinks.abandonOfflineSource).not.toHaveBeenCalled();
+    expect(deleteWhere).not.toHaveBeenCalled();
+  });
+});

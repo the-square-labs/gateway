@@ -61,7 +61,7 @@ export function QuickStatsCard({
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
       {hasScope("proxy:view") && (
         <StatCard
-          title="Proxy Hosts"
+          title="Routes"
           value={displayStats.proxyHosts.total}
           icon={Globe}
           subtitle={`${displayStats.proxyHosts.online} online, ${displayStats.proxyHosts.offline} offline`}

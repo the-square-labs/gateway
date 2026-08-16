@@ -5,7 +5,12 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import {
+  authMiddleware,
+  requireScope,
+  requireScopeBase,
+  requireScopeForResource,
+} from '@/modules/auth/auth.middleware.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
 import {
@@ -237,13 +242,21 @@ databaseRoutes.get('/:id/logs', requireScopeForResource('databases:view', 'id'),
   return c.json({ data });
 });
 
-databaseRoutes.openapi({ ...listManagedDatabaseCatalogRoute, middleware: requireScope('databases:view') }, async (c) =>
-  c.json({ data: container.resolve(ManagedDatabaseService).listCatalog() })
+databaseRoutes.openapi(
+  { ...listManagedDatabaseCatalogRoute, middleware: requireScopeBase('databases:view') },
+  async (c) => c.json({ data: container.resolve(ManagedDatabaseService).listCatalog() })
 );
 
-databaseRoutes.openapi({ ...listManagedDatabasesRoute, middleware: requireScope('databases:view') }, async (c) =>
-  c.json({ data: await container.resolve(ManagedDatabaseService).list() })
-);
+databaseRoutes.openapi({ ...listManagedDatabasesRoute, middleware: requireScopeBase('databases:view') }, async (c) => {
+  const scopes = c.get('effectiveScopes') || [];
+  const data = await container.resolve(ManagedDatabaseService).list();
+  const allowedIds = hasScope(scopes, 'databases:view')
+    ? null
+    : new Set(getResourceScopedIds(scopes, 'databases:view'));
+  return c.json({
+    data: allowedIds ? data.filter((database) => allowedIds.has(database.databaseConnectionId ?? '')) : data,
+  });
+});
 
 databaseRoutes.openapi({ ...createManagedDatabaseRoute, middleware: requireScope('databases:create') }, async (c) => {
   const user = c.get('user')!;

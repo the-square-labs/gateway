@@ -189,7 +189,7 @@ class ApiClient extends withInferenceApi(
       )
     );
     add(
-      auth.hasScope("domains:view"),
+      auth.hasScopedAccess("domains:view"),
       "domains",
       cache("domains:list:folder-view", () => this.listDomains({ page: 1, limit: 1000 }))
     );
@@ -802,6 +802,7 @@ class ApiClient extends withInferenceApi(
       displayName?: string | null;
       appearanceColor?: import("@/types").NodeAppearanceColor | null;
       serviceAddress?: string | null;
+      confirmDomainDnsUpdate?: boolean;
     }
   ): Promise<import("@/types").Node> {
     return this.unwrapData(
@@ -824,8 +825,9 @@ class ApiClient extends withInferenceApi(
     );
   }
 
-  async deleteNode(id: string): Promise<void> {
-    await this.request(`/nodes/${id}`, { method: "DELETE" });
+  async deleteNode(id: string, options: { cascadeProxyHosts?: boolean } = {}): Promise<void> {
+    const query = options.cascadeProxyHosts ? "?cascadeProxyHosts=true" : "";
+    await this.request(`/nodes/${id}${query}`, { method: "DELETE" });
   }
 
   async listNodeFolders(): Promise<import("@/types").ResourceFolderTreeNode[]> {
@@ -1819,14 +1821,15 @@ class ApiClient extends withInferenceApi(
   }
 
   async testNginxTemplate(
-    content: string
+    content: string,
+    templateId?: string
   ): Promise<{ rendered: string; valid: boolean; errors: string[] }> {
     return this.unwrapData(
       this.request<{ data: { rendered: string; valid: boolean; errors: string[] } }>(
         "/nginx-templates/test",
         {
           method: "POST",
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({ content, templateId }),
         }
       )
     );
@@ -1918,6 +1921,10 @@ class ApiClient extends withInferenceApi(
         method: "POST",
       })
     );
+  }
+
+  async cancelPendingACMECert(id: string): Promise<void> {
+    return this.request<void>(`/ssl-certificates/${id}/acme-cancel`, { method: "POST" });
   }
 
   async resyncSSLCertificateDistribution(id: string): Promise<{ synchronized: number }> {
@@ -2049,7 +2056,7 @@ class ApiClient extends withInferenceApi(
   }
 
   async previewDomain(
-    data: Pick<CreateDomainRequest, "domain" | "ttl" | "proxied">
+    data: Pick<CreateDomainRequest, "domain" | "dnsProvider" | "ttl" | "proxied" | "nginxNodeId">
   ): Promise<import("@/types").DomainPreview> {
     return this.unwrapData(
       this.request<{ data: import("@/types").DomainPreview }>("/domains/preview", {
@@ -2065,6 +2072,48 @@ class ApiClient extends withInferenceApi(
         method: "POST",
         body: JSON.stringify(data),
       })
+    );
+  }
+
+  async listDomainNginxNodes(): Promise<import("@/types").DomainNginxNodeOptions> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").DomainNginxNodeOptions }>("/domains/nginx-nodes")
+    );
+  }
+
+  async resolveDomainCloudflareMigration(
+    id: string,
+    data: import("@/types").ResolveCloudflareMigrationRequest
+  ): Promise<DomainWithUsage> {
+    return this.unwrapData(
+      this.request<{ data: DomainWithUsage }>(`/domains/${id}/cloudflare-migration/resolve`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      })
+    );
+  }
+
+  async previewDomainIngressMigration(
+    id: string,
+    targetNodeId: string
+  ): Promise<import("@/types").DomainIngressMigrationImpact> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").DomainIngressMigrationImpact }>(
+        `/domains/${id}/ingress-migration/preview`,
+        { method: "POST", body: JSON.stringify({ targetNodeId }) }
+      )
+    );
+  }
+
+  async migrateDomainIngress(
+    id: string,
+    targetNodeId: string
+  ): Promise<import("@/types").DomainIngressMigrationImpact> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").DomainIngressMigrationImpact }>(
+        `/domains/${id}/ingress-migration`,
+        { method: "POST", body: JSON.stringify({ targetNodeId }) }
+      )
     );
   }
 

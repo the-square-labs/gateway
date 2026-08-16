@@ -15,7 +15,15 @@ import {
   sleep,
   waitForContainerVisible,
 } from './scenario-helpers.js';
-import { expectApiAccessible, expectOk, expectSessionOnly, expectStatus, type TestCase, test } from './test-harness.js';
+import {
+  expectApiAccessible,
+  expectApiAccessibleOrFeatureDisabled,
+  expectOk,
+  expectSessionOnly,
+  expectStatus,
+  type TestCase,
+  test,
+} from './test-harness.js';
 
 export const scenarios: TestCase[] = [
   test('health endpoint reports dependency status', async (ctx) => {
@@ -42,7 +50,7 @@ export const scenarios: TestCase[] = [
     expectSessionOnly(await ctx.client.get('/api/admin/users'), 'GET /api/admin/users');
   }),
 
-  test('all no-parameter OpenAPI GET routes that support API tokens are reachable', async (ctx) => {
+  test('all no-parameter OpenAPI GET routes are API-accessible or explicitly session-only', async (ctx) => {
     const openapi = await ctx.client.get<{ paths?: Record<string, Record<string, unknown>> }>('/openapi.json');
     expectOk(openapi, 'GET /openapi.json');
     const skipPrefixes = [
@@ -70,7 +78,13 @@ export const scenarios: TestCase[] = [
 
     for (const path of paths) {
       const response = await ctx.client.get(path);
-      expectApiAccessible(response, `GET ${path}`);
+      if (response.status === 403 && response.text.includes('browser session')) {
+        expectSessionOnly(response, `GET ${path}`);
+      } else if (path.startsWith('/api/logging/')) {
+        expectApiAccessibleOrFeatureDisabled(response, `GET ${path}`, 'LOGGING_DISABLED');
+      } else {
+        expectApiAccessible(response, `GET ${path}`);
+      }
     }
   }),
 
@@ -112,7 +126,11 @@ export const scenarios: TestCase[] = [
 
     for (const path of paths) {
       const response = await ctx.client.get(path, { query: path.includes('?') ? undefined : { limit: 5 } });
-      expectApiAccessible(response, `GET ${path}`);
+      if (path.startsWith('/api/logging/')) {
+        expectApiAccessibleOrFeatureDisabled(response, `GET ${path}`, 'LOGGING_DISABLED');
+      } else {
+        expectApiAccessible(response, `GET ${path}`);
+      }
     }
   }),
 
@@ -274,17 +292,34 @@ export const scenarios: TestCase[] = [
         expectApiAccessible(await ctx.client.get(`/api/docker/registries/${registryId}`), 'GET created registry');
       }
 
-      const domainName = `${e2eName('domain')}.example.test`;
-      const domain = await ctx.client.post('/api/domains', { domain: domainName, description: 'created by API e2e' });
-      expectOk(domain, 'POST /api/domains');
-      const domainId = unwrapData<Row>(domain.body).id;
-      if (domainId) {
-        ctx.cleanup.push(async () => {
-          await ctx.client.delete(`/api/domains/${domainId}`);
+      const nginxNodes = await ctx.client.get('/api/domains/nginx-nodes');
+      expectApiAccessible(nginxNodes, 'GET /api/domains/nginx-nodes');
+      const eligibleNodes = unwrapData<{ eligibleNodes?: Array<Row & { effectiveAddress?: string }> }>(
+        nginxNodes.body
+      ).eligibleNodes;
+      const ingressNode = eligibleNodes?.find((node) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(node.effectiveAddress ?? ''));
+      if (ingressNode?.id && ingressNode.effectiveAddress) {
+        const dnsLabel = ingressNode.effectiveAddress.replaceAll('.', '-');
+        const domainName = `${e2eName('domain')}.${dnsLabel}.sslip.io`;
+        const domain = await ctx.client.post('/api/domains', {
+          domain: domainName,
+          description: 'created by API e2e',
+          dnsProvider: 'external',
+          nginxNodeId: ingressNode.id,
         });
-        expectOk(await ctx.client.put(`/api/domains/${domainId}`, { description: 'updated by API e2e' }), 'PUT domain');
-        expectApiAccessible(await ctx.client.get(`/api/domains/${domainId}`), 'GET created domain');
-        expectApiAccessible(await ctx.client.post(`/api/domains/${domainId}/check-dns`), 'POST domain DNS check');
+        expectOk(domain, 'POST /api/domains');
+        const domainId = unwrapData<Row>(domain.body).id;
+        if (domainId) {
+          ctx.cleanup.push(async () => {
+            await ctx.client.delete(`/api/domains/${domainId}`);
+          });
+          expectOk(
+            await ctx.client.put(`/api/domains/${domainId}`, { description: 'updated by API e2e' }),
+            'PUT domain'
+          );
+          expectApiAccessible(await ctx.client.get(`/api/domains/${domainId}`), 'GET created domain');
+          expectApiAccessible(await ctx.client.post(`/api/domains/${domainId}/check-dns`), 'POST domain DNS check');
+        }
       }
     },
     skipWithoutMutations

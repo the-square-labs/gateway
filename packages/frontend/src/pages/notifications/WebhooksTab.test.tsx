@@ -102,4 +102,21 @@ describe("WebhooksTab", () => {
     await screen.findByText("Ops Discord");
     expect(screen.queryByRole("heading", { name: "New Webhook" })).not.toBeInTheDocument();
   });
+
+  it("uses the shared empty state with a create CTA and no duplicate description", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+
+    renderWithRouter(<WebhooksTab canRead canManage openCreateToken={0} />);
+
+    expect(await screen.findByRole("button", { name: "Create a webhook" })).toBeInTheDocument();
+    expect(
+      screen.queryByText("Webhooks define where and how notifications are delivered.")
+    ).not.toBeInTheDocument();
+  });
 });

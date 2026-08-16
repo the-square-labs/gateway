@@ -8,7 +8,7 @@ const QUICK_ACTIONS: Record<string, QuickAction[]> = {
   "/": [
     { label: "System overview", prompt: "Give me an overview of the system status" },
     { label: "Expiring soon", prompt: "Show certificates expiring in the next 30 days" },
-    { label: "Health summary", prompt: "What's the health status of all proxy hosts?" },
+    { label: "Health summary", prompt: "What's the health status of all ingress routes?" },
     { label: "Recent changes", prompt: "Summarize recent operational changes and their impact" },
     { label: "What needs attention", prompt: "What needs my attention right now?" },
     {
@@ -27,14 +27,17 @@ const QUICK_ACTIONS: Record<string, QuickAction[]> = {
     { label: "Revoked certs", prompt: "List all revoked certificates" },
   ],
   "/proxy-hosts": [
-    { label: "List all hosts", prompt: "List all proxy hosts with their status" },
-    { label: "Create proxy host", prompt: "Help me create a new proxy host" },
-    { label: "Unhealthy hosts", prompt: "Show proxy hosts that are offline or degraded" },
+    { label: "List all routes", prompt: "List all ingress routes with their status" },
+    { label: "Create route", prompt: "Help me create a new ingress route" },
+    { label: "Unhealthy routes", prompt: "Show ingress routes that are offline or degraded" },
     {
       label: "Traffic errors",
-      prompt: "Investigate recent traffic errors and affected proxy hosts",
+      prompt: "Investigate recent traffic errors and affected ingress routes",
     },
-    { label: "Secure a host", prompt: "Help me secure a proxy host with a domain and certificate" },
+    {
+      label: "Secure a route",
+      prompt: "Help me secure an ingress route with a domain and certificate",
+    },
   ],
   "/ssl-certificates": [
     { label: "List SSL certs", prompt: "List all SSL certificates with expiry dates" },

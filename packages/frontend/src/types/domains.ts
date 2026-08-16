@@ -3,6 +3,15 @@
 export type DnsStatus = "valid" | "invalid" | "pending" | "unknown";
 export type DomainDnsProvider = "legacy" | "cloudflare";
 export type DomainDnsOwnership = "legacy" | "created" | "matched_existing" | "overwritten";
+export type DomainCloudflareMigrationStatus =
+  | "pending"
+  | "migrated"
+  | "zone_unavailable"
+  | "zone_ambiguous"
+  | "ingress_unavailable"
+  | "dns_conflict"
+  | "ignored"
+  | "error";
 
 export interface DnsRecords {
   a: string[];
@@ -30,6 +39,13 @@ export interface Domain {
   dnsTargetIps: string[];
   dnsTtl: number | null;
   dnsProxied: boolean | null;
+  cloudflareMigrationStatus: DomainCloudflareMigrationStatus | null;
+  cloudflareMigrationCheckedAt: string | null;
+  nginxNodeId: string | null;
+  ingressMigrationId?: string | null;
+  ingressMigrationSourceNodeId?: string | null;
+  ingressMigrationStatus?: string | null;
+  ingressMigrationError?: string | null;
   isSystem?: boolean;
   folderId?: string | null;
   sortOrder?: number;
@@ -41,7 +57,13 @@ export interface Domain {
 }
 
 export interface DomainUsage {
-  proxyHosts: Array<{ id: string; slug: string; domainNames: string[]; enabled: boolean }>;
+  proxyHosts: Array<{
+    id: string;
+    slug: string;
+    domainNames: string[];
+    enabled: boolean;
+    nodeId: string | null;
+  }>;
   sslCertificates: Array<{
     id: string;
     domainNames: string[];
@@ -51,22 +73,68 @@ export interface DomainUsage {
 }
 
 export interface DomainWithUsage extends Domain {
+  nginxNode: DomainNginxNode | null;
   usage: DomainUsage;
 }
+
+export interface DomainNginxNode {
+  id: string;
+  slug: string;
+  hostname: string;
+  displayName: string | null;
+  appearanceColor: string | null;
+  effectiveAddress?: string;
+}
+
+export interface DomainNginxNodeOptions {
+  eligibleNodes: Array<DomainNginxNode & { effectiveAddress: string }>;
+  unconfiguredNodes: DomainNginxNode[];
+  totalNginxNodes: number;
+  unconfiguredNginxNodes: number;
+}
+
+export interface DomainIngressMigrationImpact {
+  status: "ready" | "waiting_dns" | "cleanup_pending" | "completed";
+  sourceNode: DomainNginxNode & { effectiveAddress: string };
+  targetNode: DomainNginxNode & { effectiveAddress: string };
+  domains: Array<{
+    id: string;
+    domain: string;
+    dnsProvider: "cloudflare" | "external";
+    dnsStatus: DnsStatus;
+  }>;
+  proxyHosts: Array<{
+    id: string;
+    slug: string;
+    domainNames: string[];
+    enabled: boolean;
+  }>;
+  targetIps: string[];
+  requiresExternalDnsBeforeMove: boolean;
+}
+
+export type ResolveCloudflareMigrationRequest =
+  | { action: "retry" }
+  | { action: "keep_external" }
+  | { action: "update_dns"; nginxNodeId: string };
 
 export interface DomainSearchResult {
   id: string;
   domain: string;
   dnsStatus: DnsStatus;
+  dnsProvider: DomainDnsProvider;
+  nginxNodeId: string | null;
 }
 
 export interface CreateDomainRequest {
   domain: string;
+  dnsProvider: "cloudflare" | "external";
   description?: string;
   folderId?: string | null;
   ttl?: number;
   proxied?: boolean;
   overwriteDns?: boolean;
+  nginxNodeId?: string;
 }
 
 export interface DeleteDomainRequest {
@@ -91,10 +159,12 @@ export interface DomainDnsConflictDetails {
   recordIds?: string[];
 }
 
-export interface DomainPreview {
+export interface CloudflareDomainPreview {
+  dnsProvider: "cloudflare";
   domain: string;
   zoneName: string;
   connectorId: string;
+  nginxNode: DomainNginxNode & { effectiveAddress: string };
   targetIps: string[];
   ttl: number;
   proxied: boolean;
@@ -103,6 +173,18 @@ export interface DomainPreview {
   status: "ready" | "matched" | "mismatch" | "blocked";
   canOverwrite: boolean;
 }
+
+export interface ExternalDomainPreview {
+  dnsProvider: "external";
+  domain: string;
+  nginxNode: DomainNginxNode & { effectiveAddress: string };
+  targetIps: string[];
+  queryName: string;
+  dnsRecords: DnsRecords;
+  status: DnsStatus;
+}
+
+export type DomainPreview = CloudflareDomainPreview | ExternalDomainPreview;
 
 export interface UpdateDomainRequest {
   description?: string | null;

@@ -23,10 +23,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
-import {
-  HeaderOverflowMenu,
-  ResponsiveHeaderActions,
-} from "@/components/common/ResponsiveHeaderActions";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -729,11 +726,18 @@ export function DockerDeploymentDetail({
                 </Button>
               </>
             )}
-            <HeaderOverflowMenu
-              actions={overflowActions}
-              disabled={actionDisabled}
-              ariaLabel="More deployment actions"
-            />
+            {overflowActions.map((headerAction) => (
+              <Button
+                key={headerAction.label}
+                variant={headerAction.destructive ? "destructive" : "outline"}
+                disabled={headerAction.disabled}
+                title={headerAction.disabled ? headerAction.disabledReason : undefined}
+                onClick={headerAction.onClick}
+              >
+                {headerAction.icon}
+                {headerAction.label}
+              </Button>
+            ))}
           </ResponsiveHeaderActions>
         </div>
 

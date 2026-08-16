@@ -50,6 +50,7 @@ export type * from "./resource-search";
 export {
   AI_SCOPE,
   API_TOKEN_SCOPES,
+  FOLDER_SCOPABLE_SCOPES,
   GROUP_ASSIGNABLE_SCOPES,
   RESOURCE_SCOPABLE_SCOPES,
   TOKEN_SCOPES,

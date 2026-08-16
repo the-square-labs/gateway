@@ -394,8 +394,22 @@ export class NodeRegistryService {
   updateHealthReport(nodeId: string, report: NodeHealthReport): void {
     const node = this.nodes.get(nodeId);
     if (node) {
+      const previousIngressAddresses = [
+        ...(node.lastHealthReport?.localIpAddresses ?? []),
+        ...(node.lastHealthReport?.publicIpAddresses ?? []),
+      ]
+        .map((address) => address.trim())
+        .filter(Boolean)
+        .sort();
+      const nextIngressAddresses = [...(report.localIpAddresses ?? []), ...(report.publicIpAddresses ?? [])]
+        .map((address) => address.trim())
+        .filter(Boolean)
+        .sort();
       node.lastHealthReport = report;
       node.lastReportAt = new Date();
+      if (node.type === 'nginx' && previousIngressAddresses.join('\u0000') !== nextIngressAddresses.join('\u0000')) {
+        this.eventBus?.publish('node.ingress_addresses.changed', { id: nodeId });
+      }
     }
   }
 

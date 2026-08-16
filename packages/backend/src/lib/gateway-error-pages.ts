@@ -26,18 +26,27 @@ export function gatewayMaintenanceHtml(hideExternalBranding = false): string {
 export const GATEWAY_RESTARTING_SCRIPT = `(() => {
   const check = async () => {
     try {
-      const response = await fetch('/health', { cache: 'no-store' });
+      const response = await fetch('/health', {
+        cache: 'no-store',
+        headers: { 'X-Gateway-Health-Probe': 'restart-page' },
+      });
       if (response.ok) {
         const health = await response.json();
         if (health.lifecycleState === 'running') {
-          window.location.reload();
-          return;
+          const page = await fetch(window.location.href, {
+            cache: 'no-store',
+            headers: { Accept: 'text/html' },
+          });
+          if (page.ok) {
+            window.setTimeout(() => window.location.reload(), 1000);
+            return;
+          }
         }
       }
     } catch {}
     window.setTimeout(check, 1000);
   };
-  void check();
+  window.setTimeout(check, 1000);
 })();`;
 
 export const GATEWAY_RESTARTING_HTML = `<!doctype html>

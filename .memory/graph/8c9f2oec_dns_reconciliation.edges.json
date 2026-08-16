@@ -1,0 +1,25 @@
+{
+  "file_name": "8c9f2oec_dns_reconciliation",
+  "edges": [
+    {
+      "from_id": "8c9f2oec",
+      "to_id": "x7unpgb6",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both define durable Nginx proxy-host configuration contracts and generated configuration behavior.",
+      "source": "auto",
+      "created_at": 1786650490990,
+      "updated_at": 1786650490990
+    },
+    {
+      "from_id": "8c9f2oec",
+      "to_id": "3ta908aa",
+      "relation": "same_area",
+      "weight": 0.45,
+      "reason": "Both concern managed proxy hosts and Nginx node-facing ingress behavior, though their primary contracts differ.",
+      "source": "auto",
+      "created_at": 1786650490990,
+      "updated_at": 1786650490990
+    }
+  ]
+}

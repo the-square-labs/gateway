@@ -53,6 +53,7 @@ vi.mock('@/modules/auth/auth.middleware.js', () => {
     requireActiveUser,
     requireScope: allow,
     requireAnyScope: allow,
+    requireAnyScopeBase: allow,
     requireScopeBase: allow,
     requireScopeForResource: allow,
     sessionOnly: allow(),

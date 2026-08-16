@@ -1,7 +1,6 @@
 import {
   Cable,
   Code2,
-  EllipsisVertical,
   Info,
   KeyRound,
   Pencil,
@@ -33,13 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -95,6 +87,7 @@ export function ProxyHostDetail({
   const canViewRawConfig = !!id && hasScope(`proxy:raw:read:${id}`);
   const canWriteRawConfig = !!id && hasScope(`proxy:raw:write:${id}`);
   const canEditProxyHost = !!id && (hasScope("proxy:edit") || hasScope(`proxy:edit:${id}`));
+  const canDeleteProxyHost = !!id && (hasScope("proxy:delete") || hasScope(`proxy:delete:${id}`));
   const [host, setHost] = useState<ProxyHost | null>(null);
   const [maintenanceAccessCode, setMaintenanceAccessCode] = useState<string | null>(null);
   const [isCreatingMaintenanceAccessCode, setIsCreatingMaintenanceAccessCode] = useState(false);
@@ -228,7 +221,7 @@ export function ProxyHostDetail({
           usePinnedProxiesStore.getState().removePin(id);
         }
         if (!silent) {
-          toast.error("Failed to load proxy host");
+          toast.error("Failed to load route");
           navigate("/proxy-hosts");
         }
       } finally {
@@ -710,9 +703,8 @@ export function ProxyHostDetail({
     const deletingHostId = host.id;
     const ok = await confirmAction(
       {
-        title: "Delete Proxy Host",
-        description:
-          "Are you sure you want to delete this proxy host? This action cannot be undone.",
+        title: "Delete Route",
+        description: "Are you sure you want to delete this route? This action cannot be undone.",
         confirmLabel: "Delete",
       },
       async () => {
@@ -720,7 +712,7 @@ export function ProxyHostDetail({
           await api.deleteProxyHost(deletingHostId);
           return true;
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Failed to delete proxy host");
+          toast.error(err instanceof Error ? err.message : "Failed to delete route");
           return false;
         }
       }
@@ -739,7 +731,7 @@ export function ProxyHostDetail({
       const ok = await confirm({
         title: "Enable Maintenance Mode",
         description:
-          "All requests to this proxy host will receive HTTP 503 and managed health checks will pause until maintenance is disabled.",
+          "All requests to this route will receive HTTP 503 and managed health checks will pause until maintenance is disabled.",
         confirmLabel: "Enable Maintenance",
       });
       if (!ok) return;
@@ -945,7 +937,7 @@ export function ProxyHostDetail({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="min-w-0 basis-full break-all text-2xl font-bold sm:basis-auto">
-                  {host.domainNames[0] || "Proxy Host"}
+                  {host.domainNames[0] || "Route"}
                 </h1>
                 <Badge
                   className="shrink-0"
@@ -1003,7 +995,7 @@ export function ProxyHostDetail({
                 icon: <Pin className="h-4 w-4" />,
                 onClick: () => setPinOpen(true),
               },
-              ...(hasScope("proxy:edit")
+              ...(canEditProxyHost
                 ? [
                     {
                       label: "Edit",
@@ -1044,7 +1036,7 @@ export function ProxyHostDetail({
                     },
                   ]
                 : []),
-              ...(!isSystemHost && hasScope("proxy:delete")
+              ...(!isSystemHost && canDeleteProxyHost
                 ? [
                     {
                       label: "Delete",
@@ -1060,60 +1052,43 @@ export function ProxyHostDetail({
             <Button variant="outline" size="icon" onClick={() => setPinOpen(true)}>
               <Pin className="h-4 w-4" />
             </Button>
-            {hasScope("proxy:edit") && (
+            {canEditProxyHost && (
               <Button variant="outline" onClick={() => setEditOpen(true)}>
                 <Pencil className="h-4 w-4" />
                 Edit
               </Button>
             )}
-            {(canEditProxyHost ||
-              canIssueMaintenanceAccessCode ||
-              canResyncTls ||
-              (!isSystemHost && hasScope("proxy:delete"))) && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="More proxy host actions">
-                    <EllipsisVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {canEditProxyHost && (
-                    <DropdownMenuItem
-                      onClick={handleMaintenance}
-                      disabled={isMaintenanceToggling || !maintenanceActionAvailable}
-                    >
-                      <Wrench className="mr-2 h-4 w-4" />
-                      {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
-                    </DropdownMenuItem>
-                  )}
-                  {canIssueMaintenanceAccessCode && (
-                    <DropdownMenuItem
-                      onClick={handleCreateMaintenanceAccessCode}
-                      disabled={isCreatingMaintenanceAccessCode}
-                    >
-                      <KeyRound className="mr-2 h-4 w-4" />
-                      Create Maintenance Access Code
-                    </DropdownMenuItem>
-                  )}
-                  {canResyncTls && (
-                    <DropdownMenuItem onClick={handleTlsResync} disabled={isTlsResyncing}>
-                      <RefreshCw className={cn("mr-2 h-4 w-4", isTlsResyncing && "animate-spin")} />
-                      Retry TLS Sync
-                    </DropdownMenuItem>
-                  )}
-                  {!isSystemHost && hasScope("proxy:delete") && (
-                    <>
-                      {(canEditProxyHost || canIssueMaintenanceAccessCode || canResyncTls) && (
-                        <DropdownMenuSeparator />
-                      )}
-                      <DropdownMenuItem onClick={handleDelete} className="text-destructive">
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+            {canEditProxyHost && (
+              <Button
+                variant="outline"
+                onClick={handleMaintenance}
+                disabled={isMaintenanceToggling || !maintenanceActionAvailable}
+              >
+                <Wrench className="h-4 w-4" />
+                {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
+              </Button>
+            )}
+            {canIssueMaintenanceAccessCode && (
+              <Button
+                variant="outline"
+                onClick={handleCreateMaintenanceAccessCode}
+                disabled={isCreatingMaintenanceAccessCode}
+              >
+                <KeyRound className="h-4 w-4" />
+                Create Maintenance Access Code
+              </Button>
+            )}
+            {canResyncTls && (
+              <Button variant="outline" onClick={handleTlsResync} disabled={isTlsResyncing}>
+                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                Retry TLS Sync
+              </Button>
+            )}
+            {!isSystemHost && canDeleteProxyHost && (
+              <Button variant="destructive" onClick={handleDelete}>
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
             )}
           </ResponsiveHeaderActions>
         </div>
@@ -1361,7 +1336,7 @@ export function ProxyHostDetail({
       <Dialog open={pinOpen} onOpenChange={setPinOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Pin Proxy Host</DialogTitle>
+            <DialogTitle>Pin Route</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1386,5 +1361,5 @@ export function ProxyHostDetail({
 }
 
 function ProxyHostDetailSkeleton() {
-  return <DetailPageSkeleton label="Loading proxy host" />;
+  return <DetailPageSkeleton label="Loading route" />;
 }

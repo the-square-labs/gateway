@@ -29,12 +29,16 @@ export class DockerTaskService {
     });
   }
 
-  async list(filters?: { nodeId?: string; status?: string; type?: string }) {
+  async list(filters?: { nodeId?: string; status?: string; type?: string; allowedNodeIds?: string[] }) {
     await this.markStaleActiveTasksFailed();
     const conditions = [];
     if (filters?.nodeId) conditions.push(eq(dockerTasks.nodeId, filters.nodeId));
     if (filters?.status) conditions.push(eq(dockerTasks.status, filters.status));
     if (filters?.type) conditions.push(eq(dockerTasks.type, filters.type));
+    if (filters?.allowedNodeIds) {
+      if (filters.allowedNodeIds.length === 0) return [];
+      conditions.push(inArray(dockerTasks.nodeId, filters.allowedNodeIds));
+    }
 
     return this.db.select().from(dockerTasks).where(buildWhere(conditions)).orderBy(desc(dockerTasks.createdAt));
   }

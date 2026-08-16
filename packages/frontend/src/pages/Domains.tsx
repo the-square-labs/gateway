@@ -1,14 +1,18 @@
 import {
+  ArrowRight,
   FolderPlus,
   Globe,
   MoreVertical,
   Pencil,
   Plus,
   RefreshCw,
+  Route as RouteIcon,
   Shield,
   Trash2,
+  Truck,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -18,11 +22,18 @@ import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { AddDomainDialog } from "@/components/domains/AddDomainDialog";
-import { DnsStatusBadge } from "@/components/domains/DnsStatusBadge";
 import { DomainDetailDialog } from "@/components/domains/DomainDetailDialog";
 import { getDomainPermissions } from "@/components/domains/domain-permissions";
+import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,27 +53,132 @@ import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
-import type { DnsStatus, Domain, DomainDnsConflictDetails } from "@/types";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import type { Domain, DomainDnsConflictDetails, DomainNginxNodeOptions } from "@/types";
 
 const DOMAIN_FOLDER_LIST_CACHE_KEY = "domains:list:folder-view";
+const DIALOG_PAYLOAD_CLEAR_DELAY_MS = 260;
+
+type DomainCreationBlocker = "no_nodes" | "no_public_address";
+export type DomainHealthStatus = "healthy" | "warning" | "error";
+
+const DOMAIN_HEALTH_BADGE: Record<
+  DomainHealthStatus,
+  { label: string; variant: "success" | "warning" | "destructive" }
+> = {
+  healthy: { label: "Healthy", variant: "success" },
+  warning: { label: "Warning", variant: "warning" },
+  error: { label: "Error", variant: "destructive" },
+};
+
+export function getDomainHealthStatus(
+  domain: Pick<Domain, "dnsStatus" | "cloudflareMigrationStatus">
+): DomainHealthStatus {
+  if (domain.dnsStatus === "invalid") return "error";
+  if (domain.dnsStatus === "valid") return "healthy";
+  return "warning";
+}
+
+function DomainHealthBadge({ domain }: { domain: Domain }) {
+  const health = getDomainHealthStatus(domain);
+  const config = DOMAIN_HEALTH_BADGE[health];
+  return <Badge variant={config.variant}>{config.label}</Badge>;
+}
+
+const DOMAIN_CREATION_BLOCKER_COPY: Record<
+  DomainCreationBlocker,
+  { title: string; description: string; actionLabel: string; href: string }
+> = {
+  no_nodes: {
+    title: "No Ingress nodes",
+    description:
+      "A domain must be assigned to an Ingress node that accepts incoming traffic. Add and connect an Ingress node first; Gateway will use its detected public service address as the DNS target. You can review or change that address in the node's Settings before returning here.",
+    actionLabel: "Open Nodes",
+    href: "/nodes",
+  },
+  no_public_address: {
+    title: "No public Ingress addresses",
+    description:
+      "Gateway found Ingress nodes, but none currently reports a public service address that can be used as the DNS target. Open a node's Settings and choose Automatic or one of the detected public addresses. Nodes that expose only private addresses cannot be assigned to a domain.",
+    actionLabel: "Open Nodes",
+    href: "/nodes",
+  },
+};
+
+export function getDomainCreationBlocker(
+  options: DomainNginxNodeOptions
+): DomainCreationBlocker | null {
+  if (options.totalNginxNodes === 0) return "no_nodes";
+  if (options.eligibleNodes.length === 0) return "no_public_address";
+  return null;
+}
 
 export function Domains() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedDomainName = searchParams.get("domain");
   const { hasScope } = useAuthStore();
-  const { canCreateDomain, canDeleteDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
-  const canCheckDns = hasScope("domains:edit");
-  const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
+  const { canCreateDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
+  const hasCloudflareIntegration = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
+  );
 
   const cachedDomains = api.getCached<{ data: Domain[] }>(DOMAIN_FOLDER_LIST_CACHE_KEY);
   const [domains, setDomains] = useState<Domain[]>(cachedDomains?.data ?? []);
   const [isLoading, setIsLoading] = useState(!cachedDomains);
   const [cloudflareReady, setCloudflareReady] = useState<boolean | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<DnsStatus | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<DomainHealthStatus | "all">("all");
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [addDnsProvider, setAddDnsProvider] = useState<"cloudflare" | "external">("cloudflare");
+  const [cloudflareChoiceOpen, setCloudflareChoiceOpen] = useState(false);
+  const [creationBlocker, setCreationBlocker] = useState<DomainCreationBlocker | null>(null);
+  const [creationBlockerOpen, setCreationBlockerOpen] = useState(false);
+  const creationBlockerClearTimerRef = useRef<number | null>(null);
+  const [checkingNginxNodes, setCheckingNginxNodes] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [detailInitialView, setDetailInitialView] = useState<"details" | "ingress-migration">(
+    "details"
+  );
+  const [routeCreateDomain, setRouteCreateDomain] = useState<Pick<
+    Domain,
+    "domain" | "nginxNodeId"
+  > | null>(null);
+  const cloudflareConfigured = cloudflareReady ?? hasCloudflareIntegration;
+  const creationBlockerCopy = creationBlocker
+    ? DOMAIN_CREATION_BLOCKER_COPY[creationBlocker]
+    : null;
+
+  const openCreationBlocker = useCallback((blocker: DomainCreationBlocker) => {
+    if (creationBlockerClearTimerRef.current !== null) {
+      window.clearTimeout(creationBlockerClearTimerRef.current);
+      creationBlockerClearTimerRef.current = null;
+    }
+    setCreationBlocker(blocker);
+    setCreationBlockerOpen(true);
+  }, []);
+
+  const closeCreationBlocker = useCallback(() => {
+    setCreationBlockerOpen(false);
+    if (creationBlockerClearTimerRef.current !== null) {
+      window.clearTimeout(creationBlockerClearTimerRef.current);
+    }
+    creationBlockerClearTimerRef.current = window.setTimeout(() => {
+      setCreationBlocker(null);
+      creationBlockerClearTimerRef.current = null;
+    }, DIALOG_PAYLOAD_CLEAR_DELAY_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (creationBlockerClearTimerRef.current !== null) {
+        window.clearTimeout(creationBlockerClearTimerRef.current);
+      }
+    },
+    []
+  );
 
   const loadDomains = useCallback(async () => {
     try {
@@ -114,6 +230,29 @@ export function Domains() {
     loadDomains();
   });
 
+  const handleAddDomain = async () => {
+    if (checkingNginxNodes) return;
+    setCheckingNginxNodes(true);
+    try {
+      const options = await api.listDomainNginxNodes();
+      const blocker = getDomainCreationBlocker(options);
+      if (blocker) {
+        openCreationBlocker(blocker);
+        return;
+      }
+      if (!cloudflareConfigured) {
+        setCloudflareChoiceOpen(true);
+        return;
+      }
+      setAddDnsProvider("cloudflare");
+      setAddDialogOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load Ingress nodes");
+    } finally {
+      setCheckingNginxNodes(false);
+    }
+  };
+
   const handleCheckDns = async (d: Domain) => {
     try {
       await api.checkDomainDns(d.id);
@@ -151,7 +290,7 @@ export function Domains() {
         description:
           d.dnsProvider === "cloudflare"
             ? `Delete "${d.domain}" and its Gateway-managed Cloudflare DNS records?`
-            : `Are you sure you want to delete "${d.domain}"? This won't affect proxy hosts or certificates using this domain.`,
+            : `Are you sure you want to delete "${d.domain}"? This won't affect routes or certificates using this domain.`,
         confirmLabel: "Delete",
       });
       if (!ok) return;
@@ -177,9 +316,7 @@ export function Domains() {
       }
       const msg = err instanceof Error ? err.message : "Failed to delete domain";
       if (msg.includes("in use")) {
-        toast.error(
-          "Cannot delete: domain is used by proxy hosts. Remove it from proxy hosts first."
-        );
+        toast.error("Cannot delete: domain is used by routes. Remove it from routes first.");
       } else if (msg.includes("System")) {
         toast.error("System domains cannot be deleted.");
       } else {
@@ -188,17 +325,33 @@ export function Domains() {
     }
   };
 
-  const openDetail = (id: string) => {
+  const openDetail = (id: string, initialView: "details" | "ingress-migration" = "details") => {
     setDetailId(id);
+    setDetailInitialView(initialView);
     setDetailOpen(true);
   };
 
+  useEffect(() => {
+    if (!requestedDomainName || isLoading) return;
+    const requested = requestedDomainName.trim().toLowerCase();
+    const matchingDomain = domains.find((domain) => domain.domain.toLowerCase() === requested);
+    if (matchingDomain) {
+      setDetailId(matchingDomain.id);
+      setDetailInitialView("details");
+      setDetailOpen(true);
+    } else {
+      setSearch(requestedDomainName);
+    }
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("domain");
+    setSearchParams(nextParams, { replace: true });
+  }, [domains, isLoading, requestedDomainName, searchParams, setSearchParams]);
+
   const hasActiveFilters = search.trim() !== "" || statusFilter !== "all";
-  const domainsAvailable = cloudflareReady !== false;
   const filteredDomains = useMemo(() => {
     const query = search.trim().toLowerCase();
     return domains.filter((domain) => {
-      if (statusFilter !== "all" && domain.dnsStatus !== statusFilter) return false;
+      if (statusFilter !== "all" && getDomainHealthStatus(domain) !== statusFilter) return false;
       if (!query) return true;
       return [domain.domain, domain.description].some((value) =>
         value?.toLowerCase().includes(query)
@@ -229,10 +382,10 @@ export function Domains() {
       ),
     },
     {
-      id: "dns",
-      label: "DNS",
+      id: "health",
+      label: "Health",
       width: "8rem",
-      renderCell: (d) => <DnsStatusBadge status={d.dnsStatus} />,
+      renderCell: (d) => <DomainHealthBadge domain={d} />,
     },
     {
       id: "ssl",
@@ -247,7 +400,7 @@ export function Domains() {
     },
     {
       id: "proxyHosts",
-      label: "Proxy Hosts",
+      label: "Routes",
       width: "8rem",
       renderCell: (d) =>
         d.proxyHostCount ? (
@@ -270,8 +423,14 @@ export function Domains() {
       align: "right",
       width: "5rem",
       renderCell: (d) => {
-        const canDeleteRow = !d.isSystem && canDeleteDomain;
-        if (!canCheckDns && !canIssueCert && !canDeleteRow) return null;
+        const permissions = getDomainPermissions(hasScope, d.id);
+        const canCheckDns = permissions.canEditDomain;
+        const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
+        const canCreateRoute =
+          hasScope("proxy:create") ||
+          (!!d.nginxNodeId && hasScope(`proxy:create:${d.nginxNodeId}`));
+        const canDeleteRow = !d.isSystem && permissions.canDeleteDomain;
+        if (!canCheckDns && !canIssueCert && !canCreateRoute && !canDeleteRow) return null;
         return (
           <div
             className="flex justify-end"
@@ -289,6 +448,18 @@ export function Domains() {
                   <DropdownMenuItem onClick={() => handleCheckDns(d)}>
                     <RefreshCw className="h-4 w-4" />
                     Check DNS
+                  </DropdownMenuItem>
+                )}
+                {canCheckDns && (
+                  <DropdownMenuItem onClick={() => openDetail(d.id, "ingress-migration")}>
+                    <Truck className="h-4 w-4" />
+                    {d.ingressMigrationId ? "Complete migration" : "Move ingress"}
+                  </DropdownMenuItem>
+                )}
+                {canCreateRoute && d.nginxNodeId && (
+                  <DropdownMenuItem onClick={() => setRouteCreateDomain(d)}>
+                    <RouteIcon className="h-4 w-4" />
+                    Create route
                   </DropdownMenuItem>
                 )}
                 {canIssueCert && !d.dnsProxied && d.dnsStatus === "valid" && !d.sslCertCount && (
@@ -328,7 +499,7 @@ export function Domains() {
             <div className="min-w-0">
               <h1 className="text-2xl font-bold">Domains</h1>
               <p className="text-sm text-muted-foreground">
-                Manage domains, track DNS status, and issue certificates
+                Manage public hostnames and ingress placement
               </p>
             </div>
           </div>
@@ -343,12 +514,13 @@ export function Domains() {
                     },
                   ]
                 : []),
-              ...(canCreateDomain && domainsAvailable
+              ...(canCreateDomain
                 ? [
                     {
                       label: "Add Domain",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setAddDialogOpen(true),
+                      onClick: () => void handleAddDomain(),
+                      disabled: checkingNginxNodes,
                     },
                   ]
                 : []),
@@ -360,8 +532,8 @@ export function Domains() {
                 Add Folder
               </Button>
             )}
-            {canCreateDomain && domainsAvailable && (
-              <Button onClick={() => setAddDialogOpen(true)}>
+            {canCreateDomain && (
+              <Button onClick={() => void handleAddDomain()} disabled={checkingNginxNodes}>
                 <Plus className="h-4 w-4" />
                 Add Domain
               </Button>
@@ -386,17 +558,16 @@ export function Domains() {
             filters: (
               <Select
                 value={statusFilter}
-                onValueChange={(v) => setStatusFilter(v as DnsStatus | "all")}
+                onValueChange={(v) => setStatusFilter(v as DomainHealthStatus | "all")}
               >
                 <SelectTrigger className="w-40">
-                  <SelectValue placeholder="DNS Status" />
+                  <SelectValue placeholder="Health" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="valid">Valid</SelectItem>
-                  <SelectItem value="invalid">Invalid</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="unknown">Unknown</SelectItem>
+                  <SelectItem value="healthy">Healthy</SelectItem>
+                  <SelectItem value="warning">Warning</SelectItem>
+                  <SelectItem value="error">Error</SelectItem>
                 </SelectContent>
               </Select>
             ),
@@ -405,13 +576,9 @@ export function Domains() {
           loadingLabel="Loading domains..."
           emptyState={
             <EmptyState
-              message={
-                domainsAvailable ? "No domains." : "Cloudflare DNS integration is not configured."
-              }
-              actionLabel={canCreateDomain && domainsAvailable ? "Add one" : undefined}
-              onAction={
-                canCreateDomain && domainsAvailable ? () => setAddDialogOpen(true) : undefined
-              }
+              message="No domains."
+              actionLabel={canCreateDomain ? "Add one" : undefined}
+              onAction={canCreateDomain ? () => void handleAddDomain() : undefined}
               hasActiveFilters={hasActiveFilters}
               onReset={() => {
                 setSearch("");
@@ -432,12 +599,86 @@ export function Domains() {
           open={addDialogOpen}
           onOpenChange={setAddDialogOpen}
           onCreated={loadDomains}
+          dnsProvider={addDnsProvider}
         />
+        <Dialog open={cloudflareChoiceOpen} onOpenChange={setCloudflareChoiceOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Configure Cloudflare DNS</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Cloudflare can create and maintain the DNS records for this domain automatically. You
+              can also continue with external DNS after pointing the domain at the selected Ingress
+              node yourself.
+            </p>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setCloudflareChoiceOpen(false);
+                  setAddDnsProvider("external");
+                  setAddDialogOpen(true);
+                }}
+              >
+                Continue without Cloudflare
+              </Button>
+              {canInspectCloudflare && (
+                <Button asChild>
+                  <Link to="/settings/integrations" onClick={() => setCloudflareChoiceOpen(false)}>
+                    Configure Cloudflare <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog
+          open={creationBlockerOpen}
+          onOpenChange={(open) => {
+            if (open) setCreationBlockerOpen(true);
+            else closeCreationBlocker();
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{creationBlockerCopy?.title}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">{creationBlockerCopy?.description}</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeCreationBlocker}>
+                Close
+              </Button>
+              {creationBlockerCopy && (
+                <Button asChild>
+                  <Link to={creationBlockerCopy.href} onClick={closeCreationBlocker}>
+                    {creationBlockerCopy.actionLabel} <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <DomainDetailDialog
           domainId={detailId}
           open={detailOpen}
-          onOpenChange={setDetailOpen}
+          initialView={detailInitialView}
+          onOpenChange={(nextOpen) => {
+            setDetailOpen(nextOpen);
+            if (!nextOpen) setDetailInitialView("details");
+          }}
           onUpdated={loadDomains}
+        />
+        <CreateProxyHostDialog
+          open={routeCreateDomain !== null}
+          onOpenChange={(open) => {
+            if (!open) setRouteCreateDomain(null);
+          }}
+          initialDomainName={routeCreateDomain?.domain}
+          initialNodeId={routeCreateDomain?.nginxNodeId ?? undefined}
+          onSuccess={() => {
+            setRouteCreateDomain(null);
+            void loadDomains();
+          }}
         />
       </div>
     </PageTransition>

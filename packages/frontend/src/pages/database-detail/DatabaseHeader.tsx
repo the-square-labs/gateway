@@ -1,5 +1,4 @@
 import {
-  EllipsisVertical,
   FileCode2,
   HardDrive,
   KeyRound,
@@ -11,17 +10,13 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import {
+  type ResponsiveHeaderAction,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import type { DatabaseConnection } from "@/types";
 import { formatHealthStatusLabel, HEALTH_BADGE } from "./shared";
 
@@ -84,198 +79,140 @@ export function DatabaseHeader({
   onRotateCertificate,
   onRemove,
 }: DatabaseHeaderProps) {
-  const menuItems = (
-    <>
-      {canEdit && (
-        <DropdownMenuItem onClick={onOpenSettings}>
-          <Settings className="h-3.5 w-3.5 mr-2" />
-          Settings
-        </DropdownMenuItem>
-      )}
-      {canResize && (
-        <DropdownMenuItem onClick={onOpenResize}>
-          <HardDrive className="h-3.5 w-3.5 mr-2" />
-          Resize database
-        </DropdownMenuItem>
-      )}
-      {canConfigureClickHouse && (
-        <DropdownMenuItem onClick={onConfigureClickHouse}>
-          <FileCode2 className="h-3.5 w-3.5 mr-2" />
-          Configure ClickHouse
-        </DropdownMenuItem>
-      )}
-      {canConfigureRedis && (
-        <DropdownMenuItem onClick={onConfigureRedis}>
-          <SlidersHorizontal className="h-3.5 w-3.5 mr-2" />
-          Configure Redis
-        </DropdownMenuItem>
-      )}
-      {(canPause || canUnpause) && (
-        <DropdownMenuItem onClick={canPause ? onPause : onUnpause}>
-          {canPause ? (
-            <Pause className="h-3.5 w-3.5 mr-2" />
-          ) : (
-            <Play className="h-3.5 w-3.5 mr-2" />
-          )}
-          {canPause ? "Pause database" : "Unpause database"}
-        </DropdownMenuItem>
-      )}
-      {canRestart && (
-        <DropdownMenuItem onClick={onRestart}>
-          <RefreshCw className="h-3.5 w-3.5 mr-2" />
-          Restart database
-        </DropdownMenuItem>
-      )}
-      {(canEdit || canPause || canUnpause || canConfigureClickHouse || canConfigureRedis) &&
-        (canReveal || canDelete) && <DropdownMenuSeparator />}
-      {canReveal && (
-        <DropdownMenuItem onClick={onRevealCredentials}>
-          <KeyRound className="h-3.5 w-3.5 mr-2" />
-          Reveal credentials
-        </DropdownMenuItem>
-      )}
-      {canRotateDirectCredentials && (
-        <DropdownMenuItem onClick={onRotateDirectCredentials}>
-          <RefreshCw className="h-3.5 w-3.5 mr-2" />
-          Rotate direct-access credentials
-        </DropdownMenuItem>
-      )}
-      {canRotateCertificate && (
-        <DropdownMenuItem onClick={onRotateCertificate}>
-          <RefreshCw className="h-3.5 w-3.5 mr-2" />
-          Rotate TLS certificate
-        </DropdownMenuItem>
-      )}
-      {(canReveal || canRotateDirectCredentials || canRotateCertificate) && canDelete && (
-        <DropdownMenuSeparator />
-      )}
-      {canDelete && (
-        <DropdownMenuItem onClick={onRemove} className="text-destructive">
-          <Trash2 className="h-3.5 w-3.5 mr-2" />
-          Remove
-        </DropdownMenuItem>
-      )}
-    </>
-  );
+  type HeaderAction = ResponsiveHeaderAction & { buttonLabel: string; iconOnly?: boolean };
+  const headerActions: HeaderAction[] = [
+    {
+      id: "database:pin",
+      label: "Pin database",
+      buttonLabel: "Pin",
+      iconOnly: true,
+      icon: <Pin className="h-4 w-4" />,
+      onClick: onOpenPin,
+    },
+    ...(canEdit
+      ? [
+          {
+            id: "database:test",
+            label: "Test database connection",
+            buttonLabel: "Test",
+            icon: <RefreshCw className="h-4 w-4" />,
+            onClick: onTest,
+          },
+          {
+            id: "database:settings",
+            label: "Database settings",
+            buttonLabel: "Settings",
+            icon: <Settings className="h-4 w-4" />,
+            onClick: onOpenSettings,
+          },
+        ]
+      : []),
+    ...(canResize
+      ? [
+          {
+            id: "database:resize",
+            label: "Resize database",
+            buttonLabel: "Resize",
+            icon: <HardDrive className="h-4 w-4" />,
+            onClick: onOpenResize,
+          },
+        ]
+      : []),
+    ...(canConfigureClickHouse
+      ? [
+          {
+            id: "database:configure-clickhouse",
+            label: "Configure ClickHouse",
+            buttonLabel: "Configure ClickHouse",
+            icon: <FileCode2 className="h-4 w-4" />,
+            onClick: onConfigureClickHouse,
+          },
+        ]
+      : []),
+    ...(canConfigureRedis
+      ? [
+          {
+            id: "database:configure-redis",
+            label: "Configure Redis",
+            buttonLabel: "Configure Redis",
+            icon: <SlidersHorizontal className="h-4 w-4" />,
+            onClick: onConfigureRedis,
+          },
+        ]
+      : []),
+    ...(canPause || canUnpause
+      ? [
+          {
+            id: canPause ? "database:pause" : "database:unpause",
+            label: canPause ? "Pause database" : "Unpause database",
+            buttonLabel: canPause ? "Pause" : "Unpause",
+            icon: canPause ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />,
+            onClick: canPause ? onPause : onUnpause,
+          },
+        ]
+      : []),
+    ...(canRestart
+      ? [
+          {
+            id: "database:restart",
+            label: "Restart database",
+            buttonLabel: "Restart",
+            icon: <RefreshCw className="h-4 w-4" />,
+            onClick: onRestart,
+          },
+        ]
+      : []),
+    ...(canReveal
+      ? [
+          {
+            id: "database:reveal-credentials",
+            label: "Reveal database credentials",
+            buttonLabel: "Reveal credentials",
+            icon: <KeyRound className="h-4 w-4" />,
+            onClick: onRevealCredentials,
+            separatorBefore: true,
+          },
+        ]
+      : []),
+    ...(canRotateDirectCredentials
+      ? [
+          {
+            id: "database:rotate-direct-credentials",
+            label: "Rotate direct-access credentials",
+            buttonLabel: "Rotate credentials",
+            icon: <RefreshCw className="h-4 w-4" />,
+            onClick: onRotateDirectCredentials,
+          },
+        ]
+      : []),
+    ...(canRotateCertificate
+      ? [
+          {
+            id: "database:rotate-tls-certificate",
+            label: "Rotate TLS certificate",
+            buttonLabel: "Rotate TLS",
+            icon: <RefreshCw className="h-4 w-4" />,
+            onClick: onRotateCertificate,
+          },
+        ]
+      : []),
+    ...(canDelete
+      ? [
+          {
+            id: "database:remove",
+            label: "Remove database",
+            buttonLabel: "Remove",
+            icon: <Trash2 className="h-4 w-4" />,
+            onClick: onRemove,
+            destructive: true,
+            separatorBefore: true,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="flex shrink-0 items-center justify-between gap-3">
-      <CommandPalettePageActions
-        actions={[
-          {
-            id: "database:pin",
-            label: "Pin database",
-            icon: <Pin className="h-4 w-4" />,
-            action: onOpenPin,
-          },
-          ...(canEdit
-            ? [
-                {
-                  id: "database:test",
-                  label: "Test database connection",
-                  icon: <RefreshCw className="h-4 w-4" />,
-                  action: onTest,
-                },
-                {
-                  id: "database:settings",
-                  label: "Database settings",
-                  icon: <Settings className="h-4 w-4" />,
-                  action: onOpenSettings,
-                },
-              ]
-            : []),
-          ...(canPause
-            ? [
-                {
-                  id: "database:pause",
-                  label: "Pause database",
-                  icon: <Pause className="h-4 w-4" />,
-                  action: onPause,
-                },
-              ]
-            : []),
-          ...(canConfigureClickHouse
-            ? [
-                {
-                  id: "database:configure-clickhouse",
-                  label: "Configure ClickHouse",
-                  icon: <FileCode2 className="h-4 w-4" />,
-                  action: onConfigureClickHouse,
-                },
-              ]
-            : []),
-          ...(canConfigureRedis
-            ? [
-                {
-                  id: "database:configure-redis",
-                  label: "Configure Redis",
-                  icon: <SlidersHorizontal className="h-4 w-4" />,
-                  action: onConfigureRedis,
-                },
-              ]
-            : []),
-          ...(canUnpause
-            ? [
-                {
-                  id: "database:unpause",
-                  label: "Unpause database",
-                  icon: <Play className="h-4 w-4" />,
-                  action: onUnpause,
-                },
-              ]
-            : []),
-          ...(canRestart
-            ? [
-                {
-                  id: "database:restart",
-                  label: "Restart database",
-                  icon: <RefreshCw className="h-4 w-4" />,
-                  action: onRestart,
-                },
-              ]
-            : []),
-          ...(canReveal
-            ? [
-                {
-                  id: "database:reveal-credentials",
-                  label: "Reveal database credentials",
-                  icon: <KeyRound className="h-4 w-4" />,
-                  action: onRevealCredentials,
-                },
-              ]
-            : []),
-          ...(canRotateDirectCredentials
-            ? [
-                {
-                  id: "database:rotate-direct-credentials",
-                  label: "Rotate direct-access credentials",
-                  icon: <RefreshCw className="h-4 w-4" />,
-                  action: onRotateDirectCredentials,
-                },
-              ]
-            : []),
-          ...(canRotateCertificate
-            ? [
-                {
-                  id: "database:rotate-tls-certificate",
-                  label: "Rotate TLS certificate",
-                  icon: <RefreshCw className="h-4 w-4" />,
-                  action: onRotateCertificate,
-                },
-              ]
-            : []),
-          ...(canDelete
-            ? [
-                {
-                  id: "database:remove",
-                  label: "Remove database",
-                  icon: <Trash2 className="h-4 w-4" />,
-                  action: onRemove,
-                },
-              ]
-            : []),
-        ]}
-      />
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <PageBackButton onClick={onBack} />
         <div className="min-w-0">
@@ -300,68 +237,20 @@ export function DatabaseHeader({
         </div>
       </div>
 
-      <div className="hidden items-center gap-2 sm:flex">
-        <Button variant="outline" size="icon" onClick={onOpenPin}>
-          <Pin className="h-4 w-4" />
-        </Button>
-        {canEdit && (
-          <Button variant="outline" onClick={onTest}>
-            <RefreshCw className="h-4 w-4" />
-            Test
+      <ResponsiveHeaderActions actions={headerActions}>
+        {headerActions.map((headerAction) => (
+          <Button
+            key={headerAction.id}
+            variant={headerAction.destructive ? "destructive" : "outline"}
+            size={headerAction.iconOnly ? "icon" : "default"}
+            aria-label={headerAction.iconOnly ? headerAction.label : undefined}
+            onClick={headerAction.onClick}
+          >
+            {headerAction.icon}
+            {!headerAction.iconOnly ? headerAction.buttonLabel : null}
           </Button>
-        )}
-        {(canEdit ||
-          canPause ||
-          canUnpause ||
-          canRestart ||
-          canConfigureClickHouse ||
-          canConfigureRedis ||
-          canReveal ||
-          canRotateDirectCredentials ||
-          canRotateCertificate ||
-          canDelete) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon">
-                <EllipsisVertical className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">{menuItems}</DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-
-      <div className="ml-auto flex shrink-0 sm:hidden">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" aria-label="Database actions">
-              <EllipsisVertical className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={onOpenPin}>
-              <Pin className="h-3.5 w-3.5 mr-2" />
-              Pin
-            </DropdownMenuItem>
-            {canEdit && (
-              <DropdownMenuItem onClick={onTest}>
-                <RefreshCw className="h-3.5 w-3.5 mr-2" />
-                Test
-              </DropdownMenuItem>
-            )}
-            {(canEdit ||
-              canPause ||
-              canUnpause ||
-              canConfigureClickHouse ||
-              canConfigureRedis ||
-              canReveal ||
-              canRotateDirectCredentials ||
-              canRotateCertificate ||
-              canDelete) && <DropdownMenuSeparator />}
-            {menuItems}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+        ))}
+      </ResponsiveHeaderActions>
     </div>
   );
 }

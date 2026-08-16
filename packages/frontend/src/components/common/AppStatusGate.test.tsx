@@ -81,6 +81,115 @@ describe("gateway update version matching", () => {
     );
   });
 
+  it("never overlaps restart recovery requests", async () => {
+    vi.useFakeTimers();
+    useAppStatusStore.setState({ gatewayRestartingActive: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+
+    render(<AppStatusGate />);
+
+    await act(async () => Promise.resolve());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs unavailable recovery checks sequentially and stops after stable recovery", async () => {
+    vi.useFakeTimers();
+    window.sessionStorage.setItem("gateway-maintenance-auto-reload", "1");
+    useAppStatusStore.setState({ maintenanceActive: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input) === "/health") {
+        return new Response(JSON.stringify({ lifecycleState: "running", version: "2.4.0" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ data: { state: "complete" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    render(<AppStatusGate />);
+
+    const recoveryCheckCount = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === "/api/setup/status").length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(recoveryCheckCount()).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(recoveryCheckCount()).toBe(2);
+    expect(useAppStatusStore.getState().maintenanceActive).toBe(false);
+    expect(
+      screen.queryByRole("heading", { name: "Temporarily Unavailable" })
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(recoveryCheckCount()).toBe(2);
+  });
+
+  it("uses the restart layout for unavailable state without manual actions", async () => {
+    vi.useFakeTimers();
+    useAppStatusStore.setState({ maintenanceActive: true });
+
+    render(<AppStatusGate />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+
+    expect(screen.getByRole("heading", { name: "Temporarily Unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload now" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Checking backend availability automatically.")
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toHaveAttribute(
+      "href",
+      "https://wiolett.net"
+    );
+  });
+
+  it("never overlaps unavailable recovery requests", async () => {
+    vi.useFakeTimers();
+    useAppStatusStore.setState({ maintenanceActive: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+
+    render(<AppStatusGate />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("clears a stale regular restart blocker when Gateway is already healthy", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ lifecycleState: "running", version: "2.4.0" }), {

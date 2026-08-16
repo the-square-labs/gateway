@@ -110,6 +110,252 @@ describe('NodesService enrollment token creation', () => {
     expect(result.slug).toBe(existing.slug);
   });
 
+  it('rejects custom, private, and unreported Nginx service addresses', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddress: null,
+      lastHealthReport: {
+        localIpAddresses: ['192.168.1.20'],
+        publicIpAddresses: ['8.8.8.8', '1.1.1.1'],
+      },
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn(async () => [existing]) })),
+        })),
+      })),
+      update: vi.fn(),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.update(existing.id, { serviceAddress: 'edge.example.com' }, 'user-1')).rejects.toMatchObject({
+      code: 'INVALID_NGINX_SERVICE_ADDRESS',
+    });
+    await expect(service.update(existing.id, { serviceAddress: '192.168.1.20' }, 'user-1')).rejects.toMatchObject({
+      code: 'INVALID_NGINX_SERVICE_ADDRESS',
+    });
+    await expect(service.update(existing.id, { serviceAddress: '9.9.9.9' }, 'user-1')).rejects.toMatchObject({
+      code: 'INVALID_NGINX_SERVICE_ADDRESS',
+    });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('requires confirmation before changing DNS targets for domains assigned to an Nginx node', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddress: '8.8.8.8',
+      lastHealthReport: { localIpAddresses: [], publicIpAddresses: ['8.8.8.8', '1.1.1.1'] },
+    };
+    let selection = 0;
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => {
+            selection += 1;
+            return selection === 1
+              ? { limit: vi.fn(async () => [existing]) }
+              : Promise.resolve([{ id: 'domain-1', domain: 'app.example.com', dnsTargetIps: ['8.8.8.8'] }]);
+          }),
+        })),
+      })),
+      update: vi.fn(),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.update(existing.id, { serviceAddress: '1.1.1.1' }, 'user-1')).rejects.toMatchObject({
+      code: 'NODE_SERVICE_ADDRESS_DOMAINS_AFFECTED',
+      details: { domainCount: 1, previousAddress: '8.8.8.8', nextAddress: '1.1.1.1' },
+    });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('updates the Nginx address and durable domain target intent in one transaction', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddress: '8.8.8.8',
+      lastHealthReport: { localIpAddresses: [], publicIpAddresses: ['8.8.8.8', '1.1.1.1'] },
+    };
+    let selection = 0;
+    const nodeSet = vi.fn((values) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...existing, ...values }]) })),
+    }));
+    const domainSet = vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) }));
+    let updateCall = 0;
+    const tx = {
+      update: vi.fn(() => ({ set: ++updateCall === 1 ? nodeSet : domainSet })),
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => {
+            selection += 1;
+            return selection === 1
+              ? { limit: vi.fn(async () => [existing]) }
+              : Promise.resolve([{ id: 'domain-1', domain: 'app.example.com', dnsTargetIps: ['8.8.8.8'] }]);
+          }),
+        })),
+      })),
+      update: vi.fn(),
+      transaction: vi.fn(async (write) => write(tx)),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(
+      service.update(existing.id, { serviceAddress: '1.1.1.1', confirmDomainDnsUpdate: true }, 'user-1')
+    ).resolves.toMatchObject({ serviceAddress: '1.1.1.1' });
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(nodeSet).toHaveBeenCalledWith(expect.objectContaining({ serviceAddress: '1.1.1.1' }));
+    expect(domainSet).toHaveBeenCalledWith(expect.objectContaining({ pendingDnsTargetIp: '1.1.1.1' }));
+  });
+
+  it('blocks deletion of a node with assigned domains before disconnecting it', async () => {
+    const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      Promise.resolve([]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ id: 'domain-1', domain: 'app.example.com' }]),
+    ];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          leftJoin: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+          where: vi.fn(() => selections.shift()),
+        })),
+      })),
+      transaction: vi.fn(),
+    } as any;
+    const registry = { getNode: vi.fn(), deregister: vi.fn() };
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      registry as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.remove(existing.id, 'user-1')).rejects.toMatchObject({
+      code: 'NODE_HAS_DOMAINS',
+      statusCode: 409,
+      details: { domainCount: 1 },
+    });
+    expect(registry.getNode).not.toHaveBeenCalled();
+    expect(registry.deregister).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('cascades assigned proxy hosts when an offline Nginx node removal is explicitly confirmed', async () => {
+    const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
+    const assignedHosts = [{ id: 'proxy-1' }, { id: 'proxy-2' }];
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      Promise.resolve(assignedHosts),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([]),
+    ];
+    const nodeDeleteWhere = vi.fn(async () => undefined);
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          leftJoin: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+          where: vi.fn(() => selections.shift()),
+        })),
+      })),
+      transaction: vi.fn(async (callback) => callback({ delete: vi.fn(() => ({ where: nodeDeleteWhere })) })),
+    } as any;
+    const auditService = { log: vi.fn(async () => undefined) };
+    const registry = { getNode: vi.fn(() => undefined), deregister: vi.fn() };
+    const proxyService = { deleteProxyHost: vi.fn(async () => undefined) };
+    const service = new NodesService(
+      db,
+      auditService as any,
+      registry as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+    service.setProxyService(proxyService as any);
+
+    await service.remove(existing.id, 'user-1', { cascadeOfflineProxyHosts: true });
+
+    expect(proxyService.deleteProxyHost).toHaveBeenCalledTimes(2);
+    expect(proxyService.deleteProxyHost).toHaveBeenNthCalledWith(1, 'proxy-1', 'user-1', {
+      abandonOfflineNode: true,
+    });
+    expect(proxyService.deleteProxyHost).toHaveBeenNthCalledWith(2, 'proxy-2', 'user-1', {
+      abandonOfflineNode: true,
+    });
+    expect(nodeDeleteWhere).toHaveBeenCalledOnce();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'node.remove',
+        details: expect.objectContaining({ cascadedProxyHostCount: 2 }),
+      })
+    );
+  });
+
+  it('does not cascade proxy hosts while the Nginx node is connected', async () => {
+    const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
+    const selections = [{ limit: vi.fn(async () => [existing]) }, Promise.resolve([{ id: 'proxy-1' }])];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+      })),
+    } as any;
+    const proxyService = { deleteProxyHost: vi.fn() };
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn(() => ({ commandStream: { end: vi.fn() } })) } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+    service.setProxyService(proxyService as any);
+
+    await expect(service.remove(existing.id, 'user-1', { cascadeOfflineProxyHosts: true })).rejects.toMatchObject({
+      code: 'NODE_CONNECTED',
+      statusCode: 409,
+    });
+    expect(proxyService.deleteProxyHost).not.toHaveBeenCalled();
+  });
+
   it('returns only the public enrollment target when local gRPC IP is not configured', async () => {
     const { service } = createService({
       gatewayGrpcPublicTarget: 'gateway.example.com:9443',

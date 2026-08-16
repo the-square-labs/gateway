@@ -1,4 +1,4 @@
-import { Network, Plus, Trash2 } from "lucide-react";
+import { Network, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { DockerFolderedResourceList } from "@/components/docker/DockerFolderedResourceList";
 import { Badge } from "@/components/ui/badge";
@@ -380,7 +381,8 @@ export function DockerNetworks({
               className="flex items-center justify-end pr-1"
               onClick={(e) => e.stopPropagation()}
             >
-              {hasScope("docker:networks:delete") &&
+              {(hasScope("docker:networks:delete") ||
+                hasScope(`docker:networks:delete:${net._nodeId}`)) &&
                 count === 0 &&
                 net.availability !== "unavailable" && (
                   <Button
@@ -402,7 +404,7 @@ export function DockerNetworks({
   );
   const networkColumns = allNetworkColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
-    if (!hasScope("docker:networks:delete") && c.id === "actions") return false;
+    if (!hasScopedAccess("docker:networks:delete") && c.id === "actions") return false;
     return true;
   });
   const detailContainerColumns = useMemo<SimpleTableColumn<NetworkContainerRow>[]>(
@@ -440,8 +442,8 @@ export function DockerNetworks({
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Docker Networks</h1>
               {!isLoading && visibleNodeId && (
@@ -454,7 +456,38 @@ export function DockerNetworks({
               Manage Docker networks across your nodes
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions
+            actions={
+              selectedNodeId
+                ? [
+                    {
+                      label: "Refresh",
+                      icon: <RefreshCw className="h-4 w-4" />,
+                      onClick: () => requestSnapshotRefresh("networks", visibleNodeId),
+                      disabled: isLoading,
+                    },
+                    ...(canManageFolders
+                      ? [
+                          {
+                            label: "New Folder",
+                            onClick: () => createFolderRef.current?.(),
+                          },
+                        ]
+                      : []),
+                    ...(hasScope("docker:networks:create") ||
+                    hasScope(`docker:networks:create:${selectedNodeId}`)
+                      ? [
+                          {
+                            label: "Create Network",
+                            icon: <Plus className="h-4 w-4" />,
+                            onClick: () => openCreate(),
+                          },
+                        ]
+                      : []),
+                  ]
+                : []
+            }
+          >
             {selectedNodeId && (
               <>
                 <RefreshButton
@@ -466,7 +499,8 @@ export function DockerNetworks({
                     New Folder
                   </Button>
                 )}
-                {hasScope("docker:networks:create") && (
+                {(hasScope("docker:networks:create") ||
+                  hasScope(`docker:networks:create:${selectedNodeId}`)) && (
                   <Button onClick={() => openCreate()}>
                     <Plus className="h-4 w-4 mr-1" />
                     Create Network
@@ -474,7 +508,7 @@ export function DockerNetworks({
                 )}
               </>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
       )}
 
@@ -526,8 +560,18 @@ export function DockerNetworks({
             message="No networks found."
             hasActiveFilters={search !== ""}
             onReset={() => setSearch("")}
-            actionLabel={hasScope("docker:networks:create") ? "Create a network" : undefined}
-            onAction={hasScope("docker:networks:create") ? () => openCreate() : undefined}
+            actionLabel={
+              hasScope("docker:networks:create") ||
+              (!!selectedNodeId && hasScope(`docker:networks:create:${selectedNodeId}`))
+                ? "Create a network"
+                : undefined
+            }
+            onAction={
+              hasScope("docker:networks:create") ||
+              (!!selectedNodeId && hasScope(`docker:networks:create:${selectedNodeId}`))
+                ? () => openCreate()
+                : undefined
+            }
           />
         }
         minWidth={fixedNodeId ? "720px" : "860px"}

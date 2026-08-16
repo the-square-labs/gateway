@@ -4,6 +4,7 @@ import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { apiTokens } from '@/db/schema/index.js';
+import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { boundScopes, hasScope as permissionHasScope } from '@/lib/permissions.js';
 import { canonicalizeScopes, isApiTokenScope } from '@/lib/scopes.js';
@@ -150,9 +151,13 @@ export class TokensService {
     if (!user) return null;
     if (user.isBlocked) return null;
 
+    const scopes = await expandFolderScopes(
+      this.db,
+      boundScopes(token.scopes || [], user.scopes).filter(isApiTokenScope)
+    );
     return {
       user,
-      scopes: boundScopes(token.scopes || [], user.scopes).filter(isApiTokenScope),
+      scopes,
       tokenId: token.id,
       tokenPrefix: token.tokenPrefix,
     };

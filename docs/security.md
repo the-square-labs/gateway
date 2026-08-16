@@ -78,7 +78,7 @@ Gateway maintains separate certificate domains:
 
 - System node CA for daemon mTLS identity.
 - Internal PKI for user-managed roots, intermediates, templates, and issued certificates.
-- SSL certificate store for ACME, uploaded, or linked certificates used by proxy hosts.
+- SSL certificate store for ACME, uploaded, or linked certificates used by ingress routes. Gateway keeps canonical encrypted material and distributes node-local replicas only to nginx nodes with active TLS routes.
 
 Private key material is encrypted at rest with `PKI_MASTER_KEY`. That key is critical: without it, Gateway cannot decrypt stored PKI material or private keys. Protect it like a root secret and include it in secure backups.
 
@@ -102,7 +102,7 @@ Authorization uses granular scopes:
 - Users receive scopes through permission groups.
 - API tokens and OAuth grants cannot exceed the owning user's current effective scopes.
 - MCP access requires the owning user to have the `mcp:use` capability.
-- Resource-scoped grants can limit access to a specific node, Docker container or deployment, proxy host, database, logging environment, schema, or similar resource.
+- Resource-scoped grants can limit access to a specific node, Docker container or deployment, ingress route (`proxy_host` in API identifiers), database, logging environment, schema, or similar resource.
 - Write-capable scopes satisfy matching read/view checks, but resource-scoped grants stay bounded to the same resource.
 - Create-only and destructive-only scopes do not grant browse access by themselves.
 

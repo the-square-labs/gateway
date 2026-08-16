@@ -21,7 +21,11 @@ import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
 
 const NODE_TYPES: Array<{ value: NodeType; label: string; description: string }> = [
-  { value: "nginx", label: "Nginx", description: "Manage proxy hosts with the Nginx daemon." },
+  {
+    value: "nginx",
+    label: "Ingress",
+    description: "Serve public domains and routes with the Nginx daemon.",
+  },
   { value: "docker", label: "Docker", description: "Manage containers and compose applications." },
   { value: "databases", label: "Databases", description: "Run managed database workloads." },
   {
@@ -179,9 +183,9 @@ export function NodeSetupWizard({
             while Gateway gives you one place to configure and observe it.
           </p>
           <p>
-            Choose Nginx to manage proxy hosts, Docker for containers and Compose applications,
-            Databases for managed database workloads, or Monitoring for health and metrics. A host
-            can run more than one node type when it has more than one job.
+            Choose Ingress to serve public domains and routes, Docker for containers and Compose
+            applications, Databases for managed database workloads, or Monitoring for health and
+            metrics. A host can run more than one node type when it has more than one job.
           </p>
           <p>
             This step creates a one-time enrollment command. Run it on the target host and keep this
@@ -288,7 +292,7 @@ export function NodeSetupWizard({
             <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="US-East proxy"
+              placeholder="US-East ingress"
               autoFocus
             />
           </SettingsControlRow>

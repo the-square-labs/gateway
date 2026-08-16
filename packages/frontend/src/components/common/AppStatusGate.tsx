@@ -1,4 +1,4 @@
-import { AlertTriangle, RotateCw, ServerCrash, XCircle } from "lucide-react";
+import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,12 @@ import { useAppStatusStore } from "@/stores/app-status";
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
 const VERSION_RELOAD_CHECK_INTERVAL_MS = 30_000;
+const MAINTENANCE_RECOVERY_CHECK_INTERVAL_MS = 5_000;
+const MAINTENANCE_AUTO_RELOAD_GUARD_KEY = "gateway-maintenance-auto-reload";
+
+export function clearMaintenanceAutoReloadGuard(): void {
+  window.sessionStorage.removeItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY);
+}
 
 async function fetchGatewayCurrentVersion(): Promise<string | null> {
   try {
@@ -20,6 +26,7 @@ async function fetchGatewayCurrentVersion(): Promise<string | null> {
     // A deployment detector must never be able to lock the application UI out.
     const response = await fetch("/health", {
       cache: "no-store",
+      headers: { "X-Gateway-Health-Probe": "version" },
     });
     if (response.ok) {
       const payload = (await response.json()) as GatewayHealthSnapshot;
@@ -35,44 +42,82 @@ function MaintenanceScreen() {
   const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
 
   useEffect(() => {
-    const checkHealth = async () => {
-      try {
-        const response = await fetch("/health", { cache: "no-store" });
-        if (response.ok) {
-          setMaintenanceActive(false);
-        }
-      } catch {
-        // Keep the maintenance screen visible until the backend answers again.
-      }
+    let cancelled = false;
+    let timer: number | null = null;
+    let consecutiveReadyChecks = 0;
+    const controller = new AbortController();
+
+    const scheduleCheck = () => {
+      if (cancelled) return;
+      timer = window.setTimeout(() => void checkRecovery(), MAINTENANCE_RECOVERY_CHECK_INTERVAL_MS);
     };
 
-    void checkHealth();
-    const interval = window.setInterval(() => {
-      void checkHealth();
-    }, 5000);
+    const checkRecovery = async () => {
+      try {
+        const [healthResponse, apiResponse] = await Promise.all([
+          fetch("/health", {
+            cache: "no-store",
+            headers: { "X-Gateway-Health-Probe": "maintenance" },
+            signal: controller.signal,
+          }),
+          fetch("/api/setup/status", {
+            cache: "no-store",
+            credentials: "include",
+            signal: controller.signal,
+          }),
+        ]);
+        const health = healthResponse.ok
+          ? ((await healthResponse.json()) as GatewayHealthSnapshot)
+          : null;
+        const ready = healthResponse.ok && health?.lifecycleState === "running" && apiResponse.ok;
 
-    return () => window.clearInterval(interval);
+        consecutiveReadyChecks = ready ? consecutiveReadyChecks + 1 : 0;
+        if (consecutiveReadyChecks >= 2) {
+          const autoReloadAlreadyAttempted =
+            window.sessionStorage.getItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY) === "1";
+          if (!autoReloadAlreadyAttempted) {
+            window.sessionStorage.setItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY, "1");
+            window.location.reload();
+          } else if (!cancelled) {
+            setMaintenanceActive(false);
+          }
+          return;
+        }
+      } catch {
+        consecutiveReadyChecks = 0;
+      }
+
+      scheduleCheck();
+    };
+
+    scheduleCheck();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [setMaintenanceActive]);
 
   return (
-    <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-8 text-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-destructive/30 bg-destructive/5">
-            <ServerCrash className="h-6 w-6" />
-          </div>
-          <h2 className="text-lg font-semibold text-foreground">Temporarily Unavailable</h2>
-          <p className="text-sm text-muted-foreground">
-            The backend is not responding right now. Your session is preserved.
-          </p>
+    <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
+      <div className="w-full max-w-sm text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)] text-[#ef4444]">
+          <AlertTriangle className="h-6 w-6" />
         </div>
-
-        <div className="space-y-3">
-          <Button onClick={() => window.location.reload()} className="w-full">
-            <RotateCw className="mr-2 h-4 w-4" />
-            Reload now
-          </Button>
-          <p className="text-xs text-muted-foreground">Automatic retry is active.</p>
+        <h2 className="m-0 text-lg font-semibold leading-[1.4]">Temporarily Unavailable</h2>
+        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">
+          The backend is not responding right now. Your session is preserved.
+        </p>
+        <div className="mt-7 text-xs text-[#71717a]">
+          Powered by{" "}
+          <a
+            href="https://wiolett.net"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#a1a1aa] hover:underline"
+          >
+            Wiolett Industries
+          </a>
         </div>
       </div>
     </div>
@@ -100,6 +145,8 @@ function GatewayOperationScreen() {
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
   useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
     // A regular restart can recover before this effect mounts. Treat the
     // persisted restart flag itself as evidence so the first healthy probe
     // clears a stale blocker. Versioned updates still wait for their target.
@@ -153,7 +200,10 @@ function GatewayOperationScreen() {
       }
 
       try {
-        const response = await fetch("/health", { cache: "no-store" });
+        const response = await fetch("/health", {
+          cache: "no-store",
+          headers: { "X-Gateway-Health-Probe": "operation" },
+        });
         if (!response.ok) {
           restartObserved = true;
           return;
@@ -194,12 +244,19 @@ function GatewayOperationScreen() {
       }
     };
 
-    const interval = window.setInterval(() => {
-      void checkHealth();
-    }, 3000);
-    void checkHealth();
+    const runCheck = async () => {
+      await checkHealth();
+      if (!cancelled && !navigating) {
+        timer = window.setTimeout(() => void runCheck(), 3000);
+      }
+    };
 
-    return () => window.clearInterval(interval);
+    void runCheck();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [
     clearGatewayRestarting,
     clearGatewayUpdating,
@@ -241,6 +298,7 @@ function GatewayOperationScreen() {
 function GatewayReloadCoordinator() {
   const gatewayUpdatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
   const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
+  const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const rateLimitedUntil = useAppStatusStore((s) => s.rateLimitedUntil);
 
   useEffect(() => {
@@ -249,7 +307,13 @@ function GatewayReloadCoordinator() {
   }, [rateLimitedUntil]);
 
   useEffect(() => {
-    if (gatewayUpdatingActive || gatewayRestartingActive || rateLimitedUntil != null) return;
+    if (
+      maintenanceActive ||
+      gatewayUpdatingActive ||
+      gatewayRestartingActive ||
+      rateLimitedUntil != null
+    )
+      return;
 
     let cancelled = false;
     let checking = false;
@@ -292,7 +356,7 @@ function GatewayReloadCoordinator() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [gatewayRestartingActive, gatewayUpdatingActive, rateLimitedUntil]);
+  }, [gatewayRestartingActive, gatewayUpdatingActive, maintenanceActive, rateLimitedUntil]);
 
   return null;
 }

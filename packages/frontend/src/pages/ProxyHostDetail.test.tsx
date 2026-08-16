@@ -471,8 +471,7 @@ describe("ProxyHostDetail", () => {
     expect(screen.queryByText("Secure Link")).not.toBeInTheDocument();
   });
 
-  it("shows maintenance as the primary state with a disable action in the overflow menu", async () => {
-    const user = userEvent.setup();
+  it("shows maintenance as the primary state with a responsive disable action", async () => {
     vi.spyOn(api, "getProxyHost").mockResolvedValue(
       makeProxyHost({ maintenanceEnabled: true, maintenanceStartedAt: new Date().toISOString() })
     );
@@ -485,10 +484,7 @@ describe("ProxyHostDetail", () => {
 
     expect((await screen.findAllByText("Maintenance")).length).toBeGreaterThan(0);
     expect(screen.getByText(/User requests receive HTTP 503/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "More proxy host actions" }));
-    expect(
-      await screen.findByRole("menuitem", { name: /Disable Maintenance/ })
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Disable Maintenance/ })).toBeInTheDocument();
     expect(screen.queryByText("Unknown")).not.toBeInTheDocument();
   });
 
@@ -506,8 +502,7 @@ describe("ProxyHostDetail", () => {
       extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
     });
 
-    await user.click(await screen.findByRole("button", { name: "More proxy host actions" }));
-    const action = await screen.findByRole("menuitem", { name: /Enable Maintenance/ });
+    const action = await screen.findByRole("button", { name: /Enable Maintenance/ });
     await user.click(action);
 
     await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
@@ -520,8 +515,7 @@ describe("ProxyHostDetail", () => {
     await waitFor(() => expect(toggle).toHaveBeenCalledWith("host-1", true));
   });
 
-  it("keeps maintenance and delete actions inside the overflow menu", async () => {
-    const user = userEvent.setup();
+  it("exposes maintenance and delete through the responsive header actions", async () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["proxy:edit", "proxy:delete"] }),
       isAuthenticated: true,
@@ -535,16 +529,11 @@ describe("ProxyHostDetail", () => {
       extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
     });
 
-    expect(
-      await screen.findByRole("button", { name: "More proxy host actions" })
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "More proxy host actions" }));
-    expect(await screen.findByRole("menuitem", { name: /Enable Maintenance/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Enable Maintenance/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 
-  it("issues a maintenance access code from the desktop overflow menu", async () => {
+  it("issues a maintenance access code from the responsive header actions", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
       user: makeUser({ scopes: ["proxy:edit", "proxy:maintenance:bypass"] }),
@@ -565,10 +554,7 @@ describe("ProxyHostDetail", () => {
       extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
     });
 
-    await user.click(await screen.findByRole("button", { name: "More proxy host actions" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Create Maintenance Access Code" })
-    );
+    await user.click(await screen.findByRole("button", { name: "Create Maintenance Access Code" }));
 
     await waitFor(() => expect(issueCode).toHaveBeenCalledWith("host-1"));
     expect(await screen.findByRole("textbox", { name: "Maintenance access code" })).toHaveValue(

@@ -1,6 +1,7 @@
 import * as acme from 'acme-client';
 import { createChildLogger } from '@/lib/logger.js';
 import { x509 } from '@/lib/x509.js';
+import { AppError } from '@/middleware/error-handler.js';
 
 const logger = createChildLogger('ACMEService');
 
@@ -10,21 +11,43 @@ export function dns01RecordNameForDomain(domain: string): string {
 }
 
 export class ACMEService {
-  /** Set by bootstrap to deploy challenge files to the correct nginx node via daemon.
-   *  `domains` is passed so the callback can look up which node hosts those domains. */
-  onChallengeCreate?: (token: string, content: string, domains: string[]) => Promise<void>;
-  onChallengeRemove?: (token: string, domains: string[]) => Promise<void>;
+  /** Set by bootstrap to resolve and deploy HTTP-01 challenges through Domain ingress affinity. */
+  onHttp01Preflight?: (domains: string[]) => Promise<void>;
+  onChallengeCreate?: (token: string, content: string, domain: string) => Promise<void>;
+  onChallengeRemove?: (token: string, domain: string) => Promise<void>;
 
   constructor(
     private readonly acmeEmail: string | undefined,
     private readonly staging: boolean
   ) {}
 
-  private getAcmeEmail(): string {
-    if (!this.acmeEmail) {
-      throw new Error('ACME_EMAIL must be configured to use ACME certificate issuance');
+  private getAcmeEmail(contactEmail?: string): string {
+    const email = contactEmail?.trim() || this.acmeEmail?.trim();
+    if (!email) {
+      throw new AppError(
+        400,
+        'ACME_CONTACT_EMAIL_MISSING',
+        'A contact email is required for ACME certificate issuance'
+      );
     }
-    return this.acmeEmail;
+    return email;
+  }
+
+  private async createAccount(client: acme.Client, contactEmail?: string): Promise<void> {
+    const email = this.getAcmeEmail(contactEmail);
+    try {
+      await client.createAccount({
+        termsOfServiceAgreed: true,
+        contact: [`mailto:${email}`],
+      });
+    } catch (error) {
+      const providerMessage = error instanceof Error ? error.message : 'Unknown ACME provider error';
+      throw new AppError(
+        400,
+        'ACME_CONTACT_EMAIL_REJECTED',
+        `ACME provider rejected contact email "${email}": ${providerMessage}`
+      );
+    }
   }
 
   /**
@@ -32,7 +55,8 @@ export class ACMEService {
    */
   async requestCertHTTP01(
     domains: string[],
-    staging?: boolean
+    staging?: boolean,
+    contactEmail?: string
   ): Promise<{
     certificatePem: string;
     privateKeyPem: string;
@@ -43,6 +67,8 @@ export class ACMEService {
   }> {
     logger.info('Requesting ACME cert via HTTP-01', { domains });
 
+    await this.onHttp01Preflight?.(domains);
+
     // 1. Create account key
     const accountKey = await acme.crypto.createPrivateKey();
 
@@ -52,10 +78,7 @@ export class ACMEService {
       accountKey,
     });
 
-    await client.createAccount({
-      termsOfServiceAgreed: true,
-      contact: [`mailto:${this.getAcmeEmail()}`],
-    });
+    await this.createAccount(client, contactEmail);
 
     // 3. Create order
     const order = await client.createOrder({
@@ -84,7 +107,7 @@ export class ACMEService {
         // The caller (SSLService) must deploy the challenge before calling this method
         // or pass a challengeCreateFn. For now, we use a callback if provided.
         if (this.onChallengeCreate) {
-          await this.onChallengeCreate(challenge.token, keyAuthorization, domains);
+          await this.onChallengeCreate(challenge.token, keyAuthorization, authz.identifier.value);
           challengeCleanups.push(challenge.token);
         }
 
@@ -126,7 +149,10 @@ export class ACMEService {
       for (const token of challengeCleanups) {
         try {
           if (this.onChallengeRemove) {
-            await this.onChallengeRemove(token, domains);
+            const authorization = authorizations.find((authz) =>
+              authz.challenges.some((challenge) => challenge.type === 'http-01' && challenge.token === token)
+            );
+            await this.onChallengeRemove(token, authorization?.identifier.value ?? domains[0]!);
           }
         } catch {
           // Ignore cleanup errors
@@ -141,7 +167,8 @@ export class ACMEService {
    */
   async requestCertDNS01Start(
     domains: string[],
-    staging?: boolean
+    staging?: boolean,
+    contactEmail?: string
   ): Promise<{
     accountKey: string;
     orderUrl: string;
@@ -162,10 +189,7 @@ export class ACMEService {
       accountKey,
     });
 
-    await client.createAccount({
-      termsOfServiceAgreed: true,
-      contact: [`mailto:${this.getAcmeEmail()}`],
-    });
+    await this.createAccount(client, contactEmail);
 
     // 3. Create order
     const order = await client.createOrder({
@@ -211,7 +235,8 @@ export class ACMEService {
     accountKeyPem: string,
     orderUrl: string,
     domains: string[],
-    staging?: boolean
+    staging?: boolean,
+    contactEmail?: string
   ): Promise<{
     certificatePem: string;
     privateKeyPem: string;
@@ -227,10 +252,7 @@ export class ACMEService {
       accountKey: Buffer.from(accountKeyPem),
     });
 
-    await client.createAccount({
-      termsOfServiceAgreed: true,
-      contact: [`mailto:${this.getAcmeEmail()}`],
-    });
+    await this.createAccount(client, contactEmail);
 
     // 2. Get existing order
     const order = await client.getOrder({ url: orderUrl } as any);

@@ -1671,7 +1671,7 @@ export class AIService {
       case 'link_internal_cert':
         return this.sslService.linkInternalCert({ internalCertId: a.internalCertId, name: a.name }, user.id);
       case 'request_acme_cert':
-        return this.sslService.requestACMECert(RequestACMECertSchema.parse(args), user.id);
+        return this.sslService.requestACMECert(RequestACMECertSchema.parse(args), user.id, user.email);
       case 'manage_ssl_certificate': {
         if (a.operation === 'get') {
           this.ensureToolScopeForResource(user, 'ssl:cert:view', String(a.sslCertificateId));
@@ -1704,15 +1704,15 @@ export class AIService {
       // ── Raw Config ──
       case 'get_proxy_rendered_config': {
         const host = await this.proxyService.getProxyHost(a.proxyHostId);
-        if (!host) throw new Error('Proxy host not found');
+        if (!host) throw new Error('Route not found');
         const renderedConfig = await this.proxyService.getRenderedConfig(a.proxyHostId);
         return { proxyHostId: a.proxyHostId, config: renderedConfig };
       }
       case 'update_proxy_raw_config': {
         const rawHost = await this.proxyService.getProxyHost(a.proxyHostId);
-        if (!rawHost) throw new Error('Proxy host not found');
+        if (!rawHost) throw new Error('Route not found');
         if (!(rawHost as any).rawConfigEnabled) {
-          throw new Error('Raw mode is not enabled on this proxy host. Enable it first with toggle_proxy_raw_mode.');
+          throw new Error('Raw mode is not enabled on this route. Enable it first with toggle_proxy_raw_mode.');
         }
         const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.proxyHostId}`);
         return compactProxyHostForAgent(

@@ -2,7 +2,6 @@ import { FolderPlus, Plus, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -31,7 +30,8 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
-import { nodeIconClassNames } from "@/lib/node-appearance";
+import { nodeIconClassNames, nodeTypeLabel } from "@/lib/node-appearance";
+import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -56,8 +56,8 @@ type EnrollmentTargets = {
 const NODE_TYPES = [
   {
     value: "nginx",
-    label: "Nginx",
-    description: "Reverse proxy node running nginx",
+    label: "Ingress",
+    description: "Serve public domains and routes with the Nginx daemon",
     disabled: false,
   },
   {
@@ -182,14 +182,8 @@ export function AdminNodes() {
 
   const handleDelete = useCallback(
     async (nodeId: string, hostname: string) => {
-      const ok = await confirm({
-        title: "Remove Node",
-        description: `Are you sure you want to remove "${hostname}"? This cannot be undone.`,
-        confirmLabel: "Remove",
-      });
-      if (!ok) return;
       try {
-        await api.deleteNode(nodeId);
+        if (!(await confirmAndDeleteNode(nodeId, hostname))) return;
         usePinnedNodesStore.getState().removePin(nodeId);
         toast.success("Node removed");
         fetchNodes();
@@ -326,7 +320,7 @@ export function AdminNodes() {
         label: "Type",
         width: "13%",
         align: "center",
-        renderCell: (node) => <Badge variant="secondary">{node.type}</Badge>,
+        renderCell: (node) => <Badge variant="secondary">{nodeTypeLabel(node.type)}</Badge>,
       },
       {
         id: "lock",
@@ -371,7 +365,7 @@ export function AdminNodes() {
         width: "10%",
         align: "right",
         renderCell: (node) =>
-          hasScope("nodes:delete") ? (
+          hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`) ? (
             <Button
               variant="ghost"
               size="icon"
@@ -476,7 +470,7 @@ export function AdminNodes() {
           loadingLabel="Loading nodes..."
           emptyState={
             <EmptyState
-              message="No nodes found. Add a node to start managing nginx instances remotely."
+              message="No nodes found. Add a node to start managing infrastructure remotely."
               actionLabel={hasScope("nodes:create") ? "Add Node" : undefined}
               onAction={hasScope("nodes:create") ? () => setEnrollDialogOpen(true) : undefined}
               hasActiveFilters={hasActiveFilters}
@@ -536,7 +530,7 @@ export function AdminNodes() {
               <Input
                 value={enrollDisplayName}
                 onChange={(e) => setEnrollDisplayName(e.target.value)}
-                placeholder="US-East Proxy"
+                placeholder="US-East Ingress"
               />
             </div>
           </div>

@@ -700,7 +700,7 @@ export function Dashboard() {
                       TLS certificate distribution needs attention
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      At least one active proxy host has not received its current certificate.
+                      At least one active route has not received its current certificate.
                     </p>
                   </div>
                 </div>

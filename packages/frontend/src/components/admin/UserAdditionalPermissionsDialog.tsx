@@ -155,11 +155,7 @@ export function UserAdditionalPermissionsDialog({
       ? selected.filter((id) => id !== resourceId)
       : [...selected, resourceId];
     setResources((current) => ({ ...current, [scope]: nextSelected }));
-    setBaseScopes((current) =>
-      nextSelected.length > 0
-        ? [...new Set([...current, scope])]
-        : current.filter((value) => value !== scope)
-    );
+    setBaseScopes((current) => [...new Set([...current, scope])]);
   };
 
   const handleSave = async () => {

@@ -33,7 +33,13 @@ export const useAppStatusStore = create<AppStatusState>()(
       gatewayUpdateError: null,
       rateLimitedUntil: null,
 
-      setMaintenanceActive: (maintenanceActive) => set({ maintenanceActive }),
+      setMaintenanceActive: (maintenanceActive) =>
+        set((state) => {
+          if (maintenanceActive && (state.gatewayUpdatingActive || state.gatewayRestartingActive)) {
+            return {};
+          }
+          return { maintenanceActive };
+        }),
 
       setGatewayUpdatingActive: (gatewayUpdatingActive, gatewayUpdatingTargetVersion = null) =>
         set({
@@ -42,6 +48,7 @@ export const useAppStatusStore = create<AppStatusState>()(
           gatewayRestartingActive: false,
           gatewayRestartTargetUrl: null,
           gatewayUpdateError: null,
+          ...(gatewayUpdatingActive ? { maintenanceActive: false } : {}),
         }),
 
       setGatewayRestartingActive: (gatewayRestartingActive, gatewayRestartTargetUrl = null) =>
@@ -51,6 +58,7 @@ export const useAppStatusStore = create<AppStatusState>()(
             gatewayRestartingActive,
             gatewayRestartTargetUrl,
             gatewayUpdateError: null,
+            ...(gatewayRestartingActive ? { maintenanceActive: false } : {}),
           };
         }),
 
@@ -108,6 +116,11 @@ export function syncGatewayOperationStatus(snapshot: GatewayOperationStatusSnaps
     return false;
   }
 
-  useAppStatusStore.setState(snapshot);
+  useAppStatusStore.setState({
+    ...snapshot,
+    ...(snapshot.gatewayUpdatingActive || snapshot.gatewayRestartingActive
+      ? { maintenanceActive: false }
+      : {}),
+  });
   return true;
 }

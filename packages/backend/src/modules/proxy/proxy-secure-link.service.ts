@@ -226,6 +226,51 @@ export class ProxySecureLinkService {
     await this.db.delete(proxyAdditionalSecureLinks).where(eq(proxyAdditionalSecureLinks.proxyHostId, host.id));
   }
 
+  /**
+   * Retire relay state when an offline Nginx source is being permanently
+   * removed from Gateway. The unavailable source cannot acknowledge a fresh
+   * snapshot, so only target nodes are synchronized and their cleanup is best
+   * effort after the central grants have been revoked.
+   */
+  async abandonOfflineSource(host: ProxyHostRow): Promise<void> {
+    const bindings = await this.listAdditional(host.id);
+    if (bindings.length > 0) {
+      await this.db
+        .update(proxyAdditionalSecureLinks)
+        .set({ status: 'cleanup_pending', lastError: null, updatedAt: new Date() })
+        .where(eq(proxyAdditionalSecureLinks.proxyHostId, host.id));
+    }
+    if (host.secureLinkGeneration > 0) {
+      await this.db
+        .update(proxyHosts)
+        .set({ secureLinkStatus: 'cleanup_pending', secureLinkLastError: null, updatedAt: new Date() })
+        .where(eq(proxyHosts.id, host.id));
+      await this.relayPolicy.revokeOwner('proxy_host_secure_link', host.id, { allowDeferredSnapshot: true });
+    }
+    for (const binding of bindings) {
+      await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id, { allowDeferredSnapshot: true });
+    }
+
+    const targetNodes = [
+      ...(host.dockerNodeId ? [host.dockerNodeId] : []),
+      ...bindings.map((binding) => binding.dockerNodeId),
+    ];
+    const targetResults = await Promise.allSettled(
+      [...new Set(targetNodes)].map((nodeId) => this.syncTargetNode(nodeId))
+    );
+    for (const result of targetResults) {
+      if (result.status === 'rejected') {
+        logger.warn('Failed to remove abandoned Secure Link state from a target node', {
+          hostId: host.id,
+          error: result.reason,
+        });
+      }
+    }
+    if (bindings.length > 0) {
+      await this.db.delete(proxyAdditionalSecureLinks).where(eq(proxyAdditionalSecureLinks.proxyHostId, host.id));
+    }
+  }
+
   async assertAdditionalReferences(proxyHostId: string, snippet: string | null | undefined): Promise<void> {
     const matches = [...(snippet ?? '').matchAll(/\{\{additionalSecureLinks\.([A-Za-z][A-Za-z0-9_]{0,63})\}\}/g)];
     if (matches.length === 0) return;
@@ -609,6 +654,10 @@ export class ProxySecureLinkService {
 
   async reconcileTargetNode(nodeId: string): Promise<void> {
     await this.syncTargetNode(nodeId);
+  }
+
+  async reconcileSourceNode(nodeId: string): Promise<void> {
+    await this.syncSourceNode(nodeId);
   }
 
   private async withLinkOperation<T>(linkId: string, operation: () => Promise<T>): Promise<T> {

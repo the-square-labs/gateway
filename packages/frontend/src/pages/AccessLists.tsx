@@ -46,8 +46,9 @@ interface BasicAuthInput {
 export function AccessLists() {
   const { hasScope } = useAuthStore();
   const canCreateAccessList = hasScope("acl:create");
-  const canEditAccessList = hasScope("acl:edit");
-  const canDeleteAccessList = hasScope("acl:delete");
+  const canEditAccessList = (id: string) => hasScope("acl:edit") || hasScope(`acl:edit:${id}`);
+  const canDeleteAccessList = (id: string) =>
+    hasScope("acl:delete") || hasScope(`acl:delete:${id}`);
   const cachedAccessLists = api.getCached<{ data: AccessList[] }>("access-lists:list");
   const [accessLists, setAccessLists] = useState<AccessList[]>(cachedAccessLists?.data ?? []);
   const [isLoading, setIsLoading] = useState(!cachedAccessLists);
@@ -239,7 +240,7 @@ export function AccessLists() {
       className: "w-12",
       cellClassName: "w-12",
       render: (al) =>
-        canEditAccessList ? (
+        canEditAccessList(al.id) || canDeleteAccessList(al.id) ? (
           <div onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -248,11 +249,13 @@ export function AccessLists() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => openEdit(al)}>
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                </DropdownMenuItem>
-                {canDeleteAccessList && (
+                {canEditAccessList(al.id) && (
+                  <DropdownMenuItem onClick={() => openEdit(al)}>
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                {canDeleteAccessList(al.id) && (
                   <DropdownMenuItem onClick={() => handleDelete(al)} className="text-destructive">
                     <Trash2 className="h-4 w-4" />
                     Delete
@@ -308,7 +311,9 @@ export function AccessLists() {
               getRowKey={(al) => al.id}
               loading={isLoading}
               loadingMessage="Loading access lists"
-              onRowClick={canEditAccessList ? openEdit : undefined}
+              onRowClick={(accessList) => {
+                if (canEditAccessList(accessList.id)) openEdit(accessList);
+              }}
             />
           </div>
         ) : (

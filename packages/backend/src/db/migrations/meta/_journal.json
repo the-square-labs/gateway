@@ -855,6 +855,20 @@
       "when": 1786721037603,
       "tag": "0121_flowery_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1786828837260,
+      "tag": "0122_clumsy_leopardon",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1786828935672,
+      "tag": "0123_spicy_jetstream",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import { LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { DetailRow } from "@/components/common/DetailRow";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,11 @@ import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode } from "@/types";
-import type { DomainDnsConflictDetails, DomainPreview } from "@/types/domains";
+import type {
+  DomainDnsConflictDetails,
+  DomainNginxNodeOptions,
+  DomainPreview,
+} from "@/types/domains";
 
 const PREVIEW_ANIMATION = {
   initial: { height: 0, opacity: 0, y: 8 },
@@ -40,9 +45,15 @@ interface AddDomainDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
+  dnsProvider: "cloudflare" | "external";
 }
 
-export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDialogProps) {
+export function AddDomainDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  dnsProvider,
+}: AddDomainDialogProps) {
   const [domain, setDomain] = useState("");
   const [description, setDescription] = useState("");
   const [folderId, setFolderId] = useState("");
@@ -52,11 +63,16 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
   const [preview, setPreview] = useState<DomainPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [nodeOptions, setNodeOptions] = useState<DomainNginxNodeOptions | null>(null);
+  const [nodesLoading, setNodesLoading] = useState(false);
+  const [nodesError, setNodesError] = useState<string | null>(null);
+  const [nginxNodeId, setNginxNodeId] = useState("");
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const domainFolders = useResourceFolderStore((state) => state.foldersByType.domain);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType.domain);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
   const folderList = useMemo(() => flattenFolders(domainFolders), [domainFolders]);
+  const selectedNginxNode = nodeOptions?.eligibleNodes.find((node) => node.id === nginxNodeId);
 
   const resetForm = () => {
     setDomain("");
@@ -67,6 +83,10 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
     setPreview(null);
     setPreviewError(null);
     setIsPreviewLoading(false);
+    setNodeOptions(null);
+    setNodesError(null);
+    setNodesLoading(false);
+    setNginxNodeId("");
   };
 
   const scheduleReset = () => {
@@ -107,13 +127,34 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
   useEffect(() => {
     if (!open) return;
     void fetchFolders("domain");
+    setNodesLoading(true);
+    api
+      .listDomainNginxNodes()
+      .then((result) => {
+        setNodeOptions(result);
+        setNodesError(null);
+        setNginxNodeId((current) => {
+          if (result.eligibleNodes.some((node) => node.id === current)) return current;
+          return result.eligibleNodes.length === 1 ? result.eligibleNodes[0]!.id : "";
+        });
+      })
+      .catch((error) => {
+        setNodeOptions(null);
+        setNodesError(error instanceof Error ? error.message : "Unable to load Ingress nodes");
+      })
+      .finally(() => setNodesLoading(false));
   }, [fetchFolders, open]);
 
   useEffect(() => {
     if (!open) return;
 
     const normalizedDomain = domain.trim();
-    if (normalizedDomain.length < 4 || !normalizedDomain.includes(".")) {
+    if (
+      normalizedDomain.length < 4 ||
+      !normalizedDomain.includes(".") ||
+      nodesLoading ||
+      !nginxNodeId
+    ) {
       setPreview(null);
       setPreviewError(null);
       setIsPreviewLoading(false);
@@ -124,7 +165,12 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
     setIsPreviewLoading(true);
     const timer = window.setTimeout(() => {
       api
-        .previewDomain({ domain: normalizedDomain, ttl: ttlValue, proxied })
+        .previewDomain({
+          domain: normalizedDomain,
+          dnsProvider,
+          ...(dnsProvider === "cloudflare" ? { ttl: ttlValue, proxied } : {}),
+          nginxNodeId,
+        })
         .then((result) => {
           if (cancelled) return;
           setPreview(result);
@@ -144,22 +190,26 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [domain, open, proxied, ttlValue]);
+  }, [dnsProvider, domain, nginxNodeId, nodesLoading, open, proxied, ttlValue]);
 
   const create = async (overwriteDns = false) => {
     return api.createDomain({
       domain: domain.trim(),
+      dnsProvider,
       description: description.trim() || undefined,
       folderId: folderId || undefined,
-      ttl: ttlValue,
-      proxied,
-      overwriteDns,
+      ...(dnsProvider === "cloudflare" ? { ttl: ttlValue, proxied, overwriteDns } : {}),
+      nginxNodeId,
     });
   };
 
   const handleSubmit = async () => {
     if (!domain.trim()) {
       toast.error("Domain is required");
+      return;
+    }
+    if (!nginxNodeId) {
+      toast.error("Select an ingress node with a public address");
       return;
     }
     setIsSaving(true);
@@ -200,6 +250,7 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
         setIsSaving(false);
         return;
       }
+      setPreviewError(err instanceof Error ? err.message : "Failed to add domain");
       toast.error(err instanceof Error ? err.message : "Failed to add domain");
     } finally {
       setIsSaving(false);
@@ -212,7 +263,9 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
         <DialogHeader>
           <DialogTitle>Add Domain</DialogTitle>
           <DialogDescription>
-            Register a domain to track its DNS status and manage certificates.
+            {dnsProvider === "cloudflare"
+              ? "Register a domain to track its DNS status and manage certificates."
+              : "Check existing DNS against the selected Ingress node without changing DNS records."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -271,43 +324,78 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
               </Select>
             </SettingsControlRow>
             <SettingsControlRow
-              title="TTL"
-              description="DNS record time to live"
+              title="Ingress node"
+              description="Public ingress for this domain"
               className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
               controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
             >
-              <Input
-                type="number"
-                min={1}
-                value={ttl}
-                onChange={(e) => setTtl(e.target.value)}
-                placeholder="1"
-              />
+              {nodesLoading ? (
+                <span className="text-sm text-muted-foreground">Loading nodes...</span>
+              ) : nodeOptions && nodeOptions.eligibleNodes.length > 0 ? (
+                <Select value={nginxNodeId} onValueChange={setNginxNodeId}>
+                  <SelectTrigger aria-label="Ingress node">
+                    <SelectValue placeholder="Select node">
+                      {selectedNginxNode?.displayName || selectedNginxNode?.hostname}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nodeOptions.eligibleNodes.map((node) => (
+                      <SelectItem key={node.id} value={node.id}>
+                        {node.displayName || node.hostname} · {node.effectiveAddress}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <span className="text-sm text-muted-foreground">Unavailable</span>
+              )}
             </SettingsControlRow>
-            <SettingsControlRow
-              title="Proxied"
-              description="Use Cloudflare proxy"
-              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-            >
-              <Switch checked={proxied} onChange={setProxied} />
-            </SettingsControlRow>
+            {dnsProvider === "cloudflare" && (
+              <>
+                <SettingsControlRow
+                  title="TTL"
+                  description="DNS record time to live"
+                  className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
+                  controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    value={ttl}
+                    onChange={(e) => setTtl(e.target.value)}
+                    placeholder="1"
+                  />
+                </SettingsControlRow>
+                <SettingsControlRow
+                  title="Proxied"
+                  description="Use Cloudflare proxy"
+                  className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
+                  controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
+                >
+                  <Switch checked={proxied} onChange={setProxied} />
+                </SettingsControlRow>
+              </>
+            )}
           </div>
           <AnimatePresence initial={false}>
             {(preview || previewError || isPreviewLoading) && (
               <motion.div {...PREVIEW_ANIMATION} className="overflow-hidden">
                 <div className="border border-border">
                   <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-                    <span className="text-sm font-medium">Cloudflare DNS preview</span>
+                    <span className="text-sm font-medium">
+                      {dnsProvider === "cloudflare" ? "Cloudflare DNS preview" : "DNS check"}
+                    </span>
                     {isPreviewLoading ? (
                       <LoaderCircle
                         className="h-4 w-4 animate-spin text-muted-foreground"
                         aria-label="Loading"
                       />
-                    ) : preview && preview.status !== "ready" ? (
+                    ) : preview && preview.status !== "ready" && preview.status !== "valid" ? (
                       <Badge
                         variant={
-                          preview.status === "mismatch" || preview.status === "blocked"
+                          preview.status === "mismatch" ||
+                          preview.status === "blocked" ||
+                          preview.status === "invalid"
                             ? "warning"
                             : "secondary"
                         }
@@ -317,15 +405,15 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
                       </Badge>
                     ) : null}
                   </div>
-                  <div className="space-y-2 px-3 py-2 text-sm">
-                    {preview ? (
-                      <>
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-muted-foreground">Zone</span>
-                          <span className="font-medium">{preview.zoneName}</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-muted-foreground">Target</span>
+                  {preview?.dnsProvider === "cloudflare" ? (
+                    <div className="divide-y divide-border">
+                      <DetailRow
+                        label="Zone"
+                        value={<span className="font-medium">{preview.zoneName}</span>}
+                      />
+                      <DetailRow
+                        label="Target"
+                        value={
                           <div className="flex min-w-0 flex-1 flex-wrap justify-end gap-1">
                             {preview.desiredRecords.map((record) => (
                               <Badge key={`${record.type}-${record.content}`} variant="outline">
@@ -333,10 +421,12 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
                               </Badge>
                             ))}
                           </div>
-                        </div>
-                        {preview.currentRecords.length > 0 && (
-                          <div className="flex items-start justify-between gap-3">
-                            <span className="text-muted-foreground">Current</span>
+                        }
+                      />
+                      {preview.currentRecords.length > 0 && (
+                        <DetailRow
+                          label="Current"
+                          value={
                             <div className="flex min-w-0 flex-1 flex-wrap justify-end gap-1">
                               {preview.currentRecords.map((record) => (
                                 <Badge
@@ -347,15 +437,45 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
                                 </Badge>
                               ))}
                             </div>
-                          </div>
-                        )}
-                      </>
-                    ) : (
+                          }
+                        />
+                      )}
+                    </div>
+                  ) : preview?.dnsProvider === "external" ? (
+                    <div className="divide-y divide-border">
+                      <DetailRow
+                        label="Expected"
+                        value={
+                          <span className="break-all font-mono text-xs">
+                            {preview.targetIps.join(", ")}
+                          </span>
+                        }
+                      />
+                      <DetailRow
+                        label="Resolved"
+                        value={
+                          <span className="break-all font-mono text-xs">
+                            {[...preview.dnsRecords.a, ...preview.dnsRecords.aaaa].join(", ") ||
+                              "No address records"}
+                          </span>
+                        }
+                      />
+                      {preview.queryName !== preview.domain && (
+                        <DetailRow
+                          label="Checked name"
+                          value={
+                            <span className="break-all font-mono text-xs">{preview.queryName}</span>
+                          }
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-2 text-sm">
                       <p className="text-muted-foreground">
                         {previewError ?? "Loading DNS preview..."}
                       </p>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -365,8 +485,24 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={isSaving}>
-            {isSaving ? "Adding..." : "Add Domain"}
+          <Button
+            onClick={handleSubmit}
+            disabled={
+              isSaving ||
+              nodesLoading ||
+              !nginxNodeId ||
+              !!nodesError ||
+              (dnsProvider === "external" &&
+                (isPreviewLoading ||
+                  preview?.dnsProvider !== "external" ||
+                  preview.status !== "valid"))
+            }
+          >
+            {isSaving
+              ? "Adding..."
+              : dnsProvider === "external"
+                ? "Check DNS and Add"
+                : "Add Domain"}
           </Button>
         </DialogFooter>
       </DialogContent>

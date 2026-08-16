@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getEffectiveNginxIngressAddress,
   getEffectiveNodeServiceAddress,
   getEffectivePublishedNodeIP,
+  getReportedPublicNodeAddresses,
+  isPubliclyRoutableIp,
   isValidNodeServiceAddress,
 } from './node-service-address.js';
 
@@ -56,5 +59,44 @@ describe('node service address', () => {
         lastHealthReport: { localIpAddresses: ['172.18.0.2'], publicIpAddresses: ['203.0.113.10'] } as never,
       })
     ).toBe('172.18.0.2');
+  });
+
+  it('recognizes globally routable addresses and rejects private and reserved ranges', () => {
+    expect(isPubliclyRoutableIp('1.1.1.1')).toBe(true);
+    expect(isPubliclyRoutableIp('2606:4700:4700::1111')).toBe(true);
+    expect(isPubliclyRoutableIp('2001:3::1')).toBe(true);
+    expect(isPubliclyRoutableIp('2001:4:112::1')).toBe(true);
+    expect(isPubliclyRoutableIp('2001:20::1')).toBe(true);
+    expect(isPubliclyRoutableIp('2001:30::1')).toBe(true);
+    expect(isPubliclyRoutableIp('10.0.0.8')).toBe(false);
+    expect(isPubliclyRoutableIp('100.64.0.1')).toBe(false);
+    expect(isPubliclyRoutableIp('203.0.113.10')).toBe(false);
+    expect(isPubliclyRoutableIp('fd00::10')).toBe(false);
+    expect(isPubliclyRoutableIp('2001:2::10')).toBe(false);
+    expect(isPubliclyRoutableIp('2001:db8::10')).toBe(false);
+    expect(isPubliclyRoutableIp('2002::10')).toBe(false);
+    expect(isPubliclyRoutableIp('3fff::10')).toBe(false);
+  });
+
+  it('collects reported public addresses from both report fields in deterministic IP-family order', () => {
+    expect(
+      getReportedPublicNodeAddresses({
+        lastHealthReport: {
+          localIpAddresses: ['10.0.0.8', '8.8.8.8'],
+          publicIpAddresses: ['2606:4700:4700::1111', '1.1.1.1', '8.8.8.8'],
+        } as never,
+      })
+    ).toEqual(['1.1.1.1', '8.8.8.8', '2606:4700:4700::1111']);
+  });
+
+  it('uses only a currently reported public address for Nginx ingress', () => {
+    const report = {
+      localIpAddresses: ['192.168.1.20'],
+      publicIpAddresses: ['8.8.8.8', '1.1.1.1'],
+    } as never;
+    expect(getEffectiveNginxIngressAddress({ serviceAddress: null, lastHealthReport: report })).toBe('1.1.1.1');
+    expect(getEffectiveNginxIngressAddress({ serviceAddress: '8.8.8.8', lastHealthReport: report })).toBe('8.8.8.8');
+    expect(getEffectiveNginxIngressAddress({ serviceAddress: '9.9.9.9', lastHealthReport: report })).toBeNull();
+    expect(getEffectiveNginxIngressAddress({ serviceAddress: '192.168.1.20', lastHealthReport: report })).toBeNull();
   });
 });

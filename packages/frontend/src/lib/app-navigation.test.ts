@@ -66,8 +66,8 @@ describe("app navigation registry", () => {
 
     expect(routes).toEqual({
       "1": "/",
-      "2": "/proxy-hosts",
-      "3": "/domains",
+      "2": "/domains",
+      "3": "/proxy-hosts",
       "4": "/ssl-certificates",
       "5": "/cas",
       "6": "/certificates",
@@ -84,12 +84,28 @@ describe("app navigation registry", () => {
     expect(groups.flatMap((group) => group.items.map((item) => item.id))).toContain("settings");
   });
 
-  it("hides Domains until an enabled Cloudflare integration is configured", () => {
+  it("shows Domains before a Cloudflare integration is configured", () => {
     const ids = visibleNavigationGroups(
       context({ scopes: ["domains:view"], hasCloudflareIntegration: false })
     ).flatMap((group) => group.items.map((item) => item.id));
 
-    expect(ids).not.toContain("domains");
+    expect(ids).toContain("domains");
+  });
+
+  it("shows Domains for an individual domain grant", () => {
+    const ids = visibleNavigationGroups(context({ scopes: ["domains:view:domain-1"] })).flatMap(
+      (group) => group.items.map((item) => item.id)
+    );
+
+    expect(ids).toContain("domains");
+  });
+
+  it("shows Docker for a node-scoped task grant", () => {
+    const ids = visibleNavigationGroups(
+      context({ scopes: ["docker:tasks:docker-node-1"], hasDockerNodes: true })
+    ).flatMap((group) => group.items.map((item) => item.id));
+
+    expect(ids).toContain("docker");
   });
 
   it("hides feature-backed destinations while their features are disabled", () => {

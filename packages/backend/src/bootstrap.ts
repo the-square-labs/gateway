@@ -150,6 +150,7 @@ import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { SetupWizardService } from '@/modules/setup/setup-wizard.service.js';
 import { ACMEService } from '@/modules/ssl/acme.service.js';
+import { resolveHttp01Ingress } from '@/modules/ssl/http01-ingress.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { StatusIncidentEvaluatorService } from '@/modules/status-page/status-incident-evaluator.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
@@ -798,6 +799,7 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
+  nodesService.setProxyService(proxyService);
 
   const dockerMigrationDispatch = new DockerMigrationDispatchAdapter(nodeDispatch);
   container.registerInstance(DockerMigrationDispatchAdapter, dockerMigrationDispatch);
@@ -842,39 +844,25 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(StatusPageService, statusPageService);
 
   const acmeService = new ACMEService(env.ACME_EMAIL, env.ACME_STAGING);
-  // Wire ACME HTTP-01 challenge callbacks to deploy/remove via daemon.
-  // Looks up which node(s) serve the requested domains, falling back to default node.
-  const resolveNodeIdsForDomains = async (domains: string[]): Promise<string[]> => {
-    const { sql, or } = await import('drizzle-orm');
-    const { proxyHosts } = await import('@/db/schema/index.js');
-    const conditions = domains.map((d) => sql`${proxyHosts.domainNames} @> ${JSON.stringify([d])}::jsonb`);
-    const rows = await db
-      .selectDistinct({ nodeId: proxyHosts.nodeId })
-      .from(proxyHosts)
-      .where(or(...conditions));
-    const nodeIds = rows.map((r) => r.nodeId).filter(Boolean) as string[];
-    if (nodeIds.length > 0) return [...new Set(nodeIds)];
-    // Fallback: deploy to all online nginx nodes (handles initial setup before any proxy hosts exist)
-    const { nodes: nodesTable } = await import('@/db/schema/index.js');
-    const { and: andOp, eq: eqOp } = await import('drizzle-orm');
-    const allNginx = await db
-      .select({ id: nodesTable.id })
-      .from(nodesTable)
-      .where(andOp(eqOp(nodesTable.type, 'nginx'), eqOp(nodesTable.status, 'online')));
-    return allNginx.map((n) => n.id);
+  const http01ChallengeNodes = new Map<string, string>();
+  acmeService.onHttp01Preflight = async (domains: string[]) => {
+    await Promise.all(
+      [...new Set(domains.map((domain) => domain.trim().toLowerCase()))].map((domain) =>
+        resolveHttp01Ingress(db, domain)
+      )
+    );
   };
-
-  acmeService.onChallengeCreate = async (token: string, content: string, domains: string[]) => {
-    const nodeIds = await resolveNodeIdsForDomains(domains);
-    if (nodeIds.length === 0) throw new Error('No nginx node found for ACME challenge deployment');
-    for (const nid of nodeIds) {
-      await nodeDispatch.deployAcmeChallenge(nid, token, content);
-    }
+  acmeService.onChallengeCreate = async (token: string, content: string, domain: string) => {
+    const ingress = await resolveHttp01Ingress(db, domain);
+    await nodeDispatch.deployAcmeChallenge(ingress.nodeId, token, content);
+    http01ChallengeNodes.set(token, ingress.nodeId);
   };
-  acmeService.onChallengeRemove = async (token: string, domains: string[]) => {
-    const nodeIds = await resolveNodeIdsForDomains(domains);
-    for (const nid of nodeIds) {
-      await nodeDispatch.removeAcmeChallenge(nid, token);
+  acmeService.onChallengeRemove = async (token: string, domain: string) => {
+    const nodeId = http01ChallengeNodes.get(token) ?? (await resolveHttp01Ingress(db, domain)).nodeId;
+    try {
+      await nodeDispatch.removeAcmeChallenge(nodeId, token);
+    } finally {
+      http01ChallengeNodes.delete(token);
     }
   };
   container.registerInstance(ACMEService, acmeService);
@@ -965,8 +953,11 @@ export async function initializeContainer(): Promise<void> {
   const domainsService = new DomainsService(db, auditService);
   domainsService.setEventBus(eventBus);
   domainsService.setIntegrationsService(integrationsService);
-  domainsService.setGeneralSettingsService(generalSettingsService);
+  domainsService.setNodeRegistryService(nodeRegistry);
+  domainsService.setProxyService(proxyService);
   container.registerInstance(DomainsService, domainsService);
+  domainsService.startIngressTargetReconciliation();
+  domainsService.startCloudflareMigration();
   const domainFolderService = new DomainFolderService(db, auditService);
   domainFolderService.setEventBus(eventBus);
   container.registerInstance(DomainFolderService, domainFolderService);
