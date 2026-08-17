@@ -705,6 +705,16 @@ func TestInspectNetworkNamesPrefersUserDefinedNetworkForDockerDNS(t *testing.T) 
 	}
 }
 
+func TestPrioritizeNetworkNamesFallsBackWhenPreviousPrimaryWasRemoved(t *testing.T) {
+	names := prioritizeNetworkNames(
+		[]string{"bridge", "gateway-db-current", "license-server-network"},
+		"gateway-db-removed",
+	)
+	if names[0] != "gateway-db-current" {
+		t.Fatalf("expected an existing user-defined primary network, got %#v", names)
+	}
+}
+
 func TestAnnotateImageUsageMatchesByImageID(t *testing.T) {
 	images := []imagetypes.Summary{
 		{ID: "sha256:busybox", RepoTags: []string{"busybox:latest"}, Containers: -1},

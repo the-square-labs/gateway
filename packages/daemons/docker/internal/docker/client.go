@@ -1455,6 +1455,7 @@ func (c *Client) createContainerFromInspect(
 	if err != nil {
 		return "", err
 	}
+	netNames = prioritizeNetworkNames(netNames, currentInspectNetworkMode(insp))
 	hostConfig := *insp.HostConfig
 	if len(netNames) > 0 {
 		hostConfig.NetworkMode = container.NetworkMode(netNames[0])
@@ -1512,11 +1513,24 @@ func inspectNetworkNames(insp *container.InspectResponse) []string {
 		}
 	}
 	sort.Strings(netNames)
-	currentMode := ""
-	if insp.HostConfig != nil {
-		currentMode = strings.TrimSpace(string(insp.HostConfig.NetworkMode))
+	return prioritizeNetworkNames(netNames, currentInspectNetworkMode(insp))
+}
+
+func currentInspectNetworkMode(insp *container.InspectResponse) string {
+	if insp == nil || insp.HostConfig == nil {
+		return ""
 	}
-	preferred := currentMode
+	return strings.TrimSpace(string(insp.HostConfig.NetworkMode))
+}
+
+func prioritizeNetworkNames(netNames []string, currentMode string) []string {
+	preferred := ""
+	for _, name := range netNames {
+		if name == currentMode {
+			preferred = name
+			break
+		}
+	}
 	if preferred == "" || preferred == "default" || preferred == "bridge" {
 		for _, name := range netNames {
 			if name != "bridge" && name != "default" {
