@@ -24,6 +24,7 @@ export interface RelayUpdateStatus {
 }
 
 export interface SystemConfig {
+  publicUrl?: string | null;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
   gatewayGrpcPublicTarget: string | null;

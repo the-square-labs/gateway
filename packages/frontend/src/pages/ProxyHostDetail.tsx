@@ -39,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
+import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
 import { proxyHostRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -46,6 +47,7 @@ import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { useFolderStore } from "@/stores/folders";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   AccessList,
   CustomHeader,
@@ -109,6 +111,9 @@ export function ProxyHostDetail({
   const routeSlug = resolvedProxySlug ?? params.proxySlug ?? params.id ?? "";
   const navigate = useStableNavigate();
   const { hasScope } = useAuthStore();
+  const gatewayPublicUrl = useUIBootstrapStore(
+    (state) => state.snapshot?.systemConfig.publicUrl ?? null
+  );
   const canViewAdvancedConfig = !!id && hasScope(`proxy:advanced:${id}`);
   const canViewRawConfig = !!id && hasScope(`proxy:raw:read:${id}`);
   const canWriteRawConfig = !!id && hasScope(`proxy:raw:write:${id}`);
@@ -822,6 +827,7 @@ export function ProxyHostDetail({
   const isSystemHost = host?.isSystem ?? false;
   const maintenanceActionAvailable =
     !!host &&
+    (!isGatewayPublicRoute(host, gatewayPublicUrl) || host.maintenanceEnabled) &&
     (host.maintenanceEnabled ||
       (host.enabled && host.type === "proxy" && !host.rawConfigEnabled && !host.isSystem));
   const canIssueMaintenanceAccessCode =

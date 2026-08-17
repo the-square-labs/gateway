@@ -69,6 +69,10 @@ function sameDomainNames(left: string[], right: string[]): boolean {
   return normalizedLeft.every((domain, index) => domain === normalizedRight[index]);
 }
 
+function normalizedHostname(value: string): string {
+  return value.trim().toLowerCase().replace(/\.$/, '');
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -181,6 +185,18 @@ export class ProxyService {
   }
   private emitHost(id: string, action: string, domain?: string, extra: Record<string, unknown> = {}) {
     this.eventBus?.publish('proxy.host.changed', { id, action, domain, ...extra });
+  }
+
+  private async isGatewayPublicRoute(host: Pick<ProxyHostRow, 'domainNames'>): Promise<boolean> {
+    const publicUrl = await this.generalSettings?.getPublicUrl();
+    if (!publicUrl) return false;
+    let publicHostname: string;
+    try {
+      publicHostname = normalizedHostname(new URL(publicUrl).hostname);
+    } catch {
+      return false;
+    }
+    return host.domainNames.some((domain) => normalizedHostname(domain) === publicHostname);
   }
 
   private async applyConfigToNode(
@@ -1570,6 +1586,13 @@ export class ProxyService {
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
     if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be toggled');
+    if (!enabled && (await this.isGatewayPublicRoute(existing))) {
+      throw new AppError(
+        409,
+        'GATEWAY_PUBLIC_ROUTE_PROTECTED',
+        'The route serving the Gateway public URL cannot be disabled'
+      );
+    }
     if (existing.enabled === enabled) return (await attachDockerUpstreamDisplay(this.db, [existing]))[0]!;
 
     const previousEnabled = existing.enabled;
@@ -1659,6 +1682,13 @@ export class ProxyService {
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
     if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot enter maintenance');
+    if (enabled && (await this.isGatewayPublicRoute(existing))) {
+      throw new AppError(
+        409,
+        'GATEWAY_PUBLIC_ROUTE_PROTECTED',
+        'The route serving the Gateway public URL cannot enter maintenance mode'
+      );
+    }
     if (existing.maintenanceEnabled === enabled) {
       return (await attachDockerUpstreamDisplay(this.db, [existing]))[0]!;
     }

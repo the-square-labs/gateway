@@ -34,6 +34,7 @@ const nodeSnapshot = {
 };
 
 const configData = {
+  publicUrl: 'https://gateway.example.com',
   fileUploadMaxBytes: 1,
   fileOpenMaxBytes: 2,
   gatewayGrpcPublicTarget: null,
@@ -109,6 +110,7 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.statusPageEnabled).toBe(true);
     expect(shell.navigation.nodes.data.map((node) => node.id)).toEqual(['node-nginx']);
     expect(shell.navigation.dockerNodes.map((node) => node.id)).toEqual(['node-docker']);
+    expect(shell.systemConfig.publicUrl).toBe('https://gateway.example.com');
     expect(shell.systemConfig.features).toEqual({
       pkiEnabled: true,
       domainsEnabled: true,

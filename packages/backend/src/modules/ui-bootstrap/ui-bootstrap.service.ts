@@ -45,6 +45,7 @@ export interface UIBootstrapShell {
     scopes: string[];
   };
   systemConfig: {
+    publicUrl: string | null;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
     gatewayGrpcPublicTarget: string | null;
@@ -147,6 +148,7 @@ export class UIBootstrapService {
         scopes: [...scopes],
       },
       systemConfig: {
+        publicUrl: config.publicUrl,
         fileUploadMaxBytes: config.fileUploadMaxBytes,
         fileOpenMaxBytes: config.fileOpenMaxBytes,
         gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
