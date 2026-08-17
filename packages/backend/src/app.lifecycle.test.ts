@@ -31,7 +31,7 @@ describe('Gateway lifecycle admission middleware', () => {
 
     const health = await app.request('/health', { headers: { host: 'gateway.test' } });
     expect(health.status).toBe(200);
-    expect(await health.json()).toMatchObject({ lifecycleState: 'draining_user' });
+    expect(await health.json()).toEqual({ status: 'ok' });
   });
 
   it('keeps the configured public status host admitted during log drain', async () => {

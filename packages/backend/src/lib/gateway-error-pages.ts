@@ -32,7 +32,7 @@ export const GATEWAY_RESTARTING_SCRIPT = `(() => {
       });
       if (response.ok) {
         const health = await response.json();
-        if (health.lifecycleState === 'running') {
+        if (!health.lifecycleState || health.lifecycleState === 'running') {
           const page = await fetch(window.location.href, {
             cache: 'no-store',
             headers: { Accept: 'text/html' },
