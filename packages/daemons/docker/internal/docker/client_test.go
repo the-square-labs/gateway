@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -712,6 +713,21 @@ func TestPrioritizeNetworkNamesFallsBackWhenPreviousPrimaryWasRemoved(t *testing
 	)
 	if names[0] != "gateway-db-current" {
 		t.Fatalf("expected an existing user-defined primary network, got %#v", names)
+	}
+}
+
+func TestMergeManagedDatabaseExtraHostsReplacesGeneratedAliases(t *testing.T) {
+	merged := mergeManagedDatabaseExtraHosts(
+		[]string{
+			"api.internal:10.0.0.4",
+			"db-0123456789abcdef:172.19.0.9",
+		},
+		[]string{"db-fedcba9876543210:172.20.0.2"},
+	)
+
+	expected := []string{"api.internal:10.0.0.4", "db-fedcba9876543210:172.20.0.2"}
+	if !reflect.DeepEqual(merged, expected) {
+		t.Fatalf("unexpected merged extra hosts: got %#v want %#v", merged, expected)
 	}
 }
 

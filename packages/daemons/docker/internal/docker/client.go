@@ -1457,6 +1457,11 @@ func (c *Client) createContainerFromInspect(
 	}
 	netNames = prioritizeNetworkNames(netNames, currentInspectNetworkMode(insp))
 	hostConfig := *insp.HostConfig
+	managedDatabaseHosts, err := c.managedDatabaseHostEntries(ctx, netNames)
+	if err != nil {
+		return "", err
+	}
+	hostConfig.ExtraHosts = mergeManagedDatabaseExtraHosts(hostConfig.ExtraHosts, managedDatabaseHosts)
 	if len(netNames) > 0 {
 		hostConfig.NetworkMode = container.NetworkMode(netNames[0])
 	}
@@ -1485,6 +1490,55 @@ func (c *Client) createContainerFromInspect(
 	}
 
 	return createResult.ID, nil
+}
+
+func (c *Client) managedDatabaseHostEntries(ctx context.Context, networkNames []string) ([]string, error) {
+	entries := make([]string, 0)
+	for _, networkName := range networkNames {
+		suffix, managed := strings.CutPrefix(networkName, "gateway-db-")
+		if !managed || suffix == "" {
+			continue
+		}
+
+		inspected, err := c.cli.NetworkInspect(ctx, networkName, client.NetworkInspectOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("inspect managed database network %q: %w", networkName, err)
+		}
+		connectorName := "gateway-db-connector-" + suffix
+		for _, endpoint := range inspected.Network.Containers {
+			if endpoint.Name != connectorName || !endpoint.IPv4Address.IsValid() {
+				continue
+			}
+			entries = append(entries, fmt.Sprintf("db-%s:%s", suffix, endpoint.IPv4Address.Addr()))
+			break
+		}
+	}
+	return entries, nil
+}
+
+func mergeManagedDatabaseExtraHosts(existing []string, managed []string) []string {
+	merged := make([]string, 0, len(existing)+len(managed))
+	for _, entry := range existing {
+		host, _, found := strings.Cut(entry, ":")
+		if found && isManagedDatabaseAlias(host) {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+	return append(merged, managed...)
+}
+
+func isManagedDatabaseAlias(host string) bool {
+	suffix, ok := strings.CutPrefix(host, "db-")
+	if !ok || len(suffix) != 16 {
+		return false
+	}
+	for _, char := range suffix {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) existingNetworkNames(ctx context.Context, names []string) ([]string, error) {
