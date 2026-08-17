@@ -44,10 +44,6 @@ export function SetupNetworkStep({
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const publicIpOptions = useMemo(
-    () => suggestions.publicIps.map((value) => detectedOption(value, "Detected public IP address")),
-    [suggestions.publicIps]
-  );
   const grpcPublicOptions = useMemo(() => {
     const values = [
       deriveGrpcPublicTarget(publicUrl),
@@ -74,27 +70,8 @@ export function SetupNetworkStep({
       >
         <PanelShell
           title="Gateway network"
-          description="Choose the addresses used for Gateway certificates and node enrollment. Detected values can be replaced."
+          description="Choose the public and optional local targets used for node enrollment. Detected values can be replaced."
         >
-          <SettingsControlRow
-            title="Gateway public IP"
-            description="Public IPv4 or IPv6 address advertised by the Gateway control plane."
-          >
-            <Combobox
-              freeText
-              showAllOptionsOnFocus
-              ariaLabel="Gateway public IPs"
-              value={network.publicIps}
-              options={publicIpOptions}
-              placeholder="203.0.113.10"
-              searchPlaceholder="Enter or select a public IP"
-              emptyMessage="Enter a public IPv4 or IPv6 address."
-              disabled={busy}
-              inputClassName="font-mono text-xs"
-              renderOption={renderDetectedOption}
-              onValueChange={(publicIps) => setNetwork({ ...network, publicIps })}
-            />
-          </SettingsControlRow>
           <SettingsControlRow
             title="gRPC public target"
             description="Public host or IP included in node enrollment commands."

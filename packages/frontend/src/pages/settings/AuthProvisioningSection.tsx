@@ -65,7 +65,6 @@ const DEFAULT_GENERAL_SETTINGS = {
   hideExternalBranding: false,
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
   fileOpenMaxBytes: DEFAULT_FILE_OPEN_MAX_BYTES,
-  gatewayPublicIps: [] as string[],
   gatewayGrpcPublicTarget: null as string | null,
   gatewayGrpcLocalIp: null as string | null,
   relayAutoRecovery: true,
@@ -256,12 +255,6 @@ export function AuthProvisioningSection({
       )
     )
   );
-  const [gatewayPublicIps, setGatewayPublicIps] = useState(
-    () =>
-      api
-        .getCached<AuthProvisioningSettings>("settings:auth-provisioning")
-        ?.generalSettings?.gatewayPublicIps.join(", ") ?? ""
-  );
   const [gatewayGrpcPublicTarget, setGatewayGrpcPublicTarget] = useState(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -343,7 +336,6 @@ export function AuthProvisioningSection({
         String(bytesToMegabytes(settingsData.generalSettings.fileUploadMaxBytes))
       );
       setFileOpenLimitMb(String(bytesToMegabytes(settingsData.generalSettings.fileOpenMaxBytes)));
-      setGatewayPublicIps(settingsData.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(settingsData.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(settingsData.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(settingsData.generalSettings.relayGrantTtlHours));
@@ -539,7 +531,6 @@ export function AuthProvisioningSection({
       applySettings(nextSettings);
       setFileUploadLimitMb(String(bytesToMegabytes(updated.generalSettings.fileUploadMaxBytes)));
       setFileOpenLimitMb(String(bytesToMegabytes(updated.generalSettings.fileOpenMaxBytes)));
-      setGatewayPublicIps(updated.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(updated.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(updated.generalSettings.relayGrantTtlHours));
@@ -565,7 +556,6 @@ export function AuthProvisioningSection({
       setSettings(previous);
       setFileUploadLimitMb(String(bytesToMegabytes(previous.generalSettings.fileUploadMaxBytes)));
       setFileOpenLimitMb(String(bytesToMegabytes(previous.generalSettings.fileOpenMaxBytes)));
-      setGatewayPublicIps(previous.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(previous.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(previous.generalSettings.relayGrantTtlHours));
@@ -596,10 +586,6 @@ export function AuthProvisioningSection({
 
   const draftFileUploadLimitBytes = getDraftFileUploadLimitBytes();
   const draftFileOpenLimitBytes = getDraftFileOpenLimitBytes();
-  const draftGatewayPublicIps = gatewayPublicIps
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
   const draftGatewayGrpcPublicTarget = gatewayGrpcPublicTarget.trim() || null;
   const draftGatewayGrpcLocalIp = gatewayGrpcLocalIp.trim() || null;
   const draftPublicUrl = publicUrl.trim().replace(/\/$/, "");
@@ -611,7 +597,6 @@ export function AuthProvisioningSection({
       draftFileUploadLimitBytes !== settings?.generalSettings.fileUploadMaxBytes) ||
     (draftFileOpenLimitBytes != null &&
       draftFileOpenLimitBytes !== settings?.generalSettings.fileOpenMaxBytes) ||
-    draftGatewayPublicIps.join(",") !== settings?.generalSettings.gatewayPublicIps.join(",") ||
     draftGatewayGrpcPublicTarget !== settings?.generalSettings.gatewayGrpcPublicTarget ||
     draftGatewayGrpcLocalIp !== settings?.generalSettings.gatewayGrpcLocalIp ||
     (Number.isInteger(draftRelayGrantTtlHours) &&
@@ -657,7 +642,6 @@ export function AuthProvisioningSection({
       hideExternalBranding === (settings.generalSettings.hideExternalBranding ?? false) &&
       nextBytes === settings.generalSettings.fileUploadMaxBytes &&
       nextOpenBytes === settings.generalSettings.fileOpenMaxBytes &&
-      draftGatewayPublicIps.join(",") === settings.generalSettings.gatewayPublicIps.join(",") &&
       draftGatewayGrpcPublicTarget === settings.generalSettings.gatewayGrpcPublicTarget &&
       draftGatewayGrpcLocalIp === settings.generalSettings.gatewayGrpcLocalIp &&
       draftRelayGrantTtlHours === settings.generalSettings.relayGrantTtlHours &&
@@ -685,7 +669,6 @@ export function AuthProvisioningSection({
       hideExternalBranding,
       fileUploadMaxBytes: nextBytes,
       fileOpenMaxBytes: nextOpenBytes,
-      gatewayPublicIps: draftGatewayPublicIps,
       gatewayGrpcPublicTarget: draftGatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: draftGatewayGrpcLocalIp,
       relayGrantTtlHours: draftRelayGrantTtlHours,
@@ -1115,26 +1098,6 @@ export function AuthProvisioningSection({
               value={fileOpenLimitMb}
               disabled={!canEdit || isSavingGeneral}
               onChange={(event) => setFileOpenLimitMb(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  saveGeneralSettings();
-                }
-              }}
-            />
-          </div>
-          <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-            <div>
-              <p className="text-sm font-medium">Gateway public IP(s)</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Public IPv4/IPv6 addresses used for Cloudflare A/AAAA records
-              </p>
-            </div>
-            <Input
-              className="w-full shrink-0 sm:max-w-80"
-              value={gatewayPublicIps}
-              placeholder="203.0.113.10, 2001:db8::10"
-              disabled={!canEdit || isSavingGeneral}
-              onChange={(event) => setGatewayPublicIps(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   saveGeneralSettings();

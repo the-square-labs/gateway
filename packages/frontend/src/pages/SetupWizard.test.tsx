@@ -49,7 +49,6 @@ const CONFIG = {
   },
   general: {
     publicUrl: null,
-    gatewayPublicIps: [],
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
   },
@@ -354,7 +353,6 @@ describe("SetupWizardPage", () => {
         step: "finish",
         publicUrl: "http://localhost:3300",
         network: {
-          publicIps: "203.0.113.10",
           grpcPublicTarget: "localhost:9443",
           grpcLocalIp: "",
         },
@@ -488,18 +486,10 @@ describe("SetupWizardPage", () => {
 
     const networkHeading = await screen.findByRole("heading", { name: "Gateway network" });
     const networkSection = within(networkHeading.closest("section")!);
-    expect(screen.getByRole("combobox", { name: "Gateway public IPs" })).toHaveValue(
-      "203.0.113.10"
-    );
     expect(screen.getByRole("combobox", { name: "gRPC public target" })).toHaveValue(
       "gateway.example.com:9443"
     );
     expect(screen.getByRole("combobox", { name: "gRPC local IP" })).toHaveValue("192.168.1.10");
-
-    await user.click(screen.getByRole("combobox", { name: "Gateway public IPs" }));
-    expect(screen.getByRole("button", { name: /203\.0\.113\.10/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /203\.0\.113\.11/ })).toBeInTheDocument();
-    await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("combobox", { name: "gRPC public target" }));
     expect(screen.getByRole("button", { name: /gateway\.example\.com:9443/ })).toBeInTheDocument();
@@ -562,7 +552,6 @@ describe("SetupWizardPage", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({
       publicUrl: "https://gateway.example.com",
       network: {
-        publicIps: ["203.0.113.10"],
         grpcPublicTarget: "gateway.example.com:9443",
         grpcLocalIp: "192.168.1.10",
       },
@@ -617,12 +606,12 @@ describe("SetupWizardPage", () => {
 
     const networkHeading = await screen.findByRole("heading", { name: "Gateway network" });
     const networkSection = within(networkHeading.closest("section")!);
-    const publicIps = screen.getByRole("combobox", { name: "Gateway public IPs" });
+    const grpcPublicTarget = screen.getByRole("combobox", { name: "gRPC public target" });
     const networkContinue = networkSection.getByRole("button", { name: "Continue" });
     expect(networkContinue).toBeEnabled();
-    await user.clear(publicIps);
+    await user.clear(grpcPublicTarget);
     expect(networkContinue).toBeDisabled();
-    await user.type(publicIps, "203.0.113.10");
+    await user.type(grpcPublicTarget, "gateway.example.com:9443");
     expect(networkContinue).toBeEnabled();
     await user.click(networkContinue);
 

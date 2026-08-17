@@ -8,7 +8,7 @@ function createHarness() {
   };
   const access = { invalidate: vi.fn() };
   const general = {
-    getConfig: vi.fn().mockResolvedValue({ publicUrl: null, gatewayPublicIps: [] }),
+    getConfig: vi.fn().mockResolvedValue({ publicUrl: null }),
     updateConfig: vi.fn().mockResolvedValue({ publicUrl: 'https://gateway.example.com' }),
     requirePublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
   };
@@ -111,7 +111,6 @@ function createHarness() {
 const APPLY_INPUT = {
   publicUrl: 'https://gateway.example.com',
   network: {
-    publicIps: ['203.0.113.10'],
     grpcPublicTarget: 'gateway.example.com:9443',
     grpcLocalIp: '192.168.1.10',
   },
@@ -149,7 +148,6 @@ describe('SetupWizardService', () => {
 
     expect(harness.general.updateConfig).toHaveBeenCalledWith({
       publicUrl: 'https://gateway.example.com',
-      gatewayPublicIps: ['203.0.113.10'],
       gatewayGrpcPublicTarget: 'gateway.example.com:9443',
       gatewayGrpcLocalIp: '192.168.1.10',
     });
@@ -182,7 +180,7 @@ describe('SetupWizardService', () => {
     expect(harness.logging.restore).toHaveBeenCalledWith({ mode: 'disabled' });
     expect(harness.oidc.restoreConfig).toHaveBeenCalledWith(null);
     expect(harness.mail.restoreConfig).toHaveBeenCalledWith(null);
-    expect(harness.general.updateConfig).toHaveBeenLastCalledWith({ publicUrl: null, gatewayPublicIps: [] });
+    expect(harness.general.updateConfig).toHaveBeenLastCalledWith({ publicUrl: null });
     expect(harness.auth.createUser).not.toHaveBeenCalled();
     expect(harness.policy.markSetupComplete).not.toHaveBeenCalled();
   });
@@ -194,21 +192,11 @@ describe('SetupWizardService', () => {
       harness.service.apply(
         {
           ...APPLY_INPUT,
-          network: { ...APPLY_INPUT.network, publicIps: [] },
+          network: { ...APPLY_INPUT.network, grpcPublicTarget: '' },
         },
         harness.logging as any
       )
-    ).rejects.toThrow('Select exactly one Gateway public IP');
-
-    await expect(
-      harness.service.apply(
-        {
-          ...APPLY_INPUT,
-          network: { ...APPLY_INPUT.network, publicIps: ['203.0.113.10', '203.0.113.11'] },
-        },
-        harness.logging as any
-      )
-    ).rejects.toThrow('Select exactly one Gateway public IP');
+    ).rejects.toThrow('Gateway gRPC public target is required');
 
     expect(harness.general.updateConfig).not.toHaveBeenCalled();
     expect(harness.authSettings.updateConfig).not.toHaveBeenCalled();

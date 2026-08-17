@@ -36,7 +36,6 @@ const nodeSnapshot = {
 const configData = {
   fileUploadMaxBytes: 1,
   fileOpenMaxBytes: 2,
-  gatewayPublicIps: ['127.0.0.1'],
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
   relayAutoRecovery: false,

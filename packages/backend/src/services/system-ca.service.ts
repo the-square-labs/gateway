@@ -395,7 +395,6 @@ export class SystemCAService {
     values.push(...discoveredPublicIps.ipv4, ...discoveredPublicIps.ipv6);
 
     const general = await this.generalSettingsService?.getConfig();
-    values.push(...(general?.gatewayPublicIps ?? []));
     if (general?.publicUrl) values.push(new URL(general.publicUrl).hostname);
 
     return [...new Set(values.map(normalizeGrpcServerSan).filter(Boolean))];

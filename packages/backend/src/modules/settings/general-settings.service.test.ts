@@ -19,6 +19,16 @@ describe('normalizePublicUrl', () => {
 });
 
 describe('GeneralSettingsService feature settings', () => {
+  it('ignores the removed Gateway public IP field in persisted settings', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: { gatewayPublicIps: ['203.0.113.10'] } }]);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
+    };
+    const service = new GeneralSettingsService(db as never);
+
+    expect(await service.getConfig()).not.toHaveProperty('gatewayPublicIps');
+  });
+
   it('uses a four-hour relay grant TTL and enforces the 1-48 hour range', async () => {
     const limit = vi.fn().mockResolvedValue([{ value: {} }]);
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);

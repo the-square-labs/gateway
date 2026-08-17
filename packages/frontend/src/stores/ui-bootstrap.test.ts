@@ -7,7 +7,6 @@ const SNAPSHOT = {
   systemConfig: {
     fileUploadMaxBytes: 1,
     fileOpenMaxBytes: 1,
-    gatewayPublicIps: [],
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
     relayAutoRecovery: true,

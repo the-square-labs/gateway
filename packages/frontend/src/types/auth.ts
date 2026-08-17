@@ -135,7 +135,6 @@ export interface AuthProvisioningSettings {
     hideExternalBranding?: boolean;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
-    gatewayPublicIps: string[];
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
     relayAutoRecovery: boolean;

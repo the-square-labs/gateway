@@ -17,7 +17,6 @@ import { LoggingSettingsService } from '@/modules/logging/logging-settings.servi
 import {
   GeneralSettingsService,
   isValidGatewayHostPortTarget,
-  isValidGatewayIp,
   isValidGatewayIpPortTarget,
 } from '@/modules/settings/general-settings.service.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
@@ -191,9 +190,6 @@ const SetupLoggingSchema = z.object({
 const SetupApplySchema = z.object({
   publicUrl: z.string().trim().min(1).max(2048),
   network: z.object({
-    publicIps: z
-      .array(z.string().trim().min(1).max(64).refine(isValidGatewayIp, 'Must be an IPv4 or IPv6 address'))
-      .length(1, 'Select exactly one public IP address'),
     grpcPublicTarget: z
       .string()
       .trim()

@@ -9,7 +9,6 @@ const systemConfigMocks = vi.hoisted(() => ({
   config: {
     fileUploadMaxBytes: 100 * 1024 * 1024,
     fileOpenMaxBytes: 10 * 1024 * 1024,
-    gatewayPublicIps: [] as string[],
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
     relayAutoRecovery: true,

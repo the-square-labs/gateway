@@ -436,11 +436,6 @@ export function FinishStep({
         <SettingsControlRow title="Public URL" controlsClassName="sm:min-w-0 sm:max-w-64">
           <span className="break-all text-right text-sm text-muted-foreground">{publicUrl}</span>
         </SettingsControlRow>
-        <SettingsControlRow title="Gateway public IP" controlsClassName="sm:min-w-0 sm:max-w-64">
-          <span className="break-all text-right text-sm text-muted-foreground">
-            {network.publicIps}
-          </span>
-        </SettingsControlRow>
         <SettingsControlRow title="gRPC public target" controlsClassName="sm:min-w-0 sm:max-w-64">
           <span className="break-all text-right text-sm text-muted-foreground">
             {network.grpcPublicTarget}

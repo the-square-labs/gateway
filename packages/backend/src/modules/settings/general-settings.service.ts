@@ -45,7 +45,6 @@ export interface GeneralSettings {
   hideExternalBranding: boolean;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
-  gatewayPublicIps: string[];
   gatewayGrpcPublicTarget: string | null;
   gatewayGrpcLocalIp: string | null;
   relayAutoRecovery: boolean;
@@ -87,7 +86,6 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   hideExternalBranding: false,
   fileUploadMaxBytes: FILE_UPLOAD_DEFAULT_BYTES,
   fileOpenMaxBytes: FILE_OPEN_DEFAULT_BYTES,
-  gatewayPublicIps: [],
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
   relayAutoRecovery: true,
@@ -170,14 +168,6 @@ export function normalizeHostPortTarget(value: string | null | undefined): strin
     throw new Error(`Gateway gRPC public target must be a hostname or IP address: ${trimmed}`);
   }
   return port ? `${host}:${port}` : host;
-}
-
-export function splitConfiguredIps(value: unknown): string[] {
-  const raw = Array.isArray(value) ? value.join(',') : String(value ?? '');
-  return raw
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 
 export function isValidGatewayIp(value: string): boolean {
@@ -345,12 +335,9 @@ export class GeneralSettingsService {
     return config.fileOpenMaxBytes;
   }
 
-  async getGatewayEndpointSettings(): Promise<
-    Pick<GeneralSettings, 'gatewayPublicIps' | 'gatewayGrpcPublicTarget' | 'gatewayGrpcLocalIp'>
-  > {
+  async getGatewayEndpointSettings(): Promise<Pick<GeneralSettings, 'gatewayGrpcPublicTarget' | 'gatewayGrpcLocalIp'>> {
     const config = await this.getConfig();
     return {
-      gatewayPublicIps: config.gatewayPublicIps,
       gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
     };
@@ -383,8 +370,6 @@ export class GeneralSettingsService {
     const fileOpenMaxBytes = Number.isInteger(rawFileOpenMaxBytes)
       ? rawFileOpenMaxBytes
       : DEFAULT_GENERAL_SETTINGS.fileOpenMaxBytes;
-    const gatewayPublicIps = splitConfiguredIps(record.gatewayPublicIps);
-    const invalidGatewayPublicIp = gatewayPublicIps.find((ip) => !isValidGatewayIp(ip));
     const rawRelayGrantTtlHours = Number(record.relayGrantTtlHours);
     const relayGrantTtlHours = Number.isInteger(rawRelayGrantTtlHours)
       ? rawRelayGrantTtlHours
@@ -419,9 +404,6 @@ export class GeneralSettingsService {
 
     if (fileOpenMaxBytes < FILE_OPEN_MIN_BYTES || fileOpenMaxBytes > FILE_OPEN_MAX_BYTES) {
       throw new Error(`File open limit must be between ${FILE_OPEN_MIN_BYTES} and ${FILE_OPEN_MAX_BYTES} bytes`);
-    }
-    if (invalidGatewayPublicIp) {
-      throw new Error(`Gateway public IP must be an IPv4 or IPv6 address: ${invalidGatewayPublicIp}`);
     }
     if (relayGrantTtlHours < RELAY_GRANT_TTL_MIN_HOURS || relayGrantTtlHours > RELAY_GRANT_TTL_MAX_HOURS) {
       throw new Error(
@@ -482,7 +464,6 @@ export class GeneralSettingsService {
           : DEFAULT_GENERAL_SETTINGS.hideExternalBranding,
       fileUploadMaxBytes,
       fileOpenMaxBytes,
-      gatewayPublicIps,
       gatewayGrpcPublicTarget: normalizeHostPortTarget(record.gatewayGrpcPublicTarget as string | null | undefined),
       gatewayGrpcLocalIp: normalizeIpPortTarget(record.gatewayGrpcLocalIp as string | null | undefined),
       relayAutoRecovery:

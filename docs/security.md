@@ -55,7 +55,7 @@ Long-term daemon trust is based on Gateway's internal node PKI:
 
 After enrollment, the token is not the node's identity. The certificate is.
 
-Gateway normally auto-issues its gRPC server certificate from the internal system CA and stores it under `GRPC_TLS_AUTO_DIR` (`/var/lib/gateway/tls` by default). The auto-issued certificate includes localhost, the Gateway host name, the persisted canonical public host, configured public IPs, and `GRPC_TLS_EXTRA_SANS`. The optional native HTTPS listener receives a separate `gateway-web` leaf from this same CA. Custom `GRPC_TLS_CERT` and `GRPC_TLS_KEY` paths are advanced configuration and must point to a server certificate issued by the Gateway system CA, because enrolled daemons trust that CA for ongoing mTLS connections.
+Gateway normally auto-issues its gRPC server certificate from the internal system CA and stores it under `GRPC_TLS_AUTO_DIR` (`/var/lib/gateway/tls` by default). The auto-issued certificate includes localhost, the Gateway host name, the persisted canonical public host, discovered host IP addresses, and `GRPC_TLS_EXTRA_SANS`. The optional native HTTPS listener receives a separate `gateway-web` leaf from this same CA. Custom `GRPC_TLS_CERT` and `GRPC_TLS_KEY` paths are advanced configuration and must point to a server certificate issued by the Gateway system CA, because enrolled daemons trust that CA for ongoing mTLS connections.
 
 ## Why This Prevents Node Hijacking
 

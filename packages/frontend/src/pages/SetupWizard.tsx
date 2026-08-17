@@ -37,7 +37,6 @@ import {
   type SetupConfig,
   type SetupSmtpDraft,
   type SetupStep,
-  splitNetworkPublicIps,
 } from "./setup-wizard/setup-wizard-model";
 
 class SetupRequestError extends Error {
@@ -175,7 +174,6 @@ export function SetupWizardPage() {
   const [config, setConfig] = useState<SetupConfig | null>(null);
   const [publicUrl, setPublicUrl] = useState("");
   const [network, setNetwork] = useState<NetworkDraft>({
-    publicIps: "",
     grpcPublicTarget: "",
     grpcLocalIp: "",
   });
@@ -213,7 +211,6 @@ export function SetupWizardPage() {
   const hydrate = useCallback((next: SetupConfig, codeId: string | null) => {
     const saved = readDraft(codeId);
     const defaultNetwork = {
-      publicIps: next.general.gatewayPublicIps[0] ?? next.networkSuggestions.publicIps[0] ?? "",
       grpcPublicTarget: next.general.gatewayGrpcPublicTarget ?? "",
       grpcLocalIp: next.general.gatewayGrpcLocalIp ?? next.networkSuggestions.localIps[0] ?? "",
     };
@@ -632,7 +629,6 @@ export function SetupWizardPage() {
                       {
                         publicUrl,
                         network: {
-                          publicIps: splitNetworkPublicIps(network.publicIps),
                           grpcPublicTarget: network.grpcPublicTarget,
                           grpcLocalIp: network.grpcLocalIp,
                         },

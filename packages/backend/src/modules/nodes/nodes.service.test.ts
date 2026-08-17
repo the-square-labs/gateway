@@ -33,7 +33,6 @@ describe('NodesService enrollment token creation', () => {
       service.setGeneralSettingsService(
         {
           getGatewayEndpointSettings: vi.fn(async () => ({
-            gatewayPublicIps: [],
             gatewayGrpcPublicTarget: options.gatewayGrpcPublicTarget ?? null,
             gatewayGrpcLocalIp: options.gatewayGrpcLocalIp ?? null,
           })),

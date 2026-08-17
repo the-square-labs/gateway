@@ -75,7 +75,6 @@ describe("Logging UI", () => {
       config: {
         fileUploadMaxBytes: 100 * 1024 * 1024,
         fileOpenMaxBytes: 10 * 1024 * 1024,
-        gatewayPublicIps: [],
         gatewayGrpcPublicTarget: null,
         gatewayGrpcLocalIp: null,
         relayAutoRecovery: true,

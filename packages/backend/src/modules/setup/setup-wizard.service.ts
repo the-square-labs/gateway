@@ -13,7 +13,6 @@ import type { LoggingSettingsInput } from '@/modules/logging/logging-settings.se
 import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import {
   type GeneralSettingsService,
-  isValidGatewayIp,
   normalizeHostPortTarget,
   normalizeIpPortTarget,
   normalizePublicUrl,
@@ -36,7 +35,6 @@ export interface SetupAdminInput {
 }
 
 export interface SetupNetworkInput {
-  publicIps: string[];
   grpcPublicTarget: string;
   grpcLocalIp: string;
 }
@@ -74,7 +72,6 @@ export class SetupWizardService {
   async configureGeneral(publicUrl: string, network: SetupNetworkInput) {
     const general = await this.generalSettings.updateConfig({
       publicUrl,
-      gatewayPublicIps: network.publicIps,
       gatewayGrpcPublicTarget: network.grpcPublicTarget,
       gatewayGrpcLocalIp: network.grpcLocalIp || null,
     });
@@ -284,9 +281,6 @@ export class SetupWizardService {
 
   private async validateApply(input: SetupApplyInput): Promise<boolean> {
     if (!normalizePublicUrl(input.publicUrl)) throw new Error('Gateway public URL is required');
-    if (input.network.publicIps.length !== 1) throw new Error('Select exactly one Gateway public IP');
-    const invalidPublicIp = input.network.publicIps.find((ip) => !isValidGatewayIp(ip));
-    if (invalidPublicIp) throw new Error(`Gateway public IP must be an IPv4 or IPv6 address: ${invalidPublicIp}`);
     if (!normalizeHostPortTarget(input.network.grpcPublicTarget)) {
       throw new Error('Gateway gRPC public target is required');
     }

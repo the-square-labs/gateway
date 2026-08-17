@@ -1015,7 +1015,7 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ dnsStatus: 'valid' }));
   });
 
-  it('checks external domains against the assigned Nginx node instead of Gateway public IPs', async () => {
+  it('checks external domains against the assigned Nginx node address', async () => {
     const service = new DomainsService({} as never, { log: vi.fn() } as never);
     const nodeLookup = vi
       .spyOn(service as any, 'getNginxNodeSummary')

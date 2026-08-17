@@ -194,7 +194,6 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
 
     service.setGeneralSettingsService({
       getGatewayEndpointSettings: vi.fn(async () => ({
-        gatewayPublicIps: [],
         gatewayGrpcPublicTarget: 'new.gateway.example.com:9443',
         gatewayGrpcLocalIp: '10.1.2.3:9443',
       })),

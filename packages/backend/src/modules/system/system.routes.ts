@@ -54,7 +54,6 @@ systemRoutes.openapi(systemConfigRoute, async (c) => {
     data: {
       fileUploadMaxBytes: config.fileUploadMaxBytes,
       fileOpenMaxBytes: config.fileOpenMaxBytes,
-      gatewayPublicIps: config.gatewayPublicIps,
       gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
       relayAutoRecovery: config.relayAutoRecovery,

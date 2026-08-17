@@ -49,7 +49,6 @@ export interface LoggingDraft {
 }
 
 export interface NetworkDraft {
-  publicIps: string;
   grpcPublicTarget: string;
   grpcLocalIp: string;
 }
@@ -63,7 +62,6 @@ export interface SetupConfig {
   };
   general: {
     publicUrl: string | null;
-    gatewayPublicIps: string[];
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
   };
@@ -197,21 +195,8 @@ function isIpPortTarget(value: string): boolean {
   return Boolean(ipv4WithPort && isIpv4(ipv4WithPort[1]!) && isValidPort(ipv4WithPort[2]));
 }
 
-export function splitNetworkPublicIps(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 export function isNetworkDraftValid(draft: NetworkDraft): boolean {
-  const publicIps = splitNetworkPublicIps(draft.publicIps);
-  return (
-    publicIps.length === 1 &&
-    isIp(publicIps[0]!) &&
-    isHostPortTarget(draft.grpcPublicTarget) &&
-    isIpPortTarget(draft.grpcLocalIp)
-  );
+  return isHostPortTarget(draft.grpcPublicTarget) && isIpPortTarget(draft.grpcLocalIp);
 }
 
 export function deriveGrpcPublicTarget(publicUrl: string): string {

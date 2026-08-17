@@ -47,7 +47,6 @@ export interface UIBootstrapShell {
   systemConfig: {
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
-    gatewayPublicIps: string[];
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
     relayAutoRecovery: boolean;
@@ -150,7 +149,6 @@ export class UIBootstrapService {
       systemConfig: {
         fileUploadMaxBytes: config.fileUploadMaxBytes,
         fileOpenMaxBytes: config.fileOpenMaxBytes,
-        gatewayPublicIps: config.gatewayPublicIps,
         gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
         gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
         relayAutoRecovery: config.relayAutoRecovery,

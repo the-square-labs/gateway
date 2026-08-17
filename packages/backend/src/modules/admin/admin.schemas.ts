@@ -6,7 +6,6 @@ import {
   FILE_UPLOAD_MAX_BYTES,
   FILE_UPLOAD_MIN_BYTES,
   isValidGatewayHostPortTarget,
-  isValidGatewayIp,
   isValidGatewayIpPortTarget,
   normalizePublicUrl,
   RELAY_DATA_LANES_MAX,
@@ -154,10 +153,6 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
       hideExternalBranding: z.boolean().optional(),
       fileUploadMaxBytes: z.number().int().min(FILE_UPLOAD_MIN_BYTES).max(FILE_UPLOAD_MAX_BYTES).optional(),
       fileOpenMaxBytes: z.number().int().min(FILE_OPEN_MIN_BYTES).max(FILE_OPEN_MAX_BYTES).optional(),
-      gatewayPublicIps: z
-        .array(z.string().trim().min(1).max(64).refine(isValidGatewayIp, 'Must be an IPv4 or IPv6 address'))
-        .max(16)
-        .optional(),
       gatewayGrpcPublicTarget: z
         .string()
         .trim()

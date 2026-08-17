@@ -187,7 +187,6 @@ describe('setup wizard routes', () => {
     const payload = {
       publicUrl: 'https://gateway.example.com',
       network: {
-        publicIps: ['203.0.113.10'],
         grpcPublicTarget: 'gateway.example.com:9443',
         grpcLocalIp: '192.168.1.10',
       },
@@ -240,7 +239,6 @@ describe('setup wizard routes', () => {
       body: JSON.stringify({
         publicUrl: 'https://gateway.example.com',
         network: {
-          publicIps: ['203.0.113.10'],
           grpcPublicTarget: 'gateway.example.com:9443',
           grpcLocalIp: '',
         },
@@ -378,7 +376,6 @@ describe('setup wizard routes', () => {
       body: JSON.stringify({
         publicUrl: 'https://gateway.example.com',
         network: {
-          publicIps: [],
           grpcPublicTarget: 'https://gateway.example.com/path',
           grpcLocalIp: 'gateway.local',
         },
