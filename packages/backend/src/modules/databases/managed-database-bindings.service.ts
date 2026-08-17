@@ -412,6 +412,7 @@ export class ManagedDatabaseBindingService {
           network_mode: binding.networkName,
           network_aliases: [binding.connectorAlias],
           restartPolicy: 'unless-stopped',
+          internal_workload: 'managed-database-connector',
           labels: {
             'wiolett.gateway.managed-database.binding': binding.id,
             'wiolett.gateway.managed-database.connector': 'true',

@@ -372,7 +372,7 @@ export const GITLAB_AI_TOOLS: AIToolDefinition[] = [
     parameters: { type: 'object', properties: projectSelector, required: ['connectorId', 'project'] },
     destructive: false,
     category: 'GitLab',
-    requiredScope: 'integrations:gitlab:registry:view',
+    requiredScope: 'docker:registries:view',
     invalidateStores: [],
     historyRetention: { mode: 'persistent_context' },
   },

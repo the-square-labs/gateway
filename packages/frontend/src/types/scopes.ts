@@ -625,12 +625,6 @@ const RAW_TOKEN_SCOPES = [
     group: "Integrations: GitLab",
   },
   {
-    value: "integrations:gitlab:registry:view",
-    label: "View GitLab Registries",
-    desc: "View GitLab container registries",
-    group: "Integrations: GitLab",
-  },
-  {
     value: "integrations:gitlab:registry:manage",
     label: "Manage GitLab Registries",
     desc: "Manage GitLab registry integration records and deploy credentials",
@@ -698,6 +692,37 @@ const RAW_TOKEN_SCOPES = [
     label: "Use External SSH Integrations",
     desc: "Execute approved commands on configured external SSH servers",
     group: "Integrations: SSH",
+  },
+  // Integrations: Cloudflare
+  {
+    value: "integrations:cloudflare:view",
+    label: "View Cloudflare Integrations",
+    desc: "View configured Cloudflare connectors and synchronization status",
+    group: "Integrations: Cloudflare",
+  },
+  {
+    value: "integrations:cloudflare:manage",
+    label: "Manage Cloudflare Integrations",
+    desc: "Create, edit, test, synchronize, rotate, and delete Cloudflare connectors",
+    group: "Integrations: Cloudflare",
+  },
+  {
+    value: "integrations:cloudflare:dns:view",
+    label: "View Cloudflare DNS",
+    desc: "View Cloudflare DNS zones and records available to Gateway",
+    group: "Integrations: Cloudflare",
+  },
+  {
+    value: "integrations:cloudflare:dns:edit",
+    label: "Edit Cloudflare DNS",
+    desc: "Create and update Cloudflare DNS records through Gateway",
+    group: "Integrations: Cloudflare",
+  },
+  {
+    value: "integrations:cloudflare:dns:delete",
+    label: "Delete Cloudflare DNS",
+    desc: "Delete Cloudflare DNS records through Gateway",
+    group: "Integrations: Cloudflare",
   },
   // Housekeeping
   {
@@ -1322,6 +1347,18 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
 
 export const API_TOKEN_SCOPES = TOKEN_SCOPES.filter(
   (scope) => !PROGRAMMATIC_DENIED_SCOPE_VALUES.has(scope.value)
+);
+
+const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
+  "integrations:gitlab:",
+  "integrations:github:",
+  "integrations:git:",
+  "integrations:ssh:",
+] as const;
+
+export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter(
+  (scope) =>
+    !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.value.startsWith(prefix))
 );
 
 export const GROUP_ASSIGNABLE_SCOPES = TOKEN_SCOPES.filter(

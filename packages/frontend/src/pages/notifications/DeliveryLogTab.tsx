@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { WebhookDelivery } from "@/types";
@@ -65,6 +66,7 @@ export function DeliveryLogTab({
   const [isLoading, setIsLoading] = useState(
     () => api.getCached<WebhookDelivery[]>("notifications:deliveries:all") === undefined
   );
+  const initialLoading = useInitialLoading(isLoading);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [searchInput, setSearchInput] = useState("");
@@ -252,7 +254,7 @@ export function DeliveryLogTab({
           </Select>
         }
       />
-      {isLoading && deliveries.length === 0 ? (
+      {initialLoading && deliveries.length === 0 ? (
         <DeliveryRowsSkeleton />
       ) : deliveries.length === 0 ? (
         <EmptyState

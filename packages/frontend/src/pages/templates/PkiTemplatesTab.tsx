@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -61,6 +62,7 @@ export function PkiTemplatesTab({
     : undefined;
   const [templates, setTemplates] = useState<Template[]>(cachedTemplates ?? []);
   const [isLoading, setIsLoading] = useState(canListTemplates && !cachedTemplates);
+  const initialLoading = useInitialLoading(isLoading);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Template | null>(null);
   const [step, setStep] = useState(0);
@@ -370,7 +372,7 @@ export function PkiTemplatesTab({
         )}
 
         {/* Template grid */}
-        {isLoading && templates.length === 0 ? (
+        {initialLoading && templates.length === 0 ? (
           <Skeleton />
         ) : templates.length > 0 ? (
           <div className="border border-border bg-card">

@@ -1075,6 +1075,7 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 
 ## MCP
 - mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
+- Gateway MCP never delegates GitLab, GitHub, generic Git, or external SSH integration scopes. External agents must configure dedicated provider MCP servers for repository, CI, variable, webhook, registry, and SSH operations. Cloudflare DNS remains part of Gateway MCP because Gateway directly manages domain and ingress DNS state.
 - The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
 - The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. Stable tool names, resource URIs, scopes, and REST paths still use proxy-host identifiers for compatibility.
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.

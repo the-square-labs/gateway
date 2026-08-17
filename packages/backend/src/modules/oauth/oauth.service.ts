@@ -10,6 +10,7 @@ import {
   canonicalizeScopes,
   extractBaseScope,
   isApiTokenScope,
+  isMcpTokenScope,
   isValidBaseScope,
   MANUAL_APPROVAL_SCOPE_SET,
   withoutManualApprovalScopes,
@@ -185,7 +186,8 @@ export class OAuthService {
     if (resource === this.getInferenceSetupResourceUrl()) {
       return this.canUseInferenceSetup(user) && requestedScopes.includes('inference:setup') ? ['inference:setup'] : [];
     }
-    return canonicalizeScopes(boundScopes(requestedScopes, user.scopes)).filter((scope) => isApiTokenScope(scope));
+    const granted = canonicalizeScopes(boundScopes(requestedScopes, user.scopes));
+    return granted.filter((scope) => (this.isMcpResource(resource) ? isMcpTokenScope(scope) : isApiTokenScope(scope)));
   }
 
   private canUseInferenceSetup(user: User): boolean {

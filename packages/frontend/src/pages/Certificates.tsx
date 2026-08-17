@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -61,6 +62,7 @@ export function Certificates() {
     setFilters,
     resetFilters,
   } = useCertificatesStore();
+  const initialLoading = useInitialLoading(isLoading);
   const [searchInput, setSearchInput] = useState(filters.search);
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -271,7 +273,7 @@ export function Certificates() {
         />
 
         {/* Table */}
-        {isLoading && (certificates || []).length === 0 ? (
+        {initialLoading && (certificates || []).length === 0 ? (
           <Skeleton />
         ) : (certificates || []).length > 0 ? (
           <div className="min-h-0 shrink">

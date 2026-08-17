@@ -117,7 +117,7 @@ export function PostgresExtensionsTab({
 
   return (
     <PanelShell
-      className="flex h-full min-h-0 flex-col"
+      className="flex min-h-0 flex-col"
       title="PostgreSQL Extensions"
       description={`Extensions bundled with PostgreSQL ${database.managed?.version ?? ""} that Gateway can safely enable or disable. Enabling creates database objects; disabling never uses CASCADE. ${enabledCount} enabled.`}
       bodyClassName="flex min-h-0 flex-1 flex-col"

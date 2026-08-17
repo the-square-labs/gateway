@@ -7,7 +7,6 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -65,6 +64,8 @@ export function EnvironmentTab({
   const [secretRows, setSecretRows] = useState<SecretRow[]>([]);
   const [deletedSecretIds, setDeletedSecretIds] = useState<Set<string>>(new Set());
   const [hasDatabaseNode, setHasDatabaseNode] = useState(false);
+  const [databaseNodeLoading, setDatabaseNodeLoading] = useState(true);
+  const [databaseLinksLoading, setDatabaseLinksLoading] = useState(true);
   const databaseLinksRef = useRef<ManagedDatabaseLinksSectionHandle>(null);
   const [databaseLinkDraft, setDatabaseLinkDraft] =
     useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
@@ -173,17 +174,31 @@ export function EnvironmentTab({
   useEffect(() => {
     if (!canEdit || !canManageSecrets || isServiceEnv || !containerName) {
       setHasDatabaseNode(false);
+      setDatabaseNodeLoading(false);
+      setDatabaseLinksLoading(false);
       return;
     }
 
     let cancelled = false;
+    setDatabaseNodeLoading(true);
+    setDatabaseLinksLoading(true);
     void api
       .listNodes({ type: "databases", limit: 1 })
       .then((result) => {
-        if (!cancelled) setHasDatabaseNode(result.data.length > 0);
+        if (!cancelled) {
+          const available = result.data.length > 0;
+          setHasDatabaseNode(available);
+          if (!available) setDatabaseLinksLoading(false);
+        }
       })
       .catch(() => {
-        if (!cancelled) setHasDatabaseNode(false);
+        if (!cancelled) {
+          setHasDatabaseNode(false);
+          setDatabaseLinksLoading(false);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDatabaseNodeLoading(false);
       });
     return () => {
       cancelled = true;
@@ -454,44 +469,6 @@ export function EnvironmentTab({
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="space-y-4" aria-busy="true" aria-label="Loading environment">
-        {canEdit && (
-          <PanelShell
-            title="Environment Variables"
-            description={
-              onSaveServiceEnv
-                ? "Saved to deployment configuration"
-                : "Changes will recreate the container"
-            }
-          >
-            <div className="space-y-3">
-              {Array.from({ length: 4 }, (_, index) => (
-                <div key={index} className="flex gap-3">
-                  <Skeleton className="h-9 flex-1" />
-                  <Skeleton className="h-9 flex-[2]" />
-                </div>
-              ))}
-            </div>
-          </PanelShell>
-        )}
-        {canManageSecrets && (
-          <PanelShell title="Secrets" description="Sensitive values stored with this resource">
-            <div className="space-y-3">
-              {Array.from({ length: 2 }, (_, index) => (
-                <div key={index} className="flex gap-3">
-                  <Skeleton className="h-9 flex-1" />
-                  <Skeleton className="h-9 flex-[2]" />
-                </div>
-              ))}
-            </div>
-          </PanelShell>
-        )}
-      </div>
-    );
-  }
-
   const invalidKeyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const visibleEnvRows = envVars
     .map((entry, index) => ({ entry, index }))
@@ -603,9 +580,16 @@ export function EnvironmentTab({
     secretRows.some((row) => !replacementDatabaseVariableNames.has(row.key.trim()) && row.dirty);
   const hasChanges = hasEnvChanges || hasSecretsChanges;
   const hasCombinedChanges = hasChanges || databaseLinkDraft.hasChanges;
+  const initialLoading =
+    isLoading || databaseNodeLoading || (hasDatabaseNode && databaseLinksLoading);
 
   return (
-    <div className={rawMode ? "flex flex-col flex-1 min-h-0" : "pb-6 space-y-4"}>
+    <motion.div
+      aria-busy={initialLoading}
+      animate={{ opacity: initialLoading ? 0 : 1 }}
+      initial={false}
+      className={`${rawMode ? "flex flex-col flex-1 min-h-0 gap-4" : "pb-6 space-y-4"} ${initialLoading ? "invisible" : "visible"}`}
+    >
       {canEdit && canManageSecrets && !isServiceEnv && containerName && hasDatabaseNode && (
         <ManagedDatabaseLinksSection
           ref={databaseLinksRef}
@@ -615,7 +599,7 @@ export function EnvironmentTab({
           containerName={containerName}
           disabled={disabled || isSaving || hasErrors}
           existingVariableNames={existingVariableNames}
-          externalHasChanges={hasChanges}
+          onInitialLoadingChange={setDatabaseLinksLoading}
           onDraftChange={handleDatabaseLinkDraftChange}
           onSaveRequested={() => void handleSave()}
         />
@@ -782,6 +766,6 @@ export function EnvironmentTab({
           />
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }

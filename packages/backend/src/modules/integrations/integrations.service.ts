@@ -2511,7 +2511,7 @@ export class IntegrationsService {
     const context = await this.resolveGitLabProjectContext(user, {
       connectorId: input.connectorId,
       project: input.project,
-      requiredScope: 'integrations:gitlab:registry:view',
+      requiredScope: 'docker:registries:view',
       requiredCapability: 'registryView',
     });
     const data = await context.provider.listRegistryRepositories(context.auth, this.toProviderProject(context.project));

@@ -153,6 +153,12 @@ describe('OAuth metadata routes', () => {
       expect(body.authorization_endpoint).toBe('https://gateway.example.com/api/oauth/authorize/api/mcp');
       expect(body.token_endpoint).toBe('https://gateway.example.com/api/oauth/token');
       expect(body.grant_types_supported).toEqual(['authorization_code']);
+      expect(body.scopes_supported).toContain('nodes:details');
+      expect(body.scopes_supported).toContain('integrations:cloudflare:dns:view');
+      expect(body.scopes_supported).not.toContain('integrations:gitlab:repo:read');
+      expect(body.scopes_supported).not.toContain('integrations:github:view');
+      expect(body.scopes_supported).not.toContain('integrations:git:view');
+      expect(body.scopes_supported).not.toContain('integrations:ssh:use');
     }
   });
 

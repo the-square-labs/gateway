@@ -28,6 +28,7 @@ export function buildContainerMutationSnapshot(
     env: config.Env ?? [],
     ports: hostConfig.PortBindings ?? {},
     mounts: container.Mounts ?? [],
+    networks: container.NetworkSettings?.Networks ?? {},
     entrypoint: config.Entrypoint ?? [],
     cmd: config.Cmd ?? [],
     workingDir: config.WorkingDir ?? "",
@@ -49,7 +50,7 @@ export function shouldSettleMutationTransition(
   previousSignature: string,
   next: Record<string, any> | null | undefined
 ) {
-  return buildContainerMutationSnapshot(next) !== previousSignature || !!(next as any)?._transition;
+  return !(next as any)?._transition && buildContainerMutationSnapshot(next) !== previousSignature;
 }
 
 export function useContainerMutationTransition(backendTransition?: string) {

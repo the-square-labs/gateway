@@ -433,7 +433,7 @@ export function DockerContainerDetail({
     const before = containerRef.current;
     const previousSignature = buildContainerMutationSnapshot(before);
 
-    const attempts = [0, 250, 750, 1500, 2500, 3500];
+    const attempts = [0, 250, 750, 1500, 2500, 3500, 5000, 7500];
     for (const delayMs of attempts) {
       if (delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));

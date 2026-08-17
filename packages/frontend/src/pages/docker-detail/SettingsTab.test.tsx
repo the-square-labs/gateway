@@ -346,6 +346,46 @@ describe("docker detail SettingsTab", () => {
     expect(api.listDockerNetworks).toHaveBeenCalledWith("node-1");
   });
 
+  it("keeps an attached network visible when its inspect snapshot has no network ID yet", async () => {
+    vi.spyOn(api, "listDockerNetworks").mockResolvedValue([]);
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["docker:containers:edit", "docker:networks:view", "docker:networks:edit"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    render(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        data={{
+          Id: "container-1",
+          Name: "/app",
+          State: { Status: "running", Running: true },
+          Config: { Image: "registry.example.com/team/app:latest", Entrypoint: [], Cmd: [] },
+          HostConfig: {
+            RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+            Memory: 0,
+            MemorySwap: 0,
+            NanoCPUs: 0,
+            CpuShares: 0,
+            PidsLimit: 0,
+            PortBindings: {},
+          },
+          NetworkSettings: { Networks: { "app-net": {} } },
+          Mounts: [],
+        }}
+      />
+    );
+
+    const networksPanel = screen.getByRole("heading", { name: "Networks" }).closest(".border");
+    expect(networksPanel).not.toBeNull();
+    expect(within(networksPanel as HTMLElement).getByText("app-net")).toBeInTheDocument();
+    expect(within(networksPanel as HTMLElement).queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
   it("adds a shared physical GPU through the standard table and dialog", async () => {
     vi.mocked(api.listDockerGpuUsage).mockResolvedValue([
       {

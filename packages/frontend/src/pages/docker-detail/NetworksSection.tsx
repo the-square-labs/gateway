@@ -40,13 +40,19 @@ export function readAttachedNetworks(
 ): NetworkEntry[] {
   return Object.entries(networks).map(([name, config]) => ({
     name,
-    networkId: String(config.NetworkID ?? ""),
-    ipAddress: String(config.IPAddress ?? ""),
-    gateway: String(config.Gateway ?? ""),
-    aliases: Array.isArray(config.Aliases)
-      ? (config.Aliases as unknown[]).map((alias) => String(alias))
+    networkId: String(
+      config.NetworkID ?? config.networkID ?? config.networkId ?? config.ID ?? config.id ?? ""
+    ),
+    ipAddress: String(config.IPAddress ?? config.ipAddress ?? ""),
+    gateway: String(config.Gateway ?? config.gateway ?? ""),
+    aliases: Array.isArray(config.Aliases ?? config.aliases)
+      ? ((config.Aliases ?? config.aliases) as unknown[]).map((alias) => String(alias))
       : [],
   }));
+}
+
+function isNetworkDraft(network: NetworkEntry) {
+  return !network.name && !network.networkId;
 }
 
 function isBuiltInDockerNetwork(name: string) {
@@ -79,7 +85,7 @@ export function NetworksSection({
     () => allNetworks.some((network) => !selectedNetworkIds.has(network.id)),
     [allNetworks, selectedNetworkIds]
   );
-  const hasEmptyNetworkRow = networks.some((network) => !network.networkId);
+  const hasEmptyNetworkRow = networks.some(isNetworkDraft);
 
   const loadNetworks = useCallback(async () => {
     if (!canListNetworks) return;
@@ -182,7 +188,7 @@ export function NetworksSection({
                   } border-b border-border last:border-b-0`}
                 >
                   <div className="min-w-0">
-                    {network.networkId && network.name ? (
+                    {!isNetworkDraft(network) && network.name ? (
                       <div className="flex min-h-9 min-w-0 items-center px-3 py-2 text-sm">
                         <div className="min-w-0">
                           <span className="block truncate font-medium">{network.name}</span>

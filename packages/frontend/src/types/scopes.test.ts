@@ -4,6 +4,7 @@ import {
   AI_SCOPE,
   API_TOKEN_SCOPES,
   GROUP_ASSIGNABLE_SCOPES,
+  MCP_TOKEN_SCOPES,
   RESOURCE_SCOPABLE_SCOPES,
   TOKEN_SCOPES,
 } from "./scopes";
@@ -42,6 +43,15 @@ describe("scope constants", () => {
     expect(tokenValues).toContain("admin:users:impersonate");
     expect(tokenValues).toContain("proxy:raw:write");
     expect(tokenValues).toContain("docker:containers:view");
+    expect(tokenValues).toContain("docker:registries:view");
+    expect(tokenValues).not.toContain("integrations:gitlab:registry:view");
+    expect(tokenValues).toContain("integrations:cloudflare:dns:view");
+    expect(
+      TOKEN_SCOPES.find((scope) => scope.value === "integrations:cloudflare:dns:view")
+    ).toMatchObject({
+      label: "View Cloudflare DNS",
+      group: "Integrations: Cloudflare",
+    });
 
     expect(apiTokenValues).not.toContain("feat:ai:use");
     expect(apiTokenValues).not.toContain("inference:use");
@@ -66,5 +76,16 @@ describe("scope constants", () => {
     expect(groupValues).not.toContain("admin:system");
     expect(scopeMatches(["admin:users"], "admin:users:impersonate")).toBe(false);
     expect(scopeMatches(["admin:users:impersonate"], "admin:users:impersonate")).toBe(true);
+  });
+
+  it("keeps source-control and SSH integrations out of Gateway MCP scopes", () => {
+    const mcpValues = scopeValues(MCP_TOKEN_SCOPES);
+
+    expect(mcpValues).toContain("nodes:details");
+    expect(mcpValues).toContain("integrations:cloudflare:dns:view");
+    expect(mcpValues.some((scope) => scope.startsWith("integrations:gitlab:"))).toBe(false);
+    expect(mcpValues.some((scope) => scope.startsWith("integrations:github:"))).toBe(false);
+    expect(mcpValues.some((scope) => scope.startsWith("integrations:git:"))).toBe(false);
+    expect(mcpValues.some((scope) => scope.startsWith("integrations:ssh:"))).toBe(false);
   });
 });

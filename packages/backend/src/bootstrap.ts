@@ -984,6 +984,7 @@ export async function initializeContainer(): Promise<void> {
       authService,
       container.resolve(LocalAuthService),
       finalizeSetupService,
+      mcpSettingsService,
       async () => {
         const externalIdentity = await grpcIdentityService.refresh();
         if (!env.GATEWAY_RELAY_REQUIRED) {

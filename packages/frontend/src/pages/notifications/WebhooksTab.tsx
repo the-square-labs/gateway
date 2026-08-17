@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { NotificationWebhook } from "@/types";
@@ -37,6 +38,7 @@ export function WebhooksTab({
   const [isLoading, setIsLoading] = useState(
     () => canRead && api.getCached<NotificationWebhook[]>("notifications:webhooks") === undefined
   );
+  const initialLoading = useInitialLoading(isLoading);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingWh, setEditingWh] = useState<NotificationWebhook | null>(null);
   const lastHandledCreateToken = useRef(openCreateToken);
@@ -225,7 +227,7 @@ export function WebhooksTab({
 
   return (
     <div className="space-y-4">
-      {isLoading && visibleWebhooks.length === 0 ? (
+      {initialLoading && visibleWebhooks.length === 0 ? (
         <Skeleton />
       ) : visibleWebhooks.length > 0 ? (
         <div className="border border-border bg-card">

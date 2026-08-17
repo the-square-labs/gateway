@@ -49,6 +49,9 @@ function createHarness() {
     clearOwner: vi.fn(),
     applySetupAIWorkspaceOutcomeForOwner: vi.fn(),
   };
+  const mcpSettings = {
+    updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: true }),
+  };
   const refreshGrpcIdentity = vi.fn();
   const refreshWebIdentity = vi.fn();
   const claimReturning = vi.fn().mockResolvedValue([{ key: 'setup:first_admin_claim' }]);
@@ -82,6 +85,7 @@ function createHarness() {
     auth as any,
     local as any,
     finalizeSetup as any,
+    mcpSettings as any,
     refreshGrpcIdentity,
     refreshWebIdentity
   );
@@ -101,6 +105,7 @@ function createHarness() {
     auth,
     local,
     finalizeSetup,
+    mcpSettings,
     logging,
     claimReturning,
     refreshGrpcIdentity,
@@ -258,6 +263,7 @@ describe('SetupWizardService', () => {
     await harness.service.completeAIWorkspace({ status: 'skipped' });
 
     expect(harness.general.requirePublicUrl).toHaveBeenCalledOnce();
+    expect(harness.mcpSettings.updateConfig).toHaveBeenCalledWith({ serverEnabled: true });
     expect(harness.policy.markSetupComplete).toHaveBeenCalledOnce();
     expect(harness.access.invalidate).toHaveBeenCalledOnce();
   });

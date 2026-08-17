@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -278,6 +279,7 @@ export function SSLCertificates() {
     completeDNSVerify,
     deleteCert,
   } = useSSLStore();
+  const initialLoading = useInitialLoading(isLoading);
   const [searchInput, setSearchInput] = useState(filters.search);
   type PendingRenewal = {
     certId: string;
@@ -792,7 +794,7 @@ export function SSLCertificates() {
           }
         />
 
-        {isLoading && (certificates || []).length === 0 ? (
+        {initialLoading && (certificates || []).length === 0 ? (
           <Skeleton />
         ) : (certificates || []).length > 0 ? (
           <div className="min-h-0 shrink">

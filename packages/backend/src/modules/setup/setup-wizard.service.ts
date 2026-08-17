@@ -10,6 +10,7 @@ import type { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import type { OidcConfigInput, OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import type { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import type { LoggingSettingsInput } from '@/modules/logging/logging-settings.service.js';
+import type { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import {
   type GeneralSettingsService,
@@ -65,6 +66,7 @@ export class SetupWizardService {
     private readonly authService: AuthService,
     private readonly localAuth: LocalAuthService,
     private readonly finalizeSetup: FinalizeSetupService,
+    private readonly mcpSettings: McpSettingsService,
     private readonly refreshGrpcIdentity?: () => Promise<void>,
     private readonly refreshWebIdentity?: () => Promise<void>
   ) {}
@@ -256,6 +258,7 @@ export class SetupWizardService {
         set: { value: outcome, updatedAt: new Date() },
       });
     await this.finalizeSetup.applySetupAIWorkspaceOutcomeForOwner(outcome.status);
+    await this.mcpSettings.updateConfig({ serverEnabled: true });
     await this.policy.markSetupComplete();
     await Promise.allSettled([
       this.access.invalidate(),

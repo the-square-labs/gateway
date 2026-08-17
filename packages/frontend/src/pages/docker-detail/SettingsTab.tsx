@@ -97,18 +97,18 @@ function sameRecreateBaseline(a: RecreateBaseline, b: RecreateBaseline) {
 function serializeNetworks(networks: NetworkEntry[]) {
   return JSON.stringify(
     networks
-      .map((network) => ({
-        name: network.name,
-        networkId: network.networkId,
-      }))
-      .sort((a, b) => `${a.name}:${a.networkId}`.localeCompare(`${b.name}:${b.networkId}`))
+      .map((network) => network.name)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
   );
 }
 
 function validateNetworkDraft(networks: NetworkEntry[]) {
-  if (networks.some((network) => !network.networkId || !network.name)) {
+  if (networks.some((network) => !network.name && !network.networkId)) {
     return "Select a network before saving.";
   }
+
+  if (networks.some((network) => !network.name)) return "Selected network is unavailable.";
 
   const names = networks.map((network) => network.name).filter(Boolean);
   if (new Set(names).size !== names.length) {
@@ -810,13 +810,10 @@ export function SettingsTab({
       }
 
       if (!hasConfigRecreateChanges) {
+        invalidate("containers", "networks");
+        await Promise.resolve(onRefresh?.());
         toast.success("Networks saved");
         setRecreateLoading(false);
-        void Promise.resolve(invalidate("containers", "networks"))
-          .then(() => Promise.resolve(onRefresh?.()))
-          .catch((err) => {
-            toast.error(err instanceof Error ? err.message : "Failed to refresh networks");
-          });
         return;
       }
 

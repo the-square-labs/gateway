@@ -21,7 +21,7 @@ function createDb(row: { value: unknown } | null = null) {
 }
 
 describe('McpSettingsService', () => {
-  it('disables the MCP server and enables extended compatibility by default', async () => {
+  it('uses the legacy-safe fallback when no MCP settings have been persisted', async () => {
     const service = new McpSettingsService(createDb() as any);
 
     await expect(service.getConfig()).resolves.toEqual({

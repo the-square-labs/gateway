@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { InferenceToken } from "@/types/inference";
@@ -23,6 +24,7 @@ import type { InferenceToken } from "@/types/inference";
 export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
   const [tokens, setTokens] = useState<InferenceToken[]>([]);
   const [loading, setLoading] = useState(true);
+  const initialLoading = useInitialLoading(loading);
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -91,7 +93,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
           ) : null
         }
       >
-        {loading ? (
+        {initialLoading ? (
           <InferenceTokenRowsSkeleton />
         ) : tokens.length === 0 ? (
           <EmptyState

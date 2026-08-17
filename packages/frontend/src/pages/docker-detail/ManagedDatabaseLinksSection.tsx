@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
@@ -149,7 +150,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     containerName: string;
     disabled?: boolean;
     existingVariableNames?: string[];
-    externalHasChanges?: boolean;
+    onInitialLoadingChange?: (loading: boolean) => void;
     onDraftChange?: (draft: ManagedDatabaseLinkDraft) => void;
     onSaveRequested?: () => void;
     onMutationStart?: (transition: "updating" | "recreating") => void;
@@ -164,7 +165,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     containerName,
     disabled = false,
     existingVariableNames = [],
-    externalHasChanges = false,
+    onInitialLoadingChange,
     onDraftChange,
     onSaveRequested,
     onMutationStart,
@@ -184,6 +185,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     connectionUri: "DATABASE_URL",
   });
   const [loading, setLoading] = useState(true);
+  const initialLoading = useInitialLoading(loading);
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [noAvailableDatabasesOpen, setNoAvailableDatabasesOpen] = useState(false);
@@ -222,6 +224,10 @@ export const ManagedDatabaseLinksSection = forwardRef<
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    onInitialLoadingChange?.(initialLoading);
+  }, [initialLoading, onInitialLoadingChange]);
 
   useRealtime("node.changed", () => {
     void api
@@ -498,14 +504,14 @@ export const ManagedDatabaseLinksSection = forwardRef<
       <PanelShell
         title="Managed Database Links"
         description="Private sidecar connections. Changes apply with Save & Recreate."
-        dirty={hasChanges || externalHasChanges}
+        dirty={hasChanges}
         bodyClassName={displayBindings.length > 0 ? "divide-y divide-border" : undefined}
         actions={
           <div className="flex items-center gap-2">
             <Button
               type="button"
               className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
-              disabled={disabled || loading || saving || (!hasChanges && !externalHasChanges)}
+              disabled={disabled || loading || saving || !hasChanges}
               onClick={() => (onSaveRequested ? onSaveRequested() : void save())}
             >
               <RotateCcw className="h-3.5 w-3.5" />
@@ -518,7 +524,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
           </div>
         }
       >
-        {loading ? (
+        {initialLoading ? (
           <div
             className="divide-y divide-border"
             aria-busy="true"

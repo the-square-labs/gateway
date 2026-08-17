@@ -144,7 +144,6 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `integrations:gitlab:variables:edit` |  |
 | `integrations:gitlab:variables:delete` |  |
 | `integrations:gitlab:webhooks:manage` |  |
-| `integrations:gitlab:registry:view` |  |
 | `integrations:gitlab:registry:manage` |  |
 | `integrations:gitlab:sandbox:clone` |  |
 | `integrations:github:view` |  |
@@ -302,6 +301,8 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `inference:usage:view` | System-wide inference accounting is session-only. |
 
 `mcp:use` is not a token scope. It gates whether the owning user account may use the MCP endpoint at all. MCP tokens use ordinary delegated Gateway scopes such as `nodes:details`, `proxy:view`, or `docker:containers:view` to determine which MCP tools and resources are available.
+
+Gateway MCP does not delegate `integrations:gitlab:*`, `integrations:github:*`, `integrations:git:*`, or `integrations:ssh:*` scopes. Source-control repository, CI, variable, webhook, registry, and external SSH operations belong to dedicated provider MCP servers rather than Gateway's control-plane MCP. Cloudflare DNS scopes remain available because Gateway directly manages domain and ingress DNS state.
 
 ## OAuth Manual Approval Scopes
 

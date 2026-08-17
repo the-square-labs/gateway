@@ -36,7 +36,7 @@ import type {
   OAuthAuthorization,
   ProxyHost,
 } from "@/types";
-import { API_TOKEN_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
+import { API_TOKEN_SCOPES, MCP_TOKEN_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
 
 interface OAuthApplicationsSectionProps {
   nodesList: Node[];
@@ -53,6 +53,14 @@ function resourceLabel(resource: string): string {
     return url.pathname || url.host;
   } catch {
     return resource;
+  }
+}
+
+function isMcpResource(resource: string): boolean {
+  try {
+    return new URL(resource).pathname.replace(/\/+$/, "") === "/api/mcp";
+  } catch {
+    return false;
   }
 }
 
@@ -104,10 +112,17 @@ export function OAuthApplicationsSection({
     () => parseScopesForForm(selectedAuthorization?.scopes ?? []),
     [selectedAuthorization?.scopes]
   );
+  const editableScopeCatalog = useMemo(
+    () =>
+      selectedAuthorization && isMcpResource(selectedAuthorization.resource)
+        ? MCP_TOKEN_SCOPES
+        : API_TOKEN_SCOPES,
+    [selectedAuthorization]
+  );
   const unknownScopes = useMemo(() => {
-    const known = new Set<string>(API_TOKEN_SCOPES.map((scope) => scope.value));
+    const known = new Set<string>(editableScopeCatalog.map((scope) => scope.value));
     return selectedScopeView.baseScopes.filter((scope) => !known.has(scope));
-  }, [selectedScopeView.baseScopes]);
+  }, [editableScopeCatalog, selectedScopeView.baseScopes]);
   const finalEditableScopes = useMemo(
     () => buildFinalScopes(editableBaseScopes, editableResourceScopes),
     [editableBaseScopes, editableResourceScopes]
@@ -119,12 +134,12 @@ export function OAuthApplicationsSection({
     );
   }, [finalEditableScopes, selectedAuthorization]);
   const visibleScopes = useMemo(() => {
-    return API_TOKEN_SCOPES.filter((scope) => {
+    return editableScopeCatalog.filter((scope) => {
       return (
         editableBaseScopes.includes(scope.value) || hasSelectableScopeBase(userScopes, scope.value)
       );
     });
-  }, [editableBaseScopes, userScopes]);
+  }, [editableBaseScopes, editableScopeCatalog, userScopes]);
   const selectedLogoUri = safeHttpUrl(selectedAuthorization?.logoUri);
 
   const load = useCallback(async () => {

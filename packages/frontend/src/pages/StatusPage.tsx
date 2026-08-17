@@ -44,6 +44,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -615,7 +616,9 @@ function ServicesTab({
   onEdit: (service: StatusPageServiceItem) => void;
   onDelete: (service: StatusPageServiceItem) => void;
 }) {
-  if (loading && groupedServices.length === 0) {
+  const initialLoading = useInitialLoading(loading);
+
+  if (initialLoading && groupedServices.length === 0) {
     return (
       <div className="space-y-4" aria-label="Loading status page services">
         {Array.from({ length: 2 }, (_, index) => (
@@ -718,7 +721,9 @@ function IncidentsTab({
   onPromote: (incident: StatusPageIncident) => void;
   onDelete: (incident: StatusPageIncident) => void;
 }) {
-  if (loading && incidents.length === 0) {
+  const initialLoading = useInitialLoading(loading);
+
+  if (initialLoading && incidents.length === 0) {
     return (
       <div className="space-y-3" aria-label="Loading status page incidents">
         {Array.from({ length: 3 }, (_, index) => (

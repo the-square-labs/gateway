@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { SiemDelivery, SiemDeliveryStatus, SiemDestination } from "@/types";
@@ -75,6 +76,7 @@ export function SiemDeliveryLogTab({
   const [isLoading, setIsLoading] = useState(
     () => api.getCached<SiemDelivery[]>("audit:siem:deliveries:all") === undefined
   );
+  const initialLoading = useInitialLoading(isLoading);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [searchInput, setSearchInput] = useState("");
@@ -313,7 +315,7 @@ export function SiemDeliveryLogTab({
           </div>
         }
       />
-      {isLoading && deliveries.length === 0 ? (
+      {initialLoading && deliveries.length === 0 ? (
         <SiemDeliveryRowsSkeleton />
       ) : deliveries.length === 0 ? (
         <EmptyState message="No SIEM deliveries yet. Audit activity will appear here after a destination is enabled." />

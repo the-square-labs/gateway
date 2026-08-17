@@ -144,17 +144,6 @@ describe("ManagedDatabaseLinksSection", () => {
     expect(screen.queryByText("pending")).not.toBeInTheDocument();
   });
 
-  it("delegates save to the shared environment coordinator when only env changes are pending", async () => {
-    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([]);
-    const onSaveRequested = vi.fn();
-
-    renderLinks({ externalHasChanges: true, onSaveRequested });
-
-    expect(await screen.findByRole("button", { name: "Save & Recreate" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
-    expect(onSaveRequested).toHaveBeenCalledOnce();
-  });
-
   it("shows the create-database dialog instead of the link form when no database can be linked", async () => {
     vi.spyOn(api, "listManagedDatabases").mockResolvedValue([]);
 

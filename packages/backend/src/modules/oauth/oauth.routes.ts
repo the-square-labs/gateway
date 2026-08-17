@@ -1,7 +1,7 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { container } from '@/container.js';
-import { API_TOKEN_SCOPES } from '@/lib/scopes.js';
+import { API_TOKEN_SCOPES, MCP_TOKEN_SCOPES } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, optionalAuthMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -46,6 +46,7 @@ function oauthClientErrorRedirectUrl(redirectUri: string, error: string, descrip
 function supportedScopes(resource?: string) {
   const service = oauthService();
   if (resource === service.getInferenceSetupResourceUrl()) return ['inference:setup'];
+  if (resource === service.getMcpResourceUrl()) return MCP_TOKEN_SCOPES;
   return API_TOKEN_SCOPES.filter((scope) => resource !== service.getApiResourceUrl() || scope !== 'mcp:use');
 }
 

@@ -205,6 +205,51 @@ func TestCreateContainerRejectsUnknownConfigFields(t *testing.T) {
 	}
 }
 
+func TestManagedDatabaseConnectorBindIsNarrowlyAllowlisted(t *testing.T) {
+	client := &Client{databaseTunnelDirectory: "/var/lib/docker-daemon/database-tunnel"}
+	valid := ContainerCreateConfig{
+		Name:             "gateway-db-connector-binding-1",
+		InternalWorkload: "managed-database-connector",
+		Labels: map[string]string{
+			"wiolett.gateway.managed-database.connector": "true",
+		},
+		Binds: []string{"/var/lib/docker-daemon/database-tunnel:/run/gateway-db:ro"},
+	}
+	if !client.isManagedDatabaseConnector(valid) {
+		t.Fatal("expected the daemon-owned database tunnel bind to be allowed")
+	}
+
+	tests := map[string]ContainerCreateConfig{
+		"wrong source": func() ContainerCreateConfig {
+			cfg := valid
+			cfg.Binds = []string{"/tmp/database-tunnel:/run/gateway-db:ro"}
+			return cfg
+		}(),
+		"writable bind": func() ContainerCreateConfig {
+			cfg := valid
+			cfg.Binds = []string{"/var/lib/docker-daemon/database-tunnel:/run/gateway-db:rw"}
+			return cfg
+		}(),
+		"extra bind": func() ContainerCreateConfig {
+			cfg := valid
+			cfg.Binds = append(append([]string(nil), valid.Binds...), "/tmp:/tmp:ro")
+			return cfg
+		}(),
+		"missing marker": func() ContainerCreateConfig {
+			cfg := valid
+			cfg.InternalWorkload = ""
+			return cfg
+		}(),
+	}
+	for name, cfg := range tests {
+		t.Run(name, func(t *testing.T) {
+			if client.isManagedDatabaseConnector(cfg) {
+				t.Fatal("unexpectedly allowed connector bind")
+			}
+		})
+	}
+}
+
 func TestImportedArchiveUsesImageIDForEnvOnlyRecreateAndLabelForTagUpdate(t *testing.T) {
 	imageID := "sha256:" + repeatHex("a")
 	insp := &container.InspectResponse{

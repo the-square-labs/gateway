@@ -76,6 +76,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { aiConversationRoute } from "@/lib/ai-conversation-route";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
@@ -198,6 +199,7 @@ export function AILiteSidebar({
     reorderConversationFolders,
     updateConversationFolder,
   } = useAIStore();
+  const initialRecentConversationsLoading = useInitialLoading(isLoadingRecentConversations);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const pointerPositionRef = useRef<SidebarPointerPosition | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(readExpandedProjectIds);
@@ -780,7 +782,7 @@ export function AILiteSidebar({
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto dashboard-scrollbar">
                 <SidebarPinnedResources loadBootstrap />
-                {isLoadingRecentConversations && recentConversations.length === 0 ? (
+                {initialRecentConversationsLoading && recentConversations.length === 0 ? (
                   <div className="px-3 py-3 text-xs text-muted-foreground">Loading...</div>
                 ) : (
                   <>

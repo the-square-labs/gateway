@@ -97,7 +97,7 @@ func (p *DockerPlugin) SetLogger(logger *slog.Logger) {
 func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) error {
 	p.logger = logger
 
-	c, err := NewClient(p.cfg.Docker.Socket, logger)
+	c, err := NewClient(p.cfg.Docker.Socket, p.cfg.StateDir, logger)
 	if err != nil {
 		return fmt.Errorf("init docker client: %w", err)
 	}

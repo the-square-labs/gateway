@@ -13,6 +13,7 @@ import { ResourceUngroupedSection } from "@/components/common/resource-list/Reso
 import type { ResourceListFormProps } from "@/components/common/resource-list/types";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { pointerFirstCollisionDetection } from "@/lib/dnd-collision";
 
 export function ResourceListForm<TFolder, TItem>({
@@ -30,7 +31,8 @@ export function ResourceListForm<TFolder, TItem>({
 }: ResourceListFormProps<TFolder, TItem>) {
   const topLevelFolders = folders.folders;
   const ungroupedItems = folders.ungroupedItems;
-  const showLoading = loading && !hasContent;
+  const initialLoading = useInitialLoading(Boolean(loading));
+  const showLoading = initialLoading && !hasContent;
   const frame = (
     <ResourceListFrame minWidth={minWidth}>
       <ResourceListHeaderTable columns={columns} />

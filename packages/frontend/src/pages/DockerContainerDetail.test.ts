@@ -66,7 +66,19 @@ describe("DockerContainerDetail mutation snapshot helpers", () => {
     ).toBe(true);
   });
 
-  it("settles immediately when the backend reports an active transition", () => {
+  it("settles when attached networks change", () => {
+    const before = makeContainer({ NetworkSettings: { Networks: { bridge: {} } } });
+    const signature = buildContainerMutationSnapshot(before);
+
+    expect(
+      shouldSettleMutationTransition(signature, {
+        ...before,
+        NetworkSettings: { Networks: { bridge: {}, app: { NetworkID: "network-1" } } },
+      })
+    ).toBe(true);
+  });
+
+  it("keeps polling while the backend reports an active transition", () => {
     const signature = buildContainerMutationSnapshot(makeContainer());
 
     expect(
@@ -74,7 +86,7 @@ describe("DockerContainerDetail mutation snapshot helpers", () => {
         ...makeContainer(),
         _transition: "updating",
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

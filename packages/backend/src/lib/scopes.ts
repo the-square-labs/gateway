@@ -102,7 +102,6 @@ export const ALL_SCOPES = [
   'integrations:gitlab:variables:edit',
   'integrations:gitlab:variables:delete',
   'integrations:gitlab:webhooks:manage',
-  'integrations:gitlab:registry:view',
   'integrations:gitlab:registry:manage',
   'integrations:gitlab:sandbox:clone',
   // ── Integrations: GitHub, generic Git, and external SSH ─────────
@@ -281,6 +280,17 @@ const PROGRAMMATIC_DENIED_SCOPE_SET = new Set<string>(PROGRAMMATIC_DENIED_BASE_S
 
 export const API_TOKEN_SCOPES = ALL_SCOPES.filter((scope) => !PROGRAMMATIC_DENIED_SCOPE_SET.has(scope));
 
+const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
+  'integrations:gitlab:',
+  'integrations:github:',
+  'integrations:git:',
+  'integrations:ssh:',
+] as const;
+
+export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter(
+  (scope) => !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.startsWith(prefix))
+);
+
 /** System-admin group: every scope including admin:system (protected) */
 export const SYSTEM_ADMIN_SCOPES: readonly string[] = [...ALL_SCOPES];
 
@@ -365,7 +375,6 @@ export const ADMIN_SCOPES: readonly string[] = [
   'integrations:gitlab:variables:edit',
   'integrations:gitlab:variables:delete',
   'integrations:gitlab:webhooks:manage',
-  'integrations:gitlab:registry:view',
   'integrations:gitlab:registry:manage',
   'integrations:gitlab:sandbox:clone',
   'integrations:github:view',
@@ -853,6 +862,13 @@ export function isValidBaseScope(scope: string): boolean {
 /** Check whether a scope may be delegated to an API token */
 export function isApiTokenScope(scope: string): boolean {
   return isValidBaseScope(scope) && !PROGRAMMATIC_DENIED_SCOPE_SET.has(extractBaseScope(scope));
+}
+
+/** Gateway MCP controls Gateway; source-control and SSH access belongs to dedicated MCP servers. */
+export function isMcpTokenScope(scope: string): boolean {
+  if (!isApiTokenScope(scope) || scope === 'mcp:use') return false;
+  const baseScope = extractBaseScope(scope);
+  return !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix));
 }
 
 /** Check if a scope string is a resource-scoped variant */

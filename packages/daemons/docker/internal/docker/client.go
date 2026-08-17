@@ -48,6 +48,7 @@ type Client struct {
 	cli                      *client.Client
 	logger                   *slog.Logger
 	gpuInventory             gpuInventory
+	databaseTunnelDirectory  string
 	runscHealthy             atomic.Bool
 	managedVolumeCreateMutex sync.Mutex
 }
@@ -102,7 +103,7 @@ type PortInfo struct {
 }
 
 // NewClient creates a Docker SDK client connected to the given socket path.
-func NewClient(socketPath string, logger *slog.Logger) (*Client, error) {
+func NewClient(socketPath string, stateDir string, logger *slog.Logger) (*Client, error) {
 	cli, err := client.NewClientWithOpts(
 		client.WithHost(socketPath),
 		client.WithAPIVersionNegotiation(),
@@ -110,7 +111,12 @@ func NewClient(socketPath string, logger *slog.Logger) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
-	return &Client{cli: cli, logger: logger, gpuInventory: gpu.NewCollector(logger)}, nil
+	return &Client{
+		cli:                     cli,
+		logger:                  logger,
+		gpuInventory:            gpu.NewCollector(logger),
+		databaseTunnelDirectory: filepath.Join(stateDir, DatabaseTunnelSocketDirectory),
+	}, nil
 }
 
 // Close releases the underlying Docker client resources.
@@ -469,6 +475,9 @@ type ContainerCreateConfig struct {
 	ExtraHosts          []string   `json:"extra_hosts,omitempty"`
 	GPU                 *GPUConfig `json:"gpu,omitempty"`
 	RuntimeProfile      string     `json:"runtimeProfile,omitempty"`
+	// InternalWorkload is set only by Gateway-owned backend flows. Public
+	// container creation schemas reject this field.
+	InternalWorkload string `json:"internal_workload,omitempty"`
 }
 
 type containerPortMapping struct {
@@ -801,7 +810,7 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	if cfg.Privileged || len(cfg.CapAdd) > 0 {
 		return "", "", fmt.Errorf("privileged mode and added capabilities are not allowed for user workloads")
 	}
-	if hasHostBind(cfg.Binds) {
+	if hasHostBind(cfg.Binds) && !c.isManagedDatabaseConnector(cfg) {
 		return "", "", fmt.Errorf("host bind mounts are not allowed for new user workloads")
 	}
 	containerCfg := &container.Config{
@@ -882,6 +891,20 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	}
 
 	return result.ID, cfg.Name, nil
+}
+
+func (c *Client) isManagedDatabaseConnector(cfg ContainerCreateConfig) bool {
+	if cfg.InternalWorkload != "managed-database-connector" ||
+		!strings.HasPrefix(cfg.Name, "gateway-db-connector-") ||
+		cfg.Labels["wiolett.gateway.managed-database.connector"] != "true" ||
+		len(cfg.Binds) != 1 {
+		return false
+	}
+	parts := strings.Split(cfg.Binds[0], ":")
+	return len(parts) == 3 &&
+		filepath.Clean(parts[0]) == filepath.Clean(c.databaseTunnelDirectory) &&
+		parts[1] == "/run/gateway-db" &&
+		parts[2] == "ro"
 }
 
 func applyUserWorkloadBaseline(hostCfg *container.HostConfig) {

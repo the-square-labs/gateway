@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -52,6 +53,7 @@ export function AccessLists() {
   const cachedAccessLists = api.getCached<{ data: AccessList[] }>("access-lists:list");
   const [accessLists, setAccessLists] = useState<AccessList[]>(cachedAccessLists?.data ?? []);
   const [isLoading, setIsLoading] = useState(!cachedAccessLists);
+  const initialLoading = useInitialLoading(isLoading);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AccessList | null>(null);
 
@@ -301,7 +303,7 @@ export function AccessLists() {
         </div>
 
         {/* Table */}
-        {isLoading && accessLists.length === 0 ? (
+        {initialLoading && accessLists.length === 0 ? (
           <Skeleton />
         ) : accessLists.length > 0 ? (
           <div className="border border-border bg-card">

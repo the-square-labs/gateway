@@ -159,6 +159,24 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain("COALESCE(\"scopes\", '[]'::jsonb) - 'inference:use' - 'inference:usage:view:self'");
   });
 
+  it('collapses GitLab registry-view grants into the canonical Docker registry permission', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0126_collapse_gitlab_registry_view.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain("WHEN entry.value = 'integrations:gitlab:registry:view'");
+    expect(migration).toContain("THEN 'docker:registries:view'");
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain('UPDATE "api_tokens"');
+    expect(migration).toContain('UPDATE "oauth_authorization_codes"');
+    expect(migration).toContain('UPDATE "oauth_refresh_tokens"');
+    expect(migration).toContain('UPDATE "oauth_access_tokens"');
+    expect(migration).toContain('UPDATE "ai_run_tool_calls"');
+    expect(migration).toContain('UPDATE "sandbox_jobs"');
+  });
+
   it('preserves a custom guest group before reserving the built-in name', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0115_reserve_guest_builtin_group.sql'),

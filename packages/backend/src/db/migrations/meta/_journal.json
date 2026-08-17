@@ -883,6 +883,13 @@
       "when": 1786925386942,
       "tag": "0125_productive_titanium_man",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1786932493140,
+      "tag": "0126_collapse_gitlab_registry_view",
+      "breakpoints": true
     }
   ]
 }

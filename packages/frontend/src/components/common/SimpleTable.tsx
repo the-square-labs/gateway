@@ -2,6 +2,7 @@ import type * as React from "react";
 import { Fragment } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { cn } from "@/lib/utils";
 
 export interface SimpleTableColumn<TRow> {
@@ -63,11 +64,13 @@ export function SimpleTable<TRow>({
   bodyClassName,
   rowRenderer,
 }: SimpleTableProps<TRow>) {
-  if (loading && rows.length === 0) {
+  const initialLoading = useInitialLoading(Boolean(loading));
+
+  if (initialLoading && rows.length === 0) {
     return <Skeleton />;
   }
 
-  if (!loading && rows.length === 0) {
+  if (rows.length === 0) {
     return <EmptyState message={emptyMessage} embedded />;
   }
 

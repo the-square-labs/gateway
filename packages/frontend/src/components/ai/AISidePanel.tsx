@@ -32,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
 import { selectedModelSupportsImages } from "@/lib/ai-model-capabilities";
 import {
@@ -251,6 +252,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     refreshProviderStatus,
     fetchRecentConversations,
   } = useAIStore();
+  const initialRecentConversationsLoading = useInitialLoading(isLoadingRecentConversations);
   const assistantConnectorSetup = useMemo(
     () =>
       pendingSetupInteraction?.kind === "connector_setup"
@@ -768,12 +770,12 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             guidance.
           </p>
           <QuickActionChips onSelect={handleQuickAction} context={context} />
-          {(isLoadingRecentConversations || recentConversations.length > 0) && (
+          {(initialRecentConversationsLoading || recentConversations.length > 0) && (
             <div className="mt-4 w-full max-w-[340px] border border-border">
               <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                 Recent
               </div>
-              {isLoadingRecentConversations && recentConversations.length === 0 ? (
+              {initialRecentConversationsLoading && recentConversations.length === 0 ? (
                 <div className="px-3 py-3 text-xs text-muted-foreground">Loading...</div>
               ) : (
                 normalRecentConversations.map((conversation) => (

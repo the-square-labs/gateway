@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -38,6 +39,7 @@ export function CAs() {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess } = useAuthStore();
   const { cas, fetchCAs, isLoading } = useCAStore();
+  const initialLoading = useInitialLoading(isLoading);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createIntermediateParentId, setCreateIntermediateParentId] = useState<
     string | undefined
@@ -252,7 +254,7 @@ export function CAs() {
         />
 
         {/* Table */}
-        {isLoading && visibleCAs.length === 0 ? (
+        {initialLoading && visibleCAs.length === 0 ? (
           <Skeleton />
         ) : visibleCAs.length > 0 ? (
           <div className="min-h-0 shrink overflow-auto border border-border bg-card">

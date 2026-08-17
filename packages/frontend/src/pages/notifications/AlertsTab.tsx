@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { AlertRule } from "@/types";
@@ -68,6 +69,7 @@ export function AlertsTab({
   const [isLoading, setIsLoading] = useState(
     () => canRead && api.getCached<AlertRule[]>("notifications:alerts") === undefined
   );
+  const initialLoading = useInitialLoading(isLoading);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
   const lastHandledCreateToken = useRef(openCreateToken);
@@ -246,7 +248,7 @@ export function AlertsTab({
 
   return (
     <div className="space-y-4">
-      {isLoading && visibleRules.length === 0 ? (
+      {initialLoading && visibleRules.length === 0 ? (
         <Skeleton />
       ) : visibleRules.length > 0 ? (
         <div className="border border-border bg-card">

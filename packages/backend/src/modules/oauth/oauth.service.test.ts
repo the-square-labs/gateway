@@ -299,6 +299,31 @@ describe('OAuthService.createConsentRequest', () => {
     expect(cacheSet).toHaveBeenCalledWith(expect.stringContaining('oauth:consent:'), pending, 600);
   });
 
+  it('does not grant source-control or SSH integration scopes to Gateway MCP', async () => {
+    const { service } = createService();
+    const integrationScopes = [
+      'integrations:gitlab:repo:read',
+      'integrations:github:view',
+      'integrations:git:view',
+      'integrations:ssh:use',
+    ];
+
+    const pending = await service.createConsentRequest(
+      { ...USER, scopes: [...USER.scopes, ...integrationScopes] },
+      {
+        response_type: 'code',
+        client_id: 'goc_client',
+        redirect_uri: 'http://127.0.0.1:8765/callback',
+        code_challenge: 'challenge',
+        code_challenge_method: 'S256',
+        scope: `mcp:use nodes:details ${integrationScopes.join(' ')}`,
+      }
+    );
+
+    expect(pending.grantableScopes).toEqual(['nodes:details']);
+    expect(pending.unavailableScopes).toEqual([...integrationScopes].sort());
+  });
+
   it('rejects MCP OAuth requests when the user cannot use MCP', async () => {
     const { service } = createService();
 

@@ -366,14 +366,14 @@ export function ManagedDatabaseCreateForm({
   const versions = catalogVersions(catalog, draft.type);
 
   return (
-    <AnimatePresence mode="wait" initial={false}>
+    <AnimatePresence mode="popLayout" initial={false}>
       {step === 1 && (
         <motion.div
           key="managed-database-step-1"
           {...MANAGED_DATABASE_FORM_ANIMATION}
           className="space-y-4"
         >
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-name">
                 Name
@@ -479,7 +479,7 @@ export function ManagedDatabaseCreateForm({
           {...MANAGED_DATABASE_FORM_ANIMATION}
           className="space-y-4"
         >
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-storage">
                 Storage (GB)

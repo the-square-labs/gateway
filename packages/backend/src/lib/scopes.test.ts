@@ -11,8 +11,10 @@ import {
   extractBaseScope,
   GUEST_SCOPES,
   isApiTokenScope,
+  isMcpTokenScope,
   isValidBaseScope,
   MANUAL_APPROVAL_SCOPES,
+  MCP_TOKEN_SCOPES,
   OPERATOR_SCOPES,
   PROGRAMMATIC_DENIED_BASE_SCOPES,
   RESOURCE_SCOPABLE,
@@ -61,6 +63,18 @@ function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
 }
 
 describe('canonical scope definitions', () => {
+  it('keeps external source-control and SSH integrations out of Gateway MCP delegation', () => {
+    expect(MCP_TOKEN_SCOPES).toContain('nodes:details');
+    expect(MCP_TOKEN_SCOPES).toContain('integrations:cloudflare:dns:view');
+    expect(MCP_TOKEN_SCOPES).not.toContain('mcp:use');
+    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:gitlab:'))).toBe(false);
+    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:github:'))).toBe(false);
+    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:git:'))).toBe(false);
+    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:ssh:'))).toBe(false);
+    expect(isMcpTokenScope('integrations:gitlab:repo:read')).toBe(false);
+    expect(isMcpTokenScope('nodes:details:node-1')).toBe(true);
+  });
+
   it('keeps system-admin on every canonical scope', () => {
     expect(SYSTEM_ADMIN_SCOPES).toEqual([...ALL_SCOPES]);
     expect(SYSTEM_ADMIN_SCOPES).toContain('ai:skills:manage');
@@ -104,12 +118,17 @@ describe('canonical scope definitions', () => {
     expect(ALL_SCOPES).toContain('docker:containers:mounts');
   });
 
-  it('uses Docker operation scopes instead of a provider-specific GitLab registry-use scope', () => {
+  it('uses Docker operation scopes instead of provider-specific GitLab registry scopes', () => {
     expect(ALL_SCOPES).not.toContain('integrations:gitlab:registry:use');
+    expect(ALL_SCOPES).not.toContain('integrations:gitlab:registry:view');
     expect(SYSTEM_ADMIN_SCOPES).not.toContain('integrations:gitlab:registry:use');
+    expect(SYSTEM_ADMIN_SCOPES).not.toContain('integrations:gitlab:registry:view');
     expect(ADMIN_SCOPES).not.toContain('integrations:gitlab:registry:use');
+    expect(ADMIN_SCOPES).not.toContain('integrations:gitlab:registry:view');
+    expect(ADMIN_SCOPES).toContain('docker:registries:view');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:use');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:view');
+    expect(VIEWER_SCOPES).toContain('docker:registries:view');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:manage');
   });
 

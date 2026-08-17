@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { SiemAuthType, SiemDeliveryStatus, SiemDestination } from "@/types";
@@ -58,6 +59,7 @@ export function SiemDestinationsTab({
   const [isLoading, setIsLoading] = useState(
     () => canRead && api.getCached<SiemDestination[]>(SIEM_DESTINATION_CACHE_KEY) === undefined
   );
+  const initialLoading = useInitialLoading(isLoading);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingDestination, setEditingDestination] = useState<SiemDestination | null>(null);
   const lastHandledCreateToken = useRef(openCreateToken);
@@ -302,7 +304,7 @@ export function SiemDestinationsTab({
 
   return (
     <div className="space-y-4">
-      {isLoading && destinations.length === 0 ? (
+      {initialLoading && destinations.length === 0 ? (
         <Skeleton />
       ) : destinations.length > 0 ? (
         <div className="border border-border bg-card">
