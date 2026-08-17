@@ -40,6 +40,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
+import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
 import { proxyHostRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
@@ -129,11 +130,8 @@ export function ProxyHosts({
   const canShowHostActions =
     canManageFolders || hasScopedAccess("proxy:edit") || hasScopedAccess("proxy:delete");
   const ingressNodes = useUIBootstrapStore((state) => state.snapshot?.navigation.nodes.data);
-  const ingressNodeNames = useMemo(
-    () =>
-      new Map(
-        (ingressNodes ?? []).map((node) => [node.id, node.displayName || node.hostname] as const)
-      ),
+  const ingressNodeById = useMemo(
+    () => new Map((ingressNodes ?? []).map((node) => [node.id, node] as const)),
     [ingressNodes]
   );
 
@@ -451,9 +449,14 @@ export function ProxyHosts({
       id: "ingress-node",
       label: "Ingress Node",
       width: "13%",
-      cellContentClassName: "text-sm text-muted-foreground",
-      renderCell: (host) =>
-        host.nodeId ? ingressNodeNames.get(host.nodeId) || "Unknown node" : "Unassigned",
+      renderCell: (host) => {
+        const node = host.nodeId ? ingressNodeById.get(host.nodeId) : undefined;
+        return (
+          <Badge variant="secondary" className={nodeBadgeClassName(node?.appearanceColor)}>
+            {node ? node.displayName || node.hostname : host.nodeId ? "Unknown node" : "Unassigned"}
+          </Badge>
+        );
+      },
     },
     {
       id: "type",
