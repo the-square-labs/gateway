@@ -1053,6 +1053,8 @@ export async function initializeContainer(): Promise<void> {
       relayDockerRecovery.setExpectedImage(imageRef);
       relaySupervisor.setExpectedArtifact(imageRef, buildVersion, protocolMajor);
     },
+    updateSecureLinkConnectorImage: (imageRef) =>
+      proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve(),
     probeNow: () => relaySupervisor.probeNow(),
   });
   container.registerInstance(UpdateService, updateService);

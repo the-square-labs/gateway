@@ -61,6 +61,7 @@ export interface RelayImageManifestPayload {
   digest: string;
   imageRef: string;
   protocolMajor: number;
+  secureLinkConnectorImage: string;
   createdAt: string;
   gitCommitSha?: string;
   gitPipelineId?: string;
@@ -89,6 +90,7 @@ export interface TrustedRelayUpdateArtifact {
   digest: string;
   buildVersion: string;
   protocolMajor: number;
+  secureLinkConnectorImage: string;
 }
 
 export interface DaemonUpdateManifestExpectation {
@@ -199,6 +201,14 @@ export function verifyRelayImageManifest(
   if (!Number.isInteger(payload.protocolMajor) || payload.protocolMajor !== expected.protocolMajor) {
     throw new UpdateArtifactTrustError('Relay update protocol major is incompatible');
   }
+  const gatewayRepository = payload.image.endsWith('/relay') ? payload.image.slice(0, -'/relay'.length) : '';
+  if (
+    typeof payload.secureLinkConnectorImage !== 'string' ||
+    !gatewayRepository ||
+    !isDigestPinnedImageRef(payload.secureLinkConnectorImage, `${gatewayRepository}/secure-link-connector`)
+  ) {
+    throw new UpdateArtifactTrustError('Relay update secure-link connector image reference is not digest pinned');
+  }
 
   return {
     payload,
@@ -207,6 +217,7 @@ export function verifyRelayImageManifest(
     digest: payload.digest,
     buildVersion: payload.version,
     protocolMajor: payload.protocolMajor,
+    secureLinkConnectorImage: payload.secureLinkConnectorImage,
   };
 }
 

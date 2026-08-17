@@ -135,25 +135,27 @@ func sign(args []string) {
 		payload = payloadMap
 	case "relay-image":
 		required(map[string]string{
-			"--version": *version,
-			"--tag":     *tag,
-			"--image":   *image,
-			"--digest":  *digest,
+			"--version":                     *version,
+			"--tag":                         *tag,
+			"--image":                       *image,
+			"--digest":                      *digest,
+			"--secure-link-connector-image": *secureLinkConnectorImage,
 		})
 		if *relayProtocolMajor < 1 {
 			die("--relay-protocol-major must be positive")
 		}
 		payload = map[string]any{
-			"kind":          "relay-image",
-			"version":       *version,
-			"tag":           *tag,
-			"image":         *image,
-			"digest":        *digest,
-			"imageRef":      fmt.Sprintf("%s@%s", *image, *digest),
-			"protocolMajor": *relayProtocolMajor,
-			"createdAt":     createdAt,
-			"gitCommitSha":  *commitSHA,
-			"gitPipelineId": *pipelineID,
+			"kind":                     "relay-image",
+			"version":                  *version,
+			"tag":                      *tag,
+			"image":                    *image,
+			"digest":                   *digest,
+			"imageRef":                 fmt.Sprintf("%s@%s", *image, *digest),
+			"protocolMajor":            *relayProtocolMajor,
+			"secureLinkConnectorImage": *secureLinkConnectorImage,
+			"createdAt":                createdAt,
+			"gitCommitSha":             *commitSHA,
+			"gitPipelineId":            *pipelineID,
 		}
 	default:
 		die("--kind must be gateway-image, relay-image, or daemon-binary")

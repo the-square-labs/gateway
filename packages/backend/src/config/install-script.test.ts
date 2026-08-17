@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
+const gitlabPipeline = fileURLToPath(new URL('../../../../.gitlab-ci.yml', import.meta.url));
 const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node.sh', import.meta.url));
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
 const monitoringNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-monitoring-node.sh', import.meta.url));
@@ -85,6 +86,7 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
     expect(source).toContain('secureLinkConnectorImage');
     expect(source).toContain('SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"');
+    expect(source).toContain('Signed relay manifest contains an invalid secure-link connector image.');
     expect(source).toContain('RELAY_BUILD_VERSION="$manifest_version"');
     expect(source).toContain('RELAY_PROTOCOL_MAJOR="$protocol_major"');
     expect(source).toContain('GATEWAY_RELAY_IMAGE_REF');
@@ -98,6 +100,26 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('compose up -d --no-deps app');
     expect(source).toContain('ARTIFACT_KIND="local source checksum"');
     expect(source).toContain('short_digest "$ARTIFACT_DIGEST"');
+  });
+
+  it('publishes Secure Link connectors with Relay releases instead of Gateway releases', () => {
+    const source = readFileSync(gitlabPipeline, 'utf8');
+    const relaySigning = source.slice(source.indexOf('sign-relay-update:'), source.indexOf('upload-relay-update:'));
+    const gatewaySigning = source.slice(
+      source.indexOf('sign-gateway-update:'),
+      source.indexOf('upload-gateway-update:')
+    );
+    const connectorPublishing = source.slice(
+      source.indexOf('publish-secure-link-connector:'),
+      source.indexOf('\nrelease:')
+    );
+
+    expect(relaySigning).toContain('publish-secure-link-connector');
+    expect(relaySigning).toContain('--secure-link-connector-image');
+    expect(gatewaySigning).not.toContain('publish-secure-link-connector');
+    expect(gatewaySigning).not.toContain('--secure-link-connector-image');
+    expect(connectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
+    expect(connectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
   });
 
   it('does not advertise Docker, CNI, or loopback interface addresses as host-local targets', () => {

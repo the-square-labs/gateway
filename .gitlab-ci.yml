@@ -146,7 +146,7 @@ variables:
 
 .daemon-secure-link-connector-rules: &daemon-secure-link-connector-rules
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-secure-link-connector$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
@@ -290,10 +290,14 @@ sign-relay-update:
   needs:
     - job: build-relay
       artifacts: true
+    - job: publish-secure-link-connector
+      artifacts: true
   script:
     - test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || (echo "UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 CI variable is required to publish signed relay updates" && exit 1)
     - RELAY_IMAGE_DIGEST=$(cat ../../relay-image.digest)
+    - SECURE_LINK_CONNECTOR_DIGEST=$(cat ../../secure-link-connector.digest)
     - echo "$RELAY_IMAGE_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "RELAY_IMAGE_DIGEST artifact is required to sign relay updates" && exit 1)
+    - echo "$SECURE_LINK_CONNECTOR_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "SECURE_LINK_CONNECTOR_DIGEST artifact is required to sign relay updates" && exit 1)
     - RELAY_VERSION="${CI_COMMIT_TAG%-relay}"
     - |
       go run ./shared/cmd/update-trust sign \
@@ -303,6 +307,7 @@ sign-relay-update:
         --image "${IMAGE}/relay" \
         --digest "$RELAY_IMAGE_DIGEST" \
         --relay-protocol-major 1 \
+        --secure-link-connector-image "${IMAGE}/secure-link-connector@${SECURE_LINK_CONNECTOR_DIGEST}" \
         --git-commit-sha "$CI_COMMIT_SHA" \
         --git-pipeline-id "$CI_PIPELINE_ID" \
         --out ../../relay-image.update.json
@@ -354,16 +359,12 @@ sign-gateway-update:
       artifacts: true
     - job: publish-database-connector
       artifacts: true
-    - job: publish-secure-link-connector
-      artifacts: true
   script:
     - test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || (echo "UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 CI variable is required to publish signed gateway updates" && exit 1)
     - GATEWAY_IMAGE_DIGEST=$(cat ../../gateway-image.digest)
     - DATABASE_CONNECTOR_DIGEST=$(cat ../../database-connector.digest)
-    - SECURE_LINK_CONNECTOR_DIGEST=$(cat ../../secure-link-connector.digest)
     - test -n "${GATEWAY_IMAGE_DIGEST}" || (echo "GATEWAY_IMAGE_DIGEST artifact is required to sign gateway updates" && exit 1)
     - echo "$DATABASE_CONNECTOR_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "DATABASE_CONNECTOR_DIGEST artifact is required to sign gateway updates" && exit 1)
-    - echo "$SECURE_LINK_CONNECTOR_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "SECURE_LINK_CONNECTOR_DIGEST artifact is required to sign gateway updates" && exit 1)
     - |
       go run ./shared/cmd/update-trust sign \
         --kind gateway-image \
@@ -372,7 +373,6 @@ sign-gateway-update:
         --image "$IMAGE" \
         --digest "$GATEWAY_IMAGE_DIGEST" \
         --database-connector-image "${IMAGE}/database-connector@${DATABASE_CONNECTOR_DIGEST}" \
-        --secure-link-connector-image "${IMAGE}/secure-link-connector@${SECURE_LINK_CONNECTOR_DIGEST}" \
         --git-commit-sha "$CI_COMMIT_SHA" \
         --git-pipeline-id "$CI_PIPELINE_ID" \
         --out ../../gateway-image.update.json
@@ -451,7 +451,7 @@ publish-secure-link-connector:
       - secure-link-connector.digest
     expire_in: 1 hour
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-secure-link-connector$/
 
 release:

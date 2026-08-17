@@ -458,6 +458,7 @@ verify_signed_relay() {
   local relay_tag="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
   local payload signature kind manifest_version tag image digest image_ref protocol_major
+  local secure_connector_image_ref secure_connector_image secure_connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/relay-image.update.json"
@@ -492,17 +493,26 @@ verify_signed_relay() {
   digest="$(json_string_field "$payload_file" digest)"
   image_ref="$(json_string_field "$payload_file" imageRef)"
   protocol_major="$(json_number_field "$payload_file" protocolMajor)"
+  secure_connector_image_ref="$(json_string_field "$payload_file" secureLinkConnectorImage)"
   if [[ "$kind" != "relay-image" || "$tag" != "$relay_tag" || "$relay_tag" != "${manifest_version}-relay" ||
     ! "$manifest_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ || "$image" != "${IMAGE}/relay" ||
     ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}/relay@${digest}" || "$protocol_major" != "1" ]]; then
     rm -rf "$tmp_dir"
     die "Signed relay manifest does not match a compatible Relay image."
   fi
+  secure_connector_image="${IMAGE}/secure-link-connector"
+  secure_connector_digest="${secure_connector_image_ref##*@}"
+  if [[ "$secure_connector_image_ref" != "${secure_connector_image}@${secure_connector_digest}" ||
+    ! "$secure_connector_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    rm -rf "$tmp_dir"
+    die "Signed relay manifest contains an invalid secure-link connector image."
+  fi
   rm -rf "$tmp_dir"
 
   RELAY_BUILD_VERSION="$manifest_version"
   RELAY_PROTOCOL_MAJOR="$protocol_major"
   RELAY_IMAGE_REF="$image_ref"
+  SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"
   RELAY_BOOTSTRAP=1
   ok "Relay ${manifest_version} verified (SHA-256: $(short_digest "$digest"))"
 }

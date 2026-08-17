@@ -61,6 +61,7 @@ interface FoundationMigrationOutput {
 export interface RelayUpdateRuntime {
   setMaintenance(enabled: boolean): Promise<void>;
   setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void;
+  updateSecureLinkConnectorImage(imageRef: string): Promise<void>;
   probeNow(): Promise<void>;
 }
 
@@ -637,6 +638,8 @@ exit 1`,
         String(artifact.protocolMajor),
         '--relay-image-ref',
         artifact.imageRef,
+        '--secure-link-connector-image',
+        artifact.secureLinkConnectorImage,
       ],
       HostConfig: { Binds: [`${composeDir}:/host`] },
     });
@@ -709,8 +712,10 @@ exit 1`,
         GATEWAY_RELAY_IMAGE_REF: artifact.imageRef,
         GATEWAY_RELAY_BUILD_VERSION: artifact.buildVersion,
         GATEWAY_RELAY_PROTOCOL_MAJOR: artifact.protocolMajor,
+        SECURE_LINK_CONNECTOR_IMAGE: artifact.secureLinkConnectorImage,
       });
       this.relayRuntime?.setExpectedArtifact(artifact.imageRef, artifact.buildVersion, artifact.protocolMajor);
+      await this.relayRuntime?.updateSecureLinkConnectorImage(artifact.secureLinkConnectorImage);
     } finally {
       await this.relayRuntime?.setMaintenance(false);
     }

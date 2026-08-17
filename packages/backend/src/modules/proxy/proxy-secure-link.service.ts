@@ -47,11 +47,55 @@ export class ProxySecureLinkService {
     private readonly db: DrizzleClient,
     private readonly dispatch: NodeDispatchService,
     private readonly relayPolicy: RelayPolicyService,
-    private readonly connectorImage: string
+    private connectorImage: string
   ) {}
 
   setEventBus(eventBus: EventBusService): void {
     this.eventBus = eventBus;
+  }
+
+  async updateConnectorImage(connectorImage: string): Promise<void> {
+    if (connectorImage === this.connectorImage) return;
+    this.connectorImage = connectorImage;
+
+    try {
+      const [hosts, additional] = await Promise.all([
+        this.db.query.proxyHosts.findMany({
+          where: and(
+            ne(proxyHosts.upstreamKind, 'manual'),
+            ne(proxyHosts.secureLinkStatus, 'cleanup_pending'),
+            ne(proxyHosts.secureLinkGeneration, 0)
+          ),
+          columns: { dockerNodeId: true },
+        }),
+        (this.db.query as any).proxyAdditionalSecureLinks
+          ? (this.db.query as any).proxyAdditionalSecureLinks.findMany({
+              where: inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'active']),
+              columns: { dockerNodeId: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      const targetNodeIds = new Set<string>();
+      for (const host of hosts) {
+        if (host.dockerNodeId) targetNodeIds.add(host.dockerNodeId);
+      }
+      for (const binding of additional as Array<{ dockerNodeId: string }>) {
+        targetNodeIds.add(binding.dockerNodeId);
+      }
+
+      const nodesToSync = [...targetNodeIds];
+      const results = await Promise.allSettled(nodesToSync.map((nodeId) => this.syncTargetNode(nodeId)));
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          logger.warn('Failed to apply the updated Secure Link connector image to a Docker node', {
+            nodeId: nodesToSync[index],
+            error: result.reason,
+          });
+        }
+      });
+    } catch (error) {
+      logger.warn('Failed to reconcile Secure Link connectors after the Relay update', { error });
+    }
   }
 
   async getRuntime(linkId: string) {

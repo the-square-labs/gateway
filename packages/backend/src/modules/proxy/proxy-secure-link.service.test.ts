@@ -2,6 +2,31 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it('reconciles active Docker targets with a connector image supplied by a Relay update', async () => {
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              dockerNodeId: 'docker-node',
+              upstreamKind: 'docker_container',
+              secureLinkStatus: 'active',
+              secureLinkGeneration: 1,
+            },
+          ]),
+        },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:old');
+    const syncTarget = vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+
+    await service.updateConnectorImage('connector@sha256:new');
+
+    expect(syncTarget).toHaveBeenCalledWith('docker-node');
+    expect((service as any).connectorImage).toBe('connector@sha256:new');
+  });
+
   it('returns a newly created binding while provisioning continues in the background', async () => {
     const host = {
       id: '11111111-1111-4111-8111-111111111111',
