@@ -874,10 +874,6 @@ export function DockerContainerDetail({
         ]
       : []),
   ];
-  const overflowActions = headerActions.filter(
-    (action) => !["Pin", "Start", "Stop", "Restart"].includes(action.label)
-  );
-
   const isTerminalTab = activeTab === "console" || activeTab === "logs";
   const isStopped = baseState !== "running";
   const isTabDisabled = (tab: string) => {
@@ -924,68 +920,17 @@ export function DockerContainerDetail({
           </div>
 
           <ResponsiveHeaderActions actions={headerActions}>
-            <Button
-              variant="outline"
-              size="icon"
-              disabled={actionDisabled}
-              onClick={() => setPinOpen(true)}
-            >
-              <Pin className="h-4 w-4" />
-            </Button>
-            {lifecycleActions.canStart && canManage && (
-              <Button
-                variant="outline"
-                size="default"
-                disabled={actionDisabled}
-                onClick={() =>
-                  doAction(() => api.startContainer(nodeId!, containerId!), "Container started")
-                }
-              >
-                <Play className="h-3.5 w-3.5" />
-                Start
-              </Button>
-            )}
-            {lifecycleActions.canStop && canManage && (
-              <>
-                <Button
-                  variant="outline"
-                  size="default"
-                  disabled={actionDisabled}
-                  onClick={() =>
-                    doAction(() => api.stopContainer(nodeId!, containerId!), "Container stopping")
-                  }
-                >
-                  <Square className="h-3.5 w-3.5" />
-                  Stop
-                </Button>
-                {lifecycleActions.canRestart && (
-                  <Button
-                    variant="outline"
-                    size="default"
-                    disabled={actionDisabled}
-                    onClick={() =>
-                      doAction(
-                        () => api.restartContainer(nodeId!, containerId!),
-                        "Container restarting"
-                      )
-                    }
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                    Restart
-                  </Button>
-                )}
-              </>
-            )}
-            {overflowActions.map((headerAction) => (
+            {headerActions.map((headerAction) => (
               <Button
                 key={headerAction.label}
-                variant={headerAction.destructive ? "destructive" : "outline"}
+                variant="outline"
+                size={headerAction.label === "Pin" ? "icon" : "default"}
                 disabled={headerAction.disabled}
                 title={headerAction.disabled ? headerAction.disabledReason : undefined}
                 onClick={headerAction.onClick}
               >
                 {headerAction.icon}
-                {headerAction.label}
+                {headerAction.label === "Pin" ? null : headerAction.label}
               </Button>
             ))}
           </ResponsiveHeaderActions>

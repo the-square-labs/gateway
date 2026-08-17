@@ -644,10 +644,6 @@ export function DockerDeploymentDetail({
         ]
       : []),
   ];
-  const overflowActions = headerActions.filter(
-    (action) => !["Pin", "Start", "Stop", "Restart"].includes(action.label)
-  );
-
   return (
     <PageTransition>
       <div
@@ -684,64 +680,17 @@ export function DockerDeploymentDetail({
           </div>
 
           <ResponsiveHeaderActions actions={headerActions}>
-            <Button variant="outline" size="icon" onClick={() => setPinOpen(true)}>
-              <Pin className="h-4 w-4" />
-            </Button>
-            {isStopped && canManage && (
-              <Button
-                variant="outline"
-                disabled={actionDisabled}
-                onClick={() =>
-                  runAction("start", async () => {
-                    await api.startDockerDeployment(nodeId, deployment.id);
-                    toast.success("Deployment started");
-                  })
-                }
-              >
-                <Play className="h-3.5 w-3.5" />
-                Start
-              </Button>
-            )}
-            {!isStopped && canManage && (
-              <>
-                <Button
-                  variant="outline"
-                  disabled={actionDisabled}
-                  onClick={() =>
-                    runAction("stop", async () => {
-                      await api.stopDockerDeployment(nodeId, deployment.id);
-                      toast.success("Deployment stopped");
-                    })
-                  }
-                >
-                  <Square className="h-3.5 w-3.5" />
-                  Stop
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={actionDisabled}
-                  onClick={() =>
-                    runAction("restart", async () => {
-                      await api.restartDockerDeployment(nodeId, deployment.id);
-                      toast.success("Deployment restarted");
-                    })
-                  }
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Restart
-                </Button>
-              </>
-            )}
-            {overflowActions.map((headerAction) => (
+            {headerActions.map((headerAction) => (
               <Button
                 key={headerAction.label}
-                variant={headerAction.destructive ? "destructive" : "outline"}
+                variant="outline"
+                size={headerAction.label === "Pin" ? "icon" : "default"}
                 disabled={headerAction.disabled}
                 title={headerAction.disabled ? headerAction.disabledReason : undefined}
                 onClick={headerAction.onClick}
               >
                 {headerAction.icon}
-                {headerAction.label}
+                {headerAction.label === "Pin" ? null : headerAction.label}
               </Button>
             ))}
           </ResponsiveHeaderActions>
