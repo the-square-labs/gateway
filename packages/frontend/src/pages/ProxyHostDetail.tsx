@@ -12,7 +12,7 @@ import {
   Trash2,
   Wrench,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
@@ -69,6 +69,32 @@ import { RawConfigTab } from "./proxy-detail/RawConfigTab";
 import { SecureLinkTab } from "./proxy-detail/SecureLinkTab";
 import { SettingsTab } from "./proxy-detail/SettingsTab";
 import { deriveProxyHostDetailFormState } from "./proxy-detail/state";
+
+type ProxyHostDraftSection =
+  | "template"
+  | "headers"
+  | "rewrites"
+  | "ssl"
+  | "health"
+  | "advanced"
+  | "raw";
+
+type ProxyHostDraftState = Record<ProxyHostDraftSection, boolean>;
+
+const CLEAN_PROXY_HOST_DRAFTS: ProxyHostDraftState = {
+  template: false,
+  headers: false,
+  rewrites: false,
+  ssl: false,
+  health: false,
+  advanced: false,
+  raw: false,
+};
+
+interface SyncHostStateOptions {
+  preserveDirty?: boolean;
+  forceSections?: ProxyHostDraftSection[];
+}
 
 // ── Main Component ──────────────────────────────────────────────
 export function ProxyHostDetail({
@@ -173,37 +199,50 @@ export function ProxyHostDetail({
   const [isLoadingRaw, setIsLoadingRaw] = useState(false);
   const [isSavingRaw, setIsSavingRaw] = useState(false);
 
-  const syncHostState = useCallback((data: ProxyHost) => {
+  const dirtySectionsRef = useRef<ProxyHostDraftState>(CLEAN_PROXY_HOST_DRAFTS);
+
+  const syncHostState = useCallback((data: ProxyHost, options: SyncHostStateOptions = {}) => {
     const nextState = deriveProxyHostDetailFormState(data);
+    const preserveDirty = options.preserveDirty ?? true;
+    const forcedSections = new Set(options.forceSections ?? []);
+    const shouldHydrate = (section: ProxyHostDraftSection) =>
+      !preserveDirty || forcedSections.has(section) || !dirtySectionsRef.current[section];
+
     setHost(data);
-    setCustomHeaders(nextState.customHeaders);
-    setCacheEnabled(nextState.cacheEnabled);
-    setCacheMaxAge(nextState.cacheMaxAge);
-    setRateLimitMode(nextState.rateLimitMode);
-    setRateLimitRPS(nextState.rateLimitRPS);
-    setRateLimitBurst(nextState.rateLimitBurst);
-    setRateLimitConnectionsPerIp(nextState.rateLimitConnectionsPerIp);
-    setCustomRewrites(nextState.customRewrites);
+    if (shouldHydrate("headers")) setCustomHeaders(nextState.customHeaders);
+    if (shouldHydrate("template")) {
+      setCacheEnabled(nextState.cacheEnabled);
+      setCacheMaxAge(nextState.cacheMaxAge);
+      setRateLimitMode(nextState.rateLimitMode);
+      setRateLimitRPS(nextState.rateLimitRPS);
+      setRateLimitBurst(nextState.rateLimitBurst);
+      setRateLimitConnectionsPerIp(nextState.rateLimitConnectionsPerIp);
+      setNginxTemplateId(nextState.nginxTemplateId);
+      setTemplateVariables(nextState.templateVariables);
+      setTemplateForwardScheme(nextState.templateForwardScheme);
+      setTemplateForwardHost(nextState.templateForwardHost);
+      setTemplateForwardPort(nextState.templateForwardPort);
+      setTemplateRedirectUrl(nextState.templateRedirectUrl);
+      setTemplateRedirectStatusCode(nextState.templateRedirectStatusCode);
+    }
+    if (shouldHydrate("rewrites")) setCustomRewrites(nextState.customRewrites);
     setAccessListId(nextState.accessListId);
-    setHealthCheckUrl(nextState.healthCheckUrl);
-    setHealthCheckEnabled(data.healthCheckEnabled);
-    setHealthCheckExpectedStatus(nextState.healthCheckExpectedStatus);
-    setHealthCheckExpectedBody(nextState.healthCheckExpectedBody);
-    setHealthCheckBodyMatchMode(nextState.healthCheckBodyMatchMode);
-    setHealthCheckSlowThreshold(nextState.healthCheckSlowThreshold);
-    setSslEnabled(data.sslEnabled);
-    setSslForced(data.sslForced);
-    setHttp2Support(data.http2Support);
-    setSslCertificateId(data.sslCertificateId || "");
-    setNginxTemplateId(nextState.nginxTemplateId);
-    setTemplateVariables(nextState.templateVariables);
-    setTemplateForwardScheme(nextState.templateForwardScheme);
-    setTemplateForwardHost(nextState.templateForwardHost);
-    setTemplateForwardPort(nextState.templateForwardPort);
-    setTemplateRedirectUrl(nextState.templateRedirectUrl);
-    setTemplateRedirectStatusCode(nextState.templateRedirectStatusCode);
-    setAdvancedConfig(nextState.advancedConfig);
-    setRawConfig(nextState.rawConfig);
+    if (shouldHydrate("health")) {
+      setHealthCheckUrl(nextState.healthCheckUrl);
+      setHealthCheckEnabled(data.healthCheckEnabled);
+      setHealthCheckExpectedStatus(nextState.healthCheckExpectedStatus);
+      setHealthCheckExpectedBody(nextState.healthCheckExpectedBody);
+      setHealthCheckBodyMatchMode(nextState.healthCheckBodyMatchMode);
+      setHealthCheckSlowThreshold(nextState.healthCheckSlowThreshold);
+    }
+    if (shouldHydrate("ssl")) {
+      setSslEnabled(data.sslEnabled);
+      setSslForced(data.sslForced);
+      setHttp2Support(data.http2Support);
+      setSslCertificateId(data.sslCertificateId || "");
+    }
+    if (shouldHydrate("advanced")) setAdvancedConfig(nextState.advancedConfig);
+    if (shouldHydrate("raw")) setRawConfig(nextState.rawConfig);
   }, []);
 
   // ── Load host ─────────────────────────────────────────────────
@@ -214,7 +253,7 @@ export function ProxyHostDetail({
       try {
         const data = await api.getProxyHost(id);
         const history = data.healthCheckEnabled ? await api.getProxyHostHealthHistory(id) : [];
-        syncHostState(data);
+        syncHostState(data, { preserveDirty: silent });
         setHealthHistory(history);
       } catch (err) {
         if (err instanceof ApiRequestError && err.status === 404) {
@@ -358,7 +397,7 @@ export function ProxyHostDetail({
         http2Support: sslEnabled ? http2Support : false,
         sslCertificateId: sslCertificateId || null,
       });
-      syncHostState(updated);
+      syncHostState(updated, { forceSections: ["ssl"] });
       toast.success("SSL settings updated");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update SSL settings");
@@ -536,7 +575,7 @@ export function ProxyHostDetail({
             }
           : {}),
       });
-      syncHostState(updated);
+      syncHostState(updated, { forceSections: ["template"] });
       toast.success("Template settings updated");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update template settings");
@@ -572,7 +611,7 @@ export function ProxyHostDetail({
       const updated = await api.updateProxyHost(id, {
         customHeaders: customHeaders.filter((h) => h.name.trim() !== ""),
       });
-      syncHostState(updated);
+      syncHostState(updated, { forceSections: ["headers"] });
       toast.success("Custom headers saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save custom headers");
@@ -588,7 +627,7 @@ export function ProxyHostDetail({
       const updated = await api.updateProxyHost(id, {
         customRewrites: customRewrites.filter((rule) => rule.source.trim() !== ""),
       });
-      syncHostState(updated);
+      syncHostState(updated, { forceSections: ["rewrites"] });
       toast.success("URL rewrites saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save URL rewrites");
@@ -609,8 +648,8 @@ export function ProxyHostDetail({
         healthCheckBodyMatchMode,
         healthCheckSlowThreshold,
       });
-      syncHostState(updated);
-      if (!updated.healthCheckEnabled) setHealthHistory([]);
+      syncHostState(updated, { forceSections: ["health"] });
+      setHealthHistory(updated.healthCheckEnabled ? (updated.healthHistory ?? []) : []);
       toast.success("Health check settings updated");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update health checks");
@@ -671,7 +710,7 @@ export function ProxyHostDetail({
     setIsSavingAdvanced(true);
     try {
       const updated = await saveProxyHostAdvancedConfig(api, id, advancedConfig);
-      syncHostState(updated);
+      syncHostState(updated, { forceSections: ["advanced"] });
       toast.success("Advanced config saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save advanced config");
@@ -688,7 +727,7 @@ export function ProxyHostDetail({
     setIsSavingRaw(true);
     try {
       const updated = await api.updateProxyHost(id, { rawConfig });
-      syncHostState(updated);
+      syncHostState(updated, { forceSections: ["raw"] });
       toast.success("Raw config saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save raw config");
@@ -849,54 +888,18 @@ export function ProxyHostDetail({
       host,
     ]
   );
-  const hasHealthCheckChanged = useMemo(() => {
-    if (!host) return false;
-    return (
-      healthCheckUrl !== (host.healthCheckUrl || "/") ||
-      healthCheckExpectedStatus !== (host.healthCheckExpectedStatus ?? null) ||
-      healthCheckExpectedBody !== (host.healthCheckExpectedBody || "") ||
-      healthCheckBodyMatchMode !== (host.healthCheckBodyMatchMode || "includes") ||
-      healthCheckSlowThreshold !== (host.healthCheckSlowThreshold ?? 3)
-    );
-  }, [
-    host,
-    healthCheckUrl,
-    healthCheckExpectedStatus,
-    healthCheckExpectedBody,
-    healthCheckBodyMatchMode,
-    healthCheckSlowThreshold,
-  ]);
+  const hasAdvancedConfigChanged = !!host && (host.advancedConfig || "") !== advancedConfig;
+  const hasRawConfigChanged = !!host && (host.rawConfig || "") !== rawConfig;
 
-  // ── Auto-save health check settings on change (debounced) ─────
-  useEffect(() => {
-    if (!id || !host || !hasHealthCheckChanged || !canEditProxyHost) return;
-    const timer = setTimeout(() => {
-      api
-        .updateProxyHost(id, {
-          healthCheckUrl,
-          healthCheckExpectedStatus,
-          healthCheckExpectedBody:
-            healthCheckExpectedBody.trim() === "" ? null : healthCheckExpectedBody,
-          healthCheckBodyMatchMode:
-            healthCheckExpectedBody.trim() === "" ? undefined : healthCheckBodyMatchMode,
-          healthCheckSlowThreshold: healthCheckSlowThreshold || undefined,
-        })
-        .then((updated) => syncHostState(updated))
-        .catch(() => {});
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [
-    hasHealthCheckChanged,
-    host,
-    id,
-    healthCheckUrl,
-    healthCheckExpectedStatus,
-    healthCheckExpectedBody,
-    healthCheckBodyMatchMode,
-    healthCheckSlowThreshold,
-    canEditProxyHost,
-    syncHostState,
-  ]);
+  dirtySectionsRef.current = {
+    template: hasTemplateSettingsChanged,
+    headers: hasHeadersChanged,
+    rewrites: hasRewritesChanged,
+    ssl: hasSslSettingsChanged,
+    health: hasHealthCheckSettingsChanged,
+    advanced: hasAdvancedConfigChanged,
+    raw: hasRawConfigChanged,
+  };
 
   // Navigate away from disabled tabs when raw mode changes
   useEffect(() => {
@@ -1298,7 +1301,7 @@ export function ProxyHostDetail({
             }
             return;
           }
-          loadHost();
+          loadHost(true);
         }}
       />
 

@@ -1750,7 +1750,13 @@ export class ProxyService {
   // -----------------------------------------------------------------------
 
   private runImmediateHealthCheck(hostId: string): void {
-    runImmediateProxyHealthCheck({ db: this.db, hostId, logger, nodeDispatch: this.nodeDispatch });
+    runImmediateProxyHealthCheck({
+      db: this.db,
+      hostId,
+      logger,
+      nodeDispatch: this.nodeDispatch,
+      eventBus: this.eventBus,
+    });
   }
 
   private async refreshExternalBranding(): Promise<void> {

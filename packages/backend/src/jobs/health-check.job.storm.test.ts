@@ -251,7 +251,10 @@ describe('HealthCheckJob storm protection', () => {
 
     expect(firstRun.writes[0]?.healthStatus).toBe('online');
     expect(firstObserve).not.toHaveBeenCalled();
-    expect(firstPublish).not.toHaveBeenCalled();
+    expect(firstPublish).toHaveBeenCalledWith(
+      'proxy.host.changed',
+      expect.objectContaining({ id: first.id, action: 'health.sampled', health_status: 'online' })
+    );
 
     const second = host({ healthHistory: [{ ts: new Date(Date.now() - 30_000).toISOString(), status: 'offline' }] });
     const secondRun = database([second]);
@@ -268,7 +271,7 @@ describe('HealthCheckJob storm protection', () => {
     expect(secondPublish).toHaveBeenCalledOnce();
   });
 
-  it('publishes only the offline transition and the later online recovery', async () => {
+  it('publishes same-state samples and distinguishes the later online recovery', async () => {
     const failed = host({
       healthStatus: 'offline',
       healthHistory: [{ ts: new Date(Date.now() - 30_000).toISOString(), status: 'offline' }],
@@ -282,7 +285,10 @@ describe('HealthCheckJob storm protection', () => {
     await failedJob.run();
 
     expect(failedRun.writes[0]?.healthStatus).toBe('offline');
-    expect(failedPublish).not.toHaveBeenCalled();
+    expect(failedPublish).toHaveBeenCalledWith(
+      'proxy.host.changed',
+      expect.objectContaining({ id: failed.id, action: 'health.sampled', health_status: 'offline' })
+    );
 
     const recoveredRun = database([failed]);
     const recoveredPublish = vi.fn();
@@ -326,7 +332,10 @@ describe('HealthCheckJob storm protection', () => {
     expect(probeProxySecureLink).not.toHaveBeenCalled();
     expect(writes).toHaveLength(1);
     expect(writes[0]).not.toHaveProperty('healthStatus');
-    expect(publish).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledWith(
+      'proxy.host.changed',
+      expect.objectContaining({ id: secure.id, action: 'health.sampled', health_status: 'online' })
+    );
     expect(observeStatefulEvent).not.toHaveBeenCalled();
   });
 });

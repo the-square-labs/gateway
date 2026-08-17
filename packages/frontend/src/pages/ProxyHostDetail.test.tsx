@@ -1,8 +1,9 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route } from "react-router-dom";
 import { vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { useRealtime } from "@/hooks/use-realtime";
 import { ProxyHostDetail } from "@/pages/ProxyHostDetail";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -13,6 +14,8 @@ import type { ProxyHost } from "@/types";
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: vi.fn(),
 }));
+
+const realtimeHandlers = new Map<string, (payload: unknown) => void>();
 
 vi.mock("@/components/common/ConfirmDialog", () => ({
   confirm: vi.fn(),
@@ -25,12 +28,18 @@ vi.mock("./proxy-detail/SettingsTab", () => ({
     onAccessListChange,
     healthCheckExpectedStatus,
     setHealthCheckExpectedStatus,
+    healthCheckEnabled,
+    setHealthCheckEnabled,
+    onSaveHealthCheck,
     onSaveTemplateSettings,
   }: {
     accessListId: string;
     onAccessListChange: (value: string) => void;
     healthCheckExpectedStatus: number | null;
     setHealthCheckExpectedStatus: (value: number | null) => void;
+    healthCheckEnabled: boolean;
+    setHealthCheckEnabled: (value: boolean) => void;
+    onSaveHealthCheck: () => void;
     onSaveTemplateSettings: () => void;
   }) => (
     <div>
@@ -45,6 +54,12 @@ vi.mock("./proxy-detail/SettingsTab", () => ({
           setHealthCheckExpectedStatus(event.target.value ? Number(event.target.value) : null)
         }
       />
+      <button type="button" onClick={() => setHealthCheckEnabled(!healthCheckEnabled)}>
+        Toggle health check
+      </button>
+      <button type="button" onClick={onSaveHealthCheck}>
+        Save health checks
+      </button>
       <button type="button" onClick={onSaveTemplateSettings}>
         Save template settings
       </button>
@@ -172,6 +187,10 @@ function makeProxyHost(overrides: Record<string, unknown> = {}) {
 
 describe("ProxyHostDetail", () => {
   beforeEach(() => {
+    realtimeHandlers.clear();
+    vi.mocked(useRealtime).mockImplementation((channel, handler) => {
+      if (channel) realtimeHandlers.set(channel, handler);
+    });
     vi.mocked(confirm).mockReset();
     vi.spyOn(api, "getProxyHostHealthHistory").mockResolvedValue([]);
     vi.spyOn(api, "listAccessLists").mockResolvedValue({
@@ -319,7 +338,7 @@ describe("ProxyHostDetail", () => {
     expect(textarea.value).toBe("");
   });
 
-  it("clears health check expected status with an explicit null", async () => {
+  it("keeps health-check edits local until the explicit save", async () => {
     vi.spyOn(api, "getProxyHost").mockResolvedValue(
       makeProxyHost({
         healthCheckEnabled: true,
@@ -344,6 +363,11 @@ describe("ProxyHostDetail", () => {
 
     fireEvent.change(input, { target: { value: "" } });
 
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(api.updateProxyHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save health checks" }));
+
     await waitFor(() => {
       expect(api.updateProxyHost).toHaveBeenCalledWith(
         "host-1",
@@ -353,6 +377,80 @@ describe("ProxyHostDetail", () => {
       );
     });
     expect(input.value).toBe("");
+  });
+
+  it("preserves a dirty health-check draft while another section saves", async () => {
+    const original = makeProxyHost({
+      healthCheckEnabled: true,
+      healthCheckExpectedStatus: 204,
+    });
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(original);
+    const updateSpy = vi.spyOn(api, "updateProxyHost").mockResolvedValue(original);
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/settings",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    const input = (await screen.findByLabelText("Expected status")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "201" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save template settings" }));
+
+    await waitFor(() => expect(updateSpy).toHaveBeenCalledOnce());
+    expect(input.value).toBe("201");
+  });
+
+  it("preserves an advanced-config draft during a realtime host refresh", async () => {
+    vi.spyOn(api, "getProxyHost")
+      .mockResolvedValueOnce(makeProxyHost())
+      .mockResolvedValueOnce(
+        makeProxyHost({
+          domainNames: ["updated.example.com"],
+          advancedConfig: "server-side update;",
+        })
+      );
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/advanced",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    const textarea = (await screen.findByLabelText("Advanced config")) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "unsaved local draft;" } });
+
+    await act(async () => {
+      realtimeHandlers.get("proxy.host.changed")?.({ id: "host-1", action: "health.sampled" });
+    });
+
+    expect(await screen.findByRole("heading", { name: "updated.example.com" })).toBeInTheDocument();
+    expect(textarea.value).toBe("unsaved local draft;");
+  });
+
+  it("refreshes live health status and history for a sampled event", async () => {
+    const sample = { ts: new Date().toISOString(), status: "online" };
+    vi.spyOn(api, "getProxyHost")
+      .mockResolvedValueOnce(makeProxyHost({ healthCheckEnabled: true, healthStatus: "unknown" }))
+      .mockResolvedValueOnce(makeProxyHost({ healthCheckEnabled: true, healthStatus: "online" }));
+    vi.mocked(api.getProxyHostHealthHistory)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([sample]);
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    expect(await screen.findByText("Unknown")).toBeInTheDocument();
+
+    await act(async () => {
+      realtimeHandlers.get("proxy.host.changed")?.({ id: "host-1", action: "health.sampled" });
+    });
+
+    expect(await screen.findByText("Healthy")).toBeInTheDocument();
+    expect(api.getProxyHostHealthHistory).toHaveBeenCalledTimes(2);
   });
 
   it("keeps proxy host detail mounted after editing domains", async () => {
