@@ -648,11 +648,16 @@ func TestApplyNanoCPULimitClearsAllCpuLimits(t *testing.T) {
 	}
 }
 
-func TestNetworkingConfigForInspectNetworkPreservesBridgeEndpoint(t *testing.T) {
+func TestNetworkingConfigForInspectNetworkDropsStaleRuntimeState(t *testing.T) {
 	insp := &container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
 			Networks: map[string]*network.EndpointSettings{
-				"bridge": {NetworkID: "bridge-network", IPAddress: netip.MustParseAddr("172.17.0.2")},
+				"bridge": {
+					NetworkID:  "deleted-network-id",
+					EndpointID: "deleted-endpoint-id",
+					IPAddress:  netip.MustParseAddr("172.17.0.2"),
+					Aliases:    []string{"database"},
+				},
 			},
 		},
 	}
@@ -670,8 +675,11 @@ func TestNetworkingConfigForInspectNetworkPreservesBridgeEndpoint(t *testing.T) 
 	if endpoint == nil {
 		t.Fatalf("expected bridge endpoint in networking config, got %#v", cfg.EndpointsConfig)
 	}
-	if endpoint.NetworkID != "bridge-network" || endpoint.IPAddress.String() != "172.17.0.2" {
-		t.Fatalf("unexpected bridge endpoint: %#v", endpoint)
+	if endpoint.NetworkID != "" || endpoint.EndpointID != "" || endpoint.IPAddress.IsValid() {
+		t.Fatalf("expected stale runtime network state to be removed: %#v", endpoint)
+	}
+	if len(endpoint.Aliases) != 1 || endpoint.Aliases[0] != "database" {
+		t.Fatalf("expected configured aliases to be preserved: %#v", endpoint.Aliases)
 	}
 }
 

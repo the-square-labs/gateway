@@ -1525,10 +1525,29 @@ func networkingConfigForInspectNetwork(
 		return nil
 	}
 
-	ep := insp.NetworkSettings.Networks[netNames[0]]
+	ep := endpointConfigForRecreate(insp.NetworkSettings.Networks[netNames[0]])
 	return &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{netNames[0]: ep},
 	}
+}
+
+func endpointConfigForRecreate(source *network.EndpointSettings) *network.EndpointSettings {
+	if source == nil {
+		return nil
+	}
+
+	endpoint := source.Copy()
+	endpoint.NetworkID = ""
+	endpoint.EndpointID = ""
+	endpoint.Gateway = netip.Addr{}
+	endpoint.IPAddress = netip.Addr{}
+	endpoint.MacAddress = nil
+	endpoint.IPPrefixLen = 0
+	endpoint.IPv6Gateway = netip.Addr{}
+	endpoint.GlobalIPv6Address = netip.Addr{}
+	endpoint.GlobalIPv6PrefixLen = 0
+	endpoint.DNSNames = nil
+	return endpoint
 }
 
 func (c *Client) connectContainerToAdditionalNetworks(
@@ -1542,7 +1561,7 @@ func (c *Client) connectContainerToAdditionalNetworks(
 	}
 
 	for _, netName := range netNames[1:] {
-		ep := insp.NetworkSettings.Networks[netName]
+		ep := endpointConfigForRecreate(insp.NetworkSettings.Networks[netName])
 		if _, err := c.cli.NetworkConnect(ctx, netName, client.NetworkConnectOptions{
 			Container:      containerID,
 			EndpointConfig: ep,
