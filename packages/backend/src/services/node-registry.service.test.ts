@@ -140,4 +140,45 @@ describe('NodeRegistryService', () => {
 
     await Promise.all([accepted, result]);
   });
+
+  it('preserves node status when the daemon disconnects during an update', async () => {
+    const db = makeDb();
+    const registry = new NodeRegistryService(db as never);
+    const commandStream = { write: vi.fn() };
+    await registry.register('node-1', 'nginx', 'worker-1', 'hash-1', commandStream as never);
+    db.update.mockClear();
+    registry.setNodeUpdateInProgress('node-1', true);
+
+    await registry.deregister('node-1', commandStream as never);
+
+    expect(db.update).not.toHaveBeenCalled();
+    expect(registry.getNode('node-1')).toBeUndefined();
+  });
+
+  it('does not mark a disconnected updating node offline as stale', async () => {
+    const update = vi.fn(() => ({
+      set: () => ({ where: () => Promise.resolve() }),
+    }));
+    const db = {
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () =>
+            Promise.resolve([
+              {
+                id: 'node-1',
+                hostname: 'worker-1',
+                lastSeenAt: new Date(0),
+                metadata: { updateInProgress: true },
+              },
+            ]),
+        }),
+      })),
+      update,
+    };
+    const registry = new NodeRegistryService(db as never);
+
+    await registry.markStaleNodesOffline(0);
+
+    expect(update).not.toHaveBeenCalled();
+  });
 });

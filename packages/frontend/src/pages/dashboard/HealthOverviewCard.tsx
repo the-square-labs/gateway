@@ -12,6 +12,14 @@ interface HealthOverviewCardProps {
   loading?: boolean;
 }
 
+export function sortHealthOverviewHosts(hosts: ProxyHost[]): ProxyHost[] {
+  return [...hosts].sort((left, right) => {
+    const leftDomain = [...left.domainNames].sort().join(", ").toLowerCase();
+    const rightDomain = [...right.domainNames].sort().join(", ").toLowerCase();
+    return leftDomain.localeCompare(rightDomain) || left.id.localeCompare(right.id);
+  });
+}
+
 export function HealthOverviewCard({
   healthHosts,
   hasScope,
@@ -38,38 +46,40 @@ export function HealthOverviewCard({
         </div>
       ) : healthHosts.length > 0 ? (
         <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-          {healthHosts.slice(0, 6).map((host) => (
-            <Link
-              key={host.id}
-              to={proxyHostRoute(host.slug)}
-              className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors"
-            >
-              <span className="text-sm font-medium truncate flex-1">
-                {host.domainNames.join(", ")}
-              </span>
-              <ProxyUpstreamTarget host={host} size="inline" />
-              <Badge
-                variant={
-                  (
-                    {
-                      online: "success",
-                      offline: "destructive",
-                      degraded: "warning",
-                      recovering: "warning",
-                      unknown: "secondary",
-                      disabled: "outline",
-                    } as const
-                  )[(host.effectiveHealthStatus ?? host.healthStatus) as string] || "secondary"
-                }
-                size="inline"
-                className="uppercase"
+          {sortHealthOverviewHosts(healthHosts)
+            .slice(0, 6)
+            .map((host) => (
+              <Link
+                key={host.id}
+                to={proxyHostRoute(host.slug)}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors"
               >
-                {(host.effectiveHealthStatus ?? host.healthStatus) === "online"
-                  ? "healthy"
-                  : (host.effectiveHealthStatus ?? host.healthStatus)}
-              </Badge>
-            </Link>
-          ))}
+                <span className="text-sm font-medium truncate flex-1">
+                  {host.domainNames.join(", ")}
+                </span>
+                <ProxyUpstreamTarget host={host} size="inline" />
+                <Badge
+                  variant={
+                    (
+                      {
+                        online: "success",
+                        offline: "destructive",
+                        degraded: "warning",
+                        recovering: "warning",
+                        unknown: "secondary",
+                        disabled: "outline",
+                      } as const
+                    )[(host.effectiveHealthStatus ?? host.healthStatus) as string] || "secondary"
+                  }
+                  size="inline"
+                  className="uppercase"
+                >
+                  {(host.effectiveHealthStatus ?? host.healthStatus) === "online"
+                    ? "healthy"
+                    : (host.effectiveHealthStatus ?? host.healthStatus)}
+                </Badge>
+              </Link>
+            ))}
         </div>
       ) : null}
     </PanelShell>

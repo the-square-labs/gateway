@@ -1141,6 +1141,7 @@ export async function initializeContainer(): Promise<void> {
 
   const daemonUpdateService = new DaemonUpdateService(db, env);
   daemonUpdateService.setEventBus(eventBus);
+  daemonUpdateService.setNodeRegistry(nodeRegistry);
   container.registerInstance(DaemonUpdateService, daemonUpdateService);
   nodeDispatch.setDaemonUpdateService(daemonUpdateService);
   nodesService.setDaemonUpdateService(daemonUpdateService);

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useRealtime } from "@/hooks/use-realtime";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -435,6 +436,18 @@ export function Dashboard() {
     emailOtp: boolean;
   } | null>(null);
   const [relayRetryPending, setRelayRetryPending] = useState(false);
+  const refreshDashboardNodes = useCallback(async () => {
+    try {
+      const response = await api.listNodes({ limit: 100 });
+      setNodesList(response.data);
+      setNodesLoading(false);
+    } catch {
+      // Keep the last complete dashboard snapshot when the lightweight refresh fails.
+    }
+  }, []);
+  useRealtime(user && hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
+    void refreshDashboardNodes();
+  });
   const canViewNodeDetails = useCallback(
     (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
     [hasScope]

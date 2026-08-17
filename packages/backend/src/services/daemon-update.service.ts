@@ -14,6 +14,7 @@ import {
 } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
 const logger = createChildLogger('DaemonUpdateService');
 
@@ -79,6 +80,7 @@ export class DaemonUpdateService {
   private readonly gitlabReleasesUrl: string;
   private readonly gitlabApiUrl: string;
   private eventBus?: EventBusService;
+  private nodeRegistry?: NodeRegistryService;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -91,6 +93,10 @@ export class DaemonUpdateService {
 
   setEventBus(eventBus: EventBusService) {
     this.eventBus = eventBus;
+  }
+
+  setNodeRegistry(nodeRegistry: NodeRegistryService) {
+    this.nodeRegistry = nodeRegistry;
   }
 
   private emitNodeUpdated(nodeId: string) {
@@ -208,6 +214,7 @@ export class DaemonUpdateService {
 
     await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
 
+    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
     this.emitNodeUpdated(nodeId);
   }
 
@@ -224,6 +231,7 @@ export class DaemonUpdateService {
 
     await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
 
+    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
     this.emitNodeUpdated(nodeId);
   }
 
@@ -279,6 +287,7 @@ export class DaemonUpdateService {
 
     await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
 
+    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
     this.emitNodeUpdated(nodeId);
     return true;
   }

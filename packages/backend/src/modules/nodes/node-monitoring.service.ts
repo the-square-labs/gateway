@@ -151,6 +151,7 @@ export class NodeMonitoringService extends EventEmitter {
     try {
       const node = this.registry.getNode(nodeId);
       if (!node) return;
+      if (this.registry.isNodeUpdateInProgress(nodeId)) return;
 
       try {
         node.commandStream.write({ commandId: '', requestHealth: {} }, (err: any) => {

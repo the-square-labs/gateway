@@ -17,8 +17,9 @@ describe('NodeMonitoringService active polling', () => {
         lastStatsReport: null,
       }),
       getConnectedNodeIds: vi.fn().mockReturnValue([]),
+      isNodeUpdateInProgress: vi.fn().mockReturnValue(false),
     };
-    return { service: new NodeMonitoringService(registry as never), write };
+    return { service: new NodeMonitoringService(registry as never), registry, write };
   }
 
   it('keeps non-focused stream consumers on the 5 second cadence', async () => {
@@ -70,6 +71,17 @@ describe('NodeMonitoringService active polling', () => {
     expect(write).toHaveBeenCalledTimes(14);
 
     service.unregisterClient('node-1');
+    service.destroy();
+  });
+
+  it('does not poll a node while its daemon update is in progress', () => {
+    vi.useFakeTimers();
+    const { registry, service, write } = createService();
+    registry.isNodeUpdateInProgress.mockReturnValue(true);
+
+    service.registerClient('node-1');
+
+    expect(write).not.toHaveBeenCalled();
     service.destroy();
   });
 });

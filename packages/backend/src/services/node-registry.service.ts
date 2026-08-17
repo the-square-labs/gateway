@@ -13,6 +13,10 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 
 const logger = createChildLogger('NodeRegistry');
 
+function hasUpdateInProgress(metadata: unknown): boolean {
+  return !!metadata && typeof metadata === 'object' && (metadata as Record<string, unknown>).updateInProgress === true;
+}
+
 function closeStream(stream: { end?: () => void; destroy?: () => void } | null | undefined): void {
   if (!stream) return;
   try {
@@ -59,6 +63,7 @@ export interface DispatchedCommand {
 
 export class NodeRegistryService {
   private nodes = new Map<string, ConnectedNode>();
+  private updatingNodeIds = new Set<string>();
   private execOutputHandlers = new Map<
     string,
     Set<(data: { execId: string; data: Buffer; exited: boolean; exitCode: number }) => void>
@@ -75,6 +80,15 @@ export class NodeRegistryService {
 
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.evaluator = evaluator;
+  }
+
+  setNodeUpdateInProgress(nodeId: string, updating: boolean): void {
+    if (updating) this.updatingNodeIds.add(nodeId);
+    else this.updatingNodeIds.delete(nodeId);
+  }
+
+  isNodeUpdateInProgress(nodeId: string): boolean {
+    return this.updatingNodeIds.has(nodeId);
   }
 
   private observeNodeState(nodeId: string, state: 'online' | 'offline', hostname?: string) {
@@ -226,6 +240,13 @@ export class NodeRegistryService {
       })
       .where(eq(nodes.id, nodeId));
 
+    const [registeredNode] = await this.db
+      .select({ metadata: nodes.metadata })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    this.setNodeUpdateInProgress(nodeId, hasUpdateInProgress(registeredNode?.metadata));
+
     if (options.isCurrentRegistration && !options.isCurrentRegistration()) {
       throw new Error('Registration superseded');
     }
@@ -269,6 +290,17 @@ export class NodeRegistryService {
 
     this.cleanupPendingCommands(node);
     this.nodes.delete(nodeId);
+
+    const [dbNode] = await this.db
+      .select({ metadata: nodes.metadata })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (this.isNodeUpdateInProgress(nodeId) || hasUpdateInProgress(dbNode?.metadata)) {
+      this.updatingNodeIds.add(nodeId);
+      logger.info('Node disconnected for daemon update; preserving status', { nodeId });
+      return;
+    }
 
     await this.db
       .update(nodes)
@@ -442,11 +474,12 @@ export class NodeRegistryService {
     // For nodes that are in the DB as 'online' but not in our connected set
     // This handles ungraceful disconnects that the gRPC layer didn't catch
     const dbOnlineNodes = await this.db
-      .select({ id: nodes.id, hostname: nodes.hostname, lastSeenAt: nodes.lastSeenAt })
+      .select({ id: nodes.id, hostname: nodes.hostname, lastSeenAt: nodes.lastSeenAt, metadata: nodes.metadata })
       .from(nodes)
       .where(eq(nodes.status, 'online'));
 
     for (const dbNode of dbOnlineNodes) {
+      if (this.isNodeUpdateInProgress(dbNode.id) || hasUpdateInProgress(dbNode.metadata)) continue;
       if (!connectedIds.includes(dbNode.id)) {
         const lastSeen = dbNode.lastSeenAt?.getTime() ?? 0;
         if (now - lastSeen > staleThresholdMs) {
@@ -480,14 +513,15 @@ export class NodeRegistryService {
       if (!node.lastReportAt) continue;
       const elapsed = now - node.lastReportAt.getTime();
       if (elapsed > missedThresholdMs) {
-        await this.recordOfflineStatus(node.nodeId);
-
         // Update DB status and publish event (only once per transition)
         const [dbRow] = await this.db
-          .select({ status: nodes.status })
+          .select({ status: nodes.status, metadata: nodes.metadata })
           .from(nodes)
           .where(eq(nodes.id, node.nodeId))
           .limit(1);
+        if (this.isNodeUpdateInProgress(node.nodeId) || hasUpdateInProgress(dbRow?.metadata)) continue;
+
+        await this.recordOfflineStatus(node.nodeId);
         if (dbRow?.status === 'online') {
           await this.db
             .update(nodes)
@@ -513,11 +547,12 @@ export class NodeRegistryService {
     // 2. Disconnected nodes — keep recording offline entries (same as proxy health check job)
     const connectedIds = this.getConnectedNodeIds();
     const offlineNodes = await this.db
-      .select({ id: nodes.id, hostname: nodes.hostname })
+      .select({ id: nodes.id, hostname: nodes.hostname, metadata: nodes.metadata })
       .from(nodes)
       .where(eq(nodes.status, 'offline'));
 
     for (const dbNode of offlineNodes) {
+      if (this.isNodeUpdateInProgress(dbNode.id) || hasUpdateInProgress(dbNode.metadata)) continue;
       if (!connectedIds.includes(dbNode.id)) {
         await this.recordOfflineStatus(dbNode.id);
         this.observeNodeState(dbNode.id, 'offline', dbNode.hostname ?? undefined);
