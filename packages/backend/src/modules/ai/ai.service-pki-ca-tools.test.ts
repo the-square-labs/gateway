@@ -14,7 +14,7 @@ const BASE_USER = {
 };
 
 function createService(caService: Record<string, unknown>) {
-  return new AIService(
+  const service = new AIService(
     {} as never,
     caService as never,
     {} as never,
@@ -32,6 +32,8 @@ function createService(caService: Record<string, unknown>) {
     {} as never,
     {} as never
   );
+  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  return service;
 }
 
 describe('AIService PKI CA tool routing', () => {

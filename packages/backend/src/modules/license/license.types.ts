@@ -121,27 +121,103 @@ export interface LicenseServerErrorEnvelope {
   };
 }
 
+const SHARED_FEATURES = [
+  'infrastructure',
+  'nginx',
+  'docker',
+  'tls',
+  'domains',
+  'monitoring',
+  'auth',
+  'rbac',
+  'audit',
+  'api',
+  'oauth',
+  'mcp',
+  'gitlab',
+  'ai-workspace',
+  'gateway-inference',
+  'signed-updates',
+] as const;
+
+const PERSONAL_FEATURES = [
+  ...SHARED_FEATURES,
+  'container-export',
+  'blue-green',
+  'cross-node-migration',
+  'managed-databases',
+  'status-pages',
+  'registry-discovery',
+] as const;
+
+const BUSINESS_FEATURES = [
+  ...PERSONAL_FEATURES,
+  'secure-runtime',
+  'structured-logging',
+  'audit-export',
+  'security-scanning',
+  'guided-onboarding',
+] as const;
+
 export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
   managedNodes: 100,
   users: 10,
   customPermissionGroups: 5,
   supportLevel: 'community',
-  features: [
-    'infrastructure',
-    'nginx',
-    'docker',
-    'tls',
-    'domains',
-    'monitoring',
-    'auth',
-    'rbac',
-    'audit',
-    'api',
-    'oauth',
-    'mcp',
-    'gitlab',
-    'ai-workspace',
-    'gateway-inference',
-    'signed-updates',
-  ],
+  features: [...SHARED_FEATURES],
 };
+
+export const LICENSE_PLAN_ENTITLEMENTS: Record<LicensePlan, LicenseEntitlements> = {
+  community: COMMUNITY_ENTITLEMENTS,
+  personal: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'standard',
+    features: [...PERSONAL_FEATURES],
+  },
+  business: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority',
+    features: [...BUSINESS_FEATURES],
+  },
+  enterprise: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority-dedicated',
+    features: [
+      ...BUSINESS_FEATURES,
+      'internal-pki',
+      'siem-export',
+      'oidc-group-mapping',
+      'scim',
+      'dedicated-contact',
+      'assisted-migration',
+    ],
+  },
+};
+
+export function isCanonicalEntitlements(plan: LicensePlan, value: unknown): value is LicenseEntitlements {
+  const expected = LICENSE_PLAN_ENTITLEMENTS[plan];
+  if (
+    !expected ||
+    !value ||
+    typeof value !== 'object' ||
+    !Array.isArray((value as Partial<LicenseEntitlements>).features)
+  ) {
+    return false;
+  }
+  const entitlements = value as LicenseEntitlements;
+  return (
+    entitlements.managedNodes === expected.managedNodes &&
+    entitlements.users === expected.users &&
+    entitlements.customPermissionGroups === expected.customPermissionGroups &&
+    entitlements.supportLevel === expected.supportLevel &&
+    entitlements.features.length === expected.features.length &&
+    new Set(entitlements.features).size === entitlements.features.length &&
+    entitlements.features.every((feature) => expected.features.includes(feature))
+  );
+}

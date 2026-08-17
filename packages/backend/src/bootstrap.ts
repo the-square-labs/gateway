@@ -766,6 +766,7 @@ export async function initializeContainer(): Promise<void> {
     relayPolicyService
   );
   managedDatabaseBindingService.setEventBus(eventBus);
+  managedDatabaseBindingService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
 
   const databaseFolderService = new DatabaseFolderService(db, auditService);

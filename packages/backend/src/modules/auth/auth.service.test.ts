@@ -985,6 +985,9 @@ function createAuthServiceHarness(options: {
     authSettingsService as any,
     auditService as any
   );
+  service.setLicenseQuotaService({
+    run: vi.fn((_resource, _countCurrent, write) => write(db)),
+  } as never);
   (service as any).oidcConfig = {};
 
   return {

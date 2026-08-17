@@ -4,7 +4,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { loggingEnvironments, loggingIngestTokens, loggingSchemas } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { CreateLoggingTokenInput } from './logging.schemas.js';
 
 export function hashLoggingToken(raw: string): string {
@@ -42,7 +42,7 @@ export class LoggingTokenService {
   }
 
   async create(environmentId: string, input: CreateLoggingTokenInput, userId: string) {
-    await this.licensePolicy?.requireFeature('structured-logging');
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('structured-logging');
     await this.ensureEnvironment(environmentId);
     const raw = `gwl_${randomBytes(32).toString('hex')}`;
     const [token] = await this.db

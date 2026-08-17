@@ -13,7 +13,7 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -249,7 +249,9 @@ export class DockerDeploymentService {
     currentProfile?: DockerDeploymentDesiredConfig['runtimeProfile']
   ): Promise<void> {
     if (desiredConfig.runtimeProfile !== 'secure') return;
-    if (currentProfile !== 'secure') await this.licensePolicy?.requireFeature('secure-runtime');
+    if (currentProfile !== 'secure') {
+      await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('secure-runtime');
+    }
     const node = await this.validateDockerNode(nodeId);
     const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
     if (status?.state !== 'healthy') {
@@ -405,7 +407,7 @@ export class DockerDeploymentService {
 
   async create(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
     // LICENSE ENFORCEMENT: New blue/green deployments require Personal under the project license/TOS.
-    await this.licensePolicy?.requireFeature('blue-green');
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('blue-green');
     await assertNodeAllowsServiceCreation(this.db, nodeId, 'docker');
     await this.validateDockerNode(nodeId);
     if (input.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);

@@ -53,7 +53,7 @@ export function createService({
   authService?: { getUserById: (userId: string) => Promise<User | null> };
   auditService: { log: ReturnType<typeof vi.fn> };
 }) {
-  return new AIService(
+  const service = new AIService(
     {} as never,
     caService as never,
     {} as never,
@@ -71,6 +71,8 @@ export function createService({
     databaseService as never,
     dockerService as never
   );
+  (service as any).licensePolicyService = { requireFeature: async () => undefined };
+  return service;
 }
 
 afterEach(() => {

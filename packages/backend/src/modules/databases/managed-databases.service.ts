@@ -8,7 +8,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { DatabaseCAService } from '@/services/database-ca.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -624,7 +624,7 @@ export class ManagedDatabaseService {
 
   async create(input: CreateManagedDatabaseInput, userId: string) {
     // LICENSE ENFORCEMENT: Managed database creation requires Personal under the project license/TOS.
-    await this.licensePolicy?.requireFeature('managed-databases');
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('managed-databases');
     validateClickHouseFragment(input.clickhouseConfigXml);
     const imageRef = catalogImage(input.type, input.version);
     const node = await this.assertDatabaseNode(input.nodeId);

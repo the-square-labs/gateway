@@ -16,7 +16,7 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -241,7 +241,7 @@ export class StatusPageService {
 
     if (!previous.enabled && next.enabled) {
       // LICENSE ENFORCEMENT: Only enabling a new status page requires Personal; existing pages remain manageable.
-      await this.licensePolicy?.requireFeature('status-pages');
+      await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('status-pages');
     }
 
     if (next.proxyTemplateId) {
@@ -378,6 +378,8 @@ export class StatusPageService {
   }
 
   async createService(input: CreateStatusPageServiceInput, userId: string) {
+    // LICENSE ENFORCEMENT: Shared REST/AI creation must remain behind the Personal entitlement.
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('status-pages');
     await this.validateServiceSource(input.sourceType, input.sourceId);
     const config = await this.getConfig();
     const [row] = await this.db

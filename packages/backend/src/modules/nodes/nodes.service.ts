@@ -8,7 +8,7 @@ import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
+import { type LicenseQuotaService, requireConfiguredLicenseQuota } from '@/modules/license/license-quota.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { DaemonUpdateService } from '@/services/daemon-update.service.js';
@@ -311,16 +311,14 @@ export class NodesService {
           return created;
         },
       });
-    const node = this.licenseQuota
-      ? await this.licenseQuota.run(
-          'managedNodes',
-          async (tx) => {
-            const [result] = await tx.select({ count: count() }).from(nodes);
-            return Number(result?.count ?? 0);
-          },
-          createNode
-        )
-      : await createNode(this.db);
+    const node = await requireConfiguredLicenseQuota(this.licenseQuota).run(
+      'managedNodes',
+      async (tx) => {
+        const [result] = await tx.select({ count: count() }).from(nodes);
+        return Number(result?.count ?? 0);
+      },
+      createNode
+    );
 
     await this.auditService.log({
       userId,

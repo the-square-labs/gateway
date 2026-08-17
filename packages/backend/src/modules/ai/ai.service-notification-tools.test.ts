@@ -30,7 +30,7 @@ function createService({
   siemDeliveryService?: Record<string, unknown>;
   generalSettingsService?: Record<string, unknown>;
 } = {}) {
-  return new AIService(
+  const service = new AIService(
     {} as never,
     {} as never,
     {} as never,
@@ -59,6 +59,8 @@ function createService({
     siemDeliveryService as never,
     generalSettingsService as never
   );
+  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  return service;
 }
 
 describe('AIService notification tool routing', () => {

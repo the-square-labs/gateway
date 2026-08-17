@@ -5,7 +5,7 @@ import { type SiemDeliveryStatus, siemDeliveries, siemDestinations } from '@/db/
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { AuditService } from './audit.service.js';
@@ -259,7 +259,7 @@ export class SiemDestinationService {
 
   private async requireEntitlement(): Promise<void> {
     // LICENSE ENFORCEMENT: SIEM export operations require Enterprise under the project license/TOS.
-    await this.licensePolicy?.requireFeature('siem-export');
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('siem-export');
   }
 
   private async toPublic(destination: typeof siemDestinations.$inferSelect) {

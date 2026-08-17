@@ -14,7 +14,7 @@ const BASE_USER = {
 };
 
 function createService(templatesService: Record<string, unknown>) {
-  return new AIService(
+  const service = new AIService(
     {} as never,
     {} as never,
     {} as never,
@@ -32,6 +32,8 @@ function createService(templatesService: Record<string, unknown>) {
     {} as never,
     {} as never
   );
+  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  return service;
 }
 
 describe('AIService PKI template tool routing', () => {

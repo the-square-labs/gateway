@@ -15,6 +15,10 @@ describe('SiemDeliveryService', () => {
       isFeatureEnabled: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValueOnce(false),
     };
     const service = new SiemDeliveryService({} as never, {} as never, featureState as never);
+    service.setLicensePolicyService({
+      hasFeature: vi.fn().mockResolvedValue(true),
+      requireFeature: vi.fn().mockResolvedValue(undefined),
+    } as never);
     const batch = {
       destination: {
         id: 'destination-1',
@@ -85,6 +89,7 @@ describe('SiemDeliveryService', () => {
   it('requeues only failed deliveries and clears terminal failure state', async () => {
     const query = createUpdateMock([{ id: 'delivery-1', destinationId: 'destination-1', status: 'queued' }]);
     const service = new SiemDeliveryService({ update: query.update } as never, {} as never);
+    service.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
     const eventBus = { publish: vi.fn() };
     service.setEventBus(eventBus as never);
 
@@ -112,6 +117,7 @@ describe('SiemDeliveryService', () => {
   it('refuses to requeue deliveries that are not terminal failures', async () => {
     const query = createUpdateMock([]);
     const service = new SiemDeliveryService({ update: query.update } as never, {} as never);
+    service.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
 
     await expect(service.requeue('delivery-1')).rejects.toMatchObject({
       statusCode: 409,

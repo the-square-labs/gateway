@@ -231,6 +231,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   return (
     <>
       <PanelShell
+        id="gateway-license"
         title="License"
         description="Current Gateway license and activation state"
         actions={

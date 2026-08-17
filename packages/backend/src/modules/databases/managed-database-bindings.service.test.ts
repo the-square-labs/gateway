@@ -6,7 +6,7 @@ function service(
   connectorImage = 'registry.example.com/gateway/database-connector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   allowDevelopmentConnectorImage = false
 ) {
-  return new ManagedDatabaseBindingService(
+  const instance = new ManagedDatabaseBindingService(
     {} as never,
     {} as never,
     {} as never,
@@ -17,9 +17,21 @@ function service(
     connectorImage,
     allowDevelopmentConnectorImage
   );
+  instance.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
+  return instance;
 }
 
 describe('managed database binding provisioning guardrails', () => {
+  it('fails closed before creating a binding when license policy wiring is missing', async () => {
+    const instance = service();
+    (instance as any).licensePolicy = undefined;
+
+    await expect(instance.create('database-1', {} as never, 'user-1')).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'SERVICE_UNAVAILABLE',
+    });
+  });
+
   it('emits canonical database and Docker resource identifiers for binding changes', () => {
     const instance = service() as any;
     const publish = vi.fn();

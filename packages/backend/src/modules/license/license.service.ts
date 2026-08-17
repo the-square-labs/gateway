@@ -12,6 +12,7 @@ import {
   type CachedLicenseState,
   COMMUNITY_ENTITLEMENTS,
   type EncryptedLicenseCredential,
+  isCanonicalEntitlements,
   LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS,
   LICENSE_ENTITLEMENTS_VERSION,
   LICENSE_OFFLINE_GRACE_DAYS,
@@ -61,6 +62,7 @@ export class LicenseService {
   private installationIdPromise: Promise<string> | null = null;
   private syncQueue: Promise<void> = Promise.resolve();
   private lastPublishedStatus: string | null = null;
+  private lifecycleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -79,12 +81,9 @@ export class LicenseService {
       this.getCachedState(),
     ]);
     const registrationStatus = encryptedToken ? 'registered' : (cached?.registrationStatus ?? 'pending');
-    const status = this.toStatusView(
-      cached ? { ...cached, registrationStatus } : this.communityState(registrationStatus),
-      encryptedKey,
-      installationId,
-      this.getInstallationName()
-    );
+    const effectiveCached = cached ? { ...cached, registrationStatus } : this.communityState(registrationStatus);
+    const status = this.toStatusView(effectiveCached, encryptedKey, installationId, this.getInstallationName());
+    this.scheduleLifecycleRefresh(status, effectiveCached);
     this.publishStatusIfChanged(status);
     return status;
   }
@@ -121,6 +120,7 @@ export class LicenseService {
       installationToken: credential.token,
       licenseKey: key,
     });
+    this.assertServerState(state);
     if (state.effectivePlan === 'community' || state.paidLicenseStatus !== 'valid') {
       throw new LicenseServerRequestError(409, 'LICENSE_NOT_ACTIVE', 'License server did not activate the paid plan');
     }
@@ -142,6 +142,7 @@ export class LicenseService {
     const state = await this.post<LicenseServerState>('/api/v1/licenses/deactivate', {
       installationToken: credential.token,
     });
+    this.assertServerState(state);
     await this.saveServerState(state);
     await this.deleteSetting(SETTINGS_KEYS.keyEncrypted);
     logger.info('License deactivated');
@@ -266,6 +267,10 @@ export class LicenseService {
       installationName: this.getInstallationName(),
       gatewayVersion: this.env.APP_VERSION,
     });
+    if (!result || typeof result.installationToken !== 'string' || !result.installationToken.trim()) {
+      throw new LicenseServerRequestError(502, 'INVALID_LICENSE_STATE', 'License server returned an invalid state');
+    }
+    this.assertServerState(result.state);
     await this.setSetting(
       SETTINGS_KEYS.installationTokenEncrypted,
       this.cryptoService.encryptString(result.installationToken)
@@ -341,6 +346,7 @@ export class LicenseService {
   }
 
   private async saveServerState(state: LicenseServerState): Promise<void> {
+    this.assertServerState(state);
     const previous = await this.getCachedState();
     const now = new Date().toISOString();
     const status = this.statusFromState(state);
@@ -493,7 +499,7 @@ export class LicenseService {
       case 'deactivated':
         return state.paidLicenseStatus;
       default:
-        return state.effectivePlan === 'community' ? 'invalid' : 'valid';
+        return 'invalid';
     }
   }
 
@@ -579,16 +585,135 @@ export class LicenseService {
   }
 
   private resolveExpirationGraceUntil(cached: CachedLicenseState): Date | null {
-    if (cached.graceUntil) {
-      const declared = new Date(cached.graceUntil);
-      if (Number.isFinite(declared.getTime())) return declared;
-    }
     if (!cached.paidPlan || !cached.expiresAt) return null;
     const expiresAt = new Date(cached.expiresAt);
     if (!Number.isFinite(expiresAt.getTime())) return null;
     const days = cached.paidPlan === 'personal' ? 1 : cached.paidPlan === 'business' ? 3 : 7;
     expiresAt.setUTCDate(expiresAt.getUTCDate() + days);
-    return expiresAt;
+    if (!cached.graceUntil) return expiresAt;
+    const declared = new Date(cached.graceUntil);
+    if (!Number.isFinite(declared.getTime())) return expiresAt;
+    return declared.getTime() < expiresAt.getTime() ? declared : expiresAt;
+  }
+
+  private assertServerState(value: unknown): asserts value is LicenseServerState {
+    if (!value || typeof value !== 'object') this.invalidServerState();
+    const state = value as Partial<LicenseServerState>;
+    const plans: LicensePlan[] = ['community', 'personal', 'business', 'enterprise'];
+    const statuses = ['none', 'valid', 'expired_grace', 'expired', 'revoked', 'replaced', 'deactivated'];
+    if (
+      state.registrationStatus !== 'registered' ||
+      !plans.includes(state.effectivePlan as LicensePlan) ||
+      typeof state.paidLicenseStatus !== 'string' ||
+      !statuses.includes(state.paidLicenseStatus) ||
+      state.entitlementsVersion !== LICENSE_ENTITLEMENTS_VERSION ||
+      !state.entitlements ||
+      !isCanonicalEntitlements(state.effectivePlan as LicensePlan, state.entitlements) ||
+      typeof state.serverTime !== 'string' ||
+      !Number.isFinite(Date.parse(state.serverTime))
+    ) {
+      this.invalidServerState();
+    }
+
+    const paid = state.paidLicense;
+    if (state.paidLicenseStatus === 'none') {
+      if (state.effectivePlan !== 'community' || paid !== undefined || state.graceUntil !== null) {
+        this.invalidServerState();
+      }
+      return;
+    }
+    if (!paid || typeof paid !== 'object') this.invalidServerState();
+    if (
+      !['personal', 'business', 'enterprise'].includes(paid.plan) ||
+      !['active', 'expired', 'revoked'].includes(paid.status) ||
+      typeof paid.id !== 'string' ||
+      typeof paid.name !== 'string' ||
+      typeof paid.keyLast4 !== 'string' ||
+      !paid.metadata ||
+      typeof paid.metadata !== 'object' ||
+      Array.isArray(paid.metadata) ||
+      (paid.expiresAt !== null && (typeof paid.expiresAt !== 'string' || !Number.isFinite(Date.parse(paid.expiresAt))))
+    ) {
+      this.invalidServerState();
+    }
+
+    const effectivePaid = state.paidLicenseStatus === 'valid' || state.paidLicenseStatus === 'expired_grace';
+    if (effectivePaid) {
+      if (state.effectivePlan !== paid.plan) this.invalidServerState();
+    } else if (state.effectivePlan !== 'community') {
+      this.invalidServerState();
+    }
+    if (state.paidLicenseStatus === 'valid' && paid.status !== 'active') this.invalidServerState();
+    if (state.paidLicenseStatus === 'expired_grace' && paid.status !== 'expired') this.invalidServerState();
+    if (state.paidLicenseStatus === 'expired' && paid.status !== 'expired') this.invalidServerState();
+    if (state.paidLicenseStatus === 'revoked' && paid.status !== 'revoked') this.invalidServerState();
+
+    if (state.activation !== undefined) {
+      const activation = state.activation;
+      if (
+        !activation ||
+        typeof activation.installationId !== 'string' ||
+        typeof activation.installationName !== 'string' ||
+        typeof activation.activatedAt !== 'string' ||
+        !Number.isFinite(Date.parse(activation.activatedAt)) ||
+        (activation.lastHeartbeatAt !== null &&
+          (typeof activation.lastHeartbeatAt !== 'string' || !Number.isFinite(Date.parse(activation.lastHeartbeatAt))))
+      ) {
+        this.invalidServerState();
+      }
+    }
+
+    const expectedGrace = this.serverExpirationGraceUntil(paid.plan, paid.expiresAt);
+    const declaredGrace = state.graceUntil;
+    if (
+      (expectedGrace === null && declaredGrace !== null) ||
+      (expectedGrace !== null &&
+        (typeof declaredGrace !== 'string' || Date.parse(declaredGrace) !== expectedGrace.getTime()))
+    ) {
+      this.invalidServerState();
+    }
+  }
+
+  private invalidServerState(): never {
+    throw new LicenseServerRequestError(502, 'INVALID_LICENSE_STATE', 'License server returned an invalid state');
+  }
+
+  private serverExpirationGraceUntil(plan: Exclude<LicensePlan, 'community'>, expiresAt: string | null): Date | null {
+    if (!expiresAt) return null;
+    const date = new Date(expiresAt);
+    const hours = plan === 'personal' ? 24 : plan === 'business' ? 72 : 168;
+    date.setUTCHours(date.getUTCHours() + hours);
+    return date;
+  }
+
+  private scheduleLifecycleRefresh(status: LicenseStatusView, cached: CachedLicenseState): void {
+    if (this.lifecycleTimer) clearTimeout(this.lifecycleTimer);
+    this.lifecycleTimer = null;
+    const now = Date.now();
+    const offlineDeadline =
+      cached.errorMessage && cached.paidPlan && cached.lastValidAt
+        ? this.addOfflineGrace(cached.lastValidAt).toISOString()
+        : null;
+    const expirationGraceDeadline = this.resolveExpirationGraceUntil(cached)?.toISOString() ?? null;
+    const deadline = [
+      status.expiresAt,
+      status.graceUntil,
+      status.offlineGraceUntil,
+      offlineDeadline,
+      expirationGraceDeadline,
+    ]
+      .map((value) => (value ? Date.parse(value) : Number.NaN))
+      .filter((value) => Number.isFinite(value) && value > now)
+      .sort((left, right) => left - right)[0];
+    if (deadline === undefined) return;
+    const delay = Math.min(deadline - now, 2_147_483_647);
+    this.lifecycleTimer = setTimeout(() => {
+      this.lifecycleTimer = null;
+      void this.getStatus().catch((error) => {
+        logger.error('Failed to refresh license lifecycle state', { error: this.errorMessage(error) });
+      });
+    }, delay);
+    this.lifecycleTimer.unref?.();
   }
 
   private publishStatusIfChanged(status: LicenseStatusView): void {

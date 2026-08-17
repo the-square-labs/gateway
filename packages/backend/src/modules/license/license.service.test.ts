@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LicenseServerRequestError, LicenseService } from './license.service.js';
-import type { LicenseServerState } from './license.types.js';
+import { LICENSE_PLAN_ENTITLEMENTS, type LicenseServerState } from './license.types.js';
 
 function createDb() {
   const rows = new Map<string, unknown>();
@@ -63,46 +63,38 @@ const communityState = (): LicenseServerState => ({
   paidLicenseStatus: 'none',
   graceUntil: null,
   entitlementsVersion: 2,
-  entitlements: {
-    managedNodes: 100,
-    users: 10,
-    customPermissionGroups: 5,
-    supportLevel: 'community',
-    features: ['infrastructure'],
-  },
+  entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
   serverTime: new Date().toISOString(),
 });
 
-const paidState = (plan: 'personal' | 'business' | 'enterprise' = 'business'): LicenseServerState => ({
-  registrationStatus: 'registered',
-  effectivePlan: plan,
-  paidLicenseStatus: 'valid',
-  paidLicense: {
-    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    status: 'active',
-    plan,
-    name: `Test ${plan}`,
-    expiresAt: '2030-01-01T00:00:00.000Z',
-    keyLast4: 'DDDD',
-    metadata: { order: 'A-1' },
-  },
-  graceUntil: null,
-  entitlementsVersion: 2,
-  entitlements: {
-    managedNodes: null,
-    users: null,
-    customPermissionGroups: null,
-    supportLevel: 'priority',
-    features: ['infrastructure', 'structured-logging'],
-  },
-  activation: {
-    installationId: '11111111-1111-4111-8111-111111111111',
-    installationName: 'gateway.example.com',
-    activatedAt: new Date().toISOString(),
-    lastHeartbeatAt: new Date().toISOString(),
-  },
-  serverTime: new Date().toISOString(),
-});
+const paidState = (plan: 'personal' | 'business' | 'enterprise' = 'business'): LicenseServerState => {
+  const expiresAt = new Date('2030-01-01T00:00:00.000Z');
+  const graceHours = plan === 'personal' ? 24 : plan === 'business' ? 72 : 168;
+  return {
+    registrationStatus: 'registered',
+    effectivePlan: plan,
+    paidLicenseStatus: 'valid',
+    paidLicense: {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'active',
+      plan,
+      name: `Test ${plan}`,
+      expiresAt: expiresAt.toISOString(),
+      keyLast4: 'DDDD',
+      metadata: { order: 'A-1' },
+    },
+    graceUntil: new Date(expiresAt.getTime() + graceHours * 60 * 60 * 1000).toISOString(),
+    entitlementsVersion: 2,
+    entitlements: LICENSE_PLAN_ENTITLEMENTS[plan],
+    activation: {
+      installationId: '11111111-1111-4111-8111-111111111111',
+      installationName: 'gateway.example.com',
+      activatedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+    },
+    serverTime: new Date().toISOString(),
+  };
+};
 
 function dataResponse<T>(data: T, status = 200) {
   return Promise.resolve({
@@ -332,6 +324,7 @@ describe('LicenseService', () => {
     vi.setSystemTime(new Date(expiresAt.getTime() + 60_000));
     const state = paidState(plan);
     state.paidLicenseStatus = 'expired_grace';
+    state.paidLicense!.status = 'expired';
     state.paidLicense!.expiresAt = expiresAt.toISOString();
     state.graceUntil = graceUntil.toISOString();
     const db = createDb();
@@ -379,6 +372,7 @@ describe('LicenseService', () => {
     vi.setSystemTime(new Date('2026-08-17T12:01:00.000Z'));
     const state = paidState('business');
     state.paidLicenseStatus = 'expired_grace';
+    state.paidLicense!.status = 'expired';
     state.paidLicense!.expiresAt = expiresAt.toISOString();
     state.graceUntil = graceUntil.toISOString();
     const db = createDb();
@@ -431,6 +425,7 @@ describe('LicenseService', () => {
           ...communityState(),
           paidLicenseStatus: 'replaced',
           paidLicense: paidState('personal').paidLicense,
+          graceUntil: paidState('personal').graceUntil,
           activation: paidState('personal').activation,
         })
       );
@@ -535,5 +530,93 @@ describe('LicenseService', () => {
 
     expect(fetcher.mock.calls[1]![0]).toContain('/api/v1/licenses/activate');
     expect(status).toMatchObject({ status: 'valid', plan: 'personal' });
+  });
+
+  it('rejects noncanonical server entitlements before storing credentials', async () => {
+    const db = createDb();
+    const malformed = communityState();
+    malformed.entitlements = LICENSE_PLAN_ENTITLEMENTS.personal;
+    const fetcher = vi.fn().mockImplementation(() => registerResponse(malformed));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+
+    await service.heartbeat();
+
+    expect(db.rows.has('license:installation_token_encrypted')).toBe(false);
+    expect(await service.getStatus()).toMatchObject({ status: 'community', registrationStatus: 'pending' });
+  });
+
+  it('rejects a paid effective state without paid license metadata', async () => {
+    const db = createDb();
+    const malformed = paidState('business');
+    delete malformed.paidLicense;
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(malformed));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+
+    await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
+      code: 'INVALID_LICENSE_STATE',
+    });
+    expect(db.rows.has('license:key_encrypted')).toBe(false);
+  });
+
+  it('caps cached expiration grace at the local plan maximum', async () => {
+    vi.useFakeTimers();
+    const db = createDb();
+    const expiresAt = new Date('2026-08-17T12:00:00.000Z');
+    vi.setSystemTime(new Date('2026-08-20T12:00:00.001Z'));
+    db.rows.set('license:cached_state', {
+      registrationStatus: 'registered',
+      status: 'expired_grace',
+      plan: 'business',
+      paidPlan: 'business',
+      paidLicenseStatus: 'expired_grace',
+      licenseName: 'Business',
+      licenseMetadata: {},
+      expiresAt: expiresAt.toISOString(),
+      graceUntil: new Date('2026-08-24T12:00:00.000Z').toISOString(),
+      entitlementsVersion: 2,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS.business,
+      lastCheckedAt: expiresAt.toISOString(),
+      lastValidAt: expiresAt.toISOString(),
+      activeInstallationId: null,
+      activeInstallationName: null,
+      errorMessage: null,
+    });
+    const service = new LicenseService(db as never, createCrypto() as never, env, vi.fn() as never);
+
+    expect(await service.getStatus()).toMatchObject({ status: 'expired', plan: 'community', licensed: false });
+  });
+
+  it('publishes lifecycle transitions at expiry without waiting for heartbeat', async () => {
+    vi.useFakeTimers();
+    const now = new Date('2026-08-17T12:00:00.000Z');
+    vi.setSystemTime(now);
+    const state = paidState('business');
+    state.paidLicense!.expiresAt = new Date(now.getTime() + 10_000).toISOString();
+    state.graceUntil = new Date(now.getTime() + 72 * 60 * 60 * 1000 + 10_000).toISOString();
+    state.serverTime = now.toISOString();
+    const eventBus = { publish: vi.fn() };
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(state));
+    const service = new LicenseService(
+      createDb() as never,
+      createCrypto() as never,
+      env,
+      fetcher as never,
+      undefined,
+      eventBus as never
+    );
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      'system.license.changed',
+      expect.objectContaining({ status: 'expired_grace', plan: 'business' })
+    );
   });
 });

@@ -4,7 +4,7 @@ import { type LoggingFieldDefinition, loggingSchemas } from '@/db/schema/index.j
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CreateLoggingSchemaInput, UpdateLoggingSchemaInput } from './logging.schemas.js';
 import type { LoggingSchemaView } from './logging-storage.types.js';
@@ -52,7 +52,7 @@ export class LoggingSchemaService {
   }
 
   async create(input: CreateLoggingSchemaInput, userId: string): Promise<LoggingSchemaView> {
-    await this.licensePolicy?.requireFeature('structured-logging');
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('structured-logging');
     const row = await writeWithAllocatedSlug({
       source: input.name,
       fallback: 'logging-schema',

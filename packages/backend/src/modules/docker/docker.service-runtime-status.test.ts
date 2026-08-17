@@ -47,6 +47,7 @@ function createService(runtimeStatus: Record<string, unknown>, sendDockerRuntime
     { sendDockerRuntimeCommand } as never,
     registry as never
   );
+  service.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
   return { service, updates, registry };
 }
 

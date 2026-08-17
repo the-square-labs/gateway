@@ -15,7 +15,7 @@ import {
   fetchGroupScopeMap,
 } from '@/modules/auth/live-session-user.js';
 import { mfaRequiredChannel } from '@/modules/auth/mfa-events.js';
-import type { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
+import { type LicenseQuotaService, requireConfiguredLicenseQuota } from '@/modules/license/license-quota.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
 
@@ -339,19 +339,17 @@ export class GroupService {
         .returning();
       return group;
     };
-    const group = this.licenseQuota
-      ? await this.licenseQuota.run(
-          'customPermissionGroups',
-          async (tx) => {
-            const [result] = await tx
-              .select({ count: count() })
-              .from(permissionGroups)
-              .where(eq(permissionGroups.isBuiltin, false));
-            return Number(result?.count ?? 0);
-          },
-          createGroup
-        )
-      : await createGroup(this.db);
+    const group = await requireConfiguredLicenseQuota(this.licenseQuota).run(
+      'customPermissionGroups',
+      async (tx) => {
+        const [result] = await tx
+          .select({ count: count() })
+          .from(permissionGroups)
+          .where(eq(permissionGroups.isBuiltin, false));
+        return Number(result?.count ?? 0);
+      },
+      createGroup
+    );
 
     logger.info('Created permission group', { groupId: group.id, name: group.name, parentId: group.parentId });
     this.emitGroup(group.id, 'created');

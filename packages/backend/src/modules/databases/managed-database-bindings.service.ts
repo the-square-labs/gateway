@@ -10,6 +10,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import type { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import type { DockerSecretService } from '@/modules/docker/docker-secret.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -78,6 +79,7 @@ function isMissingContainerError(error: unknown) {
 
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
   private readonly bindingPrincipalReconciliationNodes = new Set<string>();
 
   constructor(
@@ -109,6 +111,10 @@ export class ManagedDatabaseBindingService {
         });
       });
     });
+  }
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
   }
 
   async list(managedDatabaseId: string) {
@@ -198,6 +204,8 @@ export class ManagedDatabaseBindingService {
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
+    // LICENSE ENFORCEMENT: Shared REST/AI binding creation must remain behind the Personal entitlement.
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('managed-databases');
     await this.getReadyDatabase(managedDatabaseId);
     await this.assertDockerNode(input.targetNodeId);
     this.assertConnectorImage();

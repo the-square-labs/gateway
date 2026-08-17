@@ -1,4 +1,8 @@
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import {
+  hasConfiguredLicenseFeature,
+  type LicensePolicyService,
+  requireConfiguredLicensePolicy,
+} from '@/modules/license/license-policy.service.js';
 import type { LocalClickHouseService } from './local-clickhouse.service.js';
 import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
 import type { LoggingFeatureService } from './logging-feature.service.js';
@@ -19,11 +23,7 @@ export class LoggingRuntimeService {
 
   async initialize(): Promise<void> {
     let runtime = await this.settings.getRuntimeConfig();
-    if (
-      runtime.mode !== 'disabled' &&
-      this.licensePolicy &&
-      !(await this.licensePolicy.hasFeature('structured-logging'))
-    ) {
+    if (runtime.mode !== 'disabled' && !(await hasConfiguredLicenseFeature(this.licensePolicy, 'structured-logging'))) {
       // LICENSE ENFORCEMENT: Do not start a persisted paid logging backend after entitlement loss.
       runtime = await this.settings.saveConfig({ mode: 'disabled' });
     }
@@ -33,7 +33,7 @@ export class LoggingRuntimeService {
   async update(input: LoggingSettingsInput) {
     if (input.mode !== 'disabled') {
       // LICENSE ENFORCEMENT: Enabling structured logging requires Business under the project license/TOS.
-      await this.licensePolicy?.requireFeature('structured-logging');
+      await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('structured-logging');
     }
     const runtime = await this.settings.saveConfig(input);
     await this.applyRuntime(runtime);

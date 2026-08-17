@@ -2,6 +2,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { LicenseService } from './license.service.js';
 import {
+  isCanonicalEntitlements,
   LICENSE_ENTITLEMENTS_VERSION,
   type LicenseEntitlements,
   type LicensePlan,
@@ -37,6 +38,25 @@ export interface SafeLicenseSummary {
   offlineGraceUntil: string | null;
   entitlementsVersion: number;
   entitlements: LicenseEntitlements;
+}
+
+export function requireConfiguredLicensePolicy(service?: LicensePolicyService): LicensePolicyService {
+  if (service) return service;
+  logger.error('License policy service is not configured');
+
+  // LICENSE ENFORCEMENT: Missing policy wiring must fail closed; bypassing this guard violates the project license/TOS.
+  throw new AppError(503, 'SERVICE_UNAVAILABLE', 'The requested operation is temporarily unavailable');
+}
+
+export async function hasConfiguredLicenseFeature(
+  service: LicensePolicyService | undefined,
+  feature: LicenseFeature
+): Promise<boolean> {
+  if (!service) {
+    logger.error('License policy service is not configured', { feature });
+    return false;
+  }
+  return service.hasFeature(feature);
 }
 
 export class LicensePolicyService {
@@ -109,13 +129,40 @@ export class LicensePolicyService {
 
   private isPolicyStateValid(status: LicenseStatusView): boolean {
     const entitlements = status.entitlements;
+    const plans: LicensePlan[] = ['community', 'personal', 'business', 'enterprise'];
+    const statuses: LicenseStatus[] = [
+      'community',
+      'valid',
+      'expired_grace',
+      'valid_with_warning',
+      'unreachable_grace_expired',
+      'invalid',
+      'expired',
+      'revoked',
+      'replaced',
+      'deactivated',
+    ];
+    if (!plans.includes(status.plan) || !statuses.includes(status.status)) return false;
     if (status.entitlementsVersion !== LICENSE_ENTITLEMENTS_VERSION) return false;
     if (!entitlements || typeof entitlements !== 'object' || !Array.isArray(entitlements.features)) return false;
     if (typeof entitlements.supportLevel !== 'string') return false;
-    return (['managedNodes', 'users', 'customPermissionGroups'] as const).every((resource) => {
-      const value = entitlements[resource];
-      return value === null || (Number.isInteger(value) && value >= 0);
-    });
+    if (
+      !(['managedNodes', 'users', 'customPermissionGroups'] as const).every((resource) => {
+        const value = entitlements[resource];
+        return value === null || (Number.isInteger(value) && value >= 0);
+      })
+    ) {
+      return false;
+    }
+    if (!isCanonicalEntitlements(status.plan, entitlements)) return false;
+
+    if (status.status === 'community') {
+      return status.plan === 'community' && status.licensed;
+    }
+    if (status.status === 'valid' || status.status === 'expired_grace' || status.status === 'valid_with_warning') {
+      return status.plan !== 'community' && status.licensed;
+    }
+    return status.plan === 'community' && !status.licensed;
   }
 
   private invalidStateDetails(status: LicenseStatusView): Record<string, unknown> {

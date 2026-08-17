@@ -15,7 +15,7 @@ import { StatusPageService } from './status-page.service.js';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 
 function createService(db: any, proxyService: any = {}) {
-  return new StatusPageService(
+  const service = new StatusPageService(
     db,
     {
       upsertStatusPageSystemHost: vi.fn().mockResolvedValue({ id: 'proxy-status' }),
@@ -24,6 +24,8 @@ function createService(db: any, proxyService: any = {}) {
     },
     { log: vi.fn().mockResolvedValue(undefined) } as any
   );
+  service.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
+  return service;
 }
 
 function dbForSettings(node: any, cert: any = null) {
@@ -65,6 +67,17 @@ function dbForSettingsConfig(config: Record<string, unknown>, node: any = null) 
 }
 
 describe('StatusPageService settings validation', () => {
+  it('enforces the Personal entitlement at the shared service creation boundary', async () => {
+    const service = createService({});
+    service.setLicensePolicyService({
+      requireFeature: vi.fn().mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'upgrade')),
+    } as never);
+
+    await expect(service.createService({} as never, USER_ID)).rejects.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+  });
+
   it('rejects enabling without an online nginx node', async () => {
     const service = createService(dbForSettings(null));
 

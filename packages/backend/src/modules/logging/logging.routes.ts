@@ -4,6 +4,7 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -79,6 +80,8 @@ import { LoggingTokenService } from './logging-token.service.js';
 export const loggingRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 const requireLoggingEnabledMiddleware = async (_c: any, next: () => Promise<void>) => {
+  // LICENSE ENFORCEMENT: Every REST logging operation must enforce the Business entitlement at request time.
+  await container.resolve(LicensePolicyService).requireFeature('structured-logging');
   const feature = container.resolve(LoggingFeatureService);
   feature.requireEnabled();
   await next();

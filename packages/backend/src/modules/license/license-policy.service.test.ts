@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
-import type { LicenseStatusView } from './license.types.js';
+import { LICENSE_PLAN_ENTITLEMENTS, type LicenseStatusView } from './license.types.js';
 import { LicensePolicyService } from './license-policy.service.js';
 
 const baseStatus = (): LicenseStatusView => ({
@@ -17,13 +17,7 @@ const baseStatus = (): LicenseStatusView => ({
   installationName: 'gateway.example.com',
   expiresAt: null,
   entitlementsVersion: 2,
-  entitlements: {
-    managedNodes: 100,
-    users: 10,
-    customPermissionGroups: 5,
-    supportLevel: 'community',
-    features: ['infrastructure'],
-  },
+  entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
   lastCheckedAt: null,
   lastValidAt: null,
   graceUntil: null,
@@ -54,7 +48,7 @@ describe('LicensePolicyService', () => {
     const status = baseStatus();
     status.plan = 'business';
     status.status = 'expired_grace';
-    status.entitlements.features.push('secure-runtime');
+    status.entitlements = LICENSE_PLAN_ENTITLEMENTS.business;
     const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
 
     await expect(policy.requireFeature('secure-runtime')).resolves.toBeUndefined();
@@ -83,6 +77,20 @@ describe('LicensePolicyService', () => {
       message: 'The requested operation is temporarily unavailable',
     });
     expect(error.details).toBeUndefined();
+  });
+
+  it('fails closed when a non-active state carries paid entitlements', async () => {
+    const status = baseStatus();
+    status.status = 'revoked';
+    status.plan = 'enterprise';
+    status.licensed = false;
+    status.entitlements = LICENSE_PLAN_ENTITLEMENTS.enterprise;
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+
+    await expect(policy.requireFeature('internal-pki')).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'SERVICE_UNAVAILABLE',
+    });
   });
 
   it('projects only safe license fields for UI bootstrap', async () => {

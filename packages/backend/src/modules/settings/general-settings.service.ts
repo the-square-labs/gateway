@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
 import type { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 
 const SETTINGS_KEY = 'general:settings';
@@ -267,11 +267,11 @@ export class GeneralSettingsService {
   async updateConfig(updates: GeneralSettingsUpdate): Promise<GeneralSettings> {
     if (updates.features?.pkiEnabled === true) {
       // LICENSE ENFORCEMENT: Enabling user-managed PKI requires Enterprise under the project license/TOS.
-      await this.licensePolicy?.requireFeature('internal-pki');
+      await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('internal-pki');
     }
     if (updates.features?.siemEnabled === true) {
       // LICENSE ENFORCEMENT: Enabling SIEM export requires Enterprise under the project license/TOS.
-      await this.licensePolicy?.requireFeature('siem-export');
+      await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('siem-export');
     }
     const current = await this.getConfig();
     const next = this.normalize({

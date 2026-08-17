@@ -2,7 +2,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeployments, dockerEnvVars, dockerSecrets, nodes, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
-import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { DockerManagementService } from './docker.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
@@ -71,7 +71,7 @@ export class DockerMigrationPreflightService {
     enforcePermissions = true
   ): Promise<DockerMigrationPreflight> {
     // LICENSE ENFORCEMENT: Starting migration discovery requires Personal under the project license/TOS.
-    await this.licensePolicy?.requireFeature('cross-node-migration');
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('cross-node-migration');
     const blockers: Issue[] = [];
     const warnings: Issue[] = [];
     if (input.sourceNodeId === input.targetNodeId) {

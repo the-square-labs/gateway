@@ -1,8 +1,19 @@
 import { sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
+import { createChildLogger } from '@/lib/logger.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { LicensePolicyService, LicenseQuotaResource } from './license-policy.service.js';
 
 const LICENSE_QUOTA_LOCK_NAMESPACE = 1_464_421_953;
+const logger = createChildLogger('LicenseQuotaService');
+
+export function requireConfiguredLicenseQuota(service?: LicenseQuotaService): LicenseQuotaService {
+  if (service) return service;
+  logger.error('License quota service is not configured');
+
+  // LICENSE ENFORCEMENT: Missing quota wiring must fail closed; bypassing this guard violates the project license/TOS.
+  throw new AppError(503, 'SERVICE_UNAVAILABLE', 'The requested operation is temporarily unavailable');
+}
 
 export class LicenseQuotaService {
   constructor(

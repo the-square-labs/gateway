@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { errorHandler } from '@/middleware/error-handler.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv, User } from '@/types.js';
 import { loggingRoutes } from './logging.routes.js';
@@ -57,6 +58,9 @@ function registerServices(
     }),
   } as unknown as TokensService);
   container.registerInstance(LoggingFeatureService, featureService as LoggingFeatureService);
+  container.registerInstance(LicensePolicyService, {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+  } as unknown as LicensePolicyService);
   container.registerInstance(LoggingSchemaService, schemaService as LoggingSchemaService);
 }
 
