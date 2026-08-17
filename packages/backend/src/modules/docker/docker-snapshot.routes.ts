@@ -13,6 +13,7 @@ import {
 } from './docker-access-resource.service.js';
 import { compactContainerListItem, matchesContainerSearch } from './docker-container.routes.js';
 import { compactImageListItem, matchesImageSearch } from './docker-image.routes.js';
+import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
 import { compactNetworkListItem, matchesNetworkSearch } from './docker-network.routes.js';
 import {
   DOCKER_SNAPSHOT_KINDS,
@@ -68,7 +69,10 @@ function normalizeRows(kind: DockerSnapshotKind, data: Record<string, any>[], se
     case 'volumes':
       return data.filter((item) => matchesVolumeSearch(item, search)).map(compactVolumeListItem);
     case 'networks':
-      return data.map(compactNetworkListItem).filter((item) => matchesNetworkSearch(item, search));
+      return data
+        .filter((item) => !isGatewayManagedDockerNetwork(String(item.name ?? item.Name ?? '')))
+        .map(compactNetworkListItem)
+        .filter((item) => matchesNetworkSearch(item, search));
   }
 }
 

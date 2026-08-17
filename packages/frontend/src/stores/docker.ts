@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { filterUserDockerNetworks } from "@/lib/docker-networks";
 import { api } from "@/services/api";
 import type {
   DockerContainer,
@@ -424,14 +425,17 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
     const cacheKey = dockerSnapshotCacheKey("networks", effectiveNodeId, search);
-    const cached = api.getCached<DockerNetwork[]>(cacheKey, Number.POSITIVE_INFINITY);
+    const cachedRaw = api.getCached<DockerNetwork[]>(cacheKey, Number.POSITIVE_INFINITY);
+    const cached = cachedRaw ? filterUserDockerNetworks(cachedRaw) : undefined;
     if (cached) set({ networks: cached });
     set((state) => loadingState(state.loading, "networks", !cached && get().networks.length === 0));
     try {
-      const tagged = await api.listDockerNetworkSnapshots({
-        nodeId: effectiveNodeId ?? undefined,
-        search,
-      });
+      const tagged = filterUserDockerNetworks(
+        await api.listDockerNetworkSnapshots({
+          nodeId: effectiveNodeId ?? undefined,
+          search,
+        })
+      );
       const items = await attachFolderPlacements("network", tagged, dockerNetworkResourceKey);
       if (requestId !== dockerRequestIds.networks) return;
       api.setCache(cacheKey, items);

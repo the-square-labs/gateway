@@ -11,6 +11,7 @@ import {
 } from './docker.docs.js';
 import { NetworkConnectSchema, NetworkCreateSchema } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
+import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 
 const DOCKER_RESOURCE_LIST_MAX = 1000;
@@ -81,6 +82,7 @@ export function registerNetworkRoutes(router: OpenAPIHono<AppEnv>) {
       if (!Array.isArray(data)) return c.json({ data });
       const search = c.req.query('search')?.trim().toLowerCase();
       const compacted = data
+        .filter((item) => !isGatewayManagedDockerNetwork(String(item.name ?? item.Name ?? '')))
         .map((item) => ({
           ...compactNetworkListItem(item),
           nodeId,

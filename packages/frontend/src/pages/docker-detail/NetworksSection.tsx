@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
+import { isGatewayManagedDockerNetwork } from "@/lib/docker-networks";
 import { api } from "@/services/api";
 import type { DockerNetwork } from "@/types";
 
@@ -33,10 +34,6 @@ export interface NetworkEntry {
   ipAddress: string;
   gateway: string;
   aliases: string[];
-}
-
-export function isGatewayManagedDockerNetwork(name: string) {
-  return name.startsWith("gateway-db-");
 }
 
 export function readAttachedNetworks(

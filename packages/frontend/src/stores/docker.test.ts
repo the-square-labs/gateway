@@ -32,8 +32,22 @@ describe("docker store", () => {
       selectedNodeId: null,
       dockerNodes: [],
       dockerNodesLoaded: false,
+      networks: [],
       filters: { search: "", status: "all" },
     });
+  });
+
+  it("filters Gateway-managed networks returned by snapshots", async () => {
+    vi.spyOn(api, "listDockerNetworkSnapshots").mockResolvedValue([
+      { id: "managed", name: "gateway-db-79c029a3cedc4af1", driver: "bridge" },
+      { id: "application", name: "application", driver: "bridge" },
+    ] as never);
+
+    await useDockerStore.getState().fetchNetworks(null, "managed-network-filter-test");
+
+    expect(useDockerStore.getState().networks.map((network) => network.name)).toEqual([
+      "application",
+    ]);
   });
 
   it("clears a selected Docker node when the visible node list no longer contains it", () => {

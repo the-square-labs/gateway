@@ -9,6 +9,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { isGatewayInternalContainer } from './docker-internal-containers.js';
+import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
 import { DOCKER_FILE_READ_MAX_BYTES, DOCKER_FILE_UPLOAD_CHUNK_BYTES } from './docker-read-operations.js';
 
 type DockerDispatchResult = { success: boolean; error?: string; detail?: string; data?: Buffer | Uint8Array | string };
@@ -590,10 +591,6 @@ export async function listNetworks(context: DockerVolumeNetworkOperationContext,
 
 export function isBuiltInDockerNetwork(name: string) {
   return ['bridge', 'host', 'none'].includes(name);
-}
-
-export function isGatewayManagedDockerNetwork(name: string) {
-  return name.startsWith('gateway-db-');
 }
 
 export async function resolveNetworkName(

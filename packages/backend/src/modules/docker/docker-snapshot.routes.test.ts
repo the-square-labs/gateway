@@ -96,6 +96,22 @@ afterEach(() => {
 });
 
 describe('Docker snapshot routes', () => {
+  it('hides Gateway-managed database networks from aggregate snapshots', async () => {
+    const { snapshots } = await setup();
+    await snapshots.replaceList(NODE_1, 'networks', [
+      { Id: 'managed', Name: 'gateway-db-79c029a3cedc4af1', Driver: 'bridge' },
+      { Id: 'application', Name: 'application', Driver: 'bridge' },
+    ]);
+    const app = appWithScopes([`docker:networks:view:${NODE_1}`]);
+    registerDockerSnapshotRoutes(app);
+
+    const response = await app.request('/networks');
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.data.map((network: any) => network.name)).toEqual(['application']);
+  });
+
   it('aggregate GET filters unauthorized nodes and never dispatches a daemon command', async () => {
     const { dispatch } = await setup();
     const app = appWithScopes([`docker:containers:view:${NODE_1}`]);
