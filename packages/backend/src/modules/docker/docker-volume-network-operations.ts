@@ -580,11 +580,20 @@ export async function adoptVolume(
 
 export async function listNetworks(context: DockerVolumeNetworkOperationContext, nodeId: string) {
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'list');
-  return context.parseResult(result);
+  const networks = context.parseResult(result);
+  if (!Array.isArray(networks)) return networks;
+  return networks.filter((network: any) => {
+    const name = String(network.name ?? network.Name ?? '');
+    return !isGatewayManagedDockerNetwork(name);
+  });
 }
 
 export function isBuiltInDockerNetwork(name: string) {
   return ['bridge', 'host', 'none'].includes(name);
+}
+
+export function isGatewayManagedDockerNetwork(name: string) {
+  return name.startsWith('gateway-db-');
 }
 
 export async function resolveNetworkName(
@@ -592,7 +601,8 @@ export async function resolveNetworkName(
   nodeId: string,
   networkId: string
 ) {
-  const networks = await listNetworks(context, nodeId);
+  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'list');
+  const networks = context.parseResult(result);
   if (!Array.isArray(networks)) return networkId;
 
   const match = networks.find((network: any) => {
@@ -634,6 +644,9 @@ export async function removeNetwork(
   userId: string
 ) {
   const networkName = await resolveNetworkName(context, nodeId, networkId);
+  if (isGatewayManagedDockerNetwork(networkName)) {
+    throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be removed');
+  }
   if (isBuiltInDockerNetwork(networkName)) {
     throw new AppError(400, 'BUILTIN_NETWORK', 'Built-in Docker networks cannot be removed');
   }
@@ -656,6 +669,10 @@ export async function connectContainerToNetwork(
   containerId: string,
   userId: string
 ) {
+  const networkName = await resolveNetworkName(context, nodeId, networkId);
+  if (isGatewayManagedDockerNetwork(networkName)) {
+    throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be connected manually');
+  }
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'connect', { networkId, containerId });
   context.parseResult(result);
   await context.auditService.log({
@@ -675,6 +692,9 @@ export async function disconnectContainerFromNetwork(
   userId: string
 ) {
   const networkName = await resolveNetworkName(context, nodeId, networkId);
+  if (isGatewayManagedDockerNetwork(networkName)) {
+    throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be disconnected manually');
+  }
   if (isBuiltInDockerNetwork(networkName)) {
     throw new AppError(400, 'BUILTIN_NETWORK', 'Containers cannot be disconnected from built-in Docker networks');
   }

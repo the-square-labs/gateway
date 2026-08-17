@@ -370,6 +370,30 @@ describe('DockerManagementService volume and network operations', () => {
     expect(dispatch.sendDockerNetworkCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
   });
 
+  it('hides and protects Gateway-managed database networks', async () => {
+    const dispatch = {
+      sendDockerNetworkCommand: vi.fn(async (_nodeId: string, action: string) => {
+        if (action === 'list') {
+          return {
+            success: true,
+            detail: JSON.stringify([
+              { Id: 'custom-1', Name: 'frontend' },
+              { Id: 'managed-1', Name: 'gateway-db-79c029a3cedc4af1' },
+            ]),
+          };
+        }
+        return { success: true };
+      }),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.listNetworks('node-1')).resolves.toEqual([{ Id: 'custom-1', Name: 'frontend' }]);
+    await expect(
+      service.disconnectContainerFromNetwork('node-1', 'managed-1', 'container-1', 'user-1')
+    ).rejects.toMatchObject({ statusCode: 409, code: 'MANAGED_NETWORK' });
+    expect(dispatch.sendDockerNetworkCommand).not.toHaveBeenCalledWith('node-1', 'disconnect', expect.anything());
+  });
+
   it('disconnects containers from custom networks with audit', async () => {
     const dispatch = {
       sendDockerNetworkCommand: vi.fn(async (_nodeId: string, action: string) => {

@@ -35,20 +35,26 @@ export interface NetworkEntry {
   aliases: string[];
 }
 
+export function isGatewayManagedDockerNetwork(name: string) {
+  return name.startsWith("gateway-db-");
+}
+
 export function readAttachedNetworks(
   networks: Record<string, Record<string, unknown>> = {}
 ): NetworkEntry[] {
-  return Object.entries(networks).map(([name, config]) => ({
-    name,
-    networkId: String(
-      config.NetworkID ?? config.networkID ?? config.networkId ?? config.ID ?? config.id ?? ""
-    ),
-    ipAddress: String(config.IPAddress ?? config.ipAddress ?? ""),
-    gateway: String(config.Gateway ?? config.gateway ?? ""),
-    aliases: Array.isArray(config.Aliases ?? config.aliases)
-      ? ((config.Aliases ?? config.aliases) as unknown[]).map((alias) => String(alias))
-      : [],
-  }));
+  return Object.entries(networks)
+    .filter(([name]) => !isGatewayManagedDockerNetwork(name))
+    .map(([name, config]) => ({
+      name,
+      networkId: String(
+        config.NetworkID ?? config.networkID ?? config.networkId ?? config.ID ?? config.id ?? ""
+      ),
+      ipAddress: String(config.IPAddress ?? config.ipAddress ?? ""),
+      gateway: String(config.Gateway ?? config.gateway ?? ""),
+      aliases: Array.isArray(config.Aliases ?? config.aliases)
+        ? ((config.Aliases ?? config.aliases) as unknown[]).map((alias) => String(alias))
+        : [],
+    }));
 }
 
 function isNetworkDraft(network: NetworkEntry) {
@@ -92,7 +98,11 @@ export function NetworksSection({
     setNetworksLoading(true);
     try {
       const rows = await api.listDockerNetworks(nodeId);
-      setAllNetworks((rows ?? []).map((network) => normalizeDockerNetwork(network)));
+      setAllNetworks(
+        (rows ?? [])
+          .map((network) => normalizeDockerNetwork(network))
+          .filter((network) => !isGatewayManagedDockerNetwork(network.name))
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load networks");
     } finally {
