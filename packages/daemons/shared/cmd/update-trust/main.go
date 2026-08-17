@@ -141,6 +141,7 @@ func sign(args []string) {
 			"--image":                       *image,
 			"--digest":                      *digest,
 			"--min-gateway-version":         *minGatewayVersion,
+			"--database-connector-image":    *databaseConnectorImage,
 			"--secure-link-connector-image": *secureLinkConnectorImage,
 		})
 		if *relayProtocolMajor < 1 {
@@ -155,6 +156,7 @@ func sign(args []string) {
 			"imageRef":                 fmt.Sprintf("%s@%s", *image, *digest),
 			"protocolMajor":            *relayProtocolMajor,
 			"minGatewayVersion":        *minGatewayVersion,
+			"databaseConnectorImage":   *databaseConnectorImage,
 			"secureLinkConnectorImage": *secureLinkConnectorImage,
 			"createdAt":                createdAt,
 			"gitCommitSha":             *commitSHA,
