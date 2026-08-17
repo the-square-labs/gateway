@@ -99,8 +99,16 @@ func TestWriteRunscDockerConfigPreservesExistingConfiguration(t *testing.T) {
 	if _, ok := runtimes["kata"]; !ok {
 		t.Fatalf("existing runtime lost: %s", content)
 	}
-	if _, ok := runtimes["runsc"]; !ok {
+	runsc, ok := runtimes["runsc"].(map[string]any)
+	if !ok {
 		t.Fatalf("runsc runtime missing: %s", content)
+	}
+	if runsc["path"] != "/usr/local/bin/runsc" {
+		t.Fatalf("unexpected runsc path: %s", content)
+	}
+	runtimeArgs, ok := runsc["runtimeArgs"].([]any)
+	if !ok || len(runtimeArgs) != 1 || runtimeArgs[0] != "--network=host" {
+		t.Fatalf("runsc host networking missing: %s", content)
 	}
 	if err := rollback(); err != nil {
 		t.Fatal(err)

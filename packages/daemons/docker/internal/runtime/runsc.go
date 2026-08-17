@@ -588,7 +588,10 @@ func writeRunscDockerConfig(path, runscPath string) (func() error, error) {
 		runtimes = map[string]any{}
 		config["runtimes"] = runtimes
 	}
-	runtimes["runsc"] = map[string]any{"path": runscPath}
+	runtimes["runsc"] = map[string]any{
+		"path":        runscPath,
+		"runtimeArgs": []string{"--network=host"},
+	}
 	content, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return nil, err
