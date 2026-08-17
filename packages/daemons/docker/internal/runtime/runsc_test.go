@@ -76,9 +76,13 @@ func TestExtractTarRejectsPathTraversal(t *testing.T) {
 func TestWriteRunscDockerConfigPreservesExistingConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.json")
-	original := []byte(`{"log-driver":"journald","runtimes":{"kata":{"path":"/usr/bin/kata-runtime"}}}`)
+	original := []byte(`{"log-driver":"journald","runtimes":{"kata":{"path":"/usr/bin/kata-runtime"},"runsc":{"path":"/usr/local/bin/runsc"}}}`)
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	registered, current, err := runscDockerConfigStatus(path, "/usr/local/bin/runsc")
+	if err != nil || !registered || current {
+		t.Fatalf("expected legacy runsc configuration, registered=%v current=%v err=%v", registered, current, err)
 	}
 	rollback, err := writeRunscDockerConfig(path, "/usr/local/bin/runsc")
 	if err != nil {
@@ -109,6 +113,10 @@ func TestWriteRunscDockerConfigPreservesExistingConfiguration(t *testing.T) {
 	runtimeArgs, ok := runsc["runtimeArgs"].([]any)
 	if !ok || len(runtimeArgs) != 1 || runtimeArgs[0] != "--network=host" {
 		t.Fatalf("runsc host networking missing: %s", content)
+	}
+	registered, current, err = runscDockerConfigStatus(path, "/usr/local/bin/runsc")
+	if err != nil || !registered || !current {
+		t.Fatalf("expected migrated runsc configuration, registered=%v current=%v err=%v", registered, current, err)
 	}
 	if err := rollback(); err != nil {
 		t.Fatal(err)

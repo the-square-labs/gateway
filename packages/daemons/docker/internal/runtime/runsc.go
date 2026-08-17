@@ -133,11 +133,23 @@ func (m *Manager) Preflight(ctx context.Context) Status {
 	status.RemoteInstallable = os.Geteuid() == 0
 	installedVersion, runscFound := installedRunscVersion(ctx)
 	status.InstalledVersion = installedVersion
-	configured := false
-	if output, infoErr := m.runDocker(ctx, "info", "--format", "{{json .Runtimes}}"); infoErr == nil {
-		configured = strings.Contains(output, `"runsc"`)
+	registered, currentConfig, configErr := runscDockerConfigStatus(
+		m.DockerConfig,
+		filepath.Join(m.InstallDir, "runsc"),
+	)
+	if configErr != nil {
+		status.State = StateFailed
+		status.ReasonCode = "docker_config_invalid"
+		status.Message = configErr.Error()
+		return status
 	}
-	if runscFound && configured {
+	if runscFound && registered && !currentConfig {
+		status.State = StateFailed
+		status.ReasonCode = "configuration_outdated"
+		status.Message = "runsc Docker configuration requires migration"
+		return status
+	}
+	if runscFound && registered {
 		if smokeErr := m.verifyDockerRuntime(ctx); smokeErr == nil {
 			status.State = StateHealthy
 			status.ReasonCode = "smoke_test_passed"
@@ -160,6 +172,68 @@ func (m *Manager) Preflight(ctx context.Context) Status {
 	status.ReasonCode = "installation_available"
 	status.Message = "This node can install and verify Secure Runtime"
 	return status
+}
+
+// ReconcileInstalledConfig migrates Gateway-managed runsc installations from
+// older daemon releases and restarts their running containers so the new
+// runtime arguments take effect immediately.
+func (m *Manager) ReconcileInstalledConfig(ctx context.Context) (bool, error) {
+	if runtime.GOOS != "linux" || os.Geteuid() != 0 || !isLocalDockerHost(m.DockerHost) {
+		return false, nil
+	}
+	runscPath := filepath.Join(m.InstallDir, "runsc")
+	if _, err := os.Stat(runscPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	registered, current, err := runscDockerConfigStatus(m.DockerConfig, runscPath)
+	if err != nil || !registered || current {
+		return false, err
+	}
+	service, err := detectDockerService(ctx)
+	if err != nil {
+		return false, err
+	}
+	containerIDs, err := m.runningRunscContainers(ctx)
+	if err != nil {
+		return false, err
+	}
+	rollback, err := writeRunscDockerConfig(m.DockerConfig, runscPath)
+	if err != nil {
+		return false, err
+	}
+	if err := restartDocker(ctx, service); err != nil {
+		_ = rollback()
+		_ = restartDocker(context.Background(), service)
+		return false, err
+	}
+	if len(containerIDs) > 0 {
+		args := append([]string{"restart"}, containerIDs...)
+		if _, err := m.runDocker(ctx, args...); err != nil {
+			return true, fmt.Errorf("restart migrated runsc containers: %w", err)
+		}
+	}
+	return true, nil
+}
+
+func (m *Manager) runningRunscContainers(ctx context.Context) ([]string, error) {
+	output, err := m.runDocker(ctx, "ps", "-q")
+	if err != nil || output == "" {
+		return nil, err
+	}
+	ids := make([]string, 0)
+	for _, id := range strings.Fields(output) {
+		runtimeName, inspectErr := m.runDocker(ctx, "inspect", "--format", "{{.HostConfig.Runtime}}", id)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if runtimeName == "runsc" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (m *Manager) Install(ctx context.Context) (Status, error) {
@@ -588,9 +662,25 @@ func writeRunscDockerConfig(path, runscPath string) (func() error, error) {
 		runtimes = map[string]any{}
 		config["runtimes"] = runtimes
 	}
+	runtimeArgs := make([]any, 0, 1)
+	if existing, ok := runtimes["runsc"].(map[string]any); ok {
+		if existingArgs, ok := existing["runtimeArgs"].([]any); ok {
+			runtimeArgs = append(runtimeArgs, existingArgs...)
+		}
+	}
+	hasHostNetwork := false
+	for _, arg := range runtimeArgs {
+		if arg == "--network=host" {
+			hasHostNetwork = true
+			break
+		}
+	}
+	if !hasHostNetwork {
+		runtimeArgs = append(runtimeArgs, "--network=host")
+	}
 	runtimes["runsc"] = map[string]any{
 		"path":        runscPath,
-		"runtimeArgs": []string{"--network=host"},
+		"runtimeArgs": runtimeArgs,
 	}
 	content, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -630,6 +720,38 @@ func writeRunscDockerConfig(path, runscPath string) (func() error, error) {
 		}
 		return os.WriteFile(path, original, originalMode)
 	}, nil
+}
+
+func runscDockerConfigStatus(path, runscPath string) (registered bool, current bool, err error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if len(strings.TrimSpace(string(content))) == 0 {
+		return false, false, nil
+	}
+	config := map[string]any{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		return false, false, fmt.Errorf("parse Docker daemon config: %w", err)
+	}
+	runtimes, _ := config["runtimes"].(map[string]any)
+	runsc, registered := runtimes["runsc"].(map[string]any)
+	if !registered {
+		return false, false, nil
+	}
+	if runsc["path"] != runscPath {
+		return true, false, nil
+	}
+	runtimeArgs, _ := runsc["runtimeArgs"].([]any)
+	for _, arg := range runtimeArgs {
+		if arg == "--network=host" {
+			return true, true, nil
+		}
+	}
+	return true, false, nil
 }
 
 func failedStatus(reason string, err error) Status {

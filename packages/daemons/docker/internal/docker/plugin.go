@@ -193,6 +193,11 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	p.runtimeManager.DockerHost = p.cfg.Docker.Socket
 	p.runtimeManager.ProgressReporter = p.setRuntimeStatus
 	preflightCtx, cancelPreflight := context.WithTimeout(ctx, 90*time.Second)
+	if migrated, migrateErr := p.runtimeManager.ReconcileInstalledConfig(preflightCtx); migrateErr != nil {
+		p.logger.Warn("runsc Docker configuration migration failed", "error", migrateErr)
+	} else if migrated {
+		p.logger.Info("runsc Docker configuration migrated")
+	}
 	p.setRuntimeStatus(p.runtimeManager.Preflight(preflightCtx))
 	cancelPreflight()
 
