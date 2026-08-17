@@ -1,6 +1,12 @@
 import type { AIProviderStatus } from "./ai";
 import type { Node } from "./nodes";
-import type { SystemConfig, UpdateStatus } from "./system";
+import type {
+  LicenseEntitlements,
+  LicensePlan,
+  LicenseStatus,
+  SystemConfig,
+  UpdateStatus,
+} from "./system";
 
 export type ReadModelAvailability = "available" | "unavailable" | "unknown";
 export type ReadModelRefreshStatus = "never" | "refreshing" | "success" | "error";
@@ -33,5 +39,15 @@ export interface UIBootstrapShell {
   aiWorkspace: {
     configured: boolean;
     installationOwner: boolean;
+  };
+  license: {
+    status: LicenseStatus;
+    plan: LicensePlan;
+    licensed: boolean;
+    expiresAt: string | null;
+    graceUntil: string | null;
+    offlineGraceUntil: string | null;
+    entitlementsVersion: number;
+    entitlements: LicenseEntitlements;
   };
 }

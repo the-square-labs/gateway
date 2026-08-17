@@ -62,6 +62,20 @@ function createService({
 }
 
 describe('AIService notification tool routing', () => {
+  it('checks the Enterprise SIEM entitlement before invoking a SIEM tool', async () => {
+    const siemDestinationService = { list: vi.fn() };
+    const service = createService({ siemDestinationService });
+    const error = new Error('license denied');
+    const policy = { requireFeature: vi.fn().mockRejectedValue(error) };
+    (service as unknown as { licensePolicyService: typeof policy }).licensePolicyService = policy;
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:view'] }, 'list_siem_destinations', {})
+    ).resolves.toMatchObject({ error: 'license denied' });
+    expect(policy.requireFeature).toHaveBeenCalledWith('siem-export');
+    expect(siemDestinationService.list).not.toHaveBeenCalled();
+  });
+
   it('returns a clear tool result when notification services are unavailable', async () => {
     const service = createService();
 

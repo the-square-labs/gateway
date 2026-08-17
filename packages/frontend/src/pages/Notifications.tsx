@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertsTab } from "@/pages/notifications/AlertsTab";
@@ -19,6 +20,7 @@ import {
 import { WebhooksTab } from "@/pages/notifications/WebhooksTab";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import { useSystemConfigStore } from "@/stores/system-config";
 
 const TABS = [
@@ -154,7 +156,12 @@ export function Notifications() {
         Refresh
       </Button>
     ) : activeTab === "siem" && canManageSiem ? (
-      <Button onClick={() => setOpenCreateSiemToken((v) => v + 1)}>
+      <Button
+        onClick={() => {
+          if (!requireLicenseFeature("siem-export", "SIEM destinations")) return;
+          setOpenCreateSiemToken((v) => v + 1);
+        }}
+      >
         <Plus className="h-4 w-4" /> New SIEM Destination
       </Button>
     ) : activeTab === "siem-deliveries" && canViewSiem ? (
@@ -191,7 +198,10 @@ export function Notifications() {
                 {
                   label: "New SIEM Destination",
                   icon: <Plus className="h-4 w-4" />,
-                  onClick: () => setOpenCreateSiemToken((v) => v + 1),
+                  onClick: () => {
+                    if (!requireLicenseFeature("siem-export", "SIEM destinations")) return;
+                    setOpenCreateSiemToken((v) => v + 1);
+                  },
                 },
               ]
             : activeTab === "siem-deliveries" && canViewSiem
@@ -225,7 +235,10 @@ export function Notifications() {
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <LiteModeBackButton />
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold">Notifications</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-semibold">Notifications</h1>
+                {activeTab.startsWith("siem") ? <LicensePlanBadge plan="enterprise" /> : null}
+              </div>
               <p className="text-sm text-muted-foreground">
                 {siemEnabled
                   ? "Manage alert rules, webhooks, SIEM audit export, and delivery activity"

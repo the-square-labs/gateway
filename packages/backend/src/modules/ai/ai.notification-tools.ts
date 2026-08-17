@@ -3,7 +3,7 @@ import { buildSampleEvent } from '@/modules/notifications/notification-templates
 import type { User } from '@/types.js';
 import { agentPageLimit } from './ai.service-helpers.js';
 
-const SIEM_NOTIFICATION_TOOL_NAMES = new Set([
+export const SIEM_NOTIFICATION_TOOL_NAMES = new Set([
   'list_siem_destinations',
   'get_siem_destination',
   'create_siem_destination',

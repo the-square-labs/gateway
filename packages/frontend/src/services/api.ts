@@ -377,6 +377,23 @@ class ApiClient extends withInferenceApi(
     return this.request<PaginatedResponse<AuditLogEntry>>(`/audit${query ? `?${query}` : ""}`);
   }
 
+  async exportAuditLog(params: {
+    actions?: string[];
+    resourceTypes?: string[];
+    userIds?: string[];
+    from?: string;
+    to?: string;
+    excludedActions?: string[];
+    excludedResourceTypes?: string[];
+  }): Promise<AuditLogEntry[]> {
+    return this.unwrapData(
+      this.request<{ data: AuditLogEntry[] }>("/audit/export", {
+        method: "POST",
+        body: JSON.stringify(params),
+      })
+    );
+  }
+
   async getAuditUsers(): Promise<
     Array<{ userId: string | null; userName: string | null; userEmail: string | null }>
   > {

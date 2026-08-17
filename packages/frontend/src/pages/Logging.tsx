@@ -6,6 +6,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,6 +31,7 @@ import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { LoggingEnvironment, LoggingSchema, LoggingSchemaMode } from "@/types";
 import {
@@ -116,6 +118,16 @@ export function Logging({
   const [createSchemaFolderAction, setCreateSchemaFolderAction] = useState<(() => void) | null>(
     null
   );
+
+  const openEnvironmentCreate = () => {
+    if (!requireLicenseFeature("structured-logging", "Logging environments")) return;
+    setEnvironmentDialogOpen(true);
+  };
+
+  const openSchemaCreate = () => {
+    if (!requireLicenseFeature("structured-logging", "Logging schemas")) return;
+    setSchemaDialogOpen(true);
+  };
 
   const visibleTopTabs = useMemo(
     () =>
@@ -385,7 +397,10 @@ export function Logging({
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <LiteModeBackButton />
             <div className="min-w-0">
-              <h1 className="text-2xl font-bold">Logging</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold">Logging</h1>
+                <LicensePlanBadge plan="business" />
+              </div>
               <p className="text-sm text-muted-foreground">
                 Manage external log environments and reusable schemas
               </p>
@@ -399,7 +414,7 @@ export function Logging({
                     {
                       label: "Create Environment",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setEnvironmentDialogOpen(true),
+                      onClick: openEnvironmentCreate,
                     },
                   ]
                 : []),
@@ -417,7 +432,7 @@ export function Logging({
                     {
                       label: "Create Schema",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setSchemaDialogOpen(true),
+                      onClick: openSchemaCreate,
                     },
                   ]
                 : []),
@@ -440,7 +455,7 @@ export function Logging({
               </Button>
             )}
             {topTab === "environments" && canCreateEnvironment && (
-              <Button onClick={() => setEnvironmentDialogOpen(true)}>
+              <Button onClick={openEnvironmentCreate}>
                 <Plus className="h-4 w-4 mr-1" />
                 Create Environment
               </Button>
@@ -452,7 +467,7 @@ export function Logging({
               </Button>
             )}
             {topTab === "schemas" && canCreateSchema && (
-              <Button onClick={() => setSchemaDialogOpen(true)}>
+              <Button onClick={openSchemaCreate}>
                 <Plus className="h-4 w-4 mr-1" />
                 Create Schema
               </Button>
@@ -482,7 +497,7 @@ export function Logging({
               canCreate={canCreateEnvironment}
               canManageFolders={canManageEnvironmentFolders}
               onSearchChange={setEnvironmentSearch}
-              onCreate={() => setEnvironmentDialogOpen(true)}
+              onCreate={openEnvironmentCreate}
               onOpen={(environment) => navigate(loggingEnvironmentRoute(environment.slug, "logs"))}
               onRefresh={load}
               onCreateFolderRef={(fn) => setCreateEnvironmentFolderAction(() => fn)}
@@ -510,9 +525,7 @@ export function Logging({
                 canViewSchemaDetails || hasAnyScope(`logs:schemas:view:${schema.id}`)
               }
               onSearchChange={setSchemaSearch}
-              onCreate={() => {
-                setSchemaDialogOpen(true);
-              }}
+              onCreate={openSchemaCreate}
               onOpen={(schema) => navigate(loggingSchemaRoute(schema.slug))}
               onDelete={deleteSchema}
               onRefresh={load}
@@ -578,6 +591,10 @@ function LoggingSchemaDialog({
         fieldSchema,
       });
       onOpenChange(false);
+    } catch (error) {
+      if (!handleLicenseApiError(error, "Logging schemas")) {
+        toast.error(error instanceof Error ? error.message : "Failed to create logging schema");
+      }
     } finally {
       setSaving(false);
     }

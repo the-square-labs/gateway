@@ -4,6 +4,7 @@ import { dockerDeployments, dockerManagedVolumes, nodes } from '@/db/schema/inde
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -138,6 +139,7 @@ export class DockerManagementService {
   private evaluator?: NotificationEvaluatorService;
   private migrationGuard?: DockerMigrationGuard;
   private accessResourceService?: DockerAccessResourceService;
+  private licensePolicy?: LicensePolicyService;
 
   constructor(
     private db: DrizzleClient,
@@ -196,6 +198,10 @@ export class DockerManagementService {
 
   setAccessResourceService(service: DockerAccessResourceService) {
     this.accessResourceService = service;
+  }
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
   }
 
   private emitContainer(
@@ -604,8 +610,16 @@ export class DockerManagementService {
     }
   }
 
-  private async assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown): Promise<void> {
+  private async assertDockerRuntimeProfileAvailable(
+    nodeId: string,
+    profile: unknown,
+    currentProfile?: unknown
+  ): Promise<void> {
     if (profile !== 'secure') return;
+    if (currentProfile !== 'secure') {
+      // LICENSE ENFORCEMENT: A new transition to Secure Runtime requires Business under the project license/TOS.
+      await this.licensePolicy?.requireFeature('secure-runtime');
+    }
     const node = await this.validateDockerNode(nodeId);
     const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
     if (status?.state !== 'healthy') {
@@ -907,8 +921,8 @@ export class DockerManagementService {
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),
       assertDockerGpuCapability: (nodeId) => this.assertDockerGpuCapability(nodeId),
       assertDockerPortBindIpCapability: (nodeId) => this.assertDockerPortBindIpCapability(nodeId),
-      assertDockerRuntimeProfileAvailable: (nodeId, profile) =>
-        this.assertDockerRuntimeProfileAvailable(nodeId, profile),
+      assertDockerRuntimeProfileAvailable: (nodeId, profile, currentProfile) =>
+        this.assertDockerRuntimeProfileAvailable(nodeId, profile, currentProfile),
       assertNameAvailable: (nodeId, name) => this.assertNameAvailable(nodeId, name),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
         this.assertNotManagedDeploymentInternal(nodeId, containerId),
@@ -1319,6 +1333,7 @@ export class DockerManagementService {
   }
 
   async manageRunsc(nodeId: string, action: 'preflight' | 'install') {
+    await this.licensePolicy?.requireFeature('secure-runtime');
     const node = await this.validateDockerNode(nodeId);
     const reportedStatus = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus as
       | DockerRuntimeStatus

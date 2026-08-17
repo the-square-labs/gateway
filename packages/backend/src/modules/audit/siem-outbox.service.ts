@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { type SiemAuditEvent, siemDeliveries, siemDestinations } from '@/db/schema/index.js';
 import type { LicenseService } from '@/modules/license/license.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 
 type DatabaseWriter = Pick<DrizzleClient, 'select' | 'insert'>;
@@ -24,15 +25,23 @@ export interface SiemAuditEventInput {
  */
 export class SiemAuditOutboxService {
   private sourcePromise: Promise<string> | null = null;
+  private licensePolicy?: LicensePolicyService;
 
   constructor(
     private readonly licenseService: LicenseService,
     private readonly generalSettingsService: GeneralSettingsService
   ) {}
 
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
+  }
+
   async isEnabled(): Promise<boolean> {
     try {
-      return await this.generalSettingsService.isFeatureEnabled('siemEnabled');
+      return (
+        (await this.licensePolicy?.hasFeature('siem-export')) !== false &&
+        (await this.generalSettingsService.isFeatureEnabled('siemEnabled'))
+      );
     } catch {
       // An unavailable settings store must not turn an optional external
       // export into a data-leak path or make the local audit write fail.

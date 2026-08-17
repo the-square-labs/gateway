@@ -27,6 +27,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { DockerRegistryService } from '@/modules/docker/docker-registry.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { SSLService } from '@/modules/ssl/ssl.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -177,6 +178,7 @@ export class IntegrationsService {
   private eventBus?: EventBusService;
   private dockerRegistryService?: DockerRegistryService;
   private sslService?: SSLService;
+  private licensePolicy?: LicensePolicyService;
   private readonly providers = new Map<IntegrationProvider, ConnectorProvider>();
   private readonly syncLocks = new Set<string>();
   private readonly gitLabUserCredentials: GitLabUserCredentialsService;
@@ -288,6 +290,10 @@ export class IntegrationsService {
 
   setDockerRegistryService(service: DockerRegistryService) {
     this.dockerRegistryService = service;
+  }
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
   }
 
   setSSLService(service: SSLService) {
@@ -1379,11 +1385,21 @@ export class IntegrationsService {
       const allProjects = await provider.listProjects(auth);
       const allowlistEntries = await this.listAllowlistRows(id);
       const projects = this.filterAllowedProjects(row, allowlistEntries, allProjects);
-      const registryDiscovery = await provider.listRegistries(auth, projects);
-      const registries = this.filterAllowedRegistries(row, allowlistEntries, projects, registryDiscovery.registries);
+      const registryDiscoveryEnabled = this.licensePolicy
+        ? await this.licensePolicy.hasFeature('registry-discovery')
+        : true;
+      const registryDiscovery = registryDiscoveryEnabled
+        ? await provider.listRegistries(auth, projects)
+        : { registries: [], skippedProjects: [] };
+      const registries = registryDiscoveryEnabled
+        ? this.filterAllowedRegistries(row, allowlistEntries, projects, registryDiscovery.registries)
+        : [];
       await this.persistProjects(id, allProjects);
-      await this.persistRegistries(id, registries);
-      await this.dockerRegistryService?.reconcileGitLabConnectorRegistries(id);
+      if (registryDiscoveryEnabled) {
+        // LICENSE ENFORCEMENT: Automatic registry discovery/import requires Personal under the project license/TOS.
+        await this.persistRegistries(id, registries);
+        await this.dockerRegistryService?.reconcileGitLabConnectorRegistries(id);
+      }
       await this.db
         .update(integrationConnectors)
         .set({
@@ -1413,7 +1429,7 @@ export class IntegrationsService {
       }
 
       this.emitConnector(id, 'synced', 'gitlab', { name: row.name, failureCount: 0 });
-      this.emitConnector(id, 'registries-synced');
+      if (registryDiscoveryEnabled) this.emitConnector(id, 'registries-synced');
       return {
         status: 'success',
         projectCount: projects.length,
@@ -2508,6 +2524,7 @@ export class IntegrationsService {
   }
 
   async gitLabListRegistryRepositories(user: User, input: { connectorId: string; project: string }) {
+    await this.licensePolicy?.requireFeature('registry-discovery');
     const context = await this.resolveGitLabProjectContext(user, {
       connectorId: input.connectorId,
       project: input.project,

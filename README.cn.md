@@ -234,10 +234,12 @@ Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商�
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 仅限非商业使用的核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权、节点、用户和权限组不限量，并包含 container lifecycle、带 Secure Links 的 managed databases 和 public status pages。 |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal 的全部功能，并增加 Docker Secure Runtime、structured logging、security scanning、audit export 和 guided onboarding。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权、规模不限，并包含 container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages 和 registry discovery。 |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal 的全部功能，并增加 Docker Secure Runtime、structured logging、audit export、guided onboarding，以及发布后的 security scanning。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business 的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。
+
+付费密钥到期后，Personal、Business 和 Enterprise 的技术 entitlements 分别继续有效 24 小时、3 天和 7 天。该产品 grace period 与 offline validation 以及上述 30 天商业使用授权相互独立。
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

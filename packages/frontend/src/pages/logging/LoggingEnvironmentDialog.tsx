@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -8,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { LoggingEnvironment } from "@/types";
 
 export function LoggingEnvironmentDialog({
@@ -42,6 +44,12 @@ export function LoggingEnvironmentDialog({
         fieldSchema: environment?.fieldSchema ?? [],
       });
       onOpenChange(false);
+    } catch (error) {
+      if (!handleLicenseApiError(error, "Logging environments")) {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to create logging environment"
+        );
+      }
     } finally {
       setSaving(false);
     }

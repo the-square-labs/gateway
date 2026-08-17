@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/services/api";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { PermissionGroup } from "@/types";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
@@ -96,7 +97,9 @@ export function InviteUsersSetupWizard({
       });
       setCompleted(true);
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Failed to invite user");
+      if (!handleLicenseApiError(cause, "Users")) {
+        toast.error(cause instanceof Error ? cause.message : "Failed to invite user");
+      }
     } finally {
       setSaving(false);
     }

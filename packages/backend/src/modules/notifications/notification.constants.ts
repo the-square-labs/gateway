@@ -242,12 +242,33 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
     events: [
       { id: 'relay.recovering', label: 'Relay Recovering', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'relay.unavailable', label: 'Relay Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
+      {
+        id: 'license.expired_grace',
+        label: 'License Expired (Grace Period)',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'license.unavailable',
+        label: 'Paid License Unavailable',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'license.validation_warning',
+        label: 'License Validation Warning',
+        defaultSeverity: 'warning',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Gateway component name' },
       { name: '{{state.current}}', description: 'Current relay state' },
       { name: '{{failure.code}}', description: 'Stable failure code' },
       { name: '{{details.attempt}}', description: 'Recovery attempt' },
+      { name: '{{details.plan}}', description: 'Effective license plan' },
+      { name: '{{details.expires_at}}', description: 'License expiration time' },
+      { name: '{{details.grace_until}}', description: 'License grace deadline' },
     ],
   },
   {
@@ -512,6 +533,32 @@ export interface EventMapping {
 }
 
 export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
+  'system.license.changed': [
+    {
+      category: 'gateway',
+      eventId: 'license.unavailable',
+      match: () => true,
+      extractResource: () => ({ type: 'gateway', id: 'gateway-license', name: 'Gateway license' }),
+      extractData: (p) => ({
+        plan: p.plan ?? null,
+        expires_at: p.expiresAt ?? null,
+        grace_until: p.graceUntil ?? p.offlineGraceUntil ?? null,
+      }),
+      stateful: {
+        currentState: (p) => {
+          if (p.status === 'expired_grace') return 'license.expired_grace';
+          if (p.status === 'valid_with_warning') return 'license.validation_warning';
+          if (
+            ['expired', 'unreachable_grace_expired', 'invalid', 'revoked', 'replaced', 'deactivated'].includes(p.status)
+          ) {
+            return 'license.unavailable';
+          }
+          return 'license.healthy';
+        },
+        observedPatterns: ['license.expired_grace', 'license.unavailable', 'license.validation_warning'],
+      },
+    },
+  ],
   'system.relay.health.changed': [
     {
       category: 'gateway',

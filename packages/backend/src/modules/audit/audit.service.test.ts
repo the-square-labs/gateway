@@ -140,3 +140,30 @@ describe('AuditService MCP context', () => {
     expect(siemOutbox.enqueue).not.toHaveBeenCalled();
   });
 });
+
+describe('AuditService export', () => {
+  it('uses the bounded export query and returns matching entries', async () => {
+    const service = new AuditService({} as never);
+    const entry = { id: 'audit-1' };
+    const getAuditLog = vi.spyOn(service, 'getAuditLog').mockResolvedValue({
+      data: [entry] as never,
+      pagination: { page: 1, limit: 50_001, total: 1, totalPages: 1 },
+    });
+
+    await expect(service.getAuditExport({ actions: ['node.update'] })).resolves.toEqual([entry]);
+    expect(getAuditLog).toHaveBeenCalledWith({ actions: ['node.update'], page: 1, limit: 50_001 });
+  });
+
+  it('rejects exports above the server-side entry ceiling', async () => {
+    const service = new AuditService({} as never);
+    vi.spyOn(service, 'getAuditLog').mockResolvedValue({
+      data: [] as never,
+      pagination: { page: 1, limit: 50_001, total: 50_001, totalPages: 1 },
+    });
+
+    await expect(service.getAuditExport({})).rejects.toMatchObject({
+      statusCode: 413,
+      code: 'AUDIT_EXPORT_TOO_LARGE',
+    });
+  });
+});

@@ -41,6 +41,7 @@ const CONFIG = {
       lastCheckedAt: null,
       lastValidAt: null,
       graceUntil: null,
+      offlineGraceUntil: null,
       activeInstallationId: null,
       activeInstallationName: null,
       errorMessage: null,

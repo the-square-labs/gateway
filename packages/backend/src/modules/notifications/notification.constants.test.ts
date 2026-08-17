@@ -181,6 +181,30 @@ describe('evaluateWindowRatio', () => {
     expect(mapping.extractData).toBeUndefined();
   });
 
+  it('projects license grace and downgrade transitions onto the notification bus', () => {
+    const mapping = EVENT_BUS_MAPPINGS['system.license.changed'][0];
+    const payload = {
+      status: 'expired_grace',
+      plan: 'business',
+      expiresAt: '2026-08-17T12:00:00.000Z',
+      graceUntil: '2026-08-20T12:00:00.000Z',
+    };
+
+    expect(mapping.stateful?.currentState(payload)).toBe('license.expired_grace');
+    expect(mapping.extractResource(payload)).toEqual({
+      type: 'gateway',
+      id: 'gateway-license',
+      name: 'Gateway license',
+    });
+    expect(mapping.extractData?.(payload)).toEqual({
+      plan: 'business',
+      expires_at: payload.expiresAt,
+      grace_until: payload.graceUntil,
+    });
+    expect(mapping.stateful?.currentState({ status: 'expired', plan: 'community' })).toBe('license.unavailable');
+    expect(mapping.stateful?.currentState({ status: 'valid', plan: 'business' })).toBe('license.healthy');
+  });
+
   it('skips Docker container state-only rows for metric extraction', () => {
     const result = extractMetricFromHealthReport('container', 'cpu', {
       containerStats: [

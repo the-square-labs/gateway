@@ -17,6 +17,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -486,6 +487,7 @@ export function StatusPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold">Status Page</h1>
+                <LicensePlanBadge plan="personal" />
                 <Badge variant={config.enabled ? "success" : "secondary"} size="inline">
                   {config.enabled ? "Enabled" : "Disabled"}
                 </Badge>

@@ -137,6 +137,33 @@ describe("eventStream", () => {
     unsubscribe();
   });
 
+  it("invalidates license bootstrap caches on license state changes", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const handler = vi.fn();
+
+    const unsubscribe = eventStream.subscribe("system.license.changed", handler);
+    eventStream.start();
+    vi.runAllTimers();
+
+    const socket = MockWebSocket.instances[0];
+    expect(socket).toBeDefined();
+    socket.open();
+
+    const payload = {
+      status: "expired_grace",
+      plan: "business",
+      graceUntil: "2026-08-20T12:00:00.000Z",
+    };
+    socket.emit({ type: "event", channel: "system.license.changed", payload });
+
+    expect(invalidateCache).toHaveBeenCalledWith("req:/api/ui/bootstrap");
+    expect(invalidateCache).toHaveBeenCalledWith("req:/api/system/license");
+    expect(invalidateCache).toHaveBeenCalledWith("settings:license-status");
+    expect(handler).toHaveBeenCalledWith(payload);
+
+    unsubscribe();
+  });
+
   it("coalesces noisy node.changed events before refetching", async () => {
     const { eventStream } = await import("@/services/event-stream");
     const handler = vi.fn();

@@ -32,6 +32,7 @@ import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { SiemDelivery, SiemDeliveryStatus, SiemDestination } from "@/types";
 
 export const SIEM_DELIVERY_PAGE_SIZE = 100;
@@ -229,6 +230,7 @@ export function SiemDeliveryLogTab({
 
   const requeue = async () => {
     if (!detail || detail.status !== "failed") return;
+    if (!requireLicenseFeature("siem-export", "SIEM delivery requeue")) return;
     setRequeueing(true);
     try {
       await api.requeueSiemDelivery(detail.id);
@@ -236,7 +238,9 @@ export function SiemDeliveryLogTab({
       setDetail({ ...detail, status: "queued", attempt: 0, error: null });
       refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to requeue SIEM delivery");
+      if (!handleLicenseApiError(error, "SIEM delivery requeue")) {
+        toast.error(error instanceof Error ? error.message : "Failed to requeue SIEM delivery");
+      }
     } finally {
       setRequeueing(false);
     }

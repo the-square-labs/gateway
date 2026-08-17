@@ -24,6 +24,7 @@ import {
   getSecureDockerRuntimeDescription,
 } from "@/lib/docker-runtime-profile";
 import { api } from "@/services/api";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type DockerDeployment,
   type DockerHealthCheck,
@@ -545,8 +546,14 @@ export function DeploymentSettings({
             <Button
               className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
               disabled={!!action || !settingsChanged || !nextImage.trim()}
-              onClick={() =>
-                runAction("update-execution", async () => {
+              onClick={() => {
+                if (
+                  savedRuntimeProfile !== "secure" &&
+                  runtimeProfile === "secure" &&
+                  !requireLicenseFeature("secure-runtime", "Secure Runtime")
+                )
+                  return;
+                void runAction("update-execution", async () => {
                   const labelMap: Record<string, string> = {};
                   for (const label of labels) {
                     if (label.key.trim()) labelMap[label.key.trim()] = label.value;
@@ -581,8 +588,8 @@ export function DeploymentSettings({
                     drainSeconds: Number(drainSeconds),
                   });
                   toast.success("Service configuration updated");
-                })
-              }
+                });
+              }}
             >
               <RotateCcw className="h-3.5 w-3.5" />
               Save
@@ -616,7 +623,15 @@ export function DeploymentSettings({
             <SettingsInlineControl label="Profile">
               <Select
                 value={runtimeProfile}
-                onValueChange={(value) => setRuntimeProfile(value as DockerRuntimeProfile)}
+                onValueChange={(value) => {
+                  if (
+                    value === "secure" &&
+                    savedRuntimeProfile !== "secure" &&
+                    !requireLicenseFeature("secure-runtime", "Secure Runtime")
+                  )
+                    return;
+                  setRuntimeProfile(value as DockerRuntimeProfile);
+                }}
               >
                 <SelectTrigger aria-label="Runtime">
                   <SelectValue />

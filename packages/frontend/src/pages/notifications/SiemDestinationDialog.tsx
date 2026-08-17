@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { SiemAuthType, SiemDestination } from "@/types";
 
 const FORM_ANIMATION = {
@@ -126,7 +127,9 @@ export function SiemDestinationDialog({
       onOpenChange(false);
       onSaved();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to save SIEM destination");
+      if (!handleLicenseApiError(error, "SIEM destinations")) {
+        toast.error(error instanceof Error ? error.message : "Failed to save SIEM destination");
+      }
     } finally {
       setSaving(false);
     }

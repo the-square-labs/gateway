@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { errorHandler } from '@/middleware/error-handler.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv, User } from '@/types.js';
@@ -52,6 +53,9 @@ function registerServices(scopes: string[], templateService: Partial<TemplatesSe
   container.registerInstance(GeneralSettingsService, {
     isFeatureEnabled: vi.fn().mockResolvedValue(true),
   } as unknown as GeneralSettingsService);
+  container.registerInstance(LicensePolicyService, {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+  } as unknown as LicensePolicyService);
 }
 
 function authHeaders() {

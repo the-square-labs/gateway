@@ -6,6 +6,8 @@ Gateway is an AI-first but not AI-dependent self-hosted infrastructure control p
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
 
+For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, while Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
+
 ## Ingress
 
 Gateway uses managed nginx nodes as public ingress. The Ingress workspace is split into Domains, Routes, and SSL Certificates so placement, traffic forwarding, and TLS remain independently manageable while their relationship stays explicit.
@@ -49,9 +51,9 @@ Container workflows:
 - Start, stop, restart, recreate, duplicate, rename, and remove containers.
 - Choose the Default (`runc`) isolation profile in every plan. Business and Enterprise plans can also use the Secure (`runsc` through gVisor) profile when the target node reports a healthy Secure Runtime capability. Secure workloads cannot use GPUs, device attachments, host bind mounts, cross-node migration, or `.gwca` export.
 - Attach one or more node-discovered physical NVIDIA, AMD, or Intel GPUs to standalone containers and blue/green deployments. GPU devices are shared rather than reserved; changing a selection recreates the workload, duplicates preserve it, and both blue/green slots receive the same selection.
-- Stream `.gwca` exports and imports in either self-contained portable mode or smaller registry-backed mode. Export is protected by the dedicated, resource-scopable `docker:containers:export` permission in addition to file and environment access. Archives use a Gateway-supported configuration whitelist, always carry ordinary environment values, can optionally carry secrets, and can optionally capture the writable layer without pausing. Registry-backed archives pull and verify an immutable digest. Volume contents are never included; source volumes are restored as empty managed local volumes unless an eligible existing managed local volume is selected. Host bind mounts are not portable. Networks and occupied ports can be remapped for the target node.
+- Stream `.gwca` exports and imports on Personal and higher in either self-contained portable mode or smaller registry-backed mode. Export is protected by the dedicated, resource-scopable `docker:containers:export` permission in addition to file and environment access. Archives use a Gateway-supported configuration whitelist, always carry ordinary environment values, can optionally carry secrets, and can optionally capture the writable layer without pausing. Registry-backed archives pull and verify an immutable digest. Volume contents are never included; source volumes are restored as empty managed local volumes unless an eligible existing managed local volume is selected. Host bind mounts are not portable. Networks and occupied ports can be remapped for the target node.
 - Create, inspect, and remove images, volumes, and networks across managed nodes.
-- Run durable cross-node migrations for eligible containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery. GPU-attached workloads are intentionally not portable in v1.
+- Run durable cross-node migrations on Personal and higher for eligible containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery. GPU-attached workloads are intentionally not portable in v1.
 - Move resource-scoped grants with a container or deployment during migration. Recreates preserve the stable access identity; explicit deletion removes its grants so a later same-name resource starts without inherited access.
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. New and changed mounts accept only Gateway-managed local volumes; new host bind mounts are rejected. Existing legacy mounts are preserved during normal image, environment, and webhook updates.
@@ -97,6 +99,8 @@ Uploaded SSL:
 
 Internal PKI:
 
+Internal PKI is available on Enterprise. Losing the entitlement disables user-facing PKI without deleting authorities, certificates, templates, or audit history. Gateway's hidden system PKI remains available for internal platform transport.
+
 - Create root and intermediate certificate authorities.
 - Issue TLS server, TLS client, code-signing, and email certificates.
 - Use certificate templates with custom extensions and policies.
@@ -122,7 +126,7 @@ Domain workflows:
 
 ## Databases
 
-Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes.
+Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes. Enrolling database nodes is available in every plan; creating managed database instances requires Personal or higher.
 
 Managed instances are private by default. Gateway binds applications through a private connector and authenticated tunnel, with a separate engine identity per binding. Publishing TCP for external infrastructure is an explicit opt-in; it requires database authentication, Gateway does not open host firewalls automatically, and the path is not tunnel-encrypted unless native database TLS is configured.
 
@@ -204,7 +208,7 @@ Managed services keep running if the Gateway app is offline. You lose central co
 
 ## Structured Logging
 
-Gateway can ingest external service logs into ClickHouse.
+Gateway can ingest external service logs into ClickHouse on Business and Enterprise.
 
 Logging features:
 
@@ -228,11 +232,11 @@ Logging is optional. When structured logging is set to **Disabled** in Gateway s
 Gateway includes connector and operational communication surfaces:
 
 - Cloudflare connectors for managed A/AAAA records, DNS inspection, and automated DNS-01 certificate workflows.
-- GitLab connectors with project/group allowlists, scheduled synchronization, repository and CI operations, variables, webhooks, registry access, and sandbox clone support.
+- GitLab connectors with project/group allowlists, scheduled project synchronization, repository and CI operations, variables, webhooks, and sandbox clone support. Automatic container-registry discovery and import requires Personal or higher; ordinary Git integration remains available on Community.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
-- SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
+- Enterprise SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
 - Threshold and event alert rules for nodes, containers, routes, certificates, PostgreSQL, and Redis resources. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
-- Public status pages with managed services, incidents, incident updates, proxy templates, and preview.
+- Public status pages on Personal and higher with managed services, incidents, incident updates, proxy templates, and preview.
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.
 

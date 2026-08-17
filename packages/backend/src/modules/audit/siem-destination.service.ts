@@ -5,6 +5,7 @@ import { type SiemDeliveryStatus, siemDeliveries, siemDestinations } from '@/db/
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { AuditService } from './audit.service.js';
@@ -21,6 +22,7 @@ const ACTIVE_DELIVERY_STATUSES: SiemDeliveryStatus[] = ['queued', 'delivering', 
 
 export class SiemDestinationService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -33,7 +35,12 @@ export class SiemDestinationService {
     this.eventBus = eventBus;
   }
 
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
+  }
+
   async list(query: SiemDestinationListQuery) {
+    await this.requireEntitlement();
     const conditions: SQL[] = [isNull(siemDestinations.deletedAt)];
     if (query.enabled !== undefined) conditions.push(eq(siemDestinations.enabled, query.enabled));
     if (query.search) conditions.push(ilike(siemDestinations.name, `%${query.search}%`));
@@ -54,6 +61,7 @@ export class SiemDestinationService {
   }
 
   async getById(id: string) {
+    await this.requireEntitlement();
     return this.toPublic(await this.getRaw(id));
   }
 
@@ -68,6 +76,7 @@ export class SiemDestinationService {
   }
 
   async create(input: CreateSiemDestinationInput, userId: string) {
+    await this.requireEntitlement();
     await this.assertCapacity(input.enabled);
     await this.transport.validateEndpoint(input.url);
     const now = new Date();
@@ -99,6 +108,7 @@ export class SiemDestinationService {
   }
 
   async update(id: string, input: UpdateSiemDestinationInput, userId: string) {
+    await this.requireEntitlement();
     const existing = await this.getRaw(id);
     if (input.url !== undefined) await this.transport.validateEndpoint(input.url);
     if (input.authType !== undefined && input.authType !== existing.authType && !input.secret) {
@@ -209,6 +219,7 @@ export class SiemDestinationService {
   }
 
   async test(id: string) {
+    await this.requireEntitlement();
     const destination = await this.getRaw(id);
     return this.transport.send(destination, [
       {
@@ -244,6 +255,11 @@ export class SiemDestinationService {
     if (active >= MAX_ENABLED_DESTINATIONS && currentId !== undefined) {
       throw new AppError(409, 'SIEM_DESTINATION_LIMIT', `Disable another SIEM destination before enabling this one`);
     }
+  }
+
+  private async requireEntitlement(): Promise<void> {
+    // LICENSE ENFORCEMENT: SIEM export operations require Enterprise under the project license/TOS.
+    await this.licensePolicy?.requireFeature('siem-export');
   }
 
   private async toPublic(destination: typeof siemDestinations.$inferSelect) {

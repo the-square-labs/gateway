@@ -46,6 +46,22 @@ const configData = {
 const configSnapshot = { ...nodeSnapshot, data: configData };
 const statusPageSnapshot = { ...nodeSnapshot, data: { enabled: true } };
 const cloudflareSnapshot = { ...nodeSnapshot, data: true };
+const license = {
+  status: 'community' as const,
+  plan: 'community' as const,
+  licensed: true,
+  expiresAt: null,
+  graceUntil: null,
+  offlineGraceUntil: null,
+  entitlementsVersion: 2,
+  entitlements: {
+    managedNodes: 100,
+    users: 10,
+    customPermissionGroups: 5,
+    supportLevel: 'community',
+    features: ['infrastructure'],
+  },
+};
 
 function makeService() {
   const snapshots = {
@@ -68,6 +84,7 @@ function makeService() {
   const aiRuntime = { statusForUser: vi.fn(async () => ({ enabled: true })) };
   const aiSettings = { isEnabled: vi.fn(async () => true) };
   const finalizeSetup = { isOwner: vi.fn(async () => false) };
+  const licensePolicy = { getSummary: vi.fn(async () => license) };
   return {
     service: new UIBootstrapService(
       snapshots as never,
@@ -80,7 +97,8 @@ function makeService() {
       updates as never,
       aiRuntime as never,
       aiSettings as never,
-      finalizeSetup as never
+      finalizeSetup as never,
+      licensePolicy as never
     ),
     coordinator,
     updates,
@@ -118,6 +136,7 @@ describe('UIBootstrapService', () => {
       loggingEnabled: true,
       inferenceEnabled: true,
     });
+    expect(shell.license).toEqual(license);
     expect(updates.getCachedStatus).not.toHaveBeenCalled();
     expect(aiRuntime.statusForUser).toHaveBeenCalledOnce();
     expect(statusPage.getConfig).not.toHaveBeenCalled();
@@ -157,6 +176,7 @@ describe('UIBootstrapService', () => {
     const aiRuntime = { statusForUser: vi.fn() };
     const aiSettings = { isEnabled: vi.fn(async () => false) };
     const finalizeSetup = { isOwner: vi.fn(async () => false) };
+    const licensePolicy = { getSummary: vi.fn(async () => license) };
     const service = new UIBootstrapService(
       snapshots as never,
       coordinator as never,
@@ -168,7 +188,8 @@ describe('UIBootstrapService', () => {
       updates as never,
       aiRuntime as never,
       aiSettings as never,
-      finalizeSetup as never
+      finalizeSetup as never,
+      licensePolicy as never
     );
 
     const shell = await service.getShell(

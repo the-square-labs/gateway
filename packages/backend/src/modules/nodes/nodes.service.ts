@@ -8,6 +8,7 @@ import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { DaemonUpdateService } from '@/services/daemon-update.service.js';
@@ -61,6 +62,7 @@ export class NodesService {
   private generalSettingsService?: GeneralSettingsService;
   private proxyService?: ProxyService;
   private systemCertificateLifecycle?: SystemCertificateLifecycleService;
+  private licenseQuota?: LicenseQuotaService;
   private grpcPort = 9443;
 
   constructor(
@@ -87,6 +89,9 @@ export class NodesService {
   }
   setSystemCertificateLifecycleService(service: SystemCertificateLifecycleService) {
     this.systemCertificateLifecycle = service;
+  }
+  setLicenseQuotaService(service: LicenseQuotaService) {
+    this.licenseQuota = service;
   }
   private emitNode(id: string, action: 'created' | 'updated' | 'deleted', extra: Record<string, unknown> = {}) {
     this.eventBus?.publish('node.changed', { id, action, ...extra });
@@ -284,27 +289,38 @@ export class NodesService {
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 10);
 
-    const node = await writeWithAllocatedSlug({
-      source: input.displayName?.trim() || input.hostname,
-      fallback: 'node',
-      reserved: ['file', 'console'],
-      constraint: 'nodes_slug_unique',
-      write: async (slug) => {
-        const [created] = await this.db
-          .insert(nodes)
-          .values({
-            type: input.type,
-            hostname: input.hostname,
-            displayName: input.displayName,
-            slug,
-            enrollmentTokenSelector: enrollmentToken.selector,
-            enrollmentTokenHash: tokenHash,
-            status: 'pending',
-          })
-          .returning();
-        return created;
-      },
-    });
+    const createNode = (executor: DrizzleExecutor) =>
+      writeWithAllocatedSlug({
+        source: input.displayName?.trim() || input.hostname,
+        fallback: 'node',
+        reserved: ['file', 'console'],
+        constraint: 'nodes_slug_unique',
+        write: async (slug) => {
+          const [created] = await executor
+            .insert(nodes)
+            .values({
+              type: input.type,
+              hostname: input.hostname,
+              displayName: input.displayName,
+              slug,
+              enrollmentTokenSelector: enrollmentToken.selector,
+              enrollmentTokenHash: tokenHash,
+              status: 'pending',
+            })
+            .returning();
+          return created;
+        },
+      });
+    const node = this.licenseQuota
+      ? await this.licenseQuota.run(
+          'managedNodes',
+          async (tx) => {
+            const [result] = await tx.select({ count: count() }).from(nodes);
+            return Number(result?.count ?? 0);
+          },
+          createNode
+        )
+      : await createNode(this.db);
 
     await this.auditService.log({
       userId,

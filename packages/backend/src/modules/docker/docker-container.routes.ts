@@ -5,6 +5,7 @@ import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -422,6 +423,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...exportContainerArchiveRoute, middleware: requireDockerContainerScope('docker:containers:export') },
     async (c) => {
+      // LICENSE ENFORCEMENT: Archive operations are Personal entitlements under the project license/TOS.
+      await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const query = ContainerArchiveExportQuerySchema.parse(c.req.query());
@@ -508,6 +511,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...planContainerArchiveImportRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
     async (c) => {
+      await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
       const body = ContainerArchivePlanSchema.parse(await c.req.json());
       await assertNodeAllowsServiceCreation(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, nodeId, 'docker');
@@ -527,6 +531,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...importContainerArchiveRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
     async (c) => {
+      await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
       const query = ContainerArchiveImportQuerySchema.parse(c.req.query());
       if (c.req.header('content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/vnd.wiolett.gwca') {

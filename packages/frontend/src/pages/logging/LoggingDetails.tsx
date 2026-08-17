@@ -26,6 +26,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { loggingEnvironmentRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { LoggingEnvironment, LoggingSchema, LoggingSchemaMode } from "@/types";
 import { LoggingExplorer } from "./LoggingExplorer";
 import { LoggingSchemaEditor } from "./LoggingSchemaEditor";
@@ -236,6 +237,11 @@ export function LoggingEnvironmentDetail({
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
 
+  const setTokenDialogOpenGuarded = (nextOpen: boolean) => {
+    if (nextOpen && !requireLicenseFeature("structured-logging", "Logging ingest tokens")) return;
+    setTokenDialogOpen(nextOpen);
+  };
+
   useEffect(() => {
     if (!environment) return;
     setSettingsDraft(environment);
@@ -281,7 +287,7 @@ export function LoggingEnvironmentDetail({
             id: "logging-environment:new-token",
             label: "Create ingest token",
             icon: <Plus className="h-4 w-4" />,
-            onClick: () => setTokenDialogOpen(true),
+            onClick: () => setTokenDialogOpenGuarded(true),
           },
         ]
       : []),
@@ -347,7 +353,7 @@ export function LoggingEnvironmentDetail({
               />
             )}
             {activeTab === "tokens" && canCreateToken && (
-              <Button onClick={() => setTokenDialogOpen(true)}>
+              <Button onClick={() => setTokenDialogOpenGuarded(true)}>
                 <Plus className="h-4 w-4" />
                 New Token
               </Button>
@@ -401,7 +407,7 @@ export function LoggingEnvironmentDetail({
               environment={environment}
               canDelete={canDeleteToken}
               createDialogOpen={tokenDialogOpen}
-              onCreateDialogOpenChange={setTokenDialogOpen}
+              onCreateDialogOpenChange={setTokenDialogOpenGuarded}
             />
           </TabsContent>
           <TabsContent value="settings">

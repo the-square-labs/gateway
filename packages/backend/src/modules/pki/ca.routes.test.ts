@@ -14,11 +14,18 @@ const mocks = vi.hoisted(() => ({
   generalSettings: {
     isFeatureEnabled: vi.fn().mockResolvedValue(true),
   },
+  licensePolicy: {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn((token) => (token?.name === 'GeneralSettingsService' ? mocks.generalSettings : mocks.caService)),
+    resolve: vi.fn((token) => {
+      if (token?.name === 'GeneralSettingsService') return mocks.generalSettings;
+      if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
+      return mocks.caService;
+    }),
   },
 }));
 

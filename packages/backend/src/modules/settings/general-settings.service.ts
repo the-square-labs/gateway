@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
 import type { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 
 const SETTINGS_KEY = 'general:settings';
@@ -233,6 +234,7 @@ export function isValidGatewayHostPortTarget(value: string): boolean {
 }
 
 export class GeneralSettingsService {
+  private licensePolicy?: LicensePolicyService;
   private cached: GeneralSettings | null = null;
   private cachedAt = 0;
   private inferenceDisabledHandler?: () => Promise<void>;
@@ -242,6 +244,10 @@ export class GeneralSettingsService {
     private readonly inferenceSetupEvents?: InferenceSetupEventsService,
     private readonly eventBus?: EventBusService
   ) {}
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
+  }
 
   setInferenceDisabledHandler(handler: () => Promise<void>): void {
     this.inferenceDisabledHandler = handler;
@@ -259,6 +265,14 @@ export class GeneralSettingsService {
   }
 
   async updateConfig(updates: GeneralSettingsUpdate): Promise<GeneralSettings> {
+    if (updates.features?.pkiEnabled === true) {
+      // LICENSE ENFORCEMENT: Enabling user-managed PKI requires Enterprise under the project license/TOS.
+      await this.licensePolicy?.requireFeature('internal-pki');
+    }
+    if (updates.features?.siemEnabled === true) {
+      // LICENSE ENFORCEMENT: Enabling SIEM export requires Enterprise under the project license/TOS.
+      await this.licensePolicy?.requireFeature('siem-export');
+    }
     const current = await this.getConfig();
     const next = this.normalize({
       ...current,

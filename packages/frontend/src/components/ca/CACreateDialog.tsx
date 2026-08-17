@@ -20,6 +20,7 @@ import {
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { KeyAlgorithm } from "@/types";
 
 interface CACreateDialogProps {
@@ -86,7 +87,9 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
         setMaxValidityDays(365);
       }, 200);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create CA");
+      if (!handleLicenseApiError(err, "Internal PKI")) {
+        toast.error(err instanceof Error ? err.message : "Failed to create CA");
+      }
     } finally {
       setIsSaving(false);
     }

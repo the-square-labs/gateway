@@ -4,6 +4,7 @@ import type { AISettingsService } from '@/modules/ai/ai.settings.service.js';
 import type { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
+import type { LicensePolicyService, SafeLicenseSummary } from '@/modules/license/license-policy.service.js';
 import type { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
@@ -69,6 +70,7 @@ export interface UIBootstrapShell {
   update: unknown | null;
   aiStatus: unknown | null;
   aiWorkspace: { configured: boolean; installationOwner: boolean };
+  license: SafeLicenseSummary;
 }
 
 /**
@@ -87,7 +89,8 @@ export class UIBootstrapService {
     private readonly updates: UpdateService,
     private readonly aiRuntime: AIProviderRuntimeService,
     private readonly aiSettings: AISettingsService,
-    private readonly finalizeSetup: FinalizeSetupService
+    private readonly finalizeSetup: FinalizeSetupService,
+    private readonly licensePolicy: LicensePolicyService
   ) {
     this.coordinator.register({
       id: 'ui-shell:nodes',
@@ -125,6 +128,7 @@ export class UIBootstrapService {
       aiStatus,
       aiWorkspaceConfigured,
       installationOwner,
+      license,
     ] = await Promise.all([
       this.getNodeSnapshot(),
       this.getConfigSnapshot(),
@@ -134,6 +138,7 @@ export class UIBootstrapService {
       hasScope(scopes, 'feat:ai:use') ? this.aiRuntime.statusForUser(user) : Promise.resolve(null),
       this.aiSettings.isEnabled(),
       this.finalizeSetup.isOwner(user.id),
+      this.licensePolicy.getSummary(),
     ]);
     const config = configSnapshot.data;
 
@@ -178,6 +183,7 @@ export class UIBootstrapService {
         configured: aiWorkspaceConfigured,
         installationOwner,
       },
+      license,
     };
   }
 

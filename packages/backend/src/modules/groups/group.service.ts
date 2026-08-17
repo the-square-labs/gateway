@@ -1,7 +1,7 @@
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { permissionGroups, users } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
@@ -15,6 +15,7 @@ import {
   fetchGroupScopeMap,
 } from '@/modules/auth/live-session-user.js';
 import { mfaRequiredChannel } from '@/modules/auth/mfa-events.js';
+import type { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
 
@@ -46,11 +47,15 @@ export class GroupService {
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
   private sandboxService?: AISandboxService;
+  private licenseQuota?: LicenseQuotaService;
   setEventBus(bus: import('@/services/event-bus.service.js').EventBusService) {
     this.eventBus = bus;
   }
   setSandboxService(service: AISandboxService) {
     this.sandboxService = service;
+  }
+  setLicenseQuotaService(service: LicenseQuotaService) {
+    this.licenseQuota = service;
   }
   private emitGroup(id: string, action: 'created' | 'updated' | 'deleted') {
     this.eventBus?.publish('group.changed', { id, action });
@@ -320,17 +325,33 @@ export class GroupService {
       }
     }
 
-    const [group] = await this.db
-      .insert(permissionGroups)
-      .values({
-        name: input.name,
-        description: input.description ?? null,
-        isBuiltin: false,
-        parentId: input.parentId ?? null,
-        scopes,
-        requireGateway2fa: input.requireGateway2fa ?? false,
-      })
-      .returning();
+    const createGroup = async (executor: DrizzleExecutor) => {
+      const [group] = await executor
+        .insert(permissionGroups)
+        .values({
+          name: input.name,
+          description: input.description ?? null,
+          isBuiltin: false,
+          parentId: input.parentId ?? null,
+          scopes,
+          requireGateway2fa: input.requireGateway2fa ?? false,
+        })
+        .returning();
+      return group;
+    };
+    const group = this.licenseQuota
+      ? await this.licenseQuota.run(
+          'customPermissionGroups',
+          async (tx) => {
+            const [result] = await tx
+              .select({ count: count() })
+              .from(permissionGroups)
+              .where(eq(permissionGroups.isBuiltin, false));
+            return Number(result?.count ?? 0);
+          },
+          createGroup
+        )
+      : await createGroup(this.db);
 
     logger.info('Created permission group', { groupId: group.id, name: group.name, parentId: group.parentId });
     this.emitGroup(group.id, 'created');

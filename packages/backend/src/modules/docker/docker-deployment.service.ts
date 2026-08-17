@@ -13,6 +13,7 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -92,6 +93,7 @@ export interface DockerDeploymentSummary extends DeploymentRow {
 }
 
 export class DockerDeploymentService {
+  private licensePolicy?: LicensePolicyService;
   private eventBus?: EventBusService;
   private healthCheckService?: DockerHealthCheckService;
   private imageCleanupService?: DockerImageCleanupService;
@@ -108,6 +110,10 @@ export class DockerDeploymentService {
     private nodeRegistry: NodeRegistryService,
     private secrets?: DockerSecretService
   ) {}
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
+  }
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
@@ -237,8 +243,13 @@ export class DockerDeploymentService {
     }
   }
 
-  private async assertRuntimeProfile(nodeId: string, desiredConfig: DockerDeploymentDesiredConfig): Promise<void> {
+  private async assertRuntimeProfile(
+    nodeId: string,
+    desiredConfig: DockerDeploymentDesiredConfig,
+    currentProfile?: DockerDeploymentDesiredConfig['runtimeProfile']
+  ): Promise<void> {
     if (desiredConfig.runtimeProfile !== 'secure') return;
+    if (currentProfile !== 'secure') await this.licensePolicy?.requireFeature('secure-runtime');
     const node = await this.validateDockerNode(nodeId);
     const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
     if (status?.state !== 'healthy') {
@@ -393,6 +404,8 @@ export class DockerDeploymentService {
   }
 
   async create(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
+    // LICENSE ENFORCEMENT: New blue/green deployments require Personal under the project license/TOS.
+    await this.licensePolicy?.requireFeature('blue-green');
     await assertNodeAllowsServiceCreation(this.db, nodeId, 'docker');
     await this.validateDockerNode(nodeId);
     if (input.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
@@ -600,7 +613,7 @@ export class DockerDeploymentService {
     if (input.desiredConfig && Object.hasOwn(input.desiredConfig, 'gpu')) {
       await this.assertDockerGpuCapability(nodeId);
     }
-    await this.assertRuntimeProfile(nodeId, desiredConfig);
+    await this.assertRuntimeProfile(nodeId, desiredConfig, current.desiredConfig.runtimeProfile);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -734,7 +747,7 @@ export class DockerDeploymentService {
       env: input.env ?? deployment.desiredConfig.env,
     };
     if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
-    await this.assertRuntimeProfile(nodeId, desiredConfig);
+    await this.assertRuntimeProfile(nodeId, desiredConfig, deployment.desiredConfig.runtimeProfile);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -843,7 +856,7 @@ export class DockerDeploymentService {
       image: releaseContext?.image ?? deployment.desiredConfig.image,
     };
     if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
-    await this.assertRuntimeProfile(nodeId, desiredConfig);
+    await this.assertRuntimeProfile(nodeId, desiredConfig, deployment.desiredConfig.runtimeProfile);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,

@@ -11,6 +11,7 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { SiemDeliveryListQuery } from './siem.schemas.js';
@@ -46,6 +47,7 @@ interface ClaimedBatch {
 
 export class SiemDeliveryService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
   private running = false;
 
   constructor(
@@ -58,7 +60,12 @@ export class SiemDeliveryService {
     this.eventBus = eventBus;
   }
 
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
+  }
+
   async list(query: SiemDeliveryListQuery) {
+    await this.requireEntitlement();
     const conditions: SQL[] = [];
     if (query.destinationId) conditions.push(eq(siemDeliveries.destinationId, query.destinationId));
     if (query.status) conditions.push(eq(siemDeliveries.status, query.status));
@@ -95,6 +102,7 @@ export class SiemDeliveryService {
   }
 
   async getById(id: string) {
+    await this.requireEntitlement();
     const [delivery] = await this.db
       .select({
         id: siemDeliveries.id,
@@ -121,6 +129,7 @@ export class SiemDeliveryService {
   }
 
   async requeue(id: string) {
+    await this.requireEntitlement();
     const now = new Date();
     const [delivery] = await this.db
       .update(siemDeliveries)
@@ -154,15 +163,17 @@ export class SiemDeliveryService {
 
   async runDueDeliveries(): Promise<void> {
     if (this.running) return;
+    if ((await this.licensePolicy?.hasFeature('siem-export')) === false) return;
     if (!(await this.isFeatureEnabled())) return;
     this.running = true;
     try {
       await this.recoverExpiredLeases();
       for (let batchCount = 0; batchCount < MAX_BATCHES_PER_RUN; batchCount += 1) {
+        if ((await this.licensePolicy?.hasFeature('siem-export')) === false) break;
         if (!(await this.isFeatureEnabled())) break;
         const batch = await this.claimNextBatch();
         if (!batch) break;
-        if (!(await this.isFeatureEnabled())) {
+        if ((await this.licensePolicy?.hasFeature('siem-export')) === false || !(await this.isFeatureEnabled())) {
           await this.releaseClaimedBatch(batch);
           break;
         }
@@ -171,6 +182,11 @@ export class SiemDeliveryService {
     } finally {
       this.running = false;
     }
+  }
+
+  private async requireEntitlement(): Promise<void> {
+    // LICENSE ENFORCEMENT: SIEM delivery operations require Enterprise under the project license/TOS.
+    await this.licensePolicy?.requireFeature('siem-export');
   }
 
   private async recoverExpiredLeases(): Promise<void> {

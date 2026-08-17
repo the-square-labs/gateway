@@ -27,6 +27,7 @@ import type { DockerSnapshotService } from '@/modules/docker/docker-snapshot.ser
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import type { GroupService } from '@/modules/groups/group.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import type { MonitoringService } from '@/modules/monitoring/monitoring.service.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
@@ -63,7 +64,11 @@ import { executeInferenceTool, INFERENCE_TOOL_NAMES } from './ai.inference-tools
 import { executeIntegrationTool, INTEGRATION_TOOL_NAMES } from './ai.integration-tools.js';
 import { manageLoggingTool } from './ai.logging-tools.js';
 import { executeNodeTool, NODE_TOOL_NAMES } from './ai.node-tools.js';
-import { executeNotificationTool, NOTIFICATION_TOOL_NAMES } from './ai.notification-tools.js';
+import {
+  executeNotificationTool,
+  NOTIFICATION_TOOL_NAMES,
+  SIEM_NOTIFICATION_TOOL_NAMES,
+} from './ai.notification-tools.js';
 import { executePkiCaTool, PKI_CA_TOOL_NAMES } from './ai.pki-ca-tools.js';
 import { executePkiCertificateTool, PKI_CERTIFICATE_TOOL_NAMES } from './ai.pki-certificate-tools.js';
 import { executePkiTemplateTool, PKI_TEMPLATE_TOOL_NAMES } from './ai.pki-template-tools.js';
@@ -846,7 +851,8 @@ export class AIService {
     private readonly siemDeliveryService?: import('@/modules/audit/siem-delivery.service.js').SiemDeliveryService,
     private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService,
     private readonly planService?: AIPlanService,
-    private readonly dockerSnapshotService?: DockerSnapshotService
+    private readonly dockerSnapshotService?: DockerSnapshotService,
+    private readonly licensePolicyService?: LicensePolicyService
   ) {}
 
   private async resolveCurrentApprovalMode(user: User): Promise<AIApprovalMode> {
@@ -1410,6 +1416,10 @@ export class AIService {
       );
     }
     if (NOTIFICATION_TOOL_NAMES.has(toolName)) {
+      if (SIEM_NOTIFICATION_TOOL_NAMES.has(toolName)) {
+        // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise SIEM entitlement.
+        await this.licensePolicyService?.requireFeature('siem-export');
+      }
       return executeNotificationTool(
         {
           notifRuleService: this.notifRuleService,
@@ -1481,6 +1491,8 @@ export class AIService {
       );
     }
     if (PKI_TEMPLATE_TOOL_NAMES.has(toolName)) {
+      // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
+      await this.licensePolicyService?.requireFeature('internal-pki');
       return executePkiTemplateTool(
         {
           templatesService: this.templatesService,
@@ -1494,9 +1506,13 @@ export class AIService {
       );
     }
     if (PKI_CA_TOOL_NAMES.has(toolName)) {
+      // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
+      await this.licensePolicyService?.requireFeature('internal-pki');
       return executePkiCaTool({ caService: this.caService }, user, toolName, args);
     }
     if (PKI_CERTIFICATE_TOOL_NAMES.has(toolName)) {
+      // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
+      await this.licensePolicyService?.requireFeature('internal-pki');
       return executePkiCertificateTool(
         {
           caService: this.caService,

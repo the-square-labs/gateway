@@ -67,6 +67,12 @@ The commercial grant begins when the key is issued, continues through its expira
 
 `Coming soon` and `In development` identify product availability separately from plan entitlement. A checkmark on such a row means the feature is included in that plan when released.
 
+Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
+
+On downgrade, Gateway preserves existing premium resources and their data. New premium resources and one-shot operations such as archive import/export, migration, and audit export are blocked. Existing Secure Runtime workloads and blue/green deployments remain manageable, but selecting Secure Runtime for a new or previously default-runtime workload requires Business. Internal PKI, SIEM export, and structured logging are switchable modules: Gateway disables them when their entitlement is lost while preserving their configuration and stored data, and never automatically re-enables them after an upgrade.
+
+The Operations Console shows plan badges on whole premium modules and uses one shared upgrade dialog for blocked actions. This UI is explanatory only; the backend independently enforces the same entitlements across REST, OAuth/MCP, AI tools, background workers, public PKI routes, and domain services. Missing features return `LICENSE_ENTITLEMENT_REQUIRED` (HTTP 403), reached plan limits return `LICENSE_QUOTA_EXCEEDED` (HTTP 409), and an internally inconsistent protected policy fails closed with a generic `SERVICE_UNAVAILABLE` response.
+
 AI Workspace and the separate multi-provider Gateway Inference are available in every plan. Both are opt-in and use administrator-configured providers, published models, access rules, and limits. Neither is required to operate Gateway through the Operations Console, REST API, OAuth, or MCP.
 
 AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode researches the requested outcome with read-only planning tools, validates a structured plan, and waits for explicit user confirmation before implementation. Confirmed plans expose progress controls and finish with a separate verification pass.
@@ -110,8 +116,15 @@ Issuance of a paid key also activates the legal commercial-use grant described i
 Gateway sends paid heartbeats every 15 minutes and Community heartbeats every 30 minutes. If the
 license server is unreachable, a previously valid paid installation uses its cached state for a
 30-day technical offline-validation grace period. This is separate from the commercial license's
-30-day post-expiration legal-use grace period. An authoritative `expired`, `revoked`, `replaced`,
-or `deactivated` response immediately returns the installation to Community entitlements.
+30-day post-expiration legal-use grace period and cannot extend paid product access beyond a known
+expiration deadline.
+
+After `expiresAt`, paid product entitlements remain active for 24 hours on Personal, 3 days on
+Business, and 7 days on Enterprise. During this period the server and Gateway report
+`expired_grace`, retain the original paid plan, expose `graceUntil`, and show an authenticated
+critical Dashboard warning. Gateway evaluates the deadline locally for every protected operation;
+at or after `graceUntil` it uses Community entitlements without waiting for another heartbeat.
+`revoked`, `replaced`, and `deactivated` remain immediate and receive no entitlement grace.
 
 Data sent to the license server:
 
@@ -130,10 +143,11 @@ The installation name is derived from Gateway's persisted canonical public URL w
 |---|---|
 | `community` | No paid product key is installed; Gateway is using Community status. |
 | `valid` | The installed key is valid. |
+| `expired_grace` | The key expired, but its original paid entitlements remain active until the plan-specific `graceUntil` deadline. |
 | `valid_with_warning` | The key was previously valid, but the license server is unreachable and Gateway remains within grace. |
 | `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired. |
 | `invalid` | The license key is not valid. |
-| `expired` | The license key expired. |
+| `expired` | The plan-specific expiration grace ended and Gateway is using Community entitlements. |
 | `revoked` | The license key was revoked. |
 | `replaced` | The license activation moved to another installation. |
 | `deactivated` | The paid license was explicitly detached from this installation. |

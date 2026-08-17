@@ -234,10 +234,12 @@ Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LIC
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container lifecycle features, managed databases with Secure Links, and public status pages. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus Docker Secure Runtime, structured logging, security scanning, audit export, and guided onboarding. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, and registry discovery. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus Docker Secure Runtime, structured logging, audit export, guided onboarding, and security scanning when released. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.
+
+After a paid key expires, technical entitlements remain active for 24 hours on Personal, 3 days on Business, or 7 days on Enterprise. This product grace is separate from both offline validation and the 30-day commercial-use grant described above.
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

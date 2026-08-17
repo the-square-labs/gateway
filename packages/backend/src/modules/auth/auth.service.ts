@@ -1,9 +1,9 @@
-import { and, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, count, eq, isNotNull, isNull } from 'drizzle-orm';
 import * as client from 'openid-client';
 import { inject, injectable } from 'tsyringe';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   apiTokens,
   gitLabUserCredentials,
@@ -23,6 +23,7 @@ import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { SessionService } from '@/services/session.service.js';
@@ -114,6 +115,8 @@ interface OIDCState {
 
 @injectable()
 export class AuthService {
+  private licenseQuota?: LicenseQuotaService;
+
   private oidcConfig: client.Configuration | null = null;
 
   constructor(
@@ -125,6 +128,10 @@ export class AuthService {
     private readonly oidcSettingsService?: OidcSettingsService,
     private readonly generalSettingsService?: GeneralSettingsService
   ) {}
+
+  setLicenseQuotaService(service: LicenseQuotaService): void {
+    this.licenseQuota = service;
+  }
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
   private sandboxService?: AISandboxService;
@@ -368,16 +375,22 @@ export class AuthService {
       throw new Error('Default OIDC group not found. Has the migration been run?');
     }
 
-    const [createdUser] = await this.db
-      .insert(users)
-      .values({
-        oidcSubject: data.oidcSubject,
-        email: normalizedEmail,
-        name: normalizeDisplayName(data.name, normalizedEmail),
-        avatarUrl: data.avatarUrl,
-        groupId: group.id,
-      })
-      .returning();
+    const insertUser = async (executor: DrizzleExecutor) => {
+      const [createdUser] = await executor
+        .insert(users)
+        .values({
+          oidcSubject: data.oidcSubject,
+          email: normalizedEmail,
+          name: normalizeDisplayName(data.name, normalizedEmail),
+          avatarUrl: data.avatarUrl,
+          groupId: group.id,
+        })
+        .returning();
+      return createdUser;
+    };
+    const createdUser = this.licenseQuota
+      ? await this.licenseQuota.run('users', (tx) => this.countActiveUsers(tx), insertUser)
+      : await insertUser(this.db);
 
     logger.info('Created new user', { userId: createdUser.id, email: createdUser.email, group: group.name });
     await this.auditService.log({
@@ -452,17 +465,23 @@ export class AuthService {
       throw new Error('User with this email already exists');
     }
 
-    const [createdUser] = await this.db
-      .insert(users)
-      .values({
-        oidcSubject: authMethod === 'oidc' ? `${PRECREATED_SUBJECT_PREFIX}${normalizedEmail}` : null,
-        authMethod,
-        email: normalizedEmail,
-        name: normalizedName,
-        avatarUrl: null,
-        groupId: data.groupId,
-      })
-      .returning();
+    const insertUser = async (executor: DrizzleExecutor) => {
+      const [createdUser] = await executor
+        .insert(users)
+        .values({
+          oidcSubject: authMethod === 'oidc' ? `${PRECREATED_SUBJECT_PREFIX}${normalizedEmail}` : null,
+          authMethod,
+          email: normalizedEmail,
+          name: normalizedName,
+          avatarUrl: null,
+          groupId: data.groupId,
+        })
+        .returning();
+      return createdUser;
+    };
+    const createdUser = this.licenseQuota
+      ? await this.licenseQuota.run('users', (tx) => this.countActiveUsers(tx), insertUser)
+      : await insertUser(this.db);
 
     logger.info('Pre-created user', {
       userId: createdUser.id,
@@ -969,18 +988,24 @@ export class AuthService {
       throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
     }
 
-    const [restored] = await this.db
-      .update(users)
-      .set({
-        groupId: group.id,
-        isBlocked: true,
-        deletedAt: null,
-        deletedByUserId: null,
-        deletedFromGroupId: null,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(users.id, userId), isNotNull(users.deletedAt)))
-      .returning();
+    const restore = async (executor: DrizzleExecutor) => {
+      const [restored] = await executor
+        .update(users)
+        .set({
+          groupId: group.id,
+          isBlocked: true,
+          deletedAt: null,
+          deletedByUserId: null,
+          deletedFromGroupId: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(users.id, userId), isNotNull(users.deletedAt)))
+        .returning();
+      return restored;
+    };
+    const restored = this.licenseQuota
+      ? await this.licenseQuota.run('users', (tx) => this.countActiveUsers(tx), restore)
+      : await restore(this.db);
     if (!restored) throw new AppError(404, 'USER_NOT_FOUND', 'Deleted user not found');
 
     const mapped = await this.mapDbUserToUser(restored);
@@ -991,5 +1016,10 @@ export class AuthService {
 
   async validateSession(sessionId: string): Promise<User | null> {
     return this.sessionService.validateSession(sessionId);
+  }
+
+  private async countActiveUsers(executor: DrizzleExecutor): Promise<number> {
+    const [result] = await executor.select({ count: count() }).from(users).where(isNull(users.deletedAt));
+    return Number(result?.count ?? 0);
   }
 }

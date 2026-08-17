@@ -61,7 +61,8 @@ const communityState = (): LicenseServerState => ({
   registrationStatus: 'registered',
   effectivePlan: 'community',
   paidLicenseStatus: 'none',
-  entitlementsVersion: 1,
+  graceUntil: null,
+  entitlementsVersion: 2,
   entitlements: {
     managedNodes: 100,
     users: 10,
@@ -85,7 +86,8 @@ const paidState = (plan: 'personal' | 'business' | 'enterprise' = 'business'): L
     keyLast4: 'DDDD',
     metadata: { order: 'A-1' },
   },
-  entitlementsVersion: 1,
+  graceUntil: null,
+  entitlementsVersion: 2,
   entitlements: {
     managedNodes: null,
     users: null,
@@ -315,7 +317,107 @@ describe('LicenseService', () => {
       licensed: true,
       errorMessage: 'License server is unavailable',
     });
-    expect(status.graceUntil).toBeTruthy();
+    expect(status.offlineGraceUntil).toBeTruthy();
+    expect(status.graceUntil).toBeNull();
+  });
+
+  it.each([
+    ['personal', 24],
+    ['business', 72],
+    ['enterprise', 168],
+  ] as const)('keeps %s entitlements during its %dh expiration grace', async (plan, graceHours) => {
+    vi.useFakeTimers();
+    const expiresAt = new Date('2026-08-17T12:00:00.000Z');
+    const graceUntil = new Date(expiresAt.getTime() + graceHours * 60 * 60 * 1000);
+    vi.setSystemTime(new Date(expiresAt.getTime() + 60_000));
+    const state = paidState(plan);
+    state.paidLicenseStatus = 'expired_grace';
+    state.paidLicense!.expiresAt = expiresAt.toISOString();
+    state.graceUntil = graceUntil.toISOString();
+    const db = createDb();
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(state));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD').catch(async () => {
+      db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
+      db.rows.set('license:cached_state', {
+        registrationStatus: 'registered',
+        status: 'expired_grace',
+        plan,
+        paidPlan: plan,
+        paidLicenseStatus: 'expired_grace',
+        licenseName: `Test ${plan}`,
+        licenseMetadata: {},
+        expiresAt: expiresAt.toISOString(),
+        graceUntil: graceUntil.toISOString(),
+        entitlementsVersion: 2,
+        entitlements: state.entitlements,
+        lastCheckedAt: new Date().toISOString(),
+        lastValidAt: new Date().toISOString(),
+        activeInstallationId: null,
+        activeInstallationName: null,
+        errorMessage: null,
+      });
+    });
+
+    expect(await service.getStatus()).toMatchObject({
+      status: 'expired_grace',
+      plan,
+      licensed: true,
+      graceUntil: graceUntil.toISOString(),
+      entitlements: state.entitlements,
+    });
+  });
+
+  it('downgrades locally when expiration grace ends without another heartbeat', async () => {
+    vi.useFakeTimers();
+    const expiresAt = new Date('2026-08-17T12:00:00.000Z');
+    const graceUntil = new Date('2026-08-20T12:00:00.000Z');
+    vi.setSystemTime(new Date('2026-08-17T12:01:00.000Z'));
+    const state = paidState('business');
+    state.paidLicenseStatus = 'expired_grace';
+    state.paidLicense!.expiresAt = expiresAt.toISOString();
+    state.graceUntil = graceUntil.toISOString();
+    const db = createDb();
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(state));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
+      code: 'LICENSE_NOT_ACTIVE',
+    });
+    db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
+    db.rows.set('license:cached_state', {
+      registrationStatus: 'registered',
+      status: 'expired_grace',
+      plan: 'business',
+      paidPlan: 'business',
+      paidLicenseStatus: 'expired_grace',
+      licenseName: 'Test business',
+      licenseMetadata: {},
+      expiresAt: expiresAt.toISOString(),
+      graceUntil: graceUntil.toISOString(),
+      entitlementsVersion: 2,
+      entitlements: state.entitlements,
+      lastCheckedAt: new Date().toISOString(),
+      lastValidAt: new Date().toISOString(),
+      activeInstallationId: null,
+      activeInstallationName: null,
+      errorMessage: null,
+    });
+
+    vi.setSystemTime(graceUntil);
+    expect(await service.getStatus()).toMatchObject({
+      status: 'expired',
+      plan: 'community',
+      licensed: false,
+      graceUntil: null,
+      entitlements: expect.objectContaining({ managedNodes: 100, users: 10, customPermissionGroups: 5 }),
+    });
   });
 
   it('downgrades a replaced paid activation to Community authoritatively', async () => {

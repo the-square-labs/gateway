@@ -48,6 +48,7 @@ export type LicenseRegistrationStatus = "registered" | "pending";
 export type LicenseStatus =
   | "community"
   | "valid"
+  | "expired_grace"
   | "valid_with_warning"
   | "unreachable_grace_expired"
   | "invalid"
@@ -82,6 +83,7 @@ export interface LicenseStatusView {
   lastCheckedAt: string | null;
   lastValidAt: string | null;
   graceUntil: string | null;
+  offlineGraceUntil: string | null;
   activeInstallationId: string | null;
   activeInstallationName: string | null;
   errorMessage: string | null;

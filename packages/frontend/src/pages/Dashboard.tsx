@@ -24,6 +24,7 @@ import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   AuditLogEntry,
   DashboardRelaySnapshot,
@@ -278,6 +279,79 @@ export function RelayHealthNotice({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function formatGraceRemaining(deadline: number, now: number): string {
+  const totalMinutes = Math.max(0, Math.ceil((deadline - now) / 60_000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  return [days ? `${days}d` : "", hours ? `${hours}h` : "", `${minutes}m`]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function LicenseGraceNotice({
+  graceUntil,
+  canManage,
+}: {
+  graceUntil: string | null;
+  canManage: boolean;
+}) {
+  const invalidateLicense = useUIBootstrapStore((state) => state.invalidate);
+  const deadline = graceUntil ? new Date(graceUntil).getTime() : Number.NaN;
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    const timeout = window.setTimeout(
+      () => {
+        setNow(Date.now());
+        invalidateLicense();
+      },
+      Math.min(deadline - Date.now() + 50, 2_147_483_647)
+    );
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(timeout);
+    };
+  }, [deadline, invalidateLicense]);
+
+  if (!Number.isFinite(deadline) || deadline <= now) return null;
+  const absolute = new Date(deadline).toLocaleString();
+
+  return (
+    <div className="border border-destructive/60 bg-card" role="alert" aria-live="polite">
+      <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-destructive">Gateway license has expired</p>
+            <p className="text-sm text-muted-foreground">
+              Paid features remain available until {absolute} (
+              <span aria-live="off">{formatGraceRemaining(deadline, now)} remaining</span>).
+            </p>
+            {!canManage ? (
+              <p className="text-sm text-muted-foreground">
+                Contact your administrator before the grace period ends.
+              </p>
+            ) : null}
+          </div>
+        </div>
+        {canManage ? (
+          <Link
+            to="/settings/general"
+            state={{ scrollTarget: "gateway-license" }}
+            className="flex shrink-0 items-center gap-1 text-sm font-medium text-destructive hover:underline"
+          >
+            Update license key
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -571,6 +645,7 @@ export function Dashboard() {
     user?.authMethod !== "oidc" && showMfaOnboardingReminder && !mfaHasFactor && !mfaRequired
   );
   const relay = dashboardBootstrap?.relay ?? null;
+  const license = useUIBootstrapStore((state) => state.snapshot?.license ?? null);
   const relayNotice =
     relay &&
     ["migration_pending", "maintenance", "recovering", "degraded", "critical"].includes(relay.state)
@@ -701,6 +776,12 @@ export function Dashboard() {
           </div>
         </div>
         <div className="space-y-6">
+          {license?.status === "expired_grace" ? (
+            <LicenseGraceNotice
+              graceUntil={license.graceUntil}
+              canManage={hasScope("license:manage")}
+            />
+          ) : null}
           <RelayHealthNotice
             relay={relayNotice}
             isAdmin={hasScope("admin:system")}

@@ -4,9 +4,11 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuthStore } from "@/stores/auth";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { NginxTemplates } from "./NginxTemplates";
 import { Templates } from "./Templates";
@@ -61,7 +63,12 @@ export function TemplatesPage() {
     switch (activeTab) {
       case "pki":
         return (
-          <Button onClick={() => pkiCreateRef.current?.()}>
+          <Button
+            onClick={() => {
+              if (!requireLicenseFeature("internal-pki", "Internal PKI templates")) return;
+              pkiCreateRef.current?.();
+            }}
+          >
             <Plus className="h-4 w-4 mr-1" />
             Create Template
           </Button>
@@ -83,7 +90,10 @@ export function TemplatesPage() {
           {
             label: "Create Template",
             icon: <Plus className="h-4 w-4" />,
-            onClick: () => pkiCreateRef.current?.(),
+            onClick: () => {
+              if (!requireLicenseFeature("internal-pki", "Internal PKI templates")) return;
+              pkiCreateRef.current?.();
+            },
           },
         ]
       : activeTab === "nginx" && hasScope("proxy:templates:create")
@@ -103,7 +113,10 @@ export function TemplatesPage() {
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
-              <h1 className="text-2xl font-bold">Templates</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold">Templates</h1>
+                {activeTab === "pki" ? <LicensePlanBadge plan="enterprise" /> : null}
+              </div>
               <p className="text-sm text-muted-foreground">
                 Certificate and nginx configuration templates
               </p>

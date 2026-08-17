@@ -1,5 +1,5 @@
 import { CornerDownRight, Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -9,6 +9,7 @@ import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderAct
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { StatusBadge } from "@/components/common/StatusBadge";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import { useUIStore } from "@/stores/ui";
 import type { CA } from "@/types";
 
@@ -47,13 +49,18 @@ export function CAs() {
   const modal = useUIStore((s) => s.modal);
   const closeModal = useUIStore((s) => s.closeModal);
 
+  const openCreate = useCallback((parentId?: string) => {
+    if (!requireLicenseFeature("internal-pki", "Internal PKI")) return;
+    setCreateIntermediateParentId(parentId);
+    setCreateDialogOpen(true);
+  }, []);
+
   useEffect(() => {
     if (modal?.type === "createCA") {
-      setCreateIntermediateParentId(undefined);
-      setCreateDialogOpen(true);
+      openCreate();
       closeModal();
     }
-  }, [modal, closeModal]);
+  }, [modal, closeModal, openCreate]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
@@ -161,7 +168,10 @@ export function CAs() {
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
-              <h1 className="text-2xl font-bold">Certificate Authorities</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold">Certificate Authorities</h1>
+                <LicensePlanBadge plan="enterprise" />
+              </div>
               <p className="text-sm text-muted-foreground">
                 {activeCAs.length} active &middot; {totalCerts} certificate
                 {totalCerts !== 1 ? "s" : ""} issued
@@ -175,10 +185,7 @@ export function CAs() {
                     {
                       label: "Create Intermediate",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => {
-                        setCreateIntermediateParentId("pick");
-                        setCreateDialogOpen(true);
-                      },
+                      onClick: () => openCreate("pick"),
                       disabled: activeUserManagedCAs.length === 0,
                     },
                   ]
@@ -188,10 +195,7 @@ export function CAs() {
                     {
                       label: "Create Root CA",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => {
-                        setCreateIntermediateParentId(undefined);
-                        setCreateDialogOpen(true);
-                      },
+                      onClick: () => openCreate(),
                     },
                   ]
                 : []),
@@ -200,10 +204,7 @@ export function CAs() {
             {canCreateIntermediate && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  setCreateIntermediateParentId("pick");
-                  setCreateDialogOpen(true);
-                }}
+                onClick={() => openCreate("pick")}
                 disabled={activeUserManagedCAs.length === 0}
               >
                 <Plus className="h-4 w-4" />
@@ -211,12 +212,7 @@ export function CAs() {
               </Button>
             )}
             {canCreateRoot && (
-              <Button
-                onClick={() => {
-                  setCreateIntermediateParentId(undefined);
-                  setCreateDialogOpen(true);
-                }}
-              >
+              <Button onClick={() => openCreate()}>
                 <Plus className="h-4 w-4" />
                 Create Root CA
               </Button>
@@ -272,10 +268,7 @@ export function CAs() {
             {...(canCreateRoot
               ? {
                   actionLabel: "Create one",
-                  onAction: () => {
-                    setCreateIntermediateParentId(undefined);
-                    setCreateDialogOpen(true);
-                  },
+                  onAction: () => openCreate(),
                 }
               : {})}
             hasActiveFilters={hasActiveFilters}

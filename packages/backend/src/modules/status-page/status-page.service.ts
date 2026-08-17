@@ -16,6 +16,7 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -177,6 +178,7 @@ function sanitizeHistory(
 
 export class StatusPageService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
   private frozen = false;
   private frozenHost: string | null = null;
   private lastPublicDto: PublicStatusPageDto | null = null;
@@ -190,6 +192,10 @@ export class StatusPageService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+  }
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
   }
 
   private emit(action: string, id?: string) {
@@ -232,6 +238,11 @@ export class StatusPageService {
       upstreamUrl:
         input.upstreamUrl === undefined ? previous.upstreamUrl : input.upstreamUrl ? input.upstreamUrl.trim() : null,
     };
+
+    if (!previous.enabled && next.enabled) {
+      // LICENSE ENFORCEMENT: Only enabling a new status page requires Personal; existing pages remain manageable.
+      await this.licensePolicy?.requireFeature('status-pages');
+    }
 
     if (next.proxyTemplateId) {
       await this.validateProxyTemplate(next.proxyTemplateId);

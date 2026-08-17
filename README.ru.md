@@ -234,10 +234,12 @@ Community предназначен только для некоммерческ�
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, lifecycle контейнеров, managed databases с Secure Links и публичные status pages. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также Docker Secure Runtime, structured logging, security scanning, audit export и guided onboarding. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages и registry discovery. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также Docker Secure Runtime, structured logging, audit export, guided onboarding и security scanning после выпуска. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business, а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
 
 Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).
+
+После истечения платного ключа технические entitlements продолжают действовать 24 часа для Personal, 3 дня для Business или 7 дней для Enterprise. Этот продуктовый grace period не связан ни с offline validation, ни с 30-дневным правом коммерческого использования, описанным выше.
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

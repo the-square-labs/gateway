@@ -15,6 +15,7 @@ import { nodeTypeLabel } from "@/lib/node-appearance";
 import { proxyHostRoute } from "@/lib/resource-routes";
 import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type DockerContainer,
   type DockerRuntimeStatus,
@@ -180,6 +181,7 @@ export function NodeDetailsTab({
   };
 
   const handleRuntimeAction = async (action: "preflight" | "install") => {
+    if (!requireLicenseFeature("secure-runtime", "Secure Runtime setup")) return;
     setRuntimeAction(action);
     try {
       const status =
@@ -192,7 +194,9 @@ export function NodeDetailsTab({
       );
       await refreshNode();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Secure runtime setup failed");
+      if (!handleLicenseApiError(err, "Secure Runtime setup")) {
+        toast.error(err instanceof Error ? err.message : "Secure runtime setup failed");
+      }
     } finally {
       setRuntimeAction(null);
     }

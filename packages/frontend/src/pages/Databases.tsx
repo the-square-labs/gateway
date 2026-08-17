@@ -48,6 +48,7 @@ import { databaseRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type {
   DatabaseConnection,
   DatabaseType,
@@ -754,6 +755,7 @@ export function Databases({
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const openManagedCreate = useCallback(() => {
+    if (!requireLicenseFeature("managed-databases", "Managed databases")) return;
     if (databaseNodesLoaded && databaseNodes.length === 0) {
       setManagedNodeRequiredOpen(true);
       return;
@@ -1036,7 +1038,7 @@ export function Databases({
         });
       } else {
         setManagedProvisioning(null);
-        toast.error(message);
+        if (!handleLicenseApiError(error, "Managed databases")) toast.error(message);
       }
     } finally {
       setManagedSaving(false);

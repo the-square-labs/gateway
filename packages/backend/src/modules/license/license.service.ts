@@ -7,11 +7,13 @@ import { settings } from '@/db/schema/settings.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import {
   type CachedLicenseState,
   COMMUNITY_ENTITLEMENTS,
   type EncryptedLicenseCredential,
   LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS,
+  LICENSE_ENTITLEMENTS_VERSION,
   LICENSE_OFFLINE_GRACE_DAYS,
   LICENSE_PAID_HEARTBEAT_INTERVAL_MS,
   LICENSE_SERVER_URL,
@@ -58,13 +60,15 @@ export class LicenseService {
   private registrationPromise: Promise<RegistrationCredential> | null = null;
   private installationIdPromise: Promise<string> | null = null;
   private syncQueue: Promise<void> = Promise.resolve();
+  private lastPublishedStatus: string | null = null;
 
   constructor(
     private readonly db: DrizzleClient,
     private readonly cryptoService: CryptoService,
     private readonly env: Env,
     private readonly fetcher: Fetcher = fetch,
-    private readonly generalSettingsService?: GeneralSettingsService
+    private readonly generalSettingsService?: GeneralSettingsService,
+    private readonly eventBus?: EventBusService
   ) {}
 
   async getStatus(): Promise<LicenseStatusView> {
@@ -75,12 +79,14 @@ export class LicenseService {
       this.getCachedState(),
     ]);
     const registrationStatus = encryptedToken ? 'registered' : (cached?.registrationStatus ?? 'pending');
-    return this.toStatusView(
+    const status = this.toStatusView(
       cached ? { ...cached, registrationStatus } : this.communityState(registrationStatus),
       encryptedKey,
       installationId,
       this.getInstallationName()
     );
+    this.publishStatusIfChanged(status);
+    return status;
   }
 
   async getOnboardingState(): Promise<{ completed: boolean; status: LicenseStatusView }> {
@@ -342,17 +348,20 @@ export class LicenseService {
       registrationStatus: 'registered',
       status,
       plan: state.effectivePlan,
+      paidPlan: state.paidLicense?.plan ?? null,
       paidLicenseStatus: state.paidLicenseStatus,
       licenseName: state.paidLicense?.name ?? null,
       licenseMetadata: state.paidLicense?.metadata ?? {},
       expiresAt: state.paidLicense?.expiresAt ?? null,
+      graceUntil: state.graceUntil,
       entitlementsVersion: state.entitlementsVersion,
       entitlements: state.entitlements,
       lastCheckedAt: now,
-      lastValidAt: status === 'valid' ? now : (previous?.lastValidAt ?? null),
+      lastValidAt: status === 'valid' || status === 'expired_grace' ? now : (previous?.lastValidAt ?? null),
       activeInstallationId: state.activation?.installationId ?? null,
       activeInstallationName: state.activation?.installationName ?? null,
-      errorMessage: status === 'valid' || status === 'community' ? null : state.paidLicenseStatus,
+      errorMessage:
+        status === 'valid' || status === 'expired_grace' || status === 'community' ? null : state.paidLicenseStatus,
     });
   }
 
@@ -400,23 +409,52 @@ export class LicenseService {
     installationName: string
   ): LicenseStatusView {
     const lastValidAt = cached.lastValidAt;
-    const graceUntil = cached.plan !== 'community' && lastValidAt ? this.addGrace(lastValidAt).toISOString() : null;
+    const now = Date.now();
+    const expiryAt = cached.expiresAt ? Date.parse(cached.expiresAt) : Number.NaN;
+    const expirationGraceUntil = this.resolveExpirationGraceUntil(cached);
+    const expirationGraceDeadline = expirationGraceUntil?.getTime() ?? Number.NaN;
+    const offlineGraceUntil = cached.paidPlan && lastValidAt ? this.addOfflineGrace(lastValidAt) : null;
     let status = cached.status;
-    let licensed = status === 'community' || status === 'valid';
+    let plan = cached.plan;
+    let entitlements = cached.entitlements;
+    let licensed = status === 'community' || status === 'valid' || status === 'expired_grace';
+    const authoritativeLoss = ['revoked', 'replaced', 'deactivated', 'invalid'].includes(cached.status);
 
-    if (cached.status === 'valid' && cached.errorMessage && lastValidAt) {
-      if (this.addGrace(lastValidAt).getTime() > Date.now()) {
-        status = 'valid_with_warning';
+    if (!authoritativeLoss && cached.paidPlan && Number.isFinite(expiryAt) && now >= expiryAt) {
+      if (Number.isFinite(expirationGraceDeadline) && now < expirationGraceDeadline) {
+        status = 'expired_grace';
+        plan = cached.paidPlan;
         licensed = true;
       } else {
-        status = 'unreachable_grace_expired';
+        status = 'expired';
+        plan = 'community';
+        entitlements = COMMUNITY_ENTITLEMENTS;
+        licensed = false;
+      }
+    }
+
+    if (!authoritativeLoss && cached.paidPlan && cached.errorMessage && offlineGraceUntil) {
+      const offlineDeadline = Math.min(
+        offlineGraceUntil.getTime(),
+        Number.isFinite(expirationGraceDeadline) ? expirationGraceDeadline : Number.POSITIVE_INFINITY
+      );
+      if (offlineDeadline > now) {
+        if (!(Number.isFinite(expiryAt) && now >= expiryAt)) status = 'valid_with_warning';
+        licensed = true;
+      } else {
+        status =
+          Number.isFinite(expirationGraceDeadline) && now >= expirationGraceDeadline
+            ? 'expired'
+            : 'unreachable_grace_expired';
+        plan = 'community';
+        entitlements = COMMUNITY_ENTITLEMENTS;
         licensed = false;
       }
     }
 
     return {
       status,
-      plan: cached.plan,
+      plan,
       registrationStatus: cached.registrationStatus,
       paidLicenseStatus: cached.paidLicenseStatus,
       licensed,
@@ -428,10 +466,14 @@ export class LicenseService {
       installationName,
       expiresAt: cached.expiresAt,
       entitlementsVersion: cached.entitlementsVersion,
-      entitlements: cached.entitlements,
+      entitlements,
       lastCheckedAt: cached.lastCheckedAt,
       lastValidAt,
-      graceUntil,
+      graceUntil: status === 'expired_grace' ? (expirationGraceUntil?.toISOString() ?? null) : null,
+      offlineGraceUntil:
+        status === 'valid_with_warning' || status === 'unreachable_grace_expired'
+          ? (offlineGraceUntil?.toISOString() ?? null)
+          : null,
       activeInstallationId: cached.activeInstallationId,
       activeInstallationName: cached.activeInstallationName,
       errorMessage: cached.errorMessage,
@@ -441,6 +483,7 @@ export class LicenseService {
 
   private statusFromState(state: LicenseServerState): LicenseStatus {
     if (state.effectivePlan !== 'community' && state.paidLicenseStatus === 'valid') return 'valid';
+    if (state.effectivePlan !== 'community' && state.paidLicenseStatus === 'expired_grace') return 'expired_grace';
     switch (state.paidLicenseStatus) {
       case 'none':
         return 'community';
@@ -459,11 +502,13 @@ export class LicenseService {
       registrationStatus,
       status: 'community',
       plan: 'community',
+      paidPlan: null,
       paidLicenseStatus: 'none',
       licenseName: null,
       licenseMetadata: {},
       expiresAt: null,
-      entitlementsVersion: 1,
+      graceUntil: null,
+      entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
       entitlements: COMMUNITY_ENTITLEMENTS,
       lastCheckedAt: null,
       lastValidAt: null,
@@ -484,12 +529,19 @@ export class LicenseService {
       value.plan === 'enterprise'
         ? value.plan
         : legacyPlan;
+    const paidPlan =
+      value.paidPlan === 'personal' || value.paidPlan === 'business' || value.paidPlan === 'enterprise'
+        ? value.paidPlan
+        : plan === 'personal' || plan === 'business' || plan === 'enterprise'
+          ? plan
+          : null;
     const status = typeof value.status === 'string' ? (value.status as LicenseStatus) : 'community';
     const fallback = this.communityState(value.registrationStatus === 'registered' ? 'registered' : 'pending');
     return {
       registrationStatus: fallback.registrationStatus,
       status,
       plan,
+      paidPlan,
       paidLicenseStatus:
         typeof value.paidLicenseStatus === 'string' ? value.paidLicenseStatus : status === 'valid' ? 'valid' : 'none',
       licenseMetadata:
@@ -503,6 +555,7 @@ export class LicenseService {
       entitlementsVersion: typeof value.entitlementsVersion === 'number' ? value.entitlementsVersion : 1,
       licenseName: typeof value.licenseName === 'string' ? value.licenseName : null,
       expiresAt: typeof value.expiresAt === 'string' ? value.expiresAt : null,
+      graceUntil: typeof value.graceUntil === 'string' ? value.graceUntil : null,
       lastCheckedAt: typeof value.lastCheckedAt === 'string' ? value.lastCheckedAt : null,
       lastValidAt: typeof value.lastValidAt === 'string' ? value.lastValidAt : null,
       activeInstallationId: typeof value.activeInstallationId === 'string' ? value.activeInstallationId : null,
@@ -519,10 +572,39 @@ export class LicenseService {
     }
   }
 
-  private addGrace(iso: string): Date {
+  private addOfflineGrace(iso: string): Date {
     const date = new Date(iso);
     date.setUTCDate(date.getUTCDate() + LICENSE_OFFLINE_GRACE_DAYS);
     return date;
+  }
+
+  private resolveExpirationGraceUntil(cached: CachedLicenseState): Date | null {
+    if (cached.graceUntil) {
+      const declared = new Date(cached.graceUntil);
+      if (Number.isFinite(declared.getTime())) return declared;
+    }
+    if (!cached.paidPlan || !cached.expiresAt) return null;
+    const expiresAt = new Date(cached.expiresAt);
+    if (!Number.isFinite(expiresAt.getTime())) return null;
+    const days = cached.paidPlan === 'personal' ? 1 : cached.paidPlan === 'business' ? 3 : 7;
+    expiresAt.setUTCDate(expiresAt.getUTCDate() + days);
+    return expiresAt;
+  }
+
+  private publishStatusIfChanged(status: LicenseStatusView): void {
+    const payload = {
+      status: status.status,
+      plan: status.plan,
+      paidLicenseStatus: status.paidLicenseStatus,
+      expiresAt: status.expiresAt,
+      graceUntil: status.graceUntil,
+      offlineGraceUntil: status.offlineGraceUntil,
+      entitlementsVersion: status.entitlementsVersion,
+    };
+    const signature = JSON.stringify(payload);
+    if (signature === this.lastPublishedStatus) return;
+    this.lastPublishedStatus = signature;
+    this.eventBus?.publish('system.license.changed', payload);
   }
 
   private errorMessage(error: unknown): string {

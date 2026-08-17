@@ -2,8 +2,9 @@ import 'reflect-metadata';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
@@ -44,9 +45,11 @@ function setup(scopes: string[]) {
     abort: vi.fn().mockResolvedValue({}),
   };
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
+  const licensePolicy = { requireFeature: vi.fn().mockResolvedValue(undefined) };
   container.registerInstance(DockerManagementService, docker as never);
   container.registerInstance(DockerMigrationDispatchAdapter, dispatch as never);
   container.registerInstance(AuditService, audit as never);
+  container.registerInstance(LicensePolicyService, licensePolicy as never);
 
   const app = new OpenAPIHono<AppEnv>();
   app.onError(errorHandler);
@@ -56,7 +59,7 @@ function setup(scopes: string[]) {
     await next();
   });
   registerContainerRoutes(app);
-  return { app, audit, dispatch, docker };
+  return { app, audit, dispatch, docker, licensePolicy };
 }
 
 afterEach(() => {
@@ -64,6 +67,21 @@ afterEach(() => {
 });
 
 describe('GWCA archive export route', () => {
+  it('requires the Personal container archive entitlement before contacting Docker', async () => {
+    const { app, dispatch, licensePolicy } = setup([containerScope('docker:containers:export')]);
+    licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required')
+    );
+
+    const response = await app.request(
+      `/nodes/${NODE_ID}/containers/container-id/archive?imageMode=registry&includeEnvironment=false`
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
+    expect(dispatch.openArchiveExport).not.toHaveBeenCalled();
+  });
+
   it('requires files only for portable archives', async () => {
     const { app, dispatch } = setup([containerScope('docker:containers:export')]);
 

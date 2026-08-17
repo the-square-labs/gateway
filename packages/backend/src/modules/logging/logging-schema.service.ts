@@ -4,12 +4,14 @@ import { type LoggingFieldDefinition, loggingSchemas } from '@/db/schema/index.j
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CreateLoggingSchemaInput, UpdateLoggingSchemaInput } from './logging.schemas.js';
 import type { LoggingSchemaView } from './logging-storage.types.js';
 
 export class LoggingSchemaService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -18,6 +20,10 @@ export class LoggingSchemaService {
 
   setEventBus(eventBus: EventBusService): void {
     this.eventBus = eventBus;
+  }
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
   }
 
   async list(query?: { search?: string }): Promise<LoggingSchemaView[]> {
@@ -46,6 +52,7 @@ export class LoggingSchemaService {
   }
 
   async create(input: CreateLoggingSchemaInput, userId: string): Promise<LoggingSchemaView> {
+    await this.licensePolicy?.requireFeature('structured-logging');
     const row = await writeWithAllocatedSlug({
       source: input.name,
       fallback: 'logging-schema',

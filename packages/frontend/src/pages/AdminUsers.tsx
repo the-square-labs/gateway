@@ -50,6 +50,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DeletedUser, PermissionGroup, User } from "@/types";
 
 function getInitials(name: string | null, email: string): string {
@@ -300,7 +301,9 @@ export function AdminUsers({
       resetCreateDialog();
       reloadUsers();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create user");
+      if (!handleLicenseApiError(err, "Users")) {
+        toast.error(err instanceof Error ? err.message : "Failed to create user");
+      }
     } finally {
       setCreating(false);
     }

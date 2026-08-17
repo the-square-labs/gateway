@@ -1,4 +1,5 @@
 export const LICENSE_SERVER_URL = 'https://license.wiolett.cloud';
+export const LICENSE_ENTITLEMENTS_VERSION = 2;
 export const LICENSE_OFFLINE_GRACE_DAYS = 30;
 export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -10,6 +11,7 @@ export type LicenseRegistrationStatus = 'registered' | 'pending';
 export type LicenseStatus =
   | 'community'
   | 'valid'
+  | 'expired_grace'
   | 'valid_with_warning'
   | 'unreachable_grace_expired'
   | 'invalid'
@@ -35,10 +37,12 @@ export interface CachedLicenseState {
   registrationStatus: LicenseRegistrationStatus;
   status: LicenseStatus;
   plan: LicensePlan;
+  paidPlan: Exclude<LicensePlan, 'community'> | null;
   paidLicenseStatus: string;
   licenseName: string | null;
   licenseMetadata: Record<string, unknown>;
   expiresAt: string | null;
+  graceUntil: string | null;
   entitlementsVersion: number;
   entitlements: LicenseEntitlements;
   lastCheckedAt: string | null;
@@ -66,6 +70,7 @@ export interface LicenseStatusView {
   lastCheckedAt: string | null;
   lastValidAt: string | null;
   graceUntil: string | null;
+  offlineGraceUntil: string | null;
   activeInstallationId: string | null;
   activeInstallationName: string | null;
   errorMessage: string | null;
@@ -87,6 +92,7 @@ export interface LicenseServerState {
   effectivePlan: LicensePlan;
   paidLicenseStatus: string;
   paidLicense?: LicenseServerPaidLicense;
+  graceUntil: string | null;
   entitlementsVersion: number;
   entitlements: LicenseEntitlements;
   activation?: {
@@ -120,5 +126,22 @@ export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
   users: 10,
   customPermissionGroups: 5,
   supportLevel: 'community',
-  features: [],
+  features: [
+    'infrastructure',
+    'nginx',
+    'docker',
+    'tls',
+    'domains',
+    'monitoring',
+    'auth',
+    'rbac',
+    'audit',
+    'api',
+    'oauth',
+    'mcp',
+    'gitlab',
+    'ai-workspace',
+    'gateway-inference',
+    'signed-updates',
+  ],
 };

@@ -4,6 +4,7 @@ import { type LoggingFieldDefinition, loggingEnvironments, loggingSchemas } from
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CreateLoggingEnvironmentInput, UpdateLoggingEnvironmentInput } from './logging.schemas.js';
 import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
@@ -11,6 +12,7 @@ import type { LoggingEnvironmentView } from './logging-storage.types.js';
 
 export class LoggingEnvironmentService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -21,6 +23,10 @@ export class LoggingEnvironmentService {
 
   setEventBus(eventBus: EventBusService): void {
     this.eventBus = eventBus;
+  }
+
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
   }
 
   async list(query?: { search?: string; allowedIds?: string[] }): Promise<LoggingEnvironmentView[]> {
@@ -58,6 +64,7 @@ export class LoggingEnvironmentService {
   }
 
   async create(input: CreateLoggingEnvironmentInput, userId: string): Promise<LoggingEnvironmentView> {
+    await this.licensePolicy?.requireFeature('structured-logging');
     this.validateLimits(input);
     const row = await writeWithAllocatedSlug({
       source: input.name,
