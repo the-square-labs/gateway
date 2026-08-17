@@ -14,7 +14,7 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 |---|---|---|---|
 | **Community** | Personal infrastructure, evaluation, and small self-hosted environments | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
 | **Personal** | Operators and production teams that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
-| **Business** | Teams that need security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
+| **Business** | Teams that need Secure Runtime isolation, security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
 ## Feature Availability
@@ -22,20 +22,21 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 | Feature | Status | Community | Personal | Business | Enterprise |
 |---|---|:---:|:---:|:---:|:---:|
 | Infrastructure Node Management | Ready | ✅ | ✅ | ✅ | ✅ |
-| Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
-| Docker Container Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Multi-Node Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Docker Container Management — Default Runtime (`runc`) | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker ↔ Nginx Secure Links | Ready | ✅ | ✅ | ✅ | ✅ |
 | SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Domain and DNS Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | External Database Connections and Explorers | Ready | ✅ | ✅ | ✅ | ✅ |
 | Infrastructure Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
+| Physical GPU Discovery, Attachment, and Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
 | Alerts and Webhook Notifications | Ready | ✅ | ✅ | ✅ | ✅ |
 | Authentication, OIDC, and MFA | Ready | ✅ | ✅ | ✅ | ✅ |
-| Role-Based Access Control | Ready | ✅ | ✅ | ✅ | ✅ |
+| Folder- and Resource-Scoped Role-Based Access Control | Ready | ✅ | ✅ | ✅ | ✅ |
 | Audit Log | Ready | ✅ | ✅ | ✅ | ✅ |
 | REST API, OAuth, and MCP Automation | Ready | ✅ | ✅ | ✅ | ✅ |
 | GitLab Integration | Ready | ✅ | ✅ | ✅ | ✅ |
-| AI Workspace, Plan Mode, Scenarios, and Sandboxed Execution | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
+| AI Workspace, Plan Mode, Scenarios, and AI Sandboxes | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
 | Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Coming soon | ✅ | ✅ | ✅ | ✅ |
@@ -51,6 +52,7 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
 | Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
 | Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |
+| Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
 | Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |

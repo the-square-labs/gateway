@@ -102,7 +102,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | 领域 | 摘要 |
 |------|------|
 | Ingress | Domain 选择 public nginx ingress node；route 将流量转发到 address、Docker container 或 deployment；SSL certificate 只部署到实际运行 enabled TLS routes 的 nginx nodes。还包括 maintenance mode、redirects、WebSockets、access lists、health checks、route folders、templates、logs 和 stats。REST API 为兼容性保留 `proxy-host` identifiers。 |
-| Docker | Container lifecycle、Default (`runc`) 与 Secure (`runsc`/gVisor) runtime profiles、Gateway-managed volumes、deployments、rollout/rollback、shared physical NVIDIA/AMD/Intel GPU attachment、eligible cross-node container 和 volume migrations、offline inventory snapshots、registries、images、networks、tasks、webhooks、logs、console、file browser、secrets、env vars、ports 和 cleanup。Secure workloads 不支持 GPU、migration 或 export；GPU-attached workloads 在 v1 中也不能迁移或导出。 |
+| Docker | Container lifecycle、所有计划均可使用的 Default (`runc`) runtime profile，以及 Business 和 Enterprise 可使用的 Secure (`runsc`/gVisor) profile、Gateway-managed volumes、deployments、rollout/rollback、shared physical NVIDIA/AMD/Intel GPU attachment、eligible cross-node container 和 volume migrations、offline inventory snapshots、registries、images、networks、tasks、webhooks、logs、console、file browser、secrets、env vars、ports 和 cleanup。Secure workloads 不支持 GPU、migration 或 export；GPU-attached workloads 在 v1 中也不能迁移或导出。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 route binding。 |
 | Domains | Central hostname registry、nginx ingress placement、external 或 Cloudflare-managed DNS、validation、usage tracking 和 explicit ingress migration。 |
 | Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
@@ -244,7 +244,7 @@ Gateway 提供四个产品计划。付费计划适用于一个 self-hosted 实�
 |------|------|------|------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups。 |
 | ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 节点、用户和权限组不限量，并包含 container lifecycle、带 Secure Links 的 managed databases 和 public status pages。 |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal 的全部功能，并增加 structured logging、security scanning、audit export 和 guided onboarding。 |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal 的全部功能，并增加 Docker Secure Runtime、structured logging、security scanning、audit export 和 guided onboarding。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business 的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。

@@ -102,7 +102,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Area | Summary |
 |------|---------|
 | Ingress | Domains select a public nginx ingress node; routes forward traffic to addresses, Docker containers, or deployments; SSL certificates are deployed to the nginx nodes where enabled TLS routes use them. Includes maintenance mode, redirects, WebSockets, access lists, health checks, route folders, templates, logs, and stats. The REST API keeps `proxy-host` identifiers for compatibility. |
-| Docker | Container lifecycle, Default (`runc`) and Secure (`runsc`/gVisor) runtime profiles, Gateway-managed volumes, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, and cleanup. Secure workloads cannot use GPU, migration, or export; GPU-attached workloads cannot migrate or export in v1. |
+| Docker | Container lifecycle, the Default (`runc`) runtime profile in every plan and the Secure (`runsc`/gVisor) profile in Business and Enterprise, Gateway-managed volumes, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, and cleanup. Secure workloads cannot use GPU, migration, or export; GPU-attached workloads cannot migrate or export in v1. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and route binding. |
 | Domains | Central hostname registry, nginx ingress placement, external or Cloudflare-managed DNS, validation, usage tracking, and explicit ingress migration. |
 | Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
@@ -244,7 +244,7 @@ Gateway has four product plans. Paid plans apply to one self-hosted installation
 |------|---------|--------|-----------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
 | ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited scale, container lifecycle features, managed databases with Secure Links, and public status pages. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus structured logging, security scanning, audit export, and guided onboarding. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus Docker Secure Runtime, structured logging, security scanning, audit export, and guided onboarding. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.
