@@ -130,6 +130,8 @@ export function AdminNodeDetail({
   const [appearanceColor, setAppearanceColor] = useState<NodeAppearanceColor | null>(null);
   const [serviceAddressMode, setServiceAddressMode] = useState("__auto__");
   const [customServiceAddress, setCustomServiceAddress] = useState("");
+  const [secondaryServiceAddressMode, setSecondaryServiceAddressMode] = useState("__disabled__");
+  const [customSecondaryServiceAddress, setCustomSecondaryServiceAddress] = useState("");
   const [appearanceSaving, setAppearanceSaving] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [lockSaving, setLockSaving] = useState(false);
@@ -166,6 +168,20 @@ export function AdminNodeDetail({
   const nginxPublicAddresses = node?.publicServiceAddresses ?? [];
   const automaticServiceAddress =
     node?.type === "nginx" ? nginxPublicAddresses[0] : localIpAddresses[0] || publicIpAddresses[0];
+  const selectedServiceAddress =
+    serviceAddressMode === "__auto__"
+      ? automaticServiceAddress || null
+      : serviceAddressMode === "__custom__"
+        ? customServiceAddress.trim() || null
+        : serviceAddressMode;
+  const selectedSecondaryServiceAddress =
+    secondaryServiceAddressMode === "__disabled__"
+      ? null
+      : secondaryServiceAddressMode === "__custom__"
+        ? customSecondaryServiceAddress.trim() || null
+        : secondaryServiceAddressMode;
+  const serviceAddressesDuplicate =
+    !!selectedServiceAddress && selectedServiceAddress === selectedSecondaryServiceAddress;
   const nonInteractiveWhileUpdating =
     nodeUpdating && activeTab !== "details" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
@@ -377,6 +393,16 @@ export function AdminNodeDetail({
       setServiceAddressMode("__custom__");
       setCustomServiceAddress(node.serviceAddress);
     }
+    if (!node.secondaryServiceAddress) {
+      setSecondaryServiceAddressMode("__disabled__");
+      setCustomSecondaryServiceAddress("");
+    } else if (nginxPublicAddresses.includes(node.secondaryServiceAddress)) {
+      setSecondaryServiceAddressMode(node.secondaryServiceAddress);
+      setCustomSecondaryServiceAddress("");
+    } else {
+      setSecondaryServiceAddressMode("__custom__");
+      setCustomSecondaryServiceAddress(node.secondaryServiceAddress);
+    }
     setAppearanceOpen(true);
   };
 
@@ -390,6 +416,12 @@ export function AdminNodeDetail({
           : serviceAddressMode === "__custom__"
             ? customServiceAddress.trim() || null
             : serviceAddressMode;
+      const secondaryServiceAddress =
+        secondaryServiceAddressMode === "__disabled__"
+          ? null
+          : secondaryServiceAddressMode === "__custom__"
+            ? customSecondaryServiceAddress.trim() || null
+            : secondaryServiceAddressMode;
       const update = {
         displayName: appearanceName.trim() || null,
         appearanceColor,
@@ -397,6 +429,7 @@ export function AdminNodeDetail({
         canEditNodeServiceAddress
           ? { serviceAddress }
           : {}),
+        ...(node?.type === "nginx" && canEditNodeServiceAddress ? { secondaryServiceAddress } : {}),
       };
       let updated: Node;
       try {
@@ -415,11 +448,13 @@ export function AdminNodeDetail({
               domains?: string[];
               previousAddress?: string;
               nextAddress?: string;
+              previousAddresses?: string[];
+              nextAddresses?: string[];
             }
           | undefined;
         const approved = await confirm({
           title: "Update domain DNS targets",
-          description: `This Ingress node is used by ${details?.domainCount ?? "one or more"} domain${details?.domainCount === 1 ? "" : "s"}. Their tracked Cloudflare DNS target will change from ${details?.previousAddress || "unavailable"} to ${details?.nextAddress || "unavailable"}.${details?.domains?.length ? ` Affected: ${details.domains.join(", ")}.` : ""}`,
+          description: `This Ingress node is used by ${details?.domainCount ?? "one or more"} domain${details?.domainCount === 1 ? "" : "s"}. Their tracked DNS target must be updated to one of: ${details?.nextAddresses?.join(", ") || details?.nextAddress || "unavailable"}.${details?.domains?.length ? ` Affected: ${details.domains.join(", ")}.` : ""}`,
           confirmLabel: "Update DNS targets",
         });
         if (!approved) return;
@@ -959,6 +994,51 @@ export function AdminNodeDetail({
                 </p>
               </div>
             )}
+            {node.type === "nginx" && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Secondary Address</label>
+                <Select
+                  value={secondaryServiceAddressMode}
+                  onValueChange={setSecondaryServiceAddressMode}
+                  disabled={!canEditNodeServiceAddress}
+                >
+                  <SelectTrigger aria-label="Secondary Address">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__disabled__">Disabled</SelectItem>
+                    {nginxPublicAddresses.length > 0 && (
+                      <>
+                        <SelectSeparator />
+                        <SelectGroup>
+                          <SelectLabel>Detected public addresses</SelectLabel>
+                          {nginxPublicAddresses.map((address) => (
+                            <SelectItem key={address} value={address}>
+                              {address}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </>
+                    )}
+                    <SelectSeparator />
+                    <SelectItem value="__custom__">Custom address</SelectItem>
+                  </SelectContent>
+                </Select>
+                {secondaryServiceAddressMode === "__custom__" && (
+                  <Input
+                    aria-label="Custom Secondary Address"
+                    value={customSecondaryServiceAddress}
+                    onChange={(event) => setCustomSecondaryServiceAddress(event.target.value)}
+                    placeholder="Public IPv4 or IPv6 address"
+                    disabled={!canEditNodeServiceAddress}
+                    className="font-mono text-xs"
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Used as an additional public ingress address for domains assigned to this node.
+                </p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAppearanceOpen(false)}>
@@ -968,7 +1048,10 @@ export function AdminNodeDetail({
               onClick={handleAppearanceSave}
               disabled={
                 appearanceSaving ||
-                (serviceAddressMode === "__custom__" && !customServiceAddress.trim())
+                (serviceAddressMode === "__custom__" && !customServiceAddress.trim()) ||
+                (secondaryServiceAddressMode === "__custom__" &&
+                  !customSecondaryServiceAddress.trim()) ||
+                serviceAddressesDuplicate
               }
             >
               {appearanceSaving ? "Saving..." : "Save"}

@@ -87,6 +87,7 @@ function createService(db: Record<string, unknown>, records: Array<Record<string
         displayName: 'Edge 1',
         appearanceColor: null,
         effectiveAddress: '8.8.8.8',
+        effectiveAddresses: ['8.8.8.8'],
       },
     ],
     unconfiguredNodes: [],
@@ -256,6 +257,7 @@ describe('DomainsService Cloudflare lifecycle', () => {
           displayName: null,
           appearanceColor: null,
           effectiveAddress: '1.1.1.1',
+          effectiveAddresses: ['1.1.1.1'],
         },
       ],
       unconfiguredNodes: [],
@@ -314,6 +316,7 @@ describe('DomainsService Cloudflare lifecycle', () => {
         displayName: null,
         appearanceColor: null,
         effectiveAddress: '8.8.8.8',
+        effectiveAddresses: ['8.8.8.8'],
       },
       {
         id: '22222222-2222-4222-8222-222222222222',
@@ -322,6 +325,7 @@ describe('DomainsService Cloudflare lifecycle', () => {
         displayName: null,
         appearanceColor: null,
         effectiveAddress: '1.1.1.1',
+        effectiveAddresses: ['1.1.1.1'],
       },
     ];
     vi.mocked(service.getNginxNodeOptions).mockResolvedValue({
@@ -391,6 +395,48 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(writes).toContainEqual(
       expect.objectContaining({ providerRecordIds: ['tracked-a'], dnsTargetIps: ['1.1.1.1'], dnsStatus: 'valid' })
     );
+  });
+
+  it('preserves two tracked Cloudflare targets when both are requested', async () => {
+    const db = {
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    const client = {
+      listDnsRecords: vi.fn().mockResolvedValue([
+        { id: 'tracked-a-1', type: 'A', name: 'app.example.com', content: '1.1.1.1', ttl: 1 },
+        { id: 'tracked-a-2', type: 'A', name: 'app.example.com', content: '8.8.8.8', ttl: 1 },
+      ]),
+      createDnsRecord: vi.fn(),
+      updateDnsRecord: vi.fn(),
+      deleteDnsRecord: vi.fn(),
+    };
+    service.setIntegrationsService({
+      getCloudflareDnsContextForRecord: vi.fn().mockResolvedValue({ zone: { remoteId: 'zone-1' }, client }),
+    } as never);
+
+    await (service as any).reconcileDomainTarget(
+      {
+        id: 'domain-1',
+        domain: 'app.example.com',
+        dnsProvider: 'cloudflare',
+        integrationConnectorId: 'connector-1',
+        providerZoneId: 'zone-1',
+        providerRecordIds: ['tracked-a-1', 'tracked-a-2'],
+        dnsRecordType: 'A',
+        dnsTargetIps: ['1.1.1.1', '8.8.8.8'],
+        dnsStatus: 'valid',
+        dnsTtl: 1,
+        dnsProxied: false,
+        nginxNodeId: 'node-1',
+        pendingDnsTargetIp: null,
+      },
+      ['1.1.1.1', '8.8.8.8']
+    );
+
+    expect(client.createDnsRecord).not.toHaveBeenCalled();
+    expect(client.updateDnsRecord).not.toHaveBeenCalled();
+    expect(client.deleteDnsRecord).not.toHaveBeenCalled();
   });
 
   it('refuses every untracked Cloudflare address record before mutating DNS', async () => {
@@ -1032,5 +1078,23 @@ describe('DomainsService Cloudflare lifecycle', () => {
       )
     ).resolves.toBe('valid');
     expect(nodeLookup).toHaveBeenCalledWith('node-1');
+  });
+
+  it('accepts either or both configured Nginx addresses but rejects unrelated DNS addresses', async () => {
+    const service = new DomainsService({} as never, { log: vi.fn() } as never);
+    vi.spyOn(service as any, 'getNginxNodeSummary').mockResolvedValue({
+      id: 'node-1',
+      effectiveAddress: '1.1.1.1',
+      effectiveAddresses: ['1.1.1.1', '8.8.8.8'],
+    });
+    const row = { dnsProvider: 'legacy', nginxNodeId: 'node-1', dnsTargetIps: [] };
+    const records = (a: string[]) => ({ a, aaaa: [], cname: [], caa: [], mx: [], txt: [] });
+
+    await expect((service as any).computeDomainDnsStatus(row, records(['1.1.1.1']))).resolves.toBe('valid');
+    await expect((service as any).computeDomainDnsStatus(row, records(['8.8.8.8']))).resolves.toBe('valid');
+    await expect((service as any).computeDomainDnsStatus(row, records(['1.1.1.1', '8.8.8.8']))).resolves.toBe('valid');
+    await expect((service as any).computeDomainDnsStatus(row, records(['1.1.1.1', '9.9.9.9']))).resolves.toBe(
+      'invalid'
+    );
   });
 });

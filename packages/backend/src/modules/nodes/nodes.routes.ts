@@ -157,6 +157,7 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
     displayName: node.displayName,
     appearanceColor: node.appearanceColor,
     serviceAddress: node.serviceAddress,
+    secondaryServiceAddress: node.secondaryServiceAddress,
     effectiveServiceAddress: node.effectiveServiceAddress,
     status: node.status,
     serviceCreationLocked: node.serviceCreationLocked,
@@ -538,7 +539,7 @@ nodesRoutes.openapi({ ...updateNodeRoute, middleware: requireScopeForResource('n
   const id = c.req.param('id')!;
   const input = UpdateNodeSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
-  if (input.serviceAddress !== undefined) {
+  if (input.serviceAddress !== undefined || input.secondaryServiceAddress !== undefined) {
     const current = await service.get(id);
     if (current.type === 'docker' && !hasScope(scopes, `docker:containers:config:${id}`)) {
       throw new AppError(403, 'FORBIDDEN', 'Editing the Docker service address requires Docker config access');
@@ -554,6 +555,13 @@ nodesRoutes.openapi({ ...updateNodeRoute, middleware: requireScopeForResource('n
         400,
         'INVALID_SERVICE_ADDRESS_NODE',
         'Service address is only supported for Docker, database, and Nginx nodes'
+      );
+    }
+    if (input.secondaryServiceAddress !== undefined && current.type !== 'nginx') {
+      throw new AppError(
+        400,
+        'INVALID_SECONDARY_SERVICE_ADDRESS_NODE',
+        'Secondary service address is only supported for Nginx nodes'
       );
     }
   }

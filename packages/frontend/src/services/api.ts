@@ -804,6 +804,7 @@ class ApiClient extends withInferenceApi(
       displayName?: string | null;
       appearanceColor?: import("@/types").NodeAppearanceColor | null;
       serviceAddress?: string | null;
+      secondaryServiceAddress?: string | null;
       confirmDomainDnsUpdate?: boolean;
     }
   ): Promise<import("@/types").Node> {

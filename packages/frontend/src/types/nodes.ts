@@ -130,6 +130,7 @@ export interface Node {
   displayName: string | null;
   appearanceColor: NodeAppearanceColor | null;
   serviceAddress?: string | null;
+  secondaryServiceAddress?: string | null;
   effectiveServiceAddress?: string | null;
   publicServiceAddresses?: string[];
   status: NodeStatus;

@@ -131,6 +131,7 @@ export const nodes = pgTable(
     slug: varchar('slug', { length: 60 }).notNull(),
     appearanceColor: varchar('appearance_color', { length: 32 }),
     serviceAddress: varchar('service_address', { length: 255 }),
+    secondaryServiceAddress: varchar('secondary_service_address', { length: 255 }),
     status: nodeStatusEnum('status').notNull().default('pending'),
     serviceCreationLocked: boolean('service_creation_locked').notNull().default(false),
 

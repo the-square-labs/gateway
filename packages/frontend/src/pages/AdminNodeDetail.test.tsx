@@ -337,7 +337,52 @@ describe("AdminNodeDetail", () => {
         displayName: "Edge 1",
         appearanceColor: null,
         serviceAddress: "9.9.9.9",
+        secondaryServiceAddress: null,
       })
     );
+  });
+
+  it("offers a disabled secondary Nginx address and blocks duplicate addresses", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({ id: "node-1", type: "nginx", hostname: "edge-1" }),
+      publicServiceAddresses: ["1.1.1.1", "8.8.8.8"],
+      lastHealthReport: {
+        localIpAddresses: [],
+        publicIpAddresses: ["1.1.1.1", "8.8.8.8"],
+      } as unknown as NodeHealthReport,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/node-1/details"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /settings/i }));
+    const secondaryAddress = screen.getByRole("combobox", { name: "Secondary Address" });
+    expect(secondaryAddress).toHaveTextContent("Disabled");
+
+    await user.click(secondaryAddress);
+    await user.click(await screen.findByRole("option", { name: "1.1.1.1" }));
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("combobox", { name: "Secondary Address" }));
+    await user.click(await screen.findByRole("option", { name: "8.8.8.8" }));
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getEffectiveNginxIngressAddress,
+  getEffectiveNginxIngressAddresses,
   getEffectiveNodeServiceAddress,
   getEffectivePublishedNodeIP,
   getReportedPublicNodeAddresses,
@@ -98,5 +99,27 @@ describe('node service address', () => {
     expect(getEffectiveNginxIngressAddress({ serviceAddress: '8.8.8.8', lastHealthReport: report })).toBe('8.8.8.8');
     expect(getEffectiveNginxIngressAddress({ serviceAddress: '9.9.9.9', lastHealthReport: report })).toBe('9.9.9.9');
     expect(getEffectiveNginxIngressAddress({ serviceAddress: '192.168.1.20', lastHealthReport: report })).toBeNull();
+  });
+
+  it('returns the configured secondary Nginx ingress address without enabling one automatically', () => {
+    const report = {
+      localIpAddresses: [],
+      publicIpAddresses: ['8.8.8.8', '1.1.1.1'],
+    } as never;
+
+    expect(
+      getEffectiveNginxIngressAddresses({
+        serviceAddress: null,
+        secondaryServiceAddress: null,
+        lastHealthReport: report,
+      })
+    ).toEqual(['1.1.1.1']);
+    expect(
+      getEffectiveNginxIngressAddresses({
+        serviceAddress: '8.8.8.8',
+        secondaryServiceAddress: '9.9.9.9',
+        lastHealthReport: report,
+      })
+    ).toEqual(['8.8.8.8', '9.9.9.9']);
   });
 });

@@ -20,6 +20,14 @@ export const UpdateNodeSchema = z.object({
     .refine(isValidNodeServiceAddress, 'Must be a valid IP address or hostname')
     .nullable()
     .optional(),
+  secondaryServiceAddress: z
+    .string()
+    .trim()
+    .min(1)
+    .max(255)
+    .refine(isValidNodeServiceAddress, 'Must be a valid IP address or hostname')
+    .nullable()
+    .optional(),
   confirmDomainDnsUpdate: z.boolean().optional(),
 });
 

@@ -1,0 +1,1 @@
+ALTER TABLE "nodes" ADD COLUMN "secondary_service_address" varchar(255);

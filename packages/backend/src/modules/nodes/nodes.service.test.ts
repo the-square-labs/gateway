@@ -188,6 +188,81 @@ describe('NodesService enrollment token creation', () => {
     expect(updatedValues).toHaveBeenCalledWith(expect.objectContaining({ serviceAddress: '9.9.9.9' }));
   });
 
+  it('rejects a secondary Nginx address that matches the effective primary address', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddress: null,
+      secondaryServiceAddress: null,
+      lastHealthReport: { localIpAddresses: [], publicIpAddresses: ['1.1.1.1', '8.8.8.8'] },
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => [existing]) })) })),
+      })),
+      update: vi.fn(),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.update(existing.id, { secondaryServiceAddress: '1.1.1.1' }, 'user-1')).rejects.toMatchObject({
+      code: 'DUPLICATE_NGINX_SERVICE_ADDRESSES',
+    });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('adds a secondary Nginx address without retargeting domains that still use the primary', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddress: '1.1.1.1',
+      secondaryServiceAddress: null,
+      lastHealthReport: { localIpAddresses: [], publicIpAddresses: ['1.1.1.1', '8.8.8.8'] },
+    };
+    let selection = 0;
+    const updatedValues = vi.fn((values) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...existing, ...values }]) })),
+    }));
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => {
+            selection += 1;
+            return selection === 1
+              ? { limit: vi.fn(async () => [existing]) }
+              : Promise.resolve([{ id: 'domain-1', dnsTargetIps: ['1.1.1.1'] }]);
+          }),
+        })),
+      })),
+      update: vi.fn(() => ({ set: updatedValues })),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.update(existing.id, { secondaryServiceAddress: '8.8.8.8' }, 'user-1')).resolves.toMatchObject({
+      secondaryServiceAddress: '8.8.8.8',
+    });
+    expect(updatedValues).toHaveBeenCalledWith(expect.objectContaining({ secondaryServiceAddress: '8.8.8.8' }));
+  });
+
   it('requires confirmation before changing DNS targets for domains assigned to an Nginx node', async () => {
     const existing = {
       id: 'node-1',

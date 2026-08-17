@@ -86,10 +86,25 @@ export function getEffectiveNginxIngressAddress(node: {
   serviceAddress?: string | null;
   lastHealthReport?: NodeHealthReport | null;
 }): string | null {
+  return getEffectiveNginxIngressAddresses(node)[0] ?? null;
+}
+
+export function getEffectiveNginxIngressAddresses(node: {
+  serviceAddress?: string | null;
+  secondaryServiceAddress?: string | null;
+  lastHealthReport?: NodeHealthReport | null;
+}): string[] {
   const candidates = getReportedPublicNodeAddresses(node);
   const configured = node.serviceAddress?.trim();
-  if (configured) return isPubliclyRoutableIp(configured) ? configured : null;
-  return candidates[0] ?? null;
+  const primary = configured ? (isPubliclyRoutableIp(configured) ? configured : null) : (candidates[0] ?? null);
+  const secondary = node.secondaryServiceAddress?.trim();
+  return Array.from(
+    new Set(
+      [primary, secondary && isPubliclyRoutableIp(secondary) ? secondary : null].filter(
+        (address): address is string => !!address
+      )
+    )
+  );
 }
 
 export function getEffectiveServiceAddressForNode(node: {
