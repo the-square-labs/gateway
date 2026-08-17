@@ -880,6 +880,7 @@ configure_nginx_managed() {
     log "Configuring nginx in managed mode..."
     backup_if_exists "/etc/nginx/nginx.conf"
     backup_if_exists "/etc/nginx/conf.d/default.conf"
+    backup_if_exists "/etc/nginx/http.d/default.conf"
 
     cat > /etc/nginx/nginx.conf << 'EOF'
 worker_processes auto;
@@ -1004,6 +1005,7 @@ configure_nginx() {
 # ── Step 3: Create directories ───────────────────────────────────────
 create_directories() {
     log "Creating required directories..."
+    mkdir -p /etc/nginx/conf.d
     mkdir -p "${NGINX_SITES_DIR}"
     mkdir -p /etc/nginx/certs
     mkdir -p "${NGINX_HTPASSWD_DIR}"

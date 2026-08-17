@@ -142,6 +142,14 @@ describe('install.sh managed browser bootstrap', () => {
 });
 
 describe('database daemon installer prerequisites', () => {
+  it('creates the managed nginx layout when Alpine only provides http.d', () => {
+    const source = readFileSync(nginxNodeInstaller, 'utf8');
+
+    expect(source).toContain('mkdir -p /etc/nginx/conf.d');
+    expect(source).toContain('backup_if_exists "/etc/nginx/http.d/default.conf"');
+    expect(source).toContain("cat > /etc/nginx/conf.d/default.conf << 'EOF'");
+  });
+
   it('keeps the shared Docker-node installer valid shell', () => {
     const syntax = spawnSync('bash', ['-n', dockerNodeInstaller], { encoding: 'utf8' });
     expect(syntax.status, syntax.stderr).toBe(0);
