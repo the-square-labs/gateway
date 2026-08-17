@@ -6,14 +6,16 @@ Gateway is offered in four product plans: Community, Personal, Business, and Ent
 
 The plan limits and feature availability below define the product access granted by each plan.
 
-The source-code license remains defined by [LICENSE.md](../LICENSE.md). This document describes product plans, feature availability, pricing, and product-license activation. Product plan names do not change the permissions granted by the source-code license. If a legal-use summary conflicts with `LICENSE.md`, the license text controls.
+Community is available only for noncommercial purposes permitted by the [PolyForm Strict License 1.0.0](../LICENSE.md). A Personal, Business, or Enterprise key issued by Wiolett Industries automatically grants the person or organization named in the license record limited commercial-use rights for one official, unmodified Gateway installation under the [Wiolett Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md).
+
+The commercial grant begins when the key is issued, continues through its expiration date, and remains in effect for 30 calendar days afterwards. A key without an expiration date grants commercial use while it remains active. Revocation for breach, fraud, chargeback, or refund ends the grant immediately without grace. Neither license permits modification, derivative works, or redistribution.
 
 ## Plan Positioning
 
 | Plan | Best fit | Scale | Support |
 |---|---|---|---|
-| **Community** | Personal infrastructure, evaluation, and small self-hosted environments | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
-| **Personal** | Operators and production teams that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
+| **Community** | Noncommercial personal, hobby, educational, research, and qualifying noncommercial use | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
+| **Personal** | Commercially operated installations that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
 | **Business** | Teams that need Secure Runtime isolation, security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
@@ -72,7 +74,7 @@ AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode rese
 ## Pricing
 
 > [!IMPORTANT]
-> Pricing in this document is preliminary, does not constitute an offer, and is subject to change until commercial terms are finalized. Confirm the current price and applicable terms before purchase.
+> Pricing in this document is preliminary, does not constitute an offer, and is subject to change. The current legal-use terms are defined by [LICENSE.md](../LICENSE.md) and [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md); confirm current pricing before purchase.
 
 | Plan | Monthly | Annual |
 |---|---:|---:|
@@ -103,10 +105,13 @@ Registration and activation flow:
 4. The server returns the effective plan, license metadata, expiration, activation details, and
    versioned entitlements. Gateway stores credentials encrypted and caches the latest state.
 
+Issuance of a paid key also activates the legal commercial-use grant described in [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md). Activation binds that grant to one installation at a time. The legal grant and technical entitlements are related but distinct: paid product features can end when the server reports an authoritative non-valid state even when a 30-day post-expiration commercial-use grace period is still running.
+
 Gateway sends paid heartbeats every 15 minutes and Community heartbeats every 30 minutes. If the
 license server is unreachable, a previously valid paid installation uses its cached state for a
-30-day offline grace period. An authoritative `expired`, `revoked`, `replaced`, or `deactivated`
-response immediately returns the installation to Community entitlements.
+30-day technical offline-validation grace period. This is separate from the commercial license's
+30-day post-expiration legal-use grace period. An authoritative `expired`, `revoked`, `replaced`,
+or `deactivated` response immediately returns the installation to Community entitlements.
 
 Data sent to the license server:
 
@@ -140,6 +145,10 @@ installation token, the encrypted paid key when one is installed, and the cached
 the license server. Administrators can deactivate a paid license from **Settings > General >
 License**; the server binding is released before the local key is removed.
 
-## Source License
+## Legal-use boundary
 
-The source license lives in [LICENSE.md](../LICENSE.md). It defines permitted personal, noncommercial, small-business, and separately licensed commercial use. Product plan packaging and feature availability do not replace or modify those legal terms.
+Wiolett-owned Gateway source is publicly available under the [PolyForm Strict License 1.0.0](../LICENSE.md). It permits noncommercial use, including the personal and qualifying noncommercial-organization purposes stated in that license. It does not permit modification, derivative works, or distribution.
+
+The [Wiolett Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md) is a narrow additional grant attached automatically to a Wiolett-issued Personal, Business, or Enterprise key. It permits commercial use of one official, unmodified installation during the key term and for 30 calendar days after expiration, subject to its revocation rules. It does not permit modifying, redistributing, sublicensing, transferring, or reselling Gateway.
+
+Third-party components remain governed by their own licenses. Already published Gateway releases remain governed by the terms distributed with those releases.

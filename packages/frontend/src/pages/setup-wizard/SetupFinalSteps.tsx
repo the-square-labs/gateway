@@ -50,8 +50,18 @@ export function LicenseStep({
       <div>
         <h2 className="text-lg font-semibold">Gateway edition</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Enter a Personal, Business, or Enterprise license key. If you don&apos;t have one,
-          continue with Community edition.
+          Community is for noncommercial use only. A Personal, Business, or Enterprise key grants
+          the named licensee commercial use of one official, unmodified installation. By activating
+          it, you agree to the{" "}
+          <a
+            className="underline underline-offset-4 hover:text-foreground"
+            href="https://gitlab.wiolett.net/wiolett/gateway/-/blob/main/COMMERCIAL-LICENSE.md"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Commercial Key License
+          </a>
+          .
         </p>
       </div>
       <form
@@ -76,7 +86,7 @@ export function LicenseStep({
         </div>
         <div className="flex flex-wrap justify-center gap-2">
           <Button type="button" variant="outline" onClick={onCommunity} disabled={busy}>
-            Continue with Community
+            Continue for noncommercial use
           </Button>
           <Button type="submit" disabled={busy || !trimmedKey}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound />}

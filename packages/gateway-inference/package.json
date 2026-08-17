@@ -15,7 +15,7 @@
     "url": "https://gitlab.wiolett.net/wiolett/gateway/-/issues"
   },
   "homepage": "https://gitlab.wiolett.net/wiolett/gateway",
-  "license": "AGPL-3.0-only",
+  "license": "PolyForm-Strict-1.0.0",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -25,7 +25,10 @@
   },
   "files": [
     "dist/cli.js",
-    "README.md"
+    "README.md",
+    "LICENSE.md",
+    "COMMERCIAL-LICENSE.md",
+    "NOTICE"
   ],
   "scripts": {
     "build": "rm -rf dist && esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --external:@napi-rs/keyring --external:@napi-rs/keyring-* --outfile=dist/cli.js --banner:js='#!/usr/bin/env node\nimport { createRequire as __createRequire } from \"node:module\"; const require = __createRequire(import.meta.url);' && chmod 755 dist/cli.js",

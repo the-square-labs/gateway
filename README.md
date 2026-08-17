@@ -237,13 +237,15 @@ No. AI Workspace is optional. The Operations Console, REST API, OAuth, and MCP r
 
 Gateway has four product plans. Paid plans apply to one self-hosted installation and do not add per-node, per-user, or per-permission-group charges.
 
+Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Personal, Business, or Enterprise key issued by Wiolett Industries automatically grants the named licensee limited commercial-use rights for one official, unmodified installation under the [Commercial Key License](COMMERCIAL-LICENSE.md), including 30 calendar days after the key expires. Neither license permits modification or redistribution.
+
 > [!NOTE]
 > Pricing is preliminary, does not constitute an offer, and is subject to change. Confirm current pricing and terms before purchase.
 
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited scale, container lifecycle features, managed databases with Secure Links, and public status pages. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container lifecycle features, managed databases with Secure Links, and public status pages. |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus Docker Secure Runtime, structured logging, security scanning, audit export, and guided onboarding. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 

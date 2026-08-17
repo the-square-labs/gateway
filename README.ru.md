@@ -237,13 +237,15 @@ Managed services продолжают работать. Existing nginx configs �
 
 У Gateway четыре продуктовых плана. Платные планы применяются к одной self-hosted установке без отдельной оплаты за managed nodes, пользователей или custom permission groups.
 
+Community предназначен только для некоммерческого использования по [PolyForm Strict License 1.0.0](LICENSE.md). Ключ Personal, Business или Enterprise, выданный Wiolett Industries, автоматически даёт указанному в лицензии владельцу ограниченное право коммерческого использования одной официальной немодифицированной установки по [Commercial Key License](COMMERCIAL-LICENSE.md), включая 30 календарных дней после истечения ключа. Ни одна из лицензий не разрешает модификацию или распространение.
+
 > [!NOTE]
 > Цены предварительные, не являются офертой и могут измениться. Перед покупкой уточните актуальные цены и условия.
 
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Ядро платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Неограниченный масштаб, lifecycle контейнеров, managed databases с Secure Links и публичные status pages. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, lifecycle контейнеров, managed databases с Secure Links и публичные status pages. |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также Docker Secure Runtime, structured logging, security scanning, audit export и guided onboarding. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business, а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
 

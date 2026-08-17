@@ -237,13 +237,15 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 
 Gateway 提供四个产品计划。付费计划适用于一个 self-hosted 实例，不按 managed node、用户或 custom permission group 额外收费。
 
+Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商业目的。由 Wiolett Industries 签发的 Personal、Business 或 Enterprise 密钥，会依据 [Commercial Key License](COMMERCIAL-LICENSE.md) 自动向许可证记录中的被许可方授予一台官方未修改 Gateway 实例的有限商业使用权，并在密钥到期后继续有效 30 个自然日。两种许可证均不允许修改或再分发。
+
 > [!NOTE]
 > 以下价格为初步价格，不构成要约，并可能发生变化。购买前请确认最新价格和条款。
 
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 节点、用户和权限组不限量，并包含 container lifecycle、带 Secure Links 的 managed databases 和 public status pages。 |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 仅限非商业使用的核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权、节点、用户和权限组不限量，并包含 container lifecycle、带 Secure Links 的 managed databases 和 public status pages。 |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal 的全部功能，并增加 Docker Secure Runtime、structured logging、security scanning、audit export 和 guided onboarding。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business 的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 

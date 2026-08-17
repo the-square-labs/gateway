@@ -54,3 +54,7 @@ Gateway models are exposed through stable `claude-gateway-*` aliases so Claude C
 This integration configures the Claude Code CLI only. Claude Desktop and the Claude Code VS Code extension use separate configuration surfaces and are not modified automatically.
 
 Run `npx -y @wiolett/gateway-inference@latest --help` for the complete public command surface.
+
+## License
+
+Wiolett-owned source in this package is available for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Wiolett-issued Personal, Business, or Enterprise Gateway key provides the named licensee a limited commercial-use grant under [Wiolett Gateway Commercial Key License 1.0](COMMERCIAL-LICENSE.md). Neither license permits modification or redistribution.

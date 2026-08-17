@@ -1,20 +1,24 @@
 Wiolett Gateway
-Copyright (c) 2021-2026 Wiolett (https://wiolett.net)
-All rights reserved.
+Copyright (c) 2021-2026 Wiolett Industries (https://wiolett.net)
+All rights reserved except as expressly licensed.
 
-Licensed under the PolyForm Small Business License 1.0.0.
-See LICENSE file for the full license text.
-
-ATTRIBUTION REQUIREMENT
------------------------
-You must retain all copyright notices, this NOTICE file,
-and all credits in any copy, fork, or derivative of this software.
-Removal of attribution is a violation of the license terms.
-
-COMMERCIAL USE
+SOURCE LICENSE
 --------------
-Free for small businesses (fewer than 10 people AND under
-$100,000 USD annual revenue). Attribution still required.
+Wiolett-owned Gateway source code is licensed under the
+PolyForm Strict License 1.0.0. It permits noncommercial use
+but does not permit modification or distribution. See
+LICENSE.md for the complete terms.
 
-Larger organizations must obtain a commercial license.
-For commercial licensing inquiries, contact: contact@wiolett.net
+COMMERCIAL KEY LICENSE
+----------------------
+A Personal, Business, or Enterprise key issued by Wiolett
+Industries grants the named licensee limited commercial-use
+rights for one official, unmodified Gateway installation.
+The grant lasts for the key term and 30 calendar days after
+expiration, subject to the exceptions and restrictions in
+COMMERCIAL-LICENSE.md.
+
+THIRD-PARTY SOFTWARE
+--------------------
+Third-party components remain governed by their own license
+terms. Their licenses are not replaced by these notices.

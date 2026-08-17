@@ -681,7 +681,7 @@ export function SetupWizardPage() {
                     );
                     if (status.registrationStatus === "pending") {
                       toast.info(
-                        "Community edition is ready. Registration will retry automatically when the license server is available."
+                        "Community edition is ready for noncommercial use. Registration will retry automatically when the license server is available."
                       );
                     }
                     setStep("ai-workspace");
