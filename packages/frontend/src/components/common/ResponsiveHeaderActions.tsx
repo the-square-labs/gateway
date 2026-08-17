@@ -38,6 +38,7 @@ export const HEADER_ACTION_PRIORITY = {
 
 const MIN_HEADER_CONTENT_WIDTH_PX = 320;
 const HEADER_ACTION_GAP_PX = 8;
+const MAX_HEADER_BUTTONS = 4;
 
 interface MeasuredHeaderAction {
   width: number;
@@ -65,7 +66,9 @@ export function getHeaderActionOverflowIndices(
     return [...overflowIndices].sort((a, b) => a - b);
   }
 
-  const availableWidth = headerWidth - reservedContentWidth;
+  // Header identity is primary: actions may use at most half of the row and
+  // must overflow before the title/status area is forced to truncate.
+  const availableWidth = Math.min(headerWidth - reservedContentWidth, headerWidth / 2);
   const requiredWidth = () => {
     const visibleWidth = actions.reduce(
       (total, action, index) => total + (overflowIndices.has(index) ? 0 : action.width),
@@ -85,7 +88,17 @@ export function getHeaderActionOverflowIndices(
     .filter(({ index }) => !overflowIndices.has(index))
     .sort((a, b) => a.priority - b.priority || a.index - b.index);
 
+  // The overflow trigger counts as one of the four visible header buttons.
+  // Once overflow exists, leave room for at most three direct actions.
   for (const action of collapseOrder) {
+    const visibleCount = actions.length - overflowIndices.size;
+    const renderedItemCount = visibleCount + (overflowIndices.size > 0 ? 1 : 0);
+    if (renderedItemCount <= MAX_HEADER_BUTTONS) break;
+    overflowIndices.add(action.index);
+  }
+
+  for (const action of collapseOrder) {
+    if (overflowIndices.has(action.index)) continue;
     if (requiredWidth() <= availableWidth) break;
     overflowIndices.add(action.index);
   }
