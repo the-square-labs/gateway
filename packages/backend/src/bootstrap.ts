@@ -1056,6 +1056,7 @@ export async function initializeContainer(): Promise<void> {
     },
     updateSecureLinkConnectorImage: (imageRef) =>
       proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve(),
+    updateDatabaseConnectorImage: (imageRef) => managedDatabaseBindingService.updateConnectorImage(imageRef),
     probeNow: () => relaySupervisor.probeNow(),
   });
   container.registerInstance(UpdateService, updateService);

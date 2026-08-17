@@ -62,6 +62,7 @@ export interface RelayImageManifestPayload {
   imageRef: string;
   protocolMajor: number;
   minGatewayVersion?: string;
+  databaseConnectorImage: string;
   secureLinkConnectorImage: string;
   createdAt: string;
   gitCommitSha?: string;
@@ -92,6 +93,7 @@ export interface TrustedRelayUpdateArtifact {
   buildVersion: string;
   protocolMajor: number;
   minGatewayVersion: string;
+  databaseConnectorImage: string;
   secureLinkConnectorImage: string;
 }
 
@@ -208,6 +210,13 @@ export function verifyRelayImageManifest(
   }
   const gatewayRepository = payload.image.endsWith('/relay') ? payload.image.slice(0, -'/relay'.length) : '';
   if (
+    typeof payload.databaseConnectorImage !== 'string' ||
+    !gatewayRepository ||
+    !isDigestPinnedImageRef(payload.databaseConnectorImage, `${gatewayRepository}/database-connector`)
+  ) {
+    throw new UpdateArtifactTrustError('Relay update database connector image reference is not digest pinned');
+  }
+  if (
     typeof payload.secureLinkConnectorImage !== 'string' ||
     !gatewayRepository ||
     !isDigestPinnedImageRef(payload.secureLinkConnectorImage, `${gatewayRepository}/secure-link-connector`)
@@ -223,6 +232,7 @@ export function verifyRelayImageManifest(
     buildVersion: payload.version,
     protocolMajor: payload.protocolMajor,
     minGatewayVersion: payload.minGatewayVersion ?? payload.version,
+    databaseConnectorImage: payload.databaseConnectorImage,
     secureLinkConnectorImage: payload.secureLinkConnectorImage,
   };
 }

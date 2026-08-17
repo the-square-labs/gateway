@@ -261,6 +261,7 @@ describe('UpdateService foundation migration', () => {
     const relayRuntime = {
       setMaintenance: vi.fn().mockResolvedValue(undefined),
       setExpectedArtifact: vi.fn(),
+      updateDatabaseConnectorImage: vi.fn(),
       updateSecureLinkConnectorImage: vi.fn().mockResolvedValue(undefined),
       probeNow: vi.fn().mockResolvedValue(undefined),
     };
@@ -285,9 +286,15 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        Cmd: expect.arrayContaining(['--secure-link-connector-image', relay.secureLinkConnectorImage]),
+        Cmd: expect.arrayContaining([
+          '--database-connector-image',
+          relay.databaseConnectorImage,
+          '--secure-link-connector-image',
+          relay.secureLinkConnectorImage,
+        ]),
       })
     );
+    expect(relayRuntime.updateDatabaseConnectorImage).toHaveBeenCalledWith(relay.databaseConnectorImage);
     expect(relayRuntime.updateSecureLinkConnectorImage).toHaveBeenCalledWith(relay.secureLinkConnectorImage);
     expect(relayRuntime.probeNow).toHaveBeenCalled();
   });
@@ -458,6 +465,7 @@ function makeArtifact(
 
 function makeRelayArtifact(): TrustedRelayUpdateArtifact {
   const imageRef = `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`;
+  const databaseConnectorImage = `registry.example.com/wiolett/gateway/database-connector@sha256:${'b'.repeat(64)}`;
   const secureLinkConnectorImage = `registry.example.com/wiolett/gateway/secure-link-connector@sha256:${'c'.repeat(64)}`;
   return {
     imageRef,
@@ -465,6 +473,7 @@ function makeRelayArtifact(): TrustedRelayUpdateArtifact {
     buildVersion: 'v2.4.3',
     protocolMajor: 1,
     minGatewayVersion: 'v2.4.2',
+    databaseConnectorImage,
     secureLinkConnectorImage,
     signedManifest: 'signed-relay',
     payload: {
@@ -476,6 +485,7 @@ function makeRelayArtifact(): TrustedRelayUpdateArtifact {
       imageRef,
       protocolMajor: 1,
       minGatewayVersion: 'v2.4.2',
+      databaseConnectorImage,
       secureLinkConnectorImage,
       createdAt: '2026-06-30T00:00:00.000Z',
     },

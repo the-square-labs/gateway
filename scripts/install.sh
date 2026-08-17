@@ -458,7 +458,7 @@ verify_signed_relay() {
   local relay_tag="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
   local payload signature kind manifest_version tag image digest image_ref protocol_major min_gateway_version
-  local secure_connector_image_ref secure_connector_image secure_connector_digest
+  local connector_image_ref connector_image connector_digest secure_connector_image_ref secure_connector_image secure_connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/relay-image.update.json"
@@ -494,6 +494,7 @@ verify_signed_relay() {
   image_ref="$(json_string_field "$payload_file" imageRef)"
   protocol_major="$(json_number_field "$payload_file" protocolMajor)"
   min_gateway_version="$(json_string_field "$payload_file" minGatewayVersion)"
+  connector_image_ref="$(json_string_field "$payload_file" databaseConnectorImage)"
   secure_connector_image_ref="$(json_string_field "$payload_file" secureLinkConnectorImage)"
   if [[ "$kind" != "relay-image" || "$tag" != "$relay_tag" || "$relay_tag" != "${manifest_version}-relay" ||
     ! "$manifest_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ || "$image" != "${IMAGE}/relay" ||
@@ -505,6 +506,13 @@ verify_signed_relay() {
   if [[ ! "$min_gateway_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || version_is_newer "$min_gateway_version" "$VERSION"; then
     rm -rf "$tmp_dir"
     die "Relay ${manifest_version} requires Gateway ${min_gateway_version} or newer."
+  fi
+  connector_image="${IMAGE}/database-connector"
+  connector_digest="${connector_image_ref##*@}"
+  if [[ "$connector_image_ref" != "${connector_image}@${connector_digest}" ||
+    ! "$connector_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    rm -rf "$tmp_dir"
+    die "Signed relay manifest contains an invalid database connector image."
   fi
   secure_connector_image="${IMAGE}/secure-link-connector"
   secure_connector_digest="${secure_connector_image_ref##*@}"
@@ -518,6 +526,7 @@ verify_signed_relay() {
   RELAY_BUILD_VERSION="$manifest_version"
   RELAY_PROTOCOL_MAJOR="$protocol_major"
   RELAY_IMAGE_REF="$image_ref"
+  DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
   SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"
   RELAY_BOOTSTRAP=1
   ok "Relay ${manifest_version} verified (SHA-256: $(short_digest "$digest"))"

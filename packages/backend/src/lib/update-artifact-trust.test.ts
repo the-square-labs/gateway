@@ -50,6 +50,7 @@ const relayPayload = Buffer.from(
     imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
     protocolMajor: 1,
     minGatewayVersion: 'v1.2.0',
+    databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
     secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
     createdAt: '2026-05-02T14:39:10Z',
   })
@@ -147,6 +148,7 @@ describe('update artifact trust', () => {
     expect(artifact.protocolMajor).toBe(1);
     expect(artifact.minGatewayVersion).toBe('v1.2.0');
     expect(artifact.imageRef).toContain('/relay@sha256:');
+    expect(artifact.databaseConnectorImage).toContain('/database-connector@sha256:');
     expect(artifact.secureLinkConnectorImage).toContain('/secure-link-connector@sha256:');
   });
 
@@ -160,6 +162,7 @@ describe('update artifact trust', () => {
         digest: `sha256:${checksum}`,
         imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
         protocolMajor: 1,
+        databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
         secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
         createdAt: '2026-08-17T00:00:00.000Z',
       })
@@ -195,6 +198,7 @@ describe('update artifact trust', () => {
         digest: `sha256:${checksum}`,
         imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
         protocolMajor: 1,
+        databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
         secureLinkConnectorImage: 'registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector:latest',
         createdAt: '2026-08-17T00:00:00.000Z',
       })
@@ -218,6 +222,42 @@ describe('update artifact trust', () => {
         gatewayPublicKey
       )
     ).toThrow('Relay update secure-link connector image reference is not digest pinned');
+  });
+
+  it('rejects a mutable database connector image in a Relay manifest', () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        kind: 'relay-image',
+        version: 'v1.2.3',
+        tag: 'v1.2.3-relay',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+        digest: `sha256:${checksum}`,
+        imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
+        protocolMajor: 1,
+        databaseConnectorImage: 'registry.gitlab.wiolett.net/wiolett/gateway/database-connector:latest',
+        secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
+        createdAt: '2026-08-17T00:00:00.000Z',
+      })
+    );
+    const manifest = JSON.stringify({
+      schemaVersion: 1,
+      keyId: 'wiolett-update-v1',
+      payload: payload.toString('base64url'),
+      signature: sign(null, payload, gatewaySigningKey.privateKey).toString('base64url'),
+    });
+
+    expect(() =>
+      verifyRelayImageManifest(
+        manifest,
+        {
+          version: 'v1.2.3',
+          tag: 'v1.2.3-relay',
+          image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+          protocolMajor: 1,
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('Relay update database connector image reference is not digest pinned');
   });
 
   it('rejects a relay manifest with an incompatible protocol major', () => {

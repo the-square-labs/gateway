@@ -62,6 +62,7 @@ export interface RelayUpdateRuntime {
   setMaintenance(enabled: boolean): Promise<void>;
   setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void;
   updateSecureLinkConnectorImage(imageRef: string): Promise<void>;
+  updateDatabaseConnectorImage(imageRef: string): void;
   probeNow(): Promise<void>;
 }
 
@@ -667,6 +668,8 @@ exit 1`,
         String(artifact.protocolMajor),
         '--relay-image-ref',
         artifact.imageRef,
+        '--database-connector-image',
+        artifact.databaseConnectorImage,
         '--secure-link-connector-image',
         artifact.secureLinkConnectorImage,
       ],
@@ -741,9 +744,11 @@ exit 1`,
         GATEWAY_RELAY_IMAGE_REF: artifact.imageRef,
         GATEWAY_RELAY_BUILD_VERSION: artifact.buildVersion,
         GATEWAY_RELAY_PROTOCOL_MAJOR: artifact.protocolMajor,
+        DATABASE_CONNECTOR_IMAGE: artifact.databaseConnectorImage,
         SECURE_LINK_CONNECTOR_IMAGE: artifact.secureLinkConnectorImage,
       });
       this.relayRuntime?.setExpectedArtifact(artifact.imageRef, artifact.buildVersion, artifact.protocolMajor);
+      this.relayRuntime?.updateDatabaseConnectorImage(artifact.databaseConnectorImage);
       await this.relayRuntime?.updateSecureLinkConnectorImage(artifact.secureLinkConnectorImage);
     } finally {
       await this.relayRuntime?.setMaintenance(false);

@@ -88,10 +88,14 @@ export class ManagedDatabaseBindingService {
     private readonly dockerManagement: DockerManagementService,
     private readonly dockerDeployments: DockerDeploymentService,
     private readonly dockerSecrets: DockerSecretService,
-    private readonly connectorImage: string,
+    private connectorImage: string,
     private readonly allowDevelopmentConnectorImage = false,
     private readonly relayPolicy?: Pick<RelayPolicyService, 'ensureBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner'>
   ) {}
+
+  updateConnectorImage(connectorImage: string) {
+    this.connectorImage = connectorImage;
+  }
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;

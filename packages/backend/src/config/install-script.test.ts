@@ -107,26 +107,36 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('short_digest "$ARTIFACT_DIGEST"');
   });
 
-  it('publishes Secure Link connectors with Relay releases instead of Gateway releases', () => {
+  it('publishes both connector images with Relay releases instead of Gateway releases', () => {
     const source = readFileSync(gitlabPipeline, 'utf8');
     const relaySigning = source.slice(source.indexOf('sign-relay-update:'), source.indexOf('upload-relay-update:'));
     const gatewaySigning = source.slice(
       source.indexOf('sign-gateway-update:'),
       source.indexOf('upload-gateway-update:')
     );
-    const connectorPublishing = source.slice(
+    const secureConnectorPublishing = source.slice(
       source.indexOf('publish-secure-link-connector:'),
       source.indexOf('\nrelease:')
     );
+    const databaseConnectorPublishing = source.slice(
+      source.indexOf('publish-database-connector:'),
+      source.indexOf('publish-secure-link-connector:')
+    );
 
     expect(relaySigning).toContain('publish-secure-link-connector');
+    expect(relaySigning).toContain('publish-database-connector');
     expect(relaySigning).toContain('--secure-link-connector-image');
+    expect(relaySigning).toContain('--database-connector-image');
     expect(relaySigning).toContain('--min-gateway-version');
     expect(relaySigning).toContain('config/relay/min-gateway-version');
     expect(gatewaySigning).not.toContain('publish-secure-link-connector');
+    expect(gatewaySigning).not.toContain('publish-database-connector');
     expect(gatewaySigning).not.toContain('--secure-link-connector-image');
-    expect(connectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
-    expect(connectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
+    expect(gatewaySigning).not.toContain('--database-connector-image');
+    expect(secureConnectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
+    expect(secureConnectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
+    expect(databaseConnectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
+    expect(databaseConnectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
     expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+$/);
   });
 
