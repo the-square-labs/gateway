@@ -69,41 +69,65 @@ prompt_menu() {
     local default="$1"
     shift
     local -a options=("$@")
-    local selected=$((default - 1)) key sequence tty="/dev/tty" index
+    local selected=$((default - 1)) key sequence reply tty="/dev/tty" tty_device="" supports_arrow_menu=1 index
     [[ -r "$tty" && -w "$tty" && "${TERM:-dumb}" != "dumb" ]] || die "Cannot show an interactive menu — use --type flag"
-    render_menu() {
-        local resolved="${1:-0}" rail=" "
-        [[ "$resolved" -eq 1 ]] && rail="│"
-        for index in "${!options[@]}"; do
-            if [[ "$index" -eq "$selected" ]]; then
-                printf "${BRAND_MINT}%s${NC}  ${BRAND_MINT}●${NC} ${BOLD}%d) %s${NC}\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
-            else
-                printf "${BRAND_MINT}%s${NC}  ${GRAY}○${NC} %d) %s\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
-            fi
-        done
-        [[ "$resolved" -eq 1 ]] || printf "  ${GRAY}Use ↑/↓ and Enter${NC}\033[K\n" > "$tty"
-    }
-    render_menu
-    while true; do
-        IFS= read -rsn1 key < "$tty" || die "Interactive menu closed"
-        if [[ "$key" == $'\e' ]]; then
-            IFS= read -rsn2 sequence < "$tty" || sequence=""
-            key+="$sequence"
-        fi
-        case "$key" in
-            $'\e[A') selected=$(( (selected + ${#options[@]} - 1) % ${#options[@]} )) ;;
-            $'\e[B') selected=$(( (selected + 1) % ${#options[@]} )) ;;
-            '')
+    tty_device=$(tty < "$tty" 2>/dev/null || true)
+    case "$tty_device" in
+        /dev/ttyS*|/dev/hvc*|/dev/xvc*|/dev/console) supports_arrow_menu=0 ;;
+    esac
+    if [[ "$supports_arrow_menu" -eq 1 ]]; then
+        render_menu() {
+            local resolved="${1:-0}" rail=" "
+            [[ "$resolved" -eq 1 ]] && rail="│"
+            for index in "${!options[@]}"; do
+                if [[ "$index" -eq "$selected" ]]; then
+                    printf "${BRAND_MINT}%s${NC}  ${BRAND_MINT}●${NC} ${BOLD}%d) %s${NC}\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+                else
+                    printf "${BRAND_MINT}%s${NC}  ${GRAY}○${NC} %d) %s\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+                fi
+            done
+            [[ "$resolved" -eq 1 ]] || printf "  ${GRAY}Use ↑/↓ and Enter${NC}\033[K\n" > "$tty"
+        }
+        render_menu
+        while true; do
+            if ! IFS= read -rsn1 key < "$tty" 2>/dev/null; then
                 printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
                 render_menu 1
                 printf "\r\033[K" > "$tty"
-                echo "$((selected + 1))"
-                return
-                ;;
-            *) continue ;;
-        esac
-        printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
-        render_menu
+                break
+            fi
+            if [[ "$key" == $'\e' ]]; then
+                IFS= read -rsn2 sequence < "$tty" 2>/dev/null || sequence=""
+                key+="$sequence"
+            fi
+            case "$key" in
+                $'\e[A') selected=$(( (selected + ${#options[@]} - 1) % ${#options[@]} )) ;;
+                $'\e[B') selected=$(( (selected + 1) % ${#options[@]} )) ;;
+                '')
+                    printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+                    render_menu 1
+                    printf "\r\033[K" > "$tty"
+                    echo "$((selected + 1))"
+                    return
+                    ;;
+                *) continue ;;
+            esac
+            printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+            render_menu
+        done
+    fi
+    while true; do
+        printf "${BRAND_MINT}◆${NC} ${BRAND_MINT}Choose [${default}]: ${NC}" > "$tty"
+        if ! IFS= read -r reply < "$tty" 2>/dev/null; then
+            echo "$default"
+            return
+        fi
+        reply="${reply:-$default}"
+        if [[ "$reply" =~ ^[0-9]+$ && "$reply" -ge 1 && "$reply" -le "${#options[@]}" ]]; then
+            echo "$reply"
+            return
+        fi
+        printf "${YELLOW}Enter a number from 1 to %d.${NC}\n" "${#options[@]}" > "$tty"
     done
 }
 

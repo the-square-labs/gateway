@@ -9,6 +9,7 @@ const relayMinGatewayVersion = fileURLToPath(new URL('../../../../config/relay/m
 const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node.sh', import.meta.url));
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
 const monitoringNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-monitoring-node.sh', import.meta.url));
+const daemonInstaller = fileURLToPath(new URL('../../../../scripts/setup-daemon.sh', import.meta.url));
 
 describe('install.sh managed browser bootstrap', () => {
   it('is valid shell and still works when piped to bash', () => {
@@ -232,6 +233,16 @@ describe('node installer private logs', () => {
 
 describe('node installer daemon downloads', () => {
   it.each([
+    ['nginx', nginxNodeInstaller],
+    ['docker', dockerNodeInstaller],
+    ['monitoring', monitoringNodeInstaller],
+  ])('%s searches enough GitLab releases to find less frequently published daemon tags', (_name, path) => {
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain('/releases?per_page=100');
+  });
+
+  it.each([
     ['nginx', nginxNodeInstaller, 'nginx-daemon'],
     ['docker', dockerNodeInstaller, 'docker-daemon'],
     ['monitoring', monitoringNodeInstaller, 'monitoring-daemon'],
@@ -240,6 +251,22 @@ describe('node installer daemon downloads', () => {
 
     expect(source).toContain(`die "Failed to download ${binary} \${RESOLVED_DAEMON_VERSION} from releases"`);
     expect(source).not.toContain(`Place the ${binary} binary at \${target}`);
+  });
+});
+
+describe('daemon installer interactive selectors', () => {
+  it.each([
+    ['nginx', nginxNodeInstaller],
+    ['docker', dockerNodeInstaller],
+    ['monitoring', monitoringNodeInstaller],
+    ['dispatcher', daemonInstaller],
+  ])('%s falls back from arrow-key menus on serial consoles without leaking read errors', (_name, path) => {
+    const source = readFileSync(path, 'utf8');
+    const syntax = spawnSync('bash', ['-n', path], { encoding: 'utf8' });
+
+    expect(syntax.status, syntax.stderr).toBe(0);
+    expect(source).toContain('/dev/ttyS*|/dev/hvc*|/dev/xvc*|/dev/console');
+    expect(source).toContain('read -rsn1 key < "$tty" 2>/dev/null');
   });
 });
 

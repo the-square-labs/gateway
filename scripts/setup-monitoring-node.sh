@@ -255,7 +255,7 @@ resolve_download_url() {
         log "Resolving latest monitoring release tag..."
         local latest_tag
         local releases_json
-        releases_json=$(curl -fsSL "${GITLAB_API}/releases")
+        releases_json=$(curl -fsSL "${GITLAB_API}/releases?per_page=100")
         latest_tag=$(printf '%s' "$releases_json" | grep -o '"tag_name":"v[0-9]*\.[0-9]*\.[0-9]*-monitoring"' | head -1 | cut -d'"' -f4 || true)
         if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
             die "Could not resolve latest monitoring release tag from ${GITLAB_API}/releases"
@@ -334,12 +334,16 @@ prompt_choice() {
     local default="$2"
     shift 2
     local -a options=("$@")
-    local reply selected=0 key sequence tty="/dev/tty" index
+    local reply selected=0 key sequence tty="/dev/tty" tty_device="" supports_arrow_menu=1 index
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
         echo "$default"
         return
     fi
-    if [[ "${#options[@]}" -gt 0 && -r "$tty" && -w "$tty" && "${TERM:-dumb}" != "dumb" ]]; then
+    tty_device=$(tty < "$tty" 2>/dev/null || true)
+    case "$tty_device" in
+        /dev/ttyS*|/dev/hvc*|/dev/xvc*|/dev/console) supports_arrow_menu=0 ;;
+    esac
+    if [[ "$supports_arrow_menu" -eq 1 && "${#options[@]}" -gt 0 && -r "$tty" && -w "$tty" && "${TERM:-dumb}" != "dumb" ]]; then
         selected=$((default - 1))
         (( selected >= 0 && selected < ${#options[@]} )) || selected=0
         render_menu() {
@@ -356,9 +360,14 @@ prompt_choice() {
         }
         render_menu
         while true; do
-            IFS= read -rsn1 key < "$tty" || { echo "$default"; return; }
+            if ! IFS= read -rsn1 key < "$tty" 2>/dev/null; then
+                printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+                render_menu 1
+                printf "\r\033[K" > "$tty"
+                break
+            fi
             if [[ "$key" == $'\e' ]]; then
-                IFS= read -rsn2 sequence < "$tty" || sequence=""
+                IFS= read -rsn2 sequence < "$tty" 2>/dev/null || sequence=""
                 key+="$sequence"
             fi
             case "$key" in
@@ -378,7 +387,7 @@ prompt_choice() {
         done
     fi
     if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty 2>/dev/null || reply=""
     else
         reply=""
     fi
