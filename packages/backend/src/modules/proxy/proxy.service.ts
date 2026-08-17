@@ -452,8 +452,7 @@ export class ProxyService {
       if (host.upstreamKind !== 'manual') {
         if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
         host = await this.secureLinks.prepare(host, true);
-        await this.secureLinks.commitCutover(host.id);
-        host = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) })) ?? host;
+        host = (await this.secureLinks.commitCutover(host.id)) ?? host;
       }
       const certPaths = await this.resolveCertPaths(host);
       const accessList = await this.resolveAccessList(host.accessListId);
@@ -680,8 +679,7 @@ export class ProxyService {
           if (existing.secureLinkGeneration === 0 && existing.enabled) {
             await this.removeConfigFromNode(id, existing.nodeId);
           }
-          await this.secureLinks.commitCutover(id);
-          updated = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) })) ?? updated;
+          updated = (await this.secureLinks.commitCutover(id)) ?? updated;
         }
       }
       if (updated.enabled) {
@@ -1904,8 +1902,7 @@ export class ProxyService {
           if (host.secureLinkGeneration === 0 && host.enabled) {
             await this.removeConfigFromNode(host.id, host.nodeId);
           }
-          await this.secureLinks?.commitCutover(updated.id);
-          cutoverHost = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, updated.id) })) ?? updated;
+          cutoverHost = (await this.secureLinks?.commitCutover(updated.id)) ?? updated;
         }
         if (cutoverHost.enabled) {
           try {

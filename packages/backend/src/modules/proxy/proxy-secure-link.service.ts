@@ -608,14 +608,17 @@ export class ProxySecureLinkService {
       .where(eq(proxyHosts.id, hostId));
   }
 
-  async commitCutover(hostId: string): Promise<void> {
+  async commitCutover(hostId: string): Promise<ProxyHostRow> {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
     if (!host || host.secureLinkGeneration < 1) throw new Error('Secure Link is not prepared for cutover');
-    if (host.secureLinkMigratedAt) return;
-    await this.db
+    if (host.secureLinkMigratedAt) return host;
+    const [committed] = await this.db
       .update(proxyHosts)
       .set({ secureLinkMigratedAt: new Date(), updatedAt: new Date() })
-      .where(eq(proxyHosts.id, hostId));
+      .where(eq(proxyHosts.id, hostId))
+      .returning();
+    if (!committed) throw new Error('Secure Link cutover state was not persisted');
+    return committed;
   }
 
   async markCutoverError(hostId: string, error: unknown): Promise<void> {

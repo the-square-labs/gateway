@@ -714,7 +714,11 @@ describe('ProxyService legacy Docker link compatibility', () => {
     } as any;
     const secureLinks = {
       reconcileExisting: vi.fn().mockResolvedValue({ ...provisioning, secureLinkStatus: 'cutover_ready' }),
-      commitCutover: vi.fn().mockResolvedValue(undefined),
+      commitCutover: vi.fn().mockResolvedValue({
+        ...provisioning,
+        secureLinkStatus: 'cutover_ready',
+        secureLinkMigratedAt: new Date(),
+      }),
       activate: vi.fn().mockResolvedValue(undefined),
       getActiveAdditional: vi.fn().mockResolvedValue([]),
       assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
