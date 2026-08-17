@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CLOUDFLARE_API_TOKEN_URL } from "@/lib/cloudflare";
 import { GitHubDeviceFlow } from "@/pages/settings/GitHubDeviceFlow";
 import { api } from "@/services/api";
 import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
@@ -369,19 +370,7 @@ export function IntegrationsSetupWizard({
         {saving ? <Loader2 className="animate-spin" /> : <GitBranch />}
         Save GitLab
       </Button>
-    ) : screen === "github" && githubAuthMode === "oauth" ? (
-      <GitHubDeviceFlow
-        request={{
-          name: githubName.trim(),
-          enabled: true,
-        }}
-        disabled={!githubName.trim()}
-        onCompleted={() => {
-          setConfiguredOptionalConnectors((current) => new Set(current).add("github"));
-          setScreen(completionScreen("github"));
-        }}
-      />
-    ) : screen === "github" ? (
+    ) : screen === "github" && githubAuthMode === "token" ? (
       <Button
         onClick={() => void saveGitConnector("github")}
         disabled={saving || !githubName.trim() || !githubUrl.trim() || !githubToken.trim()}
@@ -562,12 +551,22 @@ export function IntegrationsSetupWizard({
             title="API token"
             description="Requires Zone and DNS permissions for the zones Gateway should manage."
           >
-            <Input
-              type="password"
-              value={cloudflareToken}
-              onChange={(event) => setCloudflareToken(event.target.value)}
-              autoComplete="off"
-            />
+            <div className="space-y-2">
+              <Input
+                type="password"
+                value={cloudflareToken}
+                onChange={(event) => setCloudflareToken(event.target.value)}
+                autoComplete="off"
+              />
+              <a
+                href={CLOUDFLARE_API_TOKEN_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex text-sm font-medium text-[color:var(--color-link)] hover:underline focus-visible:outline-none focus-visible:underline"
+              >
+                Create API token →
+              </a>
+            </div>
           </SettingsControlRow>
         </PanelShell>
       ) : screen === "gitlab" ? (
@@ -608,122 +607,139 @@ export function IntegrationsSetupWizard({
           </SettingsControlRow>
         </PanelShell>
       ) : (
-        <PanelShell
-          title={screen === "github" ? "GitHub connector" : "Git connector"}
-          description={
-            screen === "github"
-              ? githubAuthMode === "oauth"
-                ? "Connect your GitHub account. Gateway can use repositories available to the authorized account."
-                : "Connect a GitHub account with a personal access token."
-              : "Connect one or more repositories on a generic Git host."
-          }
-        >
-          {screen === "github" ? (
-            <SettingsControlRow
-              title="Authentication"
-              description={
-                githubOAuthAvailable
-                  ? "OAuth is recommended; a personal access token remains available."
-                  : "OAuth is not configured on this Gateway; use a personal access token."
-              }
-            >
-              <Tabs
-                value={githubAuthMode}
-                onValueChange={(value) => setGithubAuthMode(value as "oauth" | "token")}
-                className="w-full"
-              >
-                <TabsList className="w-full">
-                  <TabsTrigger value="oauth" disabled={!githubOAuthAvailable} className="flex-1">
-                    {githubOAuthAvailable ? "OAuth" : "OAuth unavailable"}
-                  </TabsTrigger>
-                  <TabsTrigger value="token" className="flex-1">
-                    Token
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </SettingsControlRow>
-          ) : null}
-          <SettingsControlRow
-            title="Connector name"
-            description="A label for this source-control connection in Gateway."
+        <div className="space-y-4">
+          <PanelShell
+            title={screen === "github" ? "GitHub connector" : "Git connector"}
+            description={
+              screen === "github"
+                ? githubAuthMode === "oauth"
+                  ? "Connect your GitHub account. Gateway can use repositories available to the authorized account."
+                  : "Connect a GitHub account with a personal access token."
+                : "Connect one or more repositories on a generic Git host."
+            }
           >
-            <Input
-              value={screen === "github" ? githubName : gitName}
-              onChange={(event) => {
-                if (screen === "github") setGithubName(event.target.value);
-                else setGitName(event.target.value);
-              }}
-              autoFocus
-            />
-          </SettingsControlRow>
-          {screen === "git" || githubAuthMode === "token" ? (
+            {screen === "github" ? (
+              <SettingsControlRow
+                title="Authentication"
+                description={
+                  githubOAuthAvailable
+                    ? "OAuth is recommended; a personal access token remains available."
+                    : "OAuth is not configured on this Gateway; use a personal access token."
+                }
+              >
+                <Tabs
+                  value={githubAuthMode}
+                  onValueChange={(value) => setGithubAuthMode(value as "oauth" | "token")}
+                  className="w-full"
+                >
+                  <TabsList className="w-full">
+                    <TabsTrigger value="oauth" disabled={!githubOAuthAvailable} className="flex-1">
+                      {githubOAuthAvailable ? "OAuth" : "OAuth unavailable"}
+                    </TabsTrigger>
+                    <TabsTrigger value="token" className="flex-1">
+                      Token
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </SettingsControlRow>
+            ) : null}
             <SettingsControlRow
-              title={screen === "github" ? "GitHub URL" : "Git host URL"}
-              description={
-                screen === "github"
-                  ? "Use github.com or the base URL of your GitHub Enterprise instance."
-                  : "The base URL of the Git host that serves this repository."
-              }
+              title="Connector name"
+              description="A label for this source-control connection in Gateway."
             >
               <Input
-                value={screen === "github" ? githubUrl : gitUrl}
+                value={screen === "github" ? githubName : gitName}
                 onChange={(event) => {
-                  if (screen === "github") setGithubUrl(event.target.value);
-                  else setGitUrl(event.target.value);
+                  if (screen === "github") setGithubName(event.target.value);
+                  else setGitName(event.target.value);
                 }}
-                placeholder={screen === "github" ? "https://github.com" : "https://git.example.com"}
+                autoFocus
               />
             </SettingsControlRow>
-          ) : null}
-          {screen === "git" ? (
-            <SettingsControlRow
-              title="Repositories"
-              description="Add every repository this credential should make available to Gateway."
-            >
-              <EditableStringList
-                values={gitRepositoryUrls}
-                onChange={setGitRepositoryUrls}
-                placeholder="https://git.example.com/team/repository"
-                itemLabel="Repository URL"
-              />
-            </SettingsControlRow>
-          ) : null}
-          {screen === "git" ? (
-            <>
-              <SettingsControlRow title="Username">
+            {screen === "git" || githubAuthMode === "token" ? (
+              <SettingsControlRow
+                title={screen === "github" ? "GitHub URL" : "Git host URL"}
+                description={
+                  screen === "github"
+                    ? "Use github.com or the base URL of your GitHub Enterprise instance."
+                    : "The base URL of the Git host that serves this repository."
+                }
+              >
                 <Input
-                  value={gitUsername}
-                  onChange={(event) => setGitUsername(event.target.value)}
-                  autoComplete="username"
+                  value={screen === "github" ? githubUrl : gitUrl}
+                  onChange={(event) => {
+                    if (screen === "github") setGithubUrl(event.target.value);
+                    else setGitUrl(event.target.value);
+                  }}
+                  placeholder={
+                    screen === "github" ? "https://github.com" : "https://git.example.com"
+                  }
                 />
               </SettingsControlRow>
+            ) : null}
+            {screen === "git" ? (
               <SettingsControlRow
-                title="Access token"
-                description="Gateway encrypts this token and never displays it again."
+                title="Repositories"
+                description="Add every repository this credential should make available to Gateway."
+              >
+                <EditableStringList
+                  values={gitRepositoryUrls}
+                  onChange={setGitRepositoryUrls}
+                  placeholder="https://git.example.com/team/repository"
+                  itemLabel="Repository URL"
+                />
+              </SettingsControlRow>
+            ) : null}
+            {screen === "git" ? (
+              <>
+                <SettingsControlRow title="Username">
+                  <Input
+                    value={gitUsername}
+                    onChange={(event) => setGitUsername(event.target.value)}
+                    autoComplete="username"
+                  />
+                </SettingsControlRow>
+                <SettingsControlRow
+                  title="Access token"
+                  description="Gateway encrypts this token and never displays it again."
+                >
+                  <Input
+                    type="password"
+                    value={gitToken}
+                    onChange={(event) => setGitToken(event.target.value)}
+                    autoComplete="off"
+                  />
+                </SettingsControlRow>
+              </>
+            ) : null}
+            {screen === "github" && githubAuthMode === "token" ? (
+              <SettingsControlRow
+                title="Personal access token"
+                description="Gateway encrypts this token and uses repositories visible to its GitHub account."
               >
                 <Input
                   type="password"
-                  value={gitToken}
-                  onChange={(event) => setGitToken(event.target.value)}
+                  value={githubToken}
+                  onChange={(event) => setGithubToken(event.target.value)}
                   autoComplete="off"
                 />
               </SettingsControlRow>
-            </>
+            ) : null}
+          </PanelShell>
+          {screen === "github" && githubAuthMode === "oauth" ? (
+            <GitHubDeviceFlow
+              request={{
+                name: githubName.trim(),
+                enabled: true,
+              }}
+              disabled={!githubName.trim()}
+              onCompleted={() => {
+                setConfiguredOptionalConnectors((current) => new Set(current).add("github"));
+                setScreen(completionScreen("github"));
+              }}
+            />
           ) : null}
-          {screen === "github" && githubAuthMode === "token" ? (
-            <SettingsControlRow
-              title="Personal access token"
-              description="Gateway encrypts this token and uses repositories visible to its GitHub account."
-            >
-              <Input
-                type="password"
-                value={githubToken}
-                onChange={(event) => setGithubToken(event.target.value)}
-                autoComplete="off"
-              />
-            </SettingsControlRow>
-          ) : null}
-        </PanelShell>
+        </div>
       )}
     </FinalizeSetupWizardDialog>
   );

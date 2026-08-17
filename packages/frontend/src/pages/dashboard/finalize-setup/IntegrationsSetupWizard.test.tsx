@@ -28,6 +28,25 @@ const pendingState: FinalizeSetupState = {
 };
 
 describe("IntegrationsSetupWizard", () => {
+  it("links to the Cloudflare API token creator from setup", async () => {
+    const user = userEvent.setup();
+    render(
+      <IntegrationsSetupWizard
+        open
+        state={pendingState}
+        onBack={vi.fn()}
+        onStep={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Cloudflare/i }));
+
+    expect(screen.getByRole("link", { name: "Create API token →" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("dash.cloudflare.com/profile/api-tokens")
+    );
+  });
+
   it("opens the requested Git connector directly for an assistant handoff", async () => {
     vi.mocked(api.createGitConnector).mockResolvedValue({} as never);
     const onFinished = vi.fn();
@@ -109,7 +128,11 @@ describe("IntegrationsSetupWizard", () => {
     );
     expect(screen.queryByText("GitHub URL")).not.toBeInTheDocument();
     expect(screen.queryByText("Repository URL")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start GitHub authorization" })).toBeEnabled();
+    const authorizationButton = screen.getByRole("button", {
+      name: "Start GitHub authorization",
+    });
+    expect(authorizationButton).toBeEnabled();
+    expect(authorizationButton.closest("[data-dialog-body]")).not.toBeNull();
   });
 
   it("creates account-wide GitHub token connectors without repository or username fields", async () => {
