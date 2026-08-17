@@ -65,17 +65,6 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | 本地运行项目或参与贡献 | [Development guide](docs/development.md) |
 | 查看 permission scopes | [SCOPES.md](SCOPES.md) |
 
-## 配置 AI Harnesses
-
-[`@wiolett/gateway-inference`](packages/gateway-inference) companion 可以配置受支持的 AI harnesses，而不会把 Gateway inference token 写入它们的配置文件。先在 **Settings > General > General settings** 中启用 **Inference**，再在 **Settings > Inference** 中启用 **Harness-specific endpoints**，然后运行：
-
-```bash
-npx -y @wiolett/gateway-inference@latest setup codex
-npx -y @wiolett/gateway-inference@latest setup claude-code
-```
-
-如果没有活动连接，CLI 会询问 Gateway URL 并完成 OAuth。Codex Desktop 还必须通过 Codex 的正常流程登录 OpenAI account，并在配置后完全退出并重新打开。Claude Code 需要 2.1.129 或更高版本；这里只配置 CLI，不配置 Claude Desktop 或 VS Code extension。完整 lifecycle 和手动 API 配置请参见[包 README](packages/gateway-inference/README.md)和 [inference guide](docs/inference.md)。
-
 ## 产品导览
 
 <table>

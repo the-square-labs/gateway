@@ -65,17 +65,6 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Run the project locally or contribute | [Development guide](docs/development.md) |
 | Review permission scopes | [SCOPES.md](SCOPES.md) |
 
-## Configure AI Harnesses
-
-The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** under **Settings > General > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference** and run one of:
-
-```bash
-npx -y @wiolett/gateway-inference@latest setup codex
-npx -y @wiolett/gateway-inference@latest setup claude-code
-```
-
-The CLI asks for the Gateway URL and completes OAuth when no active connection exists. Codex Desktop must also be signed in through Codex's normal OpenAI account flow and fully restarted after setup. Claude Code setup requires Claude Code 2.1.129 or newer and configures the CLI only, not Claude Desktop or the VS Code extension. See the [package README](packages/gateway-inference/README.md) and [inference guide](docs/inference.md) for the complete lifecycle and manual API setup.
-
 ## Product Tour
 
 <table>
