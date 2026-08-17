@@ -78,7 +78,7 @@ function isMissingContainerError(error: unknown) {
 
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
-  private readonly clickHousePrincipalReconciliationNodes = new Set<string>();
+  private readonly bindingPrincipalReconciliationNodes = new Set<string>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -102,8 +102,8 @@ export class ManagedDatabaseBindingService {
     bus.subscribe('node.changed', (payload) => {
       const event = payload as { id?: unknown; status?: unknown } | null;
       if (typeof event?.id !== 'string' || event.status !== 'online') return;
-      this.reconcileClickHousePrincipalsForNode(event.id).catch((error) => {
-        logger.warn('Failed to reconcile ClickHouse binding principals after daemon connect', {
+      this.reconcileBindingPrincipalsForNode(event.id).catch((error) => {
+        logger.warn('Failed to reconcile managed database binding principals after daemon connect', {
           nodeId: event.id,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -130,8 +130,8 @@ export class ManagedDatabaseBindingService {
     };
   }
 
-  /** Reapply secure ClickHouse binding principals after a daemon reconnect. */
-  async reconcileClickHousePrincipals(nodeId?: string) {
+  /** Reapply idempotent binding principals after a database daemon reconnect. */
+  async reconcileBindingPrincipals(nodeId?: string) {
     const rows = await this.db
       .select({ database: managedDatabaseInstances, binding: managedDatabaseBindings })
       .from(managedDatabaseBindings)
@@ -139,7 +139,7 @@ export class ManagedDatabaseBindingService {
     let failures = 0;
     for (const { database, binding } of rows) {
       if (
-        database.type !== 'clickhouse' ||
+        (database.type !== 'clickhouse' && database.type !== 'postgres') ||
         database.status !== 'ready' ||
         database.pendingOperation ||
         binding.status !== 'ready' ||
@@ -150,7 +150,29 @@ export class ManagedDatabaseBindingService {
       try {
         const credentials = this.bindingCredentials(binding);
         const owner = this.ownerCredentials(database);
-        await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
+        if (credentials.username === owner.username) {
+          this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
+          continue;
+        }
+        if (database.type === 'clickhouse') {
+          await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
+        } else {
+          this.requireSuccess(
+            await this.nodeDispatch.sendDockerDatabaseCommand(
+              database.nodeId,
+              'binding_create',
+              database.id,
+              JSON.stringify({
+                bindingId: binding.id,
+                username: credentials.username,
+                password: credentials.password,
+                databaseName: credentials.databaseName ?? 'app',
+                ownerUsername: owner.username,
+                ownerPassword: owner.password,
+              })
+            )
+          );
+        }
         this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
       } catch (error) {
         failures += 1;
@@ -161,22 +183,22 @@ export class ManagedDatabaseBindingService {
       }
     }
     if (failures > 0) {
-      throw new Error(`Failed to reconcile ${failures} ClickHouse binding principal(s)`);
+      throw new Error(`Failed to reconcile ${failures} managed database binding principal(s)`);
     }
   }
 
-  private async reconcileClickHousePrincipalsForNode(nodeId: string) {
-    if (this.clickHousePrincipalReconciliationNodes.has(nodeId)) return;
-    this.clickHousePrincipalReconciliationNodes.add(nodeId);
+  private async reconcileBindingPrincipalsForNode(nodeId: string) {
+    if (this.bindingPrincipalReconciliationNodes.has(nodeId)) return;
+    this.bindingPrincipalReconciliationNodes.add(nodeId);
     try {
-      await this.reconcileClickHousePrincipals(nodeId);
+      await this.reconcileBindingPrincipals(nodeId);
     } finally {
-      this.clickHousePrincipalReconciliationNodes.delete(nodeId);
+      this.bindingPrincipalReconciliationNodes.delete(nodeId);
     }
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
-    const preflightDatabase = await this.getReadyDatabase(managedDatabaseId);
+    await this.getReadyDatabase(managedDatabaseId);
     await this.assertDockerNode(input.targetNodeId);
     this.assertConnectorImage();
     const targetResourceId = await this.resolveBindingTarget(input);
@@ -189,14 +211,6 @@ export class ManagedDatabaseBindingService {
     );
     const id = crypto.randomUUID();
     const shortId = id.replaceAll('-', '').slice(0, 16);
-    const credentials: BindingCredentials = {
-      username: `gw_${preflightDatabase.type}_${shortId.slice(0, 10)}`,
-      password: crypto.randomBytes(32).toString('base64url'),
-      ...(preflightDatabase.engineConfig.databaseName
-        ? { databaseName: preflightDatabase.engineConfig.databaseName }
-        : {}),
-    };
-    const encryptedCredentials = JSON.stringify(this.cryptoService.encryptString(JSON.stringify(credentials)));
     // Bindings provision external resources after this transaction. Lock the
     // managed database row while inserting so lifecycle deletion cannot race
     // past an empty binding list and cascade-delete an in-flight binding.
@@ -222,7 +236,10 @@ export class ManagedDatabaseBindingService {
           connectorName: `gateway-db-connector-${shortId}`,
           connectorAlias: `db-${shortId}`,
           environment: input.environment,
-          encryptedCredentials,
+          // A link is transport, not a database identity. All links to one
+          // managed database use its existing owner account so link recreation
+          // cannot split object ownership across short-lived roles.
+          encryptedCredentials: locked.encryptedOwnerCredentials,
           status: 'creating',
           createdById: userId,
           updatedById: userId,
@@ -352,26 +369,28 @@ export class ManagedDatabaseBindingService {
     try {
       const credentials = this.bindingCredentials(binding);
       const owner = this.ownerCredentials(database);
-      if (database.type === 'clickhouse') {
-        await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
-      } else {
-        this.requireSuccess(
-          await this.nodeDispatch.sendDockerDatabaseCommand(
-            database.nodeId,
-            'binding_create',
-            database.id,
-            JSON.stringify({
-              bindingId: binding.id,
-              username: credentials.username,
-              password: credentials.password,
-              databaseName: credentials.databaseName ?? 'app',
-              ownerUsername: owner.username,
-              ownerPassword: owner.password,
-            })
-          )
-        );
+      if (credentials.username !== owner.username) {
+        if (database.type === 'clickhouse') {
+          await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
+        } else {
+          this.requireSuccess(
+            await this.nodeDispatch.sendDockerDatabaseCommand(
+              database.nodeId,
+              'binding_create',
+              database.id,
+              JSON.stringify({
+                bindingId: binding.id,
+                username: credentials.username,
+                password: credentials.password,
+                databaseName: credentials.databaseName ?? 'app',
+                ownerUsername: owner.username,
+                ownerPassword: owner.password,
+              })
+            )
+          );
+        }
+        principalCreated = true;
       }
-      principalCreated = true;
 
       if (!this.relayPolicy) throw new Error('Gateway relay policy is unavailable');
       await this.relayPolicy.ensureBindingRoute(
@@ -496,21 +515,23 @@ export class ManagedDatabaseBindingService {
         networkId: binding.networkName,
       })
     );
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerDatabaseCommand(
-        database.nodeId,
-        'binding_remove',
-        database.id,
-        JSON.stringify({
-          bindingId: binding.id,
-          username: credentials.username,
-          password: credentials.password,
-          databaseName: credentials.databaseName ?? 'app',
-          ownerUsername: owner.username,
-          ownerPassword: owner.password,
-        })
-      )
-    );
+    if (credentials.username !== owner.username) {
+      this.requireSuccess(
+        await this.nodeDispatch.sendDockerDatabaseCommand(
+          database.nodeId,
+          'binding_remove_v2',
+          database.id,
+          JSON.stringify({
+            bindingId: binding.id,
+            username: credentials.username,
+            password: credentials.password,
+            databaseName: credentials.databaseName ?? 'app',
+            ownerUsername: owner.username,
+            ownerPassword: owner.password,
+          })
+        )
+      );
+    }
   }
 
   private async applyTargetBinding(
@@ -680,7 +701,7 @@ export class ManagedDatabaseBindingService {
       await this.nodeDispatch
         .sendDockerDatabaseCommand(
           database.nodeId,
-          'binding_remove',
+          'binding_remove_v2',
           database.id,
           JSON.stringify({
             bindingId: binding.id,

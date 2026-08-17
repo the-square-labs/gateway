@@ -509,6 +509,42 @@ func TestBindingPrincipalSQLUsesRealLineTermination(t *testing.T) {
 	}
 }
 
+func TestPostgresBindingPrincipalCanRunSchemaMigrations(t *testing.T) {
+	sql := postgresBindingCreateSQL(managedDatabaseBindingCommand{
+		BindingID:     "binding_123",
+		Username:      "app_user",
+		Password:      "a-long-random-secret-password",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "another-long-owner-secret",
+	})
+	if !strings.Contains(sql, `GRANT USAGE, CREATE ON SCHEMA public TO "app_user"`) {
+		t.Fatalf("PostgreSQL binding user must be able to create migration tables: %q", sql)
+	}
+}
+
+func TestPostgresBindingRemovalPreservesOwnedObjectsAndDropsRole(t *testing.T) {
+	sql := postgresBindingRemoveSQL(managedDatabaseBindingCommand{
+		BindingID:     "binding_123",
+		Username:      "app_user",
+		Password:      "a-long-random-secret-password",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "another-long-owner-secret",
+	})
+	reassign := `REASSIGN OWNED BY ' || quote_ident('app_user') || ' TO ' || quote_ident('app_owner')`
+	dropOwned := `DROP OWNED BY ' || quote_ident('app_user')`
+	dropRole := `DROP ROLE ' || quote_ident('app_user')`
+	for _, statement := range []string{reassign, dropOwned, dropRole} {
+		if !strings.Contains(sql, statement) {
+			t.Fatalf("PostgreSQL binding removal is missing %q: %q", statement, sql)
+		}
+	}
+	if !(strings.Index(sql, reassign) < strings.Index(sql, dropOwned) && strings.Index(sql, dropOwned) < strings.Index(sql, dropRole)) {
+		t.Fatalf("PostgreSQL binding removal must preserve objects before revoking grants and dropping the role: %q", sql)
+	}
+}
+
 func TestClickHouseBindingPrincipalUpdatesExistingPassword(t *testing.T) {
 	sql := clickHouseBindingCreateSQL(managedDatabaseBindingCommand{
 		BindingID:     "binding_123",

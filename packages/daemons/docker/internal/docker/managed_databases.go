@@ -505,7 +505,7 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 			return "", err
 		}
 		return `{"status":"ok"}`, nil
-	case "binding_create", "binding_remove":
+	case "binding_create", "binding_remove", "binding_remove_v2":
 		var input managedDatabaseBindingCommand
 		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
 			return "", fmt.Errorf("parse managed database binding config: %w", err)
@@ -665,15 +665,15 @@ func (m *managedDatabaseManager) removeBindingPrincipal(ctx context.Context, rec
 
 func postgresBindingCreateSQL(input managedDatabaseBindingCommand) string {
 	return fmt.Sprintf(
-		"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'CREATE ROLE ' || quote_ident(%s) || ' LOGIN PASSWORD ' || quote_literal(%s); ELSE EXECUTE 'ALTER ROLE ' || quote_ident(%s) || ' LOGIN PASSWORD ' || quote_literal(%s); END IF; END $$; GRANT ALL PRIVILEGES ON DATABASE %s TO %s;\n",
-		quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Password), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username),
+		"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'CREATE ROLE ' || quote_ident(%s) || ' LOGIN PASSWORD ' || quote_literal(%s); ELSE EXECUTE 'ALTER ROLE ' || quote_ident(%s) || ' LOGIN PASSWORD ' || quote_literal(%s); END IF; END $$; GRANT ALL PRIVILEGES ON DATABASE %s TO %s; GRANT USAGE, CREATE ON SCHEMA public TO %s;\n",
+		quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Password), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username),
 	)
 }
 
 func postgresBindingRemoveSQL(input managedDatabaseBindingCommand) string {
 	return fmt.Sprintf(
-		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'DROP OWNED BY ' || quote_ident(%s); EXECUTE 'DROP ROLE ' || quote_ident(%s); END IF; END $$;\n",
-		quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username),
+		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'REASSIGN OWNED BY ' || quote_ident(%s) || ' TO ' || quote_ident(%s); EXECUTE 'DROP OWNED BY ' || quote_ident(%s); EXECUTE 'DROP ROLE ' || quote_ident(%s); END IF; END $$;\n",
+		quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.OwnerUsername), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username),
 	)
 }
 
