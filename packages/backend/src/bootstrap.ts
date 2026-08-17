@@ -1336,6 +1336,7 @@ export async function initializeContainer(): Promise<void> {
 
   const updateCheckJob = new UpdateCheckJob(updateService, eventBus);
   scheduler.registerInterval('update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () => updateCheckJob.run());
+  setTimeout(() => void updateCheckJob.run(), 0);
   scheduler.registerInterval('license-heartbeat', LICENSE_SCHEDULER_INTERVAL_MS, () => licenseService.heartbeat());
 
   const daemonUpdateCheckJob = new DaemonUpdateCheckJob(daemonUpdateService);

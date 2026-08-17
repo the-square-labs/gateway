@@ -675,6 +675,28 @@ func TestNetworkingConfigForInspectNetworkPreservesBridgeEndpoint(t *testing.T) 
 	}
 }
 
+func TestInspectNetworkNamesPrefersUserDefinedNetworkForDockerDNS(t *testing.T) {
+	insp := &container.InspectResponse{
+		HostConfig: &container.HostConfig{NetworkMode: "bridge"},
+		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
+			"bridge":                 {},
+			"gateway-db-binding":     {},
+			"license-server-network": {},
+		}},
+	}
+
+	names := inspectNetworkNames(insp)
+	if len(names) != 3 || names[0] != "gateway-db-binding" {
+		t.Fatalf("expected a user-defined primary network, got %#v", names)
+	}
+
+	insp.HostConfig.NetworkMode = "license-server-network"
+	names = inspectNetworkNames(insp)
+	if names[0] != "license-server-network" {
+		t.Fatalf("expected the existing user-defined primary network, got %#v", names)
+	}
+}
+
 func TestAnnotateImageUsageMatchesByImageID(t *testing.T) {
 	images := []imagetypes.Summary{
 		{ID: "sha256:busybox", RepoTags: []string{"busybox:latest"}, Containers: -1},

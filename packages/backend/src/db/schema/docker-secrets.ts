@@ -1,4 +1,4 @@
-import { index, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { nodes } from './nodes.js';
 
 export const dockerSecrets = pgTable(
@@ -11,6 +11,7 @@ export const dockerSecrets = pgTable(
     containerName: text('container_name').notNull(),
     key: text('key').notNull(),
     encryptedValue: text('encrypted_value').notNull(),
+    managed: boolean('managed').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

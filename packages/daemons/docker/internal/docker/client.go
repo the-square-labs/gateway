@@ -1451,10 +1451,14 @@ func (c *Client) createContainerFromInspect(
 	// Preserve all networks the container was connected to.
 	// Docker only allows one network at creation time; the rest are connected after.
 	netNames := inspectNetworkNames(insp)
+	hostConfig := *insp.HostConfig
+	if len(netNames) > 0 {
+		hostConfig.NetworkMode = container.NetworkMode(netNames[0])
+	}
 
 	createResult, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           &createConfig,
-		HostConfig:       insp.HostConfig,
+		HostConfig:       &hostConfig,
 		NetworkingConfig: networkingConfigForInspectNetwork(insp, netNames),
 		Name:             name,
 	})
@@ -1490,6 +1494,26 @@ func inspectNetworkNames(insp *container.InspectResponse) []string {
 		}
 	}
 	sort.Strings(netNames)
+	currentMode := ""
+	if insp.HostConfig != nil {
+		currentMode = strings.TrimSpace(string(insp.HostConfig.NetworkMode))
+	}
+	preferred := currentMode
+	if preferred == "" || preferred == "default" || preferred == "bridge" {
+		for _, name := range netNames {
+			if name != "bridge" && name != "default" {
+				preferred = name
+				break
+			}
+		}
+	}
+	for index, name := range netNames {
+		if name == preferred && index > 0 {
+			copy(netNames[1:index+1], netNames[0:index])
+			netNames[0] = name
+			break
+		}
+	}
 	return netNames
 }
 

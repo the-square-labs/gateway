@@ -524,7 +524,7 @@ export class ManagedDatabaseBindingService {
     if (binding.targetType === 'deployment') {
       const secretContainer = `deployment:${binding.targetResourceId}`;
       for (const [key, value] of Object.entries(values)) {
-        await this.dockerSecrets.create(binding.targetNodeId, secretContainer, key, value, userId);
+        await this.dockerSecrets.create(binding.targetNodeId, secretContainer, key, value, userId, { managed: true });
       }
       try {
         await this.dockerDeployments.setManagedDatabaseBindingNetwork(
@@ -556,7 +556,9 @@ export class ManagedDatabaseBindingService {
       // Managed credentials live in Docker secrets. This keeps them out of
       // the ordinary Environment editor while updateContainerEnv still merges
       // them into the recreated container configuration.
-      await this.dockerSecrets.create(binding.targetNodeId, binding.targetResourceId, name, values[name]!, userId);
+      await this.dockerSecrets.create(binding.targetNodeId, binding.targetResourceId, name, values[name]!, userId, {
+        managed: true,
+      });
       delete ordinaryEnvironment[name];
     }
     const removeEnv = Object.keys(current).filter(
@@ -612,7 +614,7 @@ export class ManagedDatabaseBindingService {
     }
 
     try {
-      const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true);
+      const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true, true);
       for (const secret of secrets) {
         if (variableNames.includes(secret.key) && secret.value === expected[secret.key]) {
           await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
@@ -933,7 +935,12 @@ export class ManagedDatabaseBindingService {
   }
 
   private async removeDeploymentSecrets(binding: ManagedDatabaseBindingRow, keys: string[], userId: string) {
-    const rows = await this.dockerSecrets.list(binding.targetNodeId, `deployment:${binding.targetResourceId}`, false);
+    const rows = await this.dockerSecrets.list(
+      binding.targetNodeId,
+      `deployment:${binding.targetResourceId}`,
+      false,
+      true
+    );
     for (const row of rows) {
       if (keys.includes(row.key)) {
         await this.dockerSecrets.delete(row.id, binding.targetNodeId, userId, `deployment:${binding.targetResourceId}`);

@@ -27,35 +27,44 @@ export class DockerSecretService {
   /**
    * List secrets for a container. Values are masked unless `reveal` is true.
    */
-  async list(nodeId: string, containerName: string, reveal: boolean) {
+  async list(nodeId: string, containerName: string, reveal: boolean, includeManaged = false) {
     const rows = await this.db
       .select()
       .from(dockerSecrets)
       .where(and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, containerName)));
 
-    return rows.map((row) => ({
-      id: row.id,
-      key: row.key,
-      value: reveal ? this.decrypt(row.encryptedValue) : MASKED_VALUE,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    }));
+    return rows
+      .filter((row) => includeManaged || !row.managed)
+      .map((row) => ({
+        id: row.id,
+        key: row.key,
+        value: reveal ? this.decrypt(row.encryptedValue) : MASKED_VALUE,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }));
   }
 
   /**
    * Create a new secret for a container.
    */
-  async create(nodeId: string, containerName: string, key: string, value: string, userId: string) {
+  async create(
+    nodeId: string,
+    containerName: string,
+    key: string,
+    value: string,
+    userId: string,
+    options: { managed?: boolean } = {}
+  ) {
     await this.migrationGuard?.assertContainerAllowed(nodeId, containerName);
     const encrypted = this.cryptoService.encryptString(value);
     const encryptedValue = JSON.stringify(encrypted);
 
     const [row] = await this.db
       .insert(dockerSecrets)
-      .values({ nodeId, containerName, key, encryptedValue })
+      .values({ nodeId, containerName, key, encryptedValue, managed: options.managed ?? false })
       .onConflictDoUpdate({
         target: [dockerSecrets.nodeId, dockerSecrets.containerName, dockerSecrets.key],
-        set: { encryptedValue, updatedAt: new Date() },
+        set: { encryptedValue, managed: options.managed ?? false, updatedAt: new Date() },
       })
       .returning();
 

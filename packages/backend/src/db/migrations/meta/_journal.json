@@ -890,6 +890,13 @@
       "when": 1786932493140,
       "tag": "0126_collapse_gitlab_registry_view",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1786935933783,
+      "tag": "0127_happy_nekra",
+      "breakpoints": true
     }
   ]
 }

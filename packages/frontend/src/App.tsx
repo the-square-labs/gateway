@@ -1032,6 +1032,7 @@ function RealtimeBridge() {
             updating?: boolean;
             component?: "gateway" | "relay";
             targetVersion?: string | null;
+            statusChanged?: boolean;
           }
         | undefined;
       if (typeof ev?.updating === "boolean") {
@@ -1045,6 +1046,7 @@ function RealtimeBridge() {
           clearGatewayUpdating();
         }
       }
+      if (ev?.statusChanged) void useUpdateStore.getState().fetchStatus();
       invalidateDashboardBootstrap();
       invalidateUIBootstrap();
     });
