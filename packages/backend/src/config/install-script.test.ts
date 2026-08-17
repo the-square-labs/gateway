@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
 const gitlabPipeline = fileURLToPath(new URL('../../../../.gitlab-ci.yml', import.meta.url));
+const relayMinGatewayVersion = fileURLToPath(new URL('../../../../config/relay/min-gateway-version', import.meta.url));
 const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node.sh', import.meta.url));
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
 const monitoringNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-monitoring-node.sh', import.meta.url));
@@ -89,6 +90,9 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('Signed relay manifest contains an invalid secure-link connector image.');
     expect(source).toContain('RELAY_BUILD_VERSION="$manifest_version"');
     expect(source).toContain('RELAY_PROTOCOL_MAJOR="$protocol_major"');
+    expect(source).toContain('minGatewayVersion');
+    expect(source).toContain('requires Gateway');
+    expect(source).toContain('or newer.');
     expect(source).toContain('GATEWAY_RELAY_IMAGE_REF');
     expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay/identity:ro');
     expect(source).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
@@ -116,10 +120,13 @@ describe('install.sh managed browser bootstrap', () => {
 
     expect(relaySigning).toContain('publish-secure-link-connector');
     expect(relaySigning).toContain('--secure-link-connector-image');
+    expect(relaySigning).toContain('--min-gateway-version');
+    expect(relaySigning).toContain('config/relay/min-gateway-version');
     expect(gatewaySigning).not.toContain('publish-secure-link-connector');
     expect(gatewaySigning).not.toContain('--secure-link-connector-image');
     expect(connectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
     expect(connectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
+    expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+$/);
   });
 
   it('does not advertise Docker, CNI, or loopback interface addresses as host-local targets', () => {

@@ -4,6 +4,7 @@ import type { TrustedGatewayUpdateArtifact, TrustedRelayUpdateArtifact } from '@
 import {
   DOCKER_COMPOSE_CLI_IMAGE_REF,
   imageRepositoryFromRef,
+  isGatewayCompatibleWithRelayUpdate,
   isGatewayReleaseTag,
   isRelayReleaseTag,
   isRelayTooOldForGatewayUpdate,
@@ -93,6 +94,40 @@ describe('UpdateService release selection', () => {
     it('does not block unverifiable local versions', () => {
       expect(isRelayTooOldForGatewayUpdate('dev', 'v2.7.0')).toBe(false);
     });
+  });
+
+  describe('isGatewayCompatibleWithRelayUpdate', () => {
+    it('allows independent Relay patches when their declared Gateway floor is satisfied', () => {
+      expect(isGatewayCompatibleWithRelayUpdate('v2.7.6', 'v2.7.6')).toBe(true);
+      expect(isGatewayCompatibleWithRelayUpdate('v2.7.6', 'v2.7.5')).toBe(true);
+      expect(isGatewayCompatibleWithRelayUpdate('v2.7.5', 'v2.7.6')).toBe(false);
+    });
+  });
+
+  it('hides a cached Relay update until the Gateway compatibility floor is met', async () => {
+    const rows = [
+      { key: 'update:relay:latest_version', value: 'v2.4.3' },
+      { key: 'update:relay:min_gateway_version', value: 'v2.4.3' },
+    ];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
+      })),
+    } as any;
+    const service = new UpdateService(
+      db,
+      makeDockerService() as never,
+      {
+        APP_VERSION: 'v2.4.2',
+        GITLAB_API_URL: 'https://gitlab.example.com/api/v4',
+        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        GATEWAY_RELAY_BUILD_VERSION: 'v2.4.1',
+      } as never
+    );
+
+    expect((await service.getCachedStatus()).relay.updateAvailable).toBe(false);
+    rows[1]!.value = 'v2.4.2';
+    expect((await service.getCachedStatus()).relay.updateAvailable).toBe(true);
   });
 });
 
@@ -429,6 +464,7 @@ function makeRelayArtifact(): TrustedRelayUpdateArtifact {
     digest: `sha256:${'a'.repeat(64)}`,
     buildVersion: 'v2.4.3',
     protocolMajor: 1,
+    minGatewayVersion: 'v2.4.2',
     secureLinkConnectorImage,
     signedManifest: 'signed-relay',
     payload: {
@@ -439,6 +475,7 @@ function makeRelayArtifact(): TrustedRelayUpdateArtifact {
       digest: `sha256:${'a'.repeat(64)}`,
       imageRef,
       protocolMajor: 1,
+      minGatewayVersion: 'v2.4.2',
       secureLinkConnectorImage,
       createdAt: '2026-06-30T00:00:00.000Z',
     },

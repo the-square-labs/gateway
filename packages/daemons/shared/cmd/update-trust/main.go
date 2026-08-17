@@ -72,6 +72,7 @@ func sign(args []string) {
 	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
 	secureLinkConnectorImage := fs.String("secure-link-connector-image", "", "digest-pinned secure-link connector image reference")
 	relayProtocolMajor := fs.Int("relay-protocol-major", 0, "standalone relay protocol major")
+	minGatewayVersion := fs.String("min-gateway-version", "", "minimum compatible Gateway version")
 	commitSHA := fs.String("git-commit-sha", "", "Git commit SHA")
 	pipelineID := fs.String("git-pipeline-id", "", "GitLab pipeline ID")
 	must(fs.Parse(args))
@@ -139,6 +140,7 @@ func sign(args []string) {
 			"--tag":                         *tag,
 			"--image":                       *image,
 			"--digest":                      *digest,
+			"--min-gateway-version":         *minGatewayVersion,
 			"--secure-link-connector-image": *secureLinkConnectorImage,
 		})
 		if *relayProtocolMajor < 1 {
@@ -152,6 +154,7 @@ func sign(args []string) {
 			"digest":                   *digest,
 			"imageRef":                 fmt.Sprintf("%s@%s", *image, *digest),
 			"protocolMajor":            *relayProtocolMajor,
+			"minGatewayVersion":        *minGatewayVersion,
 			"secureLinkConnectorImage": *secureLinkConnectorImage,
 			"createdAt":                createdAt,
 			"gitCommitSha":             *commitSHA,

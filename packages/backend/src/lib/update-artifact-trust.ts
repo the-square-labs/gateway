@@ -61,6 +61,7 @@ export interface RelayImageManifestPayload {
   digest: string;
   imageRef: string;
   protocolMajor: number;
+  minGatewayVersion?: string;
   secureLinkConnectorImage: string;
   createdAt: string;
   gitCommitSha?: string;
@@ -90,6 +91,7 @@ export interface TrustedRelayUpdateArtifact {
   digest: string;
   buildVersion: string;
   protocolMajor: number;
+  minGatewayVersion: string;
   secureLinkConnectorImage: string;
 }
 
@@ -201,6 +203,9 @@ export function verifyRelayImageManifest(
   if (!Number.isInteger(payload.protocolMajor) || payload.protocolMajor !== expected.protocolMajor) {
     throw new UpdateArtifactTrustError('Relay update protocol major is incompatible');
   }
+  if (payload.minGatewayVersion !== undefined && !/^v?\d+\.\d+\.\d+$/.test(payload.minGatewayVersion)) {
+    throw new UpdateArtifactTrustError('Relay update minimum Gateway version is invalid');
+  }
   const gatewayRepository = payload.image.endsWith('/relay') ? payload.image.slice(0, -'/relay'.length) : '';
   if (
     typeof payload.secureLinkConnectorImage !== 'string' ||
@@ -217,6 +222,7 @@ export function verifyRelayImageManifest(
     digest: payload.digest,
     buildVersion: payload.version,
     protocolMajor: payload.protocolMajor,
+    minGatewayVersion: payload.minGatewayVersion ?? payload.version,
     secureLinkConnectorImage: payload.secureLinkConnectorImage,
   };
 }

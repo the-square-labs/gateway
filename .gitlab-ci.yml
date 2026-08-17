@@ -71,6 +71,7 @@ variables:
         - nx.json
         - tsconfig.json
         - packages/backend/**/*
+        - config/relay/min-gateway-version
         - config/update-trust/**/*
         - scripts/sync-update-trust-anchor.sh
         - scripts/setup-node.sh
@@ -296,6 +297,7 @@ sign-relay-update:
     - test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || (echo "UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 CI variable is required to publish signed relay updates" && exit 1)
     - RELAY_IMAGE_DIGEST=$(cat ../../relay-image.digest)
     - SECURE_LINK_CONNECTOR_DIGEST=$(cat ../../secure-link-connector.digest)
+    - RELAY_MIN_GATEWAY_VERSION=$(cat ../../config/relay/min-gateway-version)
     - echo "$RELAY_IMAGE_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "RELAY_IMAGE_DIGEST artifact is required to sign relay updates" && exit 1)
     - echo "$SECURE_LINK_CONNECTOR_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "SECURE_LINK_CONNECTOR_DIGEST artifact is required to sign relay updates" && exit 1)
     - RELAY_VERSION="${CI_COMMIT_TAG%-relay}"
@@ -307,6 +309,7 @@ sign-relay-update:
         --image "${IMAGE}/relay" \
         --digest "$RELAY_IMAGE_DIGEST" \
         --relay-protocol-major 1 \
+        --min-gateway-version "$RELAY_MIN_GATEWAY_VERSION" \
         --secure-link-connector-image "${IMAGE}/secure-link-connector@${SECURE_LINK_CONNECTOR_DIGEST}" \
         --git-commit-sha "$CI_COMMIT_SHA" \
         --git-pipeline-id "$CI_PIPELINE_ID" \

@@ -98,6 +98,13 @@ export function isRelayTooOldForGatewayUpdate(relayVersion: string, targetVersio
   return target[1] - current[1] >= 2;
 }
 
+export function isGatewayCompatibleWithRelayUpdate(currentVersion: string, minGatewayVersion: string): boolean {
+  const current = parseSemver(currentVersion);
+  const minimum = parseSemver(minGatewayVersion);
+  if (!current || !minimum) return currentVersion === 'dev';
+  return compareSemver(currentVersion, minGatewayVersion) >= 0;
+}
+
 const SETTINGS_KEYS = {
   latestVersion: 'update:latest_version',
   lastCheckedAt: 'update:last_checked_at',
@@ -106,6 +113,7 @@ const SETTINGS_KEYS = {
   relayLatestVersion: 'update:relay:latest_version',
   relayReleaseNotes: 'update:relay:release_notes',
   relayReleaseUrl: 'update:relay:release_url',
+  relayMinGatewayVersion: 'update:relay:min_gateway_version',
 } as const;
 
 export class UpdateService {
@@ -170,10 +178,13 @@ export class UpdateService {
       currentVersion !== 'dev' && latestVersion != null ? isNewerVersion(latestVersion, currentVersion) : false;
     const currentRelayVersion = this.env.GATEWAY_RELAY_BUILD_VERSION ?? 'unknown';
     const latestRelayVersion = map.get(SETTINGS_KEYS.relayLatestVersion) ?? null;
+    const relayMinGatewayVersion = map.get(SETTINGS_KEYS.relayMinGatewayVersion) ?? null;
     const relayUpdateAvailable =
       currentRelayVersion !== 'dev' &&
       currentRelayVersion !== 'unknown' &&
       latestRelayVersion != null &&
+      relayMinGatewayVersion != null &&
+      isGatewayCompatibleWithRelayUpdate(currentVersion, relayMinGatewayVersion) &&
       isNewerVersion(latestRelayVersion, currentRelayVersion);
     const updateAvailable =
       gatewayUpdateAvailable &&
@@ -252,9 +263,12 @@ export class UpdateService {
         await this.upsertSetting(SETTINGS_KEYS.releaseUrl, latest._links?.self || '');
       }
       if (latestRelay) {
-        await this.upsertSetting(SETTINGS_KEYS.relayLatestVersion, latestRelay.tag_name.replace(/-relay$/, ''));
+        const relayVersion = latestRelay.tag_name.replace(/-relay$/, '');
+        const relayArtifact = await this.prepareRelayUpdate(relayVersion, true);
+        await this.upsertSetting(SETTINGS_KEYS.relayLatestVersion, relayVersion);
         await this.upsertSetting(SETTINGS_KEYS.relayReleaseNotes, latestRelay.description || '');
         await this.upsertSetting(SETTINGS_KEYS.relayReleaseUrl, latestRelay._links?.self || '');
+        await this.upsertSetting(SETTINGS_KEYS.relayMinGatewayVersion, relayArtifact.minGatewayVersion);
       }
       if (!latest && !latestRelay) logger.debug('No Gateway or relay releases found');
       return this.getCachedStatus();
@@ -346,7 +360,10 @@ export class UpdateService {
     return artifact;
   }
 
-  async prepareRelayUpdate(targetVersion: string): Promise<TrustedRelayUpdateArtifact> {
+  async prepareRelayUpdate(
+    targetVersion: string,
+    allowIncompatibleGateway = false
+  ): Promise<TrustedRelayUpdateArtifact> {
     const version = normalizeVersionTag(targetVersion);
     const tag = `${version}-relay`;
     const selfInfo = await this.dockerService.inspectSelf();
@@ -359,8 +376,9 @@ export class UpdateService {
       throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', `Failed to fetch relay update manifest: ${response.status}`);
     }
     const signedManifest = await response.text();
+    let artifact: TrustedRelayUpdateArtifact;
     try {
-      return verifyRelayImageManifest(signedManifest, { version, tag, image, protocolMajor: 1 });
+      artifact = verifyRelayImageManifest(signedManifest, { version, tag, image, protocolMajor: 1 });
     } catch (error) {
       logger.warn('Relay update manifest verification failed', {
         targetVersion,
@@ -369,6 +387,17 @@ export class UpdateService {
       });
       throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', 'Relay update artifact is not trusted');
     }
+    if (
+      !allowIncompatibleGateway &&
+      !isGatewayCompatibleWithRelayUpdate(this.getCurrentVersion(), artifact.minGatewayVersion)
+    ) {
+      throw new AppError(
+        409,
+        'GATEWAY_UPDATE_REQUIRED',
+        `Relay ${version} requires Gateway ${artifact.minGatewayVersion} or newer`
+      );
+    }
+    return artifact;
   }
 
   async performUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
