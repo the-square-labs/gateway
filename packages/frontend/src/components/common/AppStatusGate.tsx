@@ -71,7 +71,9 @@ function MaintenanceScreen() {
           ? ((await healthResponse.json()) as GatewayHealthSnapshot)
           : null;
         const ready =
-          healthResponse.ok && (health?.lifecycleState ?? "running") === "running" && apiResponse.ok;
+          healthResponse.ok &&
+          (health?.lifecycleState ?? "running") === "running" &&
+          apiResponse.ok;
 
         consecutiveReadyChecks = ready ? consecutiveReadyChecks + 1 : 0;
         if (consecutiveReadyChecks >= 2) {
