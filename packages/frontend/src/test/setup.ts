@@ -139,8 +139,11 @@ beforeAll(() => {
   server.listen({ onUnhandledRequest: "error" });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // Radix FocusScope restores focus in a zero-delay timer. Let that cleanup
+  // finish before Vitest replaces this test file's jsdom realm.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   server.resetHandlers();
   resetTestStores();
   vi.clearAllMocks();

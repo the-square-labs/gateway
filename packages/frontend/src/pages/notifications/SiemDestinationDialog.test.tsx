@@ -14,7 +14,7 @@ describe("SiemDestinationDialog", () => {
       id: "siem-1",
     } as never);
 
-    const { unmount } = renderWithRouter(
+    renderWithRouter(
       <SiemDestinationDialog open onOpenChange={vi.fn()} destination={null} onSaved={vi.fn()} />
     );
 
@@ -42,12 +42,10 @@ describe("SiemDestinationDialog", () => {
       });
     });
 
-    unmount();
-    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  it("keeps space between the animated authentication fields and delivery control", async () => {
-    const { unmount } = renderWithRouter(
+  it("keeps space between the animated authentication fields and delivery control", () => {
+    renderWithRouter(
       <SiemDestinationDialog open onOpenChange={vi.fn()} destination={null} onSaved={vi.fn()} />
     );
 
@@ -56,7 +54,5 @@ describe("SiemDestinationDialog", () => {
 
     expect(deliveryRow.parentElement).toHaveClass("pt-4");
 
-    unmount();
-    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 });
