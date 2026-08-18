@@ -4,6 +4,8 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useLicensePaywallStore } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { PageProfile } from "@/types";
 import { PagesSettingsSection } from "./PageGlobalSettings";
 
@@ -45,10 +47,14 @@ const profile: PageProfile = {
 
 describe("PagesSettingsSection", () => {
   beforeEach(() => {
+    useLicensePaywallStore.setState({ request: null });
     useAuthStore.setState({
       user: { id: "user-1", scopes: ["pages:settings:edit"], isBlocked: false } as never,
       isAuthenticated: true,
       isLoading: false,
+    });
+    useUIBootstrapStore.setState({
+      snapshot: { license: { plan: "personal", entitlements: { features: ["pages"] } } } as never,
     });
     vi.spyOn(api, "getPageProfile").mockResolvedValue(profile);
     vi.spyOn(api, "getPageProfileOptions").mockResolvedValue({
@@ -72,6 +78,40 @@ describe("PagesSettingsSection", () => {
     });
   });
 
+  it("lets Community users edit settings but opens the Personal paywall on save", async () => {
+    const user = userEvent.setup();
+    const update = vi.spyOn(api, "updatePageProfile").mockResolvedValue(profile);
+    useUIBootstrapStore.setState({
+      snapshot: { license: { plan: "community", entitlements: { features: [] } } } as never,
+    });
+
+    render(
+      <MemoryRouter>
+        <PagesSettingsSection />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Personal+")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enable Pages" })).toBeEnabled();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    for (const control of screen.getAllByRole("combobox")) {
+      expect(control).toBeEnabled();
+    }
+    expect(api.getPageProfile).toHaveBeenCalledOnce();
+    expect(api.getPageProfileOptions).toHaveBeenCalledOnce();
+
+    await user.type(screen.getByRole("textbox"), "-preview");
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      capability: "Pages",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("uses a dirty toggle and disables Save until the preview setting changes", async () => {
     const user = userEvent.setup();
     const update = vi
@@ -85,7 +125,7 @@ describe("PagesSettingsSection", () => {
     );
 
     const save = await screen.findByRole("button", { name: "Save profile" });
-    const toggle = screen.getByRole("button", { name: "Enable immutable previews" });
+    const toggle = screen.getByRole("button", { name: "Enable Pages" });
     const panel = screen.getByText("Pages").closest("div.border") as HTMLElement;
 
     expect(toggle).toHaveAttribute("aria-pressed", "true");

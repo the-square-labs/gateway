@@ -58,6 +58,15 @@ export class PageProfileService {
     this.runtimeAdapter = adapter;
   }
 
+  async isEnabled(): Promise<boolean> {
+    const [profile] = await this.db
+      .select({ enabled: pageWildcardProfiles.enabled })
+      .from(pageWildcardProfiles)
+      .where(eq(pageWildcardProfiles.id, PROFILE_ID))
+      .limit(1);
+    return profile?.enabled === true;
+  }
+
   async get() {
     const [profile] = await this.db
       .select()

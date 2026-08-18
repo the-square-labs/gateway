@@ -83,6 +83,7 @@ import {
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageRoute } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
@@ -453,18 +454,27 @@ function ProxyHostsPageGuard({ create = false }: { create?: boolean } = {}) {
 function PagesPageGuard() {
   const hasScope = useAuthStore((state) => state.hasScope);
   const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
+  const license = useUIBootstrapStore((state) => state.snapshot?.license);
+  const entitled = license ? license.entitlements.features.includes("pages") : null;
+  useEffect(() => {
+    if (entitled === false) requireLicenseFeature("pages", "Pages");
+  }, [entitled]);
   if (!hasScopedAccess("pages:view") && !hasScope("pages:folders:manage")) {
     return <Navigate to="/" replace />;
   }
+  if (entitled === null) return null;
+  if (!entitled) return <Navigate to="/" replace />;
   return <Pages />;
 }
 
 function PageProjectDetailGuard() {
   const { projectSlug } = useParams<{ projectSlug: string }>();
   const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
+  const license = useUIBootstrapStore((state) => state.snapshot?.license);
+  const entitled = license ? license.entitlements.features.includes("pages") : null;
   const canAccess = hasScopedAccess("pages:view");
   const resolved = useResolvedPageRoute(
-    canAccess && projectSlug ? `/pages/${projectSlug}` : undefined,
+    canAccess && entitled === true && projectSlug ? `/pages/${projectSlug}` : undefined,
     () => api.getPageProjectBySlug(projectSlug!),
     (project) => ({
       resourceType: "page-project",
@@ -473,7 +483,12 @@ function PageProjectDetailGuard() {
       label: project.name,
     })
   );
+  useEffect(() => {
+    if (entitled === false) requireLicenseFeature("pages", "Pages");
+  }, [entitled]);
   if (!canAccess) return <Navigate to="/" replace />;
+  if (entitled === null) return null;
+  if (!entitled) return <Navigate to="/" replace />;
   if (resolved.loading) return <DetailRouteLoading />;
   if (resolved.error) return <DetailRouteFailure error={resolved.error} fallbackPath="/pages" />;
   if (!resolved.data) return <Navigate to="/pages" replace />;
@@ -1050,6 +1065,11 @@ function RealtimeBridge() {
   useEffect(() => {
     if (!user) return;
     return eventStream.subscribe("integration.connector.changed", invalidateUIBootstrap);
+  }, [invalidateUIBootstrap, user]);
+
+  useEffect(() => {
+    if (!user?.scopes.includes("pages:settings:view")) return;
+    return eventStream.subscribe("pages.profile.changed", invalidateUIBootstrap);
   }, [invalidateUIBootstrap, user]);
 
   useEffect(() => {

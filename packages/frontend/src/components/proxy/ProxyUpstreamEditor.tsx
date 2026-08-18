@@ -19,6 +19,7 @@ import {
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import type {
   CreateProxyHostRequest,
   DockerContainer,
@@ -206,7 +207,8 @@ export function ProxyUpstreamFields({
   useEffect(() => {
     if (value.kind !== "pages") return;
     setPageProjectsLoading(true);
-    void api.listPageProjects({ page: 1, limit: 100 })
+    void api
+      .listPageProjects({ page: 1, limit: 100 })
       .then((response) => setPageProjects(response.data ?? []))
       .catch(() => setPageProjects([]))
       .finally(() => setPageProjectsLoading(false));
@@ -218,7 +220,8 @@ export function ProxyUpstreamFields({
       return;
     }
     setPageTagsLoading(true);
-    void api.listPageTags(value.pageProjectId)
+    void api
+      .listPageTags(value.pageProjectId)
       .then(setPageTags)
       .catch(() => setPageTags([]))
       .finally(() => setPageTagsLoading(false));
@@ -278,37 +281,38 @@ export function ProxyUpstreamFields({
 
   return (
     <>
-      {showTargetSelect ? <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
-        <Select
-          value={value.kind}
-          onValueChange={(kind) =>
-            onChange({
-              ...DEFAULT_PROXY_UPSTREAM,
-              scheme: value.scheme,
-              kind: kind as ProxyUpstreamKind,
-            })
-          }
-          disabled={disabled}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {allowManual ? <SelectItem value="manual">Manual address</SelectItem> : null}
+      {showTargetSelect ? (
+        <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
+          <Select
+            value={value.kind}
+            onValueChange={(kind) => {
+              if (kind === "pages" && !requireLicenseFeature("pages", "Pages")) return;
+              onChange({
+                ...DEFAULT_PROXY_UPSTREAM,
+                scheme: value.scheme,
+                kind: kind as ProxyUpstreamKind,
+              });
+            }}
+            disabled={disabled}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {allowManual ? <SelectItem value="manual">Manual address</SelectItem> : null}
               <SelectItem value="docker_container">Docker container</SelectItem>
               <SelectItem value="docker_deployment">Docker deployment</SelectItem>
               <SelectItem value="pages">Pages</SelectItem>
-          </SelectContent>
-        </Select>
-      </SettingsControlRow> : null}
+            </SelectContent>
+          </Select>
+        </SettingsControlRow>
+      ) : null}
 
       {value.kind === "pages" ? (
         <PagesTargetPicker
           projectId={value.pageProjectId ?? ""}
           tagId={value.pageTagId ?? ""}
-          onProjectChange={(pageProjectId) =>
-            onChange({ ...value, pageProjectId, pageTagId: "" })
-          }
+          onProjectChange={(pageProjectId) => onChange({ ...value, pageProjectId, pageTagId: "" })}
           onTagChange={(pageTagId) => onChange({ ...value, pageTagId })}
           projects={pageProjects}
           tags={pageTags}

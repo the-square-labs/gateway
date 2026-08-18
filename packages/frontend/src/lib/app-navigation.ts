@@ -66,6 +66,7 @@ export interface AppNavigationVisibility {
   inferenceEnabled: boolean;
   hasLowInferenceUsage?: boolean;
   statusPageEnabled?: boolean;
+  pagesEnabled?: boolean;
   hasNginxNodes?: boolean;
   hasCloudflareIntegration?: boolean;
   hasDockerNodes?: boolean;
@@ -346,7 +347,10 @@ export function canAccessNavigationItem(
       );
     }
     case "pages":
-      return hasScopeBase(scopes, "pages:view") || scopeMatches(scopes, "pages:folders:manage");
+      return (
+        context.pagesEnabled === true &&
+        (hasScopeBase(scopes, "pages:view") || scopeMatches(scopes, "pages:folders:manage"))
+      );
     case "databases":
       return (
         hasScopeBase(scopes, "databases:view") || scopeMatches(scopes, "databases:folders:manage")

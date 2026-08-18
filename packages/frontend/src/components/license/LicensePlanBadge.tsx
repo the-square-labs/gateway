@@ -13,10 +13,10 @@ const VARIANTS: Record<PaidLicensePlan, "secondary" | "info" | "default"> = {
   enterprise: "default",
 };
 
-export function LicensePlanBadge({ plan }: { plan: PaidLicensePlan }) {
+export function LicensePlanBadge({ plan, label }: { plan: PaidLicensePlan; label?: string }) {
   return (
     <Badge size="inline" variant={VARIANTS[plan]}>
-      {LABELS[plan]}
+      {label ?? LABELS[plan]}
     </Badge>
   );
 }

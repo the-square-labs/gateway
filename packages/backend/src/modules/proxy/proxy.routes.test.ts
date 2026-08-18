@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
@@ -19,11 +19,14 @@ const mocks = vi.hoisted(() => ({
     validateAdvancedConfig: vi.fn(),
     deleteProxyHost: vi.fn(),
   },
+  licensePolicy: {
+    requireFeature: vi.fn(),
+  },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn(() => mocks.proxyService),
+    resolve: vi.fn((token) => (token?.name === 'LicensePolicyService' ? mocks.licensePolicy : mocks.proxyService)),
   },
 }));
 
@@ -88,6 +91,7 @@ describe('proxy routes programmatic raw config handling', () => {
     mocks.authType = 'api-token';
     mocks.scopes = ['proxy:view', 'proxy:create', 'proxy:view:host-1', 'proxy:edit:host-1', 'proxy:advanced:host-1'];
     vi.clearAllMocks();
+    mocks.licensePolicy.requireFeature.mockResolvedValue(undefined);
     mocks.proxyService.listProxyHosts.mockResolvedValue({ data: [rawHost], total: 1 });
     mocks.proxyService.getProxyHost.mockResolvedValue(rawHost);
     mocks.proxyService.createProxyHost.mockResolvedValue(rawHost);
@@ -465,6 +469,37 @@ describe('proxy routes programmatic raw config handling', () => {
       'user-1',
       expect.any(Object)
     );
+  });
+
+  it('returns the standard entitlement denial before creating a Pages Route', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    mocks.scopes = ['proxy:create', `pages:view:${pageProjectId}`];
+    mocks.licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
+        feature: 'pages',
+        requiredPlan: 'personal',
+      })
+    );
+
+    const response = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: '11111111-1111-4111-8111-111111111111',
+        domainNames: ['docs.example.com'],
+        upstreamKind: 'pages',
+        pageProjectId,
+        pageTagId: '33333333-3333-4333-8333-333333333333',
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      details: { feature: 'pages', requiredPlan: 'personal' },
+    });
+    expect(mocks.licensePolicy.requireFeature).toHaveBeenCalledWith('pages');
+    expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
   });
 
   it('requires visibility of the current Page Project when editing a Pages Route', async () => {

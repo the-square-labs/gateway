@@ -91,6 +91,7 @@ Installer запускает Gateway и выводит одноразовый к
 | Область | Кратко |
 |---------|--------|
 | Ingress | Домен выбирает публичную nginx ingress-ноду; route направляет трафик на адрес, Docker container или deployment; SSL-сертификат раскладывается только на nginx-ноды, где его используют активные TLS routes. Также доступны maintenance mode, redirects, WebSockets, access lists, health checks, folders, templates, logs и stats. REST API сохраняет идентификаторы `proxy-host` для совместимости. |
+| Pages | Проектный static-site hosting с неизменяемыми Deployments, изменяемыми Tags (включая управляемый системой `latest`), custom Routes, направленными на Tags, опциональными wildcard previews и runtime configuration без кэширования. Доступно в Personal и выше. |
 | Docker | Container lifecycle, профиль runtime Default (`runc`) во всех планах и Secure (`runsc`/gVisor) в Business и Enterprise, Gateway-managed volumes, deployments, rollout/rollback, подключение shared физических NVIDIA/AMD/Intel GPU, допустимые cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports и cleanup. Secure workloads не поддерживают GPU, migration и export; GPU-attached workloads в v1 также нельзя мигрировать или экспортировать. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и привязка к routes. |
 | Domains | Единый реестр hostnames, выбор nginx ingress-ноды, внешний или Cloudflare-managed DNS, validation, usage tracking и явная ingress migration. |
@@ -233,10 +234,10 @@ Community предназначен только для некоммерческ�
 
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages и registry discovery. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также Docker Secure Runtime, structured logging, audit export, guided onboarding и security scanning после выпуска. |
-| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business, а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. Pages недоступны. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages, Pages static-site hosting и registry discovery. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal (включая Pages), а также Docker Secure Runtime, structured logging, audit export, guided onboarding и security scanning после выпуска. |
+| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business (включая Pages), а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
 
 Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).
 

@@ -727,9 +727,9 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/nginx-templates', nginxTemplateRoutes);
   app.route('/api/ssl-certificates', sslRoutes);
   app.route('/api/domains', domainRoutes);
+  app.route('/api/pages/settings', pageProfileRoutes);
   app.route('/api/pages', pageProjectRoutes);
   app.route('/api/pages', pageManagementRoutes);
-  app.route('/api/pages/settings', pageProfileRoutes);
   app.route('/api/pages-deploy', pageDeployRoutes);
   app.route('/api/access-lists', accessListRoutes);
   app.route('/api/monitoring', monitoringRoutes);

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { container } from '@/container.js';
 import { appRoute, createdJson, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
 import { authMiddleware, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { PageDeploymentListQuerySchema } from './deployments/page-deployment.schemas.js';
 import { PageDeploymentService } from './deployments/page-deployment.service.js';
@@ -27,6 +28,7 @@ const PinPageDeploymentSchema = z.object({ pinned: z.boolean() });
 
 export const pageManagementRoutes = new OpenAPIHono<AppEnv>();
 pageManagementRoutes.use('*', authMiddleware);
+pageManagementRoutes.use('*', requireLicenseFeature('pages'));
 
 pageManagementRoutes.openapi(
   {

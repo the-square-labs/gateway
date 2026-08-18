@@ -12,6 +12,7 @@ import {
   requireScopeForResource,
   sessionOnly,
 } from '@/modules/auth/auth.middleware.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   createAdditionalRouteRoute,
@@ -230,9 +231,11 @@ proxyRoutes.openapi(
   async (c) => {
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
-    const row = await container
-      .resolve(AdditionalRouteService)
-      .create(c.req.param('id')!, CreateAdditionalRouteSchema.parse(await c.req.json()), user.id, scopes);
+    const input = CreateAdditionalRouteSchema.parse(await c.req.json());
+    if (input.targetKind === 'pages') {
+      await container.resolve(LicensePolicyService).requireFeature('pages');
+    }
+    const row = await container.resolve(AdditionalRouteService).create(c.req.param('id')!, input, user.id, scopes);
     const view = await container.resolve(AdditionalRouteService).present(row);
     return c.json({ data: serializeAdditionalRoute(view as Record<string, unknown>, scopes) }, 201);
   }
@@ -254,18 +257,16 @@ proxyRoutes.openapi(
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
     const input = UpdateAdditionalRouteSchema.parse(await c.req.json());
+    const existing = await container.resolve(AdditionalRouteService).get(c.req.param('id')!, c.req.param('routeId')!);
+    if (input.targetKind === 'pages' || existing.targetKind === 'pages') {
+      await container.resolve(LicensePolicyService).requireFeature('pages');
+    }
     if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
       throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required');
     }
     const row = await container
       .resolve(AdditionalRouteService)
-      .update(
-        c.req.param('id')!,
-        c.req.param('routeId')!,
-        input,
-        user.id,
-        scopes
-      );
+      .update(c.req.param('id')!, c.req.param('routeId')!, input, user.id, scopes);
     const view = await container.resolve(AdditionalRouteService).present(row);
     return c.json({ data: serializeAdditionalRoute(view as Record<string, unknown>, scopes) });
   }
@@ -276,6 +277,10 @@ proxyRoutes.openapi(
   async (c) => {
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
+    const existing = await container.resolve(AdditionalRouteService).get(c.req.param('id')!, c.req.param('routeId')!);
+    if (existing.targetKind === 'pages') {
+      await container.resolve(LicensePolicyService).requireFeature('pages');
+    }
     const row = await container
       .resolve(AdditionalRouteService)
       .retry(c.req.param('id')!, c.req.param('routeId')!, user.id, scopes);
@@ -299,6 +304,9 @@ proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('pro
   const user = c.get('user')!;
   const input = CreateProxyHostSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
+  if (input.upstreamKind === 'pages') {
+    await container.resolve(LicensePolicyService).requireFeature('pages');
+  }
   if (!hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
   }
@@ -347,6 +355,14 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   }
   const scopes = c.get('effectiveScopes') || [];
   const existing = await proxyService.getProxyHost(id);
+  if (
+    existing.upstreamKind === 'pages' ||
+    input.upstreamKind === 'pages' ||
+    input.pageProjectId !== undefined ||
+    input.pageTagId !== undefined
+  ) {
+    await container.resolve(LicensePolicyService).requireFeature('pages');
+  }
   const existingPageTarget = existing.pageTarget as { projectId?: unknown } | null | undefined;
   if (
     existing.upstreamKind === 'pages' &&

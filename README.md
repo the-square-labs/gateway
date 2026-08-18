@@ -91,6 +91,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Area | Summary |
 |------|---------|
 | Ingress | Domains select a public nginx ingress node; routes forward traffic to addresses, Docker containers, or deployments; SSL certificates are deployed to the nginx nodes where enabled TLS routes use them. Includes maintenance mode, redirects, WebSockets, access lists, health checks, route folders, templates, logs, and stats. The REST API keeps `proxy-host` identifiers for compatibility. |
+| Pages | Project-based static-site hosting with immutable Deployments, mutable Tags (including system-managed `latest`), custom Routes that target Tags, optional wildcard previews, and no-store runtime configuration. Available on Personal and higher. |
 | Docker | Container lifecycle, the Default (`runc`) runtime profile in every plan and the Secure (`runsc`/gVisor) profile in Business and Enterprise, Gateway-managed volumes, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, and cleanup. Secure workloads cannot use GPU, migration, or export; GPU-attached workloads cannot migrate or export in v1. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and route binding. |
 | Domains | Central hostname registry, nginx ingress placement, external or Cloudflare-managed DNS, validation, usage tracking, and explicit ingress migration. |
@@ -233,10 +234,10 @@ Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LIC
 
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, and registry discovery. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus Docker Secure Runtime, structured logging, audit export, guided onboarding, and security scanning when released. |
-| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. Pages unavailable. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Pages) plus Docker Secure Runtime, structured logging, audit export, guided onboarding, and security scanning when released. |
+| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business (including Pages) plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.
 

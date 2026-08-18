@@ -6,6 +6,7 @@ import { appRoute, createdJson, IdParamSchema, jsonBody, okJson, UnknownDataResp
 import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware } from '@/modules/auth/auth.middleware.js';
+import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { CreatePageDeploymentSchema } from './deployments/page-deployment.schemas.js';
 import {
@@ -51,6 +52,8 @@ const finalizeUploadRoute = appRoute({
 });
 
 export const pageDeployRoutes = new OpenAPIHono<AppEnv>();
+
+pageDeployRoutes.use('*', requireLicenseFeature('pages'));
 
 pageDeployRoutes.use('*', async (c, next) => {
   const authorization = c.req.header('Authorization');

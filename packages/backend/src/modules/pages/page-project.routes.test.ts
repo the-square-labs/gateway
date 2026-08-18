@@ -55,14 +55,16 @@ const mocks = vi.hoisted(() => {
       moveFolder: vi.fn(),
       deleteFolder: vi.fn(),
     },
+    licensePolicy: { requireFeature: vi.fn() },
   };
 });
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn((token) =>
-      token?.name === 'PageProjectFolderService' ? mocks.folderService : mocks.projectService
-    ),
+    resolve: vi.fn((token) => {
+      if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
+      return token?.name === 'PageProjectFolderService' ? mocks.folderService : mocks.projectService;
+    }),
   },
 }));
 

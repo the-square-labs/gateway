@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const UUID = '11111111-1111-4111-8111-111111111111';
@@ -13,10 +13,13 @@ const mocks = vi.hoisted(() => ({
     getOptions: vi.fn(),
     configure: vi.fn(),
   },
+  licensePolicy: { requireFeature: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
-  container: { resolve: vi.fn(() => mocks.service) },
+  container: {
+    resolve: vi.fn((token) => (token?.name === 'LicensePolicyService' ? mocks.licensePolicy : mocks.service)),
+  },
 }));
 
 vi.mock('@/modules/auth/auth.middleware.js', () => ({
@@ -83,5 +86,22 @@ describe('Pages wildcard profile authorization', () => {
       expect.objectContaining({ enabled: true, labelTemplate: 'preview-{hash}' }),
       'user-1'
     );
+  });
+
+  it('allows reading settings but requires the Pages entitlement to save them', async () => {
+    mocks.scopes = ['pages:settings:view', 'pages:settings:edit'];
+    mocks.licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Personal plan required')
+    );
+
+    expect((await app().request('/profile')).status).toBe(200);
+    const response = await app().request('/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.service.configure).not.toHaveBeenCalled();
   });
 });

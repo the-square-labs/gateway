@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const PROJECT_1 = '11111111-1111-4111-8111-111111111111';
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   publication: { moveUserTag: vi.fn() },
   retention: { setPinned: vi.fn(), deleteDeployment: vi.fn() },
   runtimeConfig: { list: vi.fn(), saveDefault: vi.fn(), saveTag: vi.fn(), resetTag: vi.fn() },
+  licensePolicy: { requireFeature: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
@@ -28,6 +29,7 @@ vi.mock('@/container.js', () => ({
       if (name === 'PageTagService') return mocks.tag;
       if (name === 'PagePublicationService') return mocks.publication;
       if (name === 'PageRuntimeConfigService') return mocks.runtimeConfig;
+      if (name === 'LicensePolicyService') return mocks.licensePolicy;
       return mocks.retention;
     }),
   },
@@ -69,6 +71,7 @@ describe('Pages management authorization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.scopes = [];
+    mocks.licensePolicy.requireFeature.mockResolvedValue(undefined);
     mocks.tag.list.mockResolvedValue([]);
     mocks.publication.moveUserTag.mockResolvedValue({ changed: true });
     mocks.retention.setPinned.mockResolvedValue({ id: DEPLOYMENT_ID, pinned: true });
@@ -76,6 +79,26 @@ describe('Pages management authorization', () => {
     mocks.runtimeConfig.saveDefault.mockResolvedValue({ generation: 1 });
     mocks.runtimeConfig.saveTag.mockResolvedValue({ generation: 1 });
     mocks.runtimeConfig.resetTag.mockResolvedValue({ generation: 1, inherited: true });
+  });
+
+  it('returns the standard entitlement denial before invoking a Pages service', async () => {
+    mocks.scopes = [`pages:view:${PROJECT_1}`];
+    mocks.licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
+        feature: 'pages',
+        requiredPlan: 'personal',
+      })
+    );
+
+    const response = await jsonRequest('GET', `/${PROJECT_1}/tags`);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      details: { feature: 'pages', requiredPlan: 'personal' },
+    });
+    expect(mocks.licensePolicy.requireFeature).toHaveBeenCalledWith('pages');
+    expect(mocks.tag.list).not.toHaveBeenCalled();
   });
 
   it('filters Tag reads through the parent Project scope', async () => {

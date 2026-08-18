@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { appRoute, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
 import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
 import { UpdatePageProfileSchema } from './page-profile.schemas.js';
 import { PageProfileService } from './page-profile.service.js';
@@ -51,6 +52,7 @@ pageProfileRoutes.openapi(
     middleware: requireScope('pages:settings:edit'),
   },
   async (c) => {
+    await container.resolve(LicensePolicyService).requireFeature('pages');
     const data = await container
       .resolve(PageProfileService)
       .configure(UpdatePageProfileSchema.parse(await c.req.json()), c.get('user')!.id);

@@ -10,6 +10,7 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -49,6 +50,7 @@ import { PageProjectFolderService } from './page-project-folder.service.js';
 
 export const pageProjectRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 pageProjectRoutes.use('*', authMiddleware);
+pageProjectRoutes.use('*', requireLicenseFeature('pages'));
 
 pageProjectRoutes.openapi(
   { ...listPageProjectFoldersRoute, middleware: requireAnyScopeBase('pages:view', 'pages:folders:manage') },

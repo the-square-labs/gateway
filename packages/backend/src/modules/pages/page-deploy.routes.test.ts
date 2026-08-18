@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     get: vi.fn(),
   },
   publicationService: { markDeploymentReady: vi.fn() },
+  licensePolicy: { requireFeature: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
@@ -30,6 +31,7 @@ vi.mock('@/container.js', () => ({
     resolve: vi.fn((token) => {
       if (token?.name === 'PageDeployTokenService') return mocks.tokenService;
       if (token?.name === 'PagePublicationService') return mocks.publicationService;
+      if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
       return mocks.deploymentService;
     }),
   },

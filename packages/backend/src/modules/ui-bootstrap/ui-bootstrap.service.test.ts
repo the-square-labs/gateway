@@ -85,6 +85,7 @@ function makeService() {
   const aiSettings = { isEnabled: vi.fn(async () => true) };
   const finalizeSetup = { isOwner: vi.fn(async () => false) };
   const licensePolicy = { getSummary: vi.fn(async () => license) };
+  const pageProfile = { isEnabled: vi.fn(async () => true) };
   return {
     service: new UIBootstrapService(
       snapshots as never,
@@ -98,7 +99,8 @@ function makeService() {
       aiRuntime as never,
       aiSettings as never,
       finalizeSetup as never,
-      licensePolicy as never
+      licensePolicy as never,
+      pageProfile as never
     ),
     coordinator,
     updates,
@@ -116,6 +118,7 @@ describe('UIBootstrapService', () => {
       'docker:containers:view:node-docker',
       'feat:ai:use',
       'status-page:view',
+      'pages:view',
     ];
 
     const shell = await service.getShell({ id: 'user-1', scopes } as never, scopes);
@@ -126,6 +129,7 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.hasNginxNodes).toBe(true);
     expect(shell.navigation.hasCloudflareIntegration).toBe(true);
     expect(shell.navigation.statusPageEnabled).toBe(true);
+    expect(shell.navigation.pagesEnabled).toBe(true);
     expect(shell.navigation.nodes.data.map((node) => node.id)).toEqual(['node-nginx']);
     expect(shell.navigation.dockerNodes.map((node) => node.id)).toEqual(['node-docker']);
     expect(shell.systemConfig.publicUrl).toBe('https://gateway.example.com');
@@ -150,6 +154,7 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.hasNginxNodes).toBe(true);
     expect(shell.navigation.hasCloudflareIntegration).toBe(true);
     expect(shell.navigation.statusPageEnabled).toBe(false);
+    expect(shell.navigation.pagesEnabled).toBe(false);
     expect(shell.navigation.dockerNodes).toEqual([]);
     expect(updates.getCachedStatus).not.toHaveBeenCalled();
     expect(aiRuntime.statusForUser).not.toHaveBeenCalled();

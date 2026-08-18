@@ -221,6 +221,7 @@ export function AILiteSidebar({
     inferenceEnabled,
     hasLowInferenceUsage: hasLowInferenceUsage(dashboardBootstrap?.inferenceUsage ?? null),
     statusPageEnabled: navigationBootstrap?.statusPageEnabled ?? false,
+    pagesEnabled: navigationBootstrap?.pagesEnabled ?? false,
     hasNginxNodes: navigationBootstrap?.hasNginxNodes ?? true,
     hasCloudflareIntegration: navigationBootstrap?.hasCloudflareIntegration ?? false,
     hasDockerNodes:

@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,8 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { requireLicenseFeature } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { PageProfile, PageProfileOptions } from "@/types";
 
 function certificateCovers(
@@ -43,6 +46,9 @@ function templateLabel(template: string, hash = "da32ccagd23fe", project = "docs
 
 export function PagesSettingsSection() {
   const canEdit = useAuthStore((state) => state.hasScope("pages:settings:edit"));
+  const license = useUIBootstrapStore((state) => state.snapshot?.license);
+  const entitled = license?.entitlements.features.includes("pages") === true;
+  const invalidateUIBootstrap = useUIBootstrapStore((state) => state.invalidate);
   const [profile, setProfile] = useState<PageProfile | null>(null);
   const [options, setOptions] = useState<PageProfileOptions>({
     domains: [],
@@ -80,12 +86,20 @@ export function PagesSettingsSection() {
   useEffect(() => {
     void load();
   }, [load]);
-  useRealtime("pages.profile.changed", () => void load());
+  useRealtime("pages.profile.changed", () => {
+    invalidateUIBootstrap();
+    void load();
+  });
   useScrollToNavigationTarget("pages", !loading);
 
   const selectedDomain = options.domains.find((domain) => domain.id === domainId) ?? null;
   const selectedCertificate =
     options.certificates.find((certificate) => certificate.id === certificateId) ?? null;
+  const availableCertificates = selectedDomain
+    ? options.certificates.filter((certificate) =>
+        certificateCovers(certificate, selectedDomain.domain)
+      )
+    : options.certificates;
   const selectedDomainSharesGateway = Boolean(selectedDomain?.isolation.same);
   const existingOverrideApplies =
     profile?.domainId === selectedDomain?.id && profile?.isolation?.overrideCurrent === true;
@@ -123,13 +137,18 @@ export function PagesSettingsSection() {
 
   const save = async (override = false) => {
     if (!canSave) return;
+    if (!entitled) {
+      requireLicenseFeature("pages", "Pages");
+      return;
+    }
     if (!enabled) {
       setSaving(true);
       try {
         const updated = await api.updatePageProfile({ enabled: false });
         setProfile(updated);
         setEnabled(updated.enabled);
-        toast.success("Immutable preview delivery disabled");
+        invalidateUIBootstrap();
+        toast.success("Pages disabled");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to disable Pages previews");
       } finally {
@@ -155,6 +174,7 @@ export function PagesSettingsSection() {
       setDomainId(updated.domainId ?? "");
       setCertificateId(updated.certificateId ?? "");
       setLabelTemplate(updated.labelTemplate || "{hash}");
+      invalidateUIBootstrap();
       toast.success("Pages wildcard profile saved");
       setWarningOpen(false);
     } catch (error) {
@@ -167,11 +187,22 @@ export function PagesSettingsSection() {
   return (
     <div id="pages" className="space-y-4 scroll-mt-6">
       {loading && !profile ? (
-        <PanelShell title="Pages" description="Loading wildcard deployment preview settings…" />
+        <PanelShell
+          title={
+            <span className="inline-flex items-center gap-2">
+              Pages <LicensePlanBadge plan="personal" label="Personal+" />
+            </span>
+          }
+          description="Loading wildcard deployment preview settings…"
+        />
       ) : (
         <>
           <PanelShell
-            title="Pages"
+            title={
+              <span className="inline-flex items-center gap-2">
+                Pages <LicensePlanBadge plan="personal" label="Personal+" />
+              </span>
+            }
             description="Each immutable Deployment gets one hostname label under this wildcard Domain."
             actions={
               <Button onClick={() => void save()} disabled={!canSave}>
@@ -182,18 +213,18 @@ export function PagesSettingsSection() {
             dirty={dirty}
           >
             <SettingsControlRow
-              title="Preview delivery"
+              title="Enabled"
               description={
                 enabled
-                  ? "Immutable preview URLs are enabled."
-                  : "Immutable preview URLs are disabled."
+                  ? "Pages projects and immutable preview delivery are enabled."
+                  : "Pages is disabled and hidden from navigation."
               }
             >
               <Switch
                 checked={enabled}
                 onChange={setEnabled}
                 disabled={!canEdit || saving}
-                ariaLabel="Enable immutable previews"
+                ariaLabel="Enable Pages"
               />
             </SettingsControlRow>
             <SettingsControlRow
@@ -216,11 +247,17 @@ export function PagesSettingsSection() {
                   <SelectValue placeholder="Select wildcard Domain" />
                 </SelectTrigger>
                 <SelectContent>
-                  {options.domains.map((domain) => (
-                    <SelectItem key={domain.id} value={domain.id}>
-                      {domain.domain} · DNS {domain.dnsStatus}
+                  {options.domains.length === 0 ? (
+                    <SelectItem value="__no-pages-domains" disabled>
+                      No wildcard Domains available
                     </SelectItem>
-                  ))}
+                  ) : (
+                    options.domains.map((domain) => (
+                      <SelectItem key={domain.id} value={domain.id}>
+                        {domain.domain} · DNS {domain.dnsStatus}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </SettingsControlRow>
@@ -237,19 +274,17 @@ export function PagesSettingsSection() {
                   <SelectValue placeholder="Select certificate" />
                 </SelectTrigger>
                 <SelectContent>
-                  {options.certificates.map((certificate) => (
-                    <SelectItem
-                      key={certificate.id}
-                      value={certificate.id}
-                      disabled={
-                        selectedDomain
-                          ? !certificateCovers(certificate, selectedDomain.domain)
-                          : false
-                      }
-                    >
-                      {certificate.name}
+                  {availableCertificates.length === 0 ? (
+                    <SelectItem value="__no-pages-certificates" disabled>
+                      No matching certificates available
                     </SelectItem>
-                  ))}
+                  ) : (
+                    availableCertificates.map((certificate) => (
+                      <SelectItem key={certificate.id} value={certificate.id}>
+                        {certificate.name}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </SettingsControlRow>

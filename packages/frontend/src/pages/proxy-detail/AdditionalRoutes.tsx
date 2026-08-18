@@ -35,8 +35,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +42,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -51,9 +50,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { getNodeAppearanceColor } from "@/lib/node-appearance";
 import { api } from "@/services/api";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import type {
   CreateProxyAdditionalRouteRequest,
   DockerContainer,
@@ -493,7 +494,9 @@ export function AdditionalRoutesPanel({
       className: "w-[46%]",
       render: (route) => (
         <div className="min-w-0">
-          <div className="truncate font-medium" title={route.path}>{route.path}</div>
+          <div className="truncate font-medium" title={route.path}>
+            {route.path}
+          </div>
           <div className="text-xs text-muted-foreground">
             {route.stripPrefix ? "Prefix stripped" : "Prefix preserved"}
           </div>
@@ -533,53 +536,59 @@ export function AdditionalRoutesPanel({
       ),
     },
     ...(canManage
-      ? [{
-          id: "actions",
-          header: "Actions",
-          align: "right" as const,
-          className: "w-[5rem]",
-          render: (route: ProxyAdditionalRoute) => {
-            const pending = pendingRouteId === route.id;
-            return (
-              <div onClick={(event) => event.stopPropagation()}>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      disabled={!mutationAllowed || pending}
-                      aria-label={`Actions for ${route.path}`}
-                    >
-                      {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => openEdit(route)}>
-                      <Pencil /> Edit
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openAdvancedConfig(route)}>
-                      <FileCode /> Edit advanced config
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void toggleRoute(route, !route.enabled)}>
-                      <Power />
-                      {route.enabled ? "Disable" : "Enable"}
-                    </DropdownMenuItem>
-                    {route.status === "failed" || route.status === "capability_missing" ? (
-                      <DropdownMenuItem onClick={() => void retryRoute(route)}>
-                        <RefreshCw /> Retry
+      ? [
+          {
+            id: "actions",
+            header: "Actions",
+            align: "right" as const,
+            className: "w-[5rem]",
+            render: (route: ProxyAdditionalRoute) => {
+              const pending = pendingRouteId === route.id;
+              return (
+                <div onClick={(event) => event.stopPropagation()}>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        disabled={!mutationAllowed || pending}
+                        aria-label={`Actions for ${route.path}`}
+                      >
+                        {pending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <MoreVertical className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => openEdit(route)}>
+                        <Pencil /> Edit
                       </DropdownMenuItem>
-                    ) : null}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => removeRoute(route)}>
-                      <Trash2 /> Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            );
+                      <DropdownMenuItem onClick={() => openAdvancedConfig(route)}>
+                        <FileCode /> Edit advanced config
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void toggleRoute(route, !route.enabled)}>
+                        <Power />
+                        {route.enabled ? "Disable" : "Enable"}
+                      </DropdownMenuItem>
+                      {route.status === "failed" || route.status === "capability_missing" ? (
+                        <DropdownMenuItem onClick={() => void retryRoute(route)}>
+                          <RefreshCw /> Retry
+                        </DropdownMenuItem>
+                      ) : null}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => removeRoute(route)}>
+                        <Trash2 /> Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              );
+            },
           },
-        }]
+        ]
       : []),
   ];
 
@@ -657,9 +666,19 @@ export function AdditionalRoutesPanel({
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAdvancedDialogOpen(false)} disabled={savingAdvanced}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => setAdvancedDialogOpen(false)}
+              disabled={savingAdvanced}
+            >
+              Cancel
+            </Button>
             <Button onClick={() => void saveAdvancedConfig()} disabled={savingAdvanced}>
-              {savingAdvanced ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {savingAdvanced ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
               {savingAdvanced ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
@@ -802,63 +821,73 @@ function AdditionalRouteWizard({
         </DialogHeader>
 
         <div className="border border-border">
-            <SettingsControlRow title="Path prefix" description="Literal path prefix for this route.">
-              <Input
-                id="additional-route-path"
-                value={draft.path}
-                onChange={(event) => setDraft((current) => ({ ...current, path: event.target.value }))}
-                placeholder="/api"
-                disabled={saving || Boolean(route)}
-                aria-invalid={Boolean(pathError)}
-              />
-            </SettingsControlRow>
-            <SettingsControlRow title="Target" description="Choose the destination for this path.">
-              <Select
-                value={draft.targetKind}
-                onValueChange={(value) => setTargetKind(value as ProxyAdditionalRouteTargetKind)}
-                disabled={saving}
-              >
-                <SelectTrigger aria-label="Additional route target"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">Manual address</SelectItem>
-                  <SelectItem value="docker_container">Docker container</SelectItem>
-                  <SelectItem value="docker_deployment">Docker deployment</SelectItem>
-                  <SelectItem value="pages">Pages</SelectItem>
-                </SelectContent>
-              </Select>
-            </SettingsControlRow>
-            {draft.targetKind === "pages" ? (
-              <PagesTargetPicker
-                projectId={draft.pageProjectId}
-                tagId={draft.pageTagId}
-                onProjectChange={(projectId) =>
-                  setDraft((current) => ({ ...current, pageProjectId: projectId, pageTagId: "" }))
-                }
-                onTagChange={(pageTagId) => setDraft((current) => ({ ...current, pageTagId }))}
-                projects={projects}
-                tags={tags}
-                projectsLoading={projectsLoading}
-                tagsLoading={tagsLoading}
-                availability={pageAvailability}
-                availabilityDescription="The selected Tag must point to a ready Deployment."
-                disabled={saving}
-              />
-            ) : (
-              <ProxyUpstreamFields
-                value={draft.upstream}
-                onChange={(upstream) => setDraft((current) => ({ ...current, upstream }))}
-                containers={containers}
-                disabled={saving || Boolean(route)}
-                showTargetSelect={false}
-              />
-            )}
+          <SettingsControlRow title="Path prefix" description="Literal path prefix for this route.">
+            <Input
+              id="additional-route-path"
+              value={draft.path}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, path: event.target.value }))
+              }
+              placeholder="/api"
+              disabled={saving || Boolean(route)}
+              aria-invalid={Boolean(pathError)}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow title="Target" description="Choose the destination for this path.">
+            <Select
+              value={draft.targetKind}
+              onValueChange={(value) => {
+                if (value === "pages" && !requireLicenseFeature("pages", "Pages")) return;
+                setTargetKind(value as ProxyAdditionalRouteTargetKind);
+              }}
+              disabled={saving}
+            >
+              <SelectTrigger aria-label="Additional route target">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="manual">Manual address</SelectItem>
+                <SelectItem value="docker_container">Docker container</SelectItem>
+                <SelectItem value="docker_deployment">Docker deployment</SelectItem>
+                <SelectItem value="pages">Pages</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsControlRow>
+          {draft.targetKind === "pages" ? (
+            <PagesTargetPicker
+              projectId={draft.pageProjectId}
+              tagId={draft.pageTagId}
+              onProjectChange={(projectId) =>
+                setDraft((current) => ({ ...current, pageProjectId: projectId, pageTagId: "" }))
+              }
+              onTagChange={(pageTagId) => setDraft((current) => ({ ...current, pageTagId }))}
+              projects={projects}
+              tags={tags}
+              projectsLoading={projectsLoading}
+              tagsLoading={tagsLoading}
+              availability={pageAvailability}
+              availabilityDescription="The selected Tag must point to a ready Deployment."
+              disabled={saving}
+            />
+          ) : (
+            <ProxyUpstreamFields
+              value={draft.upstream}
+              onChange={(upstream) => setDraft((current) => ({ ...current, upstream }))}
+              containers={containers}
+              disabled={saving || Boolean(route)}
+              showTargetSelect={false}
+            />
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={!targetValid || Boolean(pathError) || saving}>
+          <Button
+            onClick={() => void save()}
+            disabled={!targetValid || Boolean(pathError) || saving}
+          >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? "Saving…" : "Save"}
           </Button>

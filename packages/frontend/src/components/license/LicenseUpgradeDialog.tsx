@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -42,24 +41,24 @@ export function LicenseUpgradeDialog() {
           <>
             <DialogHeader>
               <DialogTitle>{planLabel(request.requiredPlan)} plan required</DialogTitle>
-              <DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-4">
+              <p className="text-sm text-muted-foreground">
                 {request.capability} requires the {planLabel(request.requiredPlan)} plan. This
                 Gateway is currently on the {PLAN_LABELS[request.currentPlan]} plan.
-              </DialogDescription>
-            </DialogHeader>
-
-            {request.quota?.limit !== undefined ? (
-              <p className="text-sm text-muted-foreground">
-                The current plan limit is {request.quota.limit}
-                {request.quota.resource ? ` for ${request.quota.resource}` : ""}.
               </p>
-            ) : null}
-
-            {!canManageLicense ? (
-              <p className="text-sm text-muted-foreground">
-                Contact your administrator to upgrade the Gateway license.
-              </p>
-            ) : null}
+              {request.quota?.limit !== undefined ? (
+                <p className="text-sm text-muted-foreground">
+                  The current plan limit is {request.quota.limit}
+                  {request.quota.resource ? ` for ${request.quota.resource}` : ""}.
+                </p>
+              ) : null}
+              {!canManageLicense ? (
+                <p className="text-sm text-muted-foreground">
+                  Contact your administrator to upgrade the Gateway license.
+                </p>
+              ) : null}
+            </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={close}>

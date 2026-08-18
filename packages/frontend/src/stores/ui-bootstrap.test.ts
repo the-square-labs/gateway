@@ -22,6 +22,7 @@ const SNAPSHOT = {
     hasNginxNodes: false,
     hasCloudflareIntegration: false,
     statusPageEnabled: false,
+    pagesEnabled: false,
     dockerNodes: [],
     nodes: {
       data: [],
@@ -43,7 +44,7 @@ const SNAPSHOT = {
     expiresAt: null,
     graceUntil: null,
     offlineGraceUntil: null,
-    entitlementsVersion: 2,
+    entitlementsVersion: 3,
     entitlements: {
       managedNodes: 100,
       users: 10,

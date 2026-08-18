@@ -19,6 +19,7 @@ export const LICENSE_FEATURE_PLANS = {
   'managed-databases': 'personal',
   'status-pages': 'personal',
   'registry-discovery': 'personal',
+  pages: 'personal',
   'secure-runtime': 'business',
   'structured-logging': 'business',
   'audit-export': 'business',

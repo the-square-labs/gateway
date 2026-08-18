@@ -1177,7 +1177,8 @@ export async function initializeContainer(): Promise<void> {
     aiProviderRuntimeService,
     aiSettingsService,
     finalizeSetupService,
-    licensePolicyService
+    licensePolicyService,
+    pageProfileService
   );
   container.registerInstance(UIBootstrapService, uiBootstrapService);
   const localClickHouseService = new LocalClickHouseService(dockerService);

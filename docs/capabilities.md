@@ -40,6 +40,20 @@ Nginx integration:
 - `integrate` mode keeps an existing host nginx config and injects Gateway-managed includes.
 - ACME HTTP-01 challenges are deployed only to the ingress node assigned to the registered domain. That node must be online, publicly reachable on port 80, and have a public service address.
 
+## Pages
+
+Gateway Pages provides project-based static-site hosting on managed nginx ingress nodes. Pages is available on Personal and higher; Community installations cannot create or manage Pages projects, deployments, or Pages Routes.
+
+Pages workflows:
+
+- Model each site as a Project with immutable Deployments and mutable Tags. `latest` is system-managed, and custom Routes target Tags.
+- Store source artifacts in Gateway and materialize replicas on managed nginx nodes through `nginx_pages_v1`.
+- Configure one optional wildcard preview profile for immutable deployment hostnames. Its one-label template contains `{hash}` exactly once.
+- Enable or disable Pages globally from Settings. Disabled Pages is removed from navigation; Community users can inspect and edit the form, but saving opens the shared Personal upgrade flow.
+- Serve public runtime configuration at `/_gateway/pages/config.js` as `window.runtime.config`. It is capped at 64 KiB, served with `no-store`, and does not change Deployment identity or artifact hashes.
+- Re-authorize resumable upload append/finalize requests and deploy-token Tag policy; publication verifies generation/status and rollback state before cleanup.
+- Integrate Pages with scopes, folders, EventBus/WebSocket, notifications, audit/SIEM, retention, navigation, search, cache, and resource context.
+
 ## Docker
 
 Gateway manages Docker through the `docker-daemon` installed on container hosts.
