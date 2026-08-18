@@ -217,6 +217,15 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
       }))
     );
   }
+  if (typeWanted('page_project') && hasScopeBase(user.scopes, 'pages:view')) {
+    searchTasks.push(() =>
+      collect('page_project', 'manage_pages', { operation: 'project_list', search: query, limit }, (project) => ({
+        id: project.id,
+        name: project.name,
+        nodeId: project.nodeId,
+      }))
+    );
+  }
   if (typeWanted('logging_environment') && hasScopeBase(user.scopes, 'logs:environments:view')) {
     searchTasks.push(() =>
       collect('logging_environment', 'manage_logging', {

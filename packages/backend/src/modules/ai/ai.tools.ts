@@ -412,7 +412,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'find_resource',
     description:
-      'Global resource search and type-scoped listing. Use this FIRST when the user names a resource but you need its ID, nodeId, or exact type. When the user asks to list resources of a type, pass an empty query with that type, for example { query: "", types: ["docker_container"] }. It searches across readable nodes, Docker containers/images/volumes/networks, ingress routes (proxy_host resource type), certificates, domains, logging resources, databases, notifications, and more. Do not manually list every node and then scan each node when find_resource can search the resource type directly.',
+      'Global resource search and type-scoped listing. Use this FIRST when the user names a resource but you need its ID, nodeId, or exact type. When the user asks to list resources of a type, pass an empty query with that type, for example { query: "", types: ["docker_container"] }. It searches across readable nodes, Docker containers/images/volumes/networks, ingress routes (proxy_host resource type), Page Projects, certificates, domains, logging resources, databases, notifications, and more. Do not manually list every node and then scan each node when find_resource can search the resource type directly.',
     parameters: {
       type: 'object',
       properties: {
@@ -442,6 +442,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
               'docker_network',
               'docker_registry',
               'database',
+              'page_project',
               'logging_environment',
               'logging_schema',
               'status_page_service',
@@ -1964,7 +1965,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'internal_documentation',
     description:
-      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, domains, access-lists, templates, acme, users, audit, siem, nginx, nodes, housekeeping, permissions, docker, databases, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gateway-settings, licensing-updates, inference, gitlab, notifications, overview, installation, authentication, cloudflare, docker-registries, clickhouse, troubleshooting.',
+      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, pages, domains, access-lists, templates, acme, users, audit, siem, nginx, nodes, housekeeping, permissions, docker, databases, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gateway-settings, licensing-updates, inference, gitlab, notifications, overview, installation, authentication, cloudflare, docker-registries, clickhouse, troubleshooting.',
     parameters: {
       type: 'object',
       properties: {
@@ -1988,6 +1989,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
             'permissions',
             'docker',
             'databases',
+            'pages',
             'postgres',
             'redis',
             'logging',

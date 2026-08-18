@@ -33,6 +33,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'docker:networks:view',
     'docker:registries:view',
     'databases:view',
+    'pages:view',
     'logs:environments:view',
     'logs:schemas:view',
     'status-page:view',
@@ -77,6 +78,10 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'databases:delete',
     'databases:credentials:reveal',
   ],
+  manage_managed_database: ['databases:view', 'databases:create', 'databases:edit', 'databases:delete'],
+  manage_pages: ['pages:view', 'pages:create', 'pages:settings:view', 'pages:settings:edit', 'pages:folders:manage'],
+  manage_additional_route: ['proxy:view', 'proxy:edit'],
+  manage_additional_secure_link: ['proxy:view', 'proxy:edit'],
   manage_postgres_data: ['databases:query:read', 'databases:query:write'],
   manage_redis_data: ['databases:query:read', 'databases:query:write', 'databases:query:admin'],
   manage_logging: [

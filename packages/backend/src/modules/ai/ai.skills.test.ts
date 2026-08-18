@@ -82,6 +82,9 @@ describe('AISkillService', () => {
 
     expect(instructions).toContain('Missing prerequisites are setup decisions, not terminal blockers');
     expect(instructions).toContain('Use find_resource first');
+    expect(instructions).toContain('manage_managed_database');
+    expect(instructions).toContain('manage_pages');
+    expect(instructions).toContain('manage_additional_route');
     expect(instructions).toContain('Docker container runtime IDs are volatile');
     expect(instructions).toContain('never propose a host bind path');
     expect(instructions).toContain('Choose the Secure Docker profile only when the node reports a healthy');

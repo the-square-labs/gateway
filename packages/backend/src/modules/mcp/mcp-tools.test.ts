@@ -158,7 +158,7 @@ describe('MCP tool scope filtering', () => {
     );
   });
 
-  it('never exposes assistant-only coordination tools through MCP', () => {
+  it('keeps assistant-only coordination tools hidden while exposing supported resource lifecycles', () => {
     expect(toolNames([])).not.toContain('wait');
     expect(toolByName(['feat:ai:use'], 'wait')).toBeUndefined();
     const resourceSetupScopes = [
@@ -169,8 +169,13 @@ describe('MCP tool scope filtering', () => {
       'settings:gateway:view',
       'settings:gateway:edit',
     ];
+    expect(toolNames(resourceSetupScopes)).toContain('manage_managed_database');
     expect(toolNames(resourceSetupScopes)).not.toEqual(
-      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
+      expect.arrayContaining(['manage_docker_migration', 'manage_logging_backend'])
+    );
+    expect(toolNames(['pages:view'])).toContain('manage_pages');
+    expect(toolNames(['proxy:view'])).toEqual(
+      expect.arrayContaining(['manage_additional_route', 'manage_additional_secure_link'])
     );
   });
 

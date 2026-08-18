@@ -512,6 +512,18 @@ describe('MCP tools', () => {
     expect(names).toContain('list_docker_deployments');
   });
 
+  it('discovers Pages and managed database lifecycle tools by domain', async () => {
+    registerToken(['pages:view', 'databases:view']);
+
+    await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'pages' } });
+    await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'databases' } });
+
+    const refreshed = await mcpRequest('tools/list');
+    const names = refreshed.body.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toContain('manage_pages');
+    expect(names).toContain('manage_managed_database');
+  });
+
   it('emits tools/list_changed after activating a toolset', async () => {
     registerToken(['docker:containers:view', 'docker:containers:manage']);
 
@@ -864,7 +876,7 @@ describe('MCP resources and prompts', () => {
     expect(names).not.toContain('provision-proxy-host');
   });
 
-  it('exposes the managed database access prompt without adding mutating tool calls', async () => {
+  it('exposes the managed database access prompt with the supported managed lifecycle tool', async () => {
     registerToken(['databases:view']);
 
     const { body } = await mcpRequest('prompts/list');
@@ -877,6 +889,7 @@ describe('MCP resources and prompts', () => {
 
     const result = await mcpRequest('prompts/get', { name: 'plan-managed-database-access', arguments: {} });
     const text = result.body.result.messages[0].content.text;
-    expect(text).toContain('Do not invent database deployment, binding, publication, or secret-reveal tool calls.');
+    expect(text).toContain('Use manage_managed_database');
+    expect(text).toContain('poll get until ready');
   });
 });

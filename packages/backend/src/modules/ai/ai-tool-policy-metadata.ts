@@ -110,6 +110,43 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     update: ['retry'],
     delete: ['delete', 'delete_binding'],
   }),
+  manage_pages: operationPolicies({
+    read: [
+      'profile_get',
+      'profile_options',
+      'project_list',
+      'project_get',
+      'deployment_list',
+      'deployment_get',
+      'tag_list',
+      'config_list',
+    ],
+    create: ['project_create'],
+    update: [
+      'profile_configure',
+      'profile_disable',
+      'project_update',
+      'deployment_pin',
+      'tag_move',
+      'config_save_default',
+      'config_save_tag',
+      'config_reset_tag',
+    ],
+    execute: ['project_migrate'],
+    delete: ['project_delete', 'deployment_delete', 'tag_delete'],
+  }),
+  manage_additional_route: operationPolicies({
+    read: ['list', 'get'],
+    create: ['create'],
+    update: ['update', 'retry'],
+    delete: ['delete'],
+  }),
+  manage_additional_secure_link: operationPolicies({
+    read: ['list'],
+    create: ['create'],
+    update: ['retry'],
+    delete: ['delete'],
+  }),
   manage_docker_migration: operationPolicies({
     read: ['preflight', 'get'],
     execute: ['start', 'cancel', 'retry_cleanup'],
@@ -348,23 +385,25 @@ function inferToolTargetIdentity(tool: AIToolDefinition): AIToolDefinition['targ
         ? ['deploymentId', 'containerId', 'containerName', 'nodeId']
         : tool.requiredScope.startsWith('databases:')
           ? ['databaseId', 'nodeId']
-          : [
-              'caId',
-              'parentCaId',
-              'certificateId',
-              'proxyHostId',
-              'domainId',
-              'accessListId',
-              'templateId',
-              'userId',
-              'containerId',
-              'deploymentId',
-              'databaseId',
-              'ruleId',
-              'webhookId',
-              'nodeId',
-              'registryId',
-            ];
+          : tool.requiredScope.startsWith('pages:')
+            ? ['projectId', 'deploymentId', 'tagId', 'nodeId']
+            : [
+                'caId',
+                'parentCaId',
+                'certificateId',
+                'proxyHostId',
+                'domainId',
+                'accessListId',
+                'templateId',
+                'userId',
+                'containerId',
+                'deploymentId',
+                'databaseId',
+                'ruleId',
+                'webhookId',
+                'nodeId',
+                'registryId',
+              ];
   const argumentsList = preferred.filter((argument) => available.has(argument));
   return argumentsList.length > 0 ? { arguments: argumentsList } : undefined;
 }

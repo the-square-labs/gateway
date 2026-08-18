@@ -106,9 +106,18 @@ describe('AI tool scope filtering', () => {
       'docker:containers:migrate',
       'settings:gateway:view',
       'settings:gateway:edit',
+      'pages:view',
+      'proxy:view',
     ]);
     expect(names).toEqual(
-      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
+      expect.arrayContaining([
+        'manage_managed_database',
+        'manage_docker_migration',
+        'manage_logging_backend',
+        'manage_pages',
+        'manage_additional_route',
+        'manage_additional_secure_link',
+      ])
     );
     expect(
       parseAndValidateAIToolArguments(
@@ -120,6 +129,12 @@ describe('AI tool scope filtering', () => {
       ok: false,
       error: 'Invalid tool arguments at /operation',
     });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_additional_route',
+        JSON.stringify({ operation: 'create', proxyHostId: 'host-1', path: '/api', targetKind: 'manual' })
+      )
+    ).toMatchObject({ ok: true });
   });
 
   it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {

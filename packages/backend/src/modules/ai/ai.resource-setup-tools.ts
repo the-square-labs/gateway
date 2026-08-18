@@ -1,5 +1,5 @@
 import { container } from '@/container.js';
-import { hasScope } from '@/lib/permissions.js';
+import { hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   CreateManagedDatabaseBindingSchema,
@@ -14,21 +14,252 @@ import {
   DockerMigrationPreflightInputSchema,
 } from '@/modules/docker/docker-migration.schemas.js';
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
+import { PageDeploymentListQuerySchema } from '@/modules/pages/deployments/page-deployment.schemas.js';
+import { PageDeploymentService } from '@/modules/pages/deployments/page-deployment.service.js';
+import {
+  CreatePageProjectSchema,
+  MigratePageProjectSchema,
+  PageProjectListQuerySchema,
+  UpdatePageProjectSchema,
+} from '@/modules/pages/page-project.schemas.js';
+import { PageProjectService } from '@/modules/pages/page-project.service.js';
+import { visiblePageProjectIds } from '@/modules/pages/page-project-access.js';
+import { UpdatePageProfileSchema } from '@/modules/pages/profile/page-profile.schemas.js';
+import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
+import { PageRetentionService } from '@/modules/pages/retention/page-retention.service.js';
+import {
+  ResetPageRuntimeConfigSchema,
+  SavePageRuntimeConfigSchema,
+} from '@/modules/pages/runtime-config/page-runtime-config.schemas.js';
+import { PageRuntimeConfigService } from '@/modules/pages/runtime-config/page-runtime-config.service.js';
+import { PagePublicationService } from '@/modules/pages/tags/page-publication.service.js';
+import { MovePageTagSchema, PageTagParamSchema } from '@/modules/pages/tags/page-tag.schemas.js';
+import { PageTagService } from '@/modules/pages/tags/page-tag.service.js';
+import { AdditionalRouteService } from '@/modules/proxy/additional-route.service.js';
+import {
+  CreateAdditionalRouteSchema,
+  UpdateAdditionalRouteSchema,
+} from '@/modules/proxy/additional-route.validation.js';
+import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
 
 export const RESOURCE_SETUP_TOOL_NAMES = new Set([
+  'manage_pages',
+  'manage_additional_route',
+  'manage_additional_secure_link',
   'manage_managed_database',
   'manage_docker_migration',
   'manage_logging_backend',
 ]);
 
 export async function executeResourceSetupTool(user: User, toolName: string, args: Record<string, unknown>) {
+  if (toolName === 'manage_pages') return managePages(user, args);
+  if (toolName === 'manage_additional_route') return manageAdditionalRoute(user, args);
+  if (toolName === 'manage_additional_secure_link') return manageAdditionalSecureLink(user, args);
   if (toolName === 'manage_managed_database') return manageManagedDatabase(user, args);
   if (toolName === 'manage_docker_migration') return manageDockerMigration(user, args);
   if (toolName === 'manage_logging_backend') return manageLoggingBackend(user, args);
   throw new Error(`Unsupported resource setup tool: ${toolName}`);
+}
+
+async function managePages(user: User, args: Record<string, unknown>) {
+  const operation = requiredString(args.operation);
+  await container.resolve(LicensePolicyService).requireFeature('pages');
+
+  const profile = container.resolve(PageProfileService);
+  if (operation === 'profile_get') {
+    ensureScope(user, 'pages:settings:view');
+    return profile.get();
+  }
+  if (operation === 'profile_options') {
+    ensureScope(user, 'pages:settings:view');
+    return profile.getOptions();
+  }
+  if (operation === 'profile_configure') {
+    ensureScope(user, 'pages:settings:edit');
+    const input = UpdatePageProfileSchema.parse(args);
+    return input.enabled ? profile.configure(input, user.id) : profile.disable(user.id);
+  }
+  if (operation === 'profile_disable') {
+    ensureScope(user, 'pages:settings:edit');
+    return profile.disable(user.id);
+  }
+
+  const projects = container.resolve(PageProjectService);
+  if (operation === 'project_list') {
+    ensureAnyScopeBase(user, ['pages:view', 'pages:create']);
+    return projects.list(PageProjectListQuerySchema.parse(args), { allowedIds: visiblePageProjectIds(user.scopes) });
+  }
+  if (operation === 'project_create') {
+    ensureScope(user, 'pages:create');
+    if (args.folderId) ensureScope(user, 'pages:folders:manage');
+    return projects.create(CreatePageProjectSchema.parse(args), user.id);
+  }
+
+  const projectId = requiredString(args.projectId);
+  if (operation === 'project_get') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return projects.get(projectId);
+  }
+  if (operation === 'project_update') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return projects.update(projectId, UpdatePageProjectSchema.parse(args), user.id);
+  }
+  if (operation === 'project_migrate') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return projects.migrate(projectId, MigratePageProjectSchema.parse(args), user.id);
+  }
+  if (operation === 'project_delete') {
+    ensureResourceScope(user, 'pages:delete', projectId);
+    await projects.delete(projectId, user.id);
+    return { success: true };
+  }
+
+  if (operation === 'deployment_list') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return container.resolve(PageDeploymentService).list(projectId, PageDeploymentListQuerySchema.parse(args));
+  }
+  const deploymentId = optionalString(args.deploymentId);
+  if (operation === 'deployment_get') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return container.resolve(PageDeploymentService).getForProject(projectId, requiredValue(deploymentId));
+  }
+  if (operation === 'deployment_pin') {
+    ensureResourceScope(user, 'pages:deployments:manage', projectId);
+    return container
+      .resolve(PageRetentionService)
+      .setPinned(projectId, requiredValue(deploymentId), requiredBoolean(args.pinned), user.id);
+  }
+  if (operation === 'deployment_delete') {
+    ensureResourceScope(user, 'pages:deployments:manage', projectId);
+    await container.resolve(PageRetentionService).deleteDeployment(projectId, requiredValue(deploymentId), user.id);
+    return { success: true };
+  }
+
+  if (operation === 'tag_list') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return container.resolve(PageTagService).list(projectId);
+  }
+  const tag = optionalString(args.tag);
+  if (operation === 'tag_move') {
+    ensureResourceScope(user, 'pages:tags:manage', projectId);
+    const parsed = PageTagParamSchema.parse({ projectId, tag: requiredValue(tag) });
+    const move = MovePageTagSchema.parse(args);
+    return container.resolve(PagePublicationService).moveUserTag(projectId, parsed.tag, move.deploymentId, user.id);
+  }
+  if (operation === 'tag_delete') {
+    ensureResourceScope(user, 'pages:tags:manage', projectId);
+    const parsed = PageTagParamSchema.parse({ projectId, tag: requiredValue(tag) });
+    await container.resolve(PageTagService).delete(projectId, parsed.tag, user.id);
+    return { success: true };
+  }
+
+  const configs = container.resolve(PageRuntimeConfigService);
+  if (operation === 'config_list') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return configs.list(projectId);
+  }
+  if (operation === 'config_save_default') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return configs.saveDefault(projectId, SavePageRuntimeConfigSchema.parse(args), user.id);
+  }
+  const tagId = requiredString(args.tagId);
+  if (operation === 'config_save_tag') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return configs.saveTag(projectId, tagId, SavePageRuntimeConfigSchema.parse(args), user.id);
+  }
+  if (operation === 'config_reset_tag') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    const input = ResetPageRuntimeConfigSchema.parse(args);
+    return configs.resetTag(projectId, tagId, input.expectedGeneration, user.id);
+  }
+  throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported Pages operation: ${operation}`);
+}
+
+async function manageAdditionalRoute(user: User, args: Record<string, unknown>) {
+  const operation = requiredString(args.operation);
+  const proxyHostId = requiredString(args.proxyHostId);
+  const service = container.resolve(AdditionalRouteService);
+  if (operation === 'list') {
+    ensureResourceScope(user, 'proxy:view', proxyHostId);
+    return { data: await service.list(proxyHostId) };
+  }
+  const routeId = operation === 'create' ? undefined : requiredString(args.routeId);
+  if (operation === 'get') {
+    ensureResourceScope(user, 'proxy:view', proxyHostId);
+    return service.present(await service.get(proxyHostId, requiredValue(routeId)));
+  }
+  ensureResourceScope(user, 'proxy:edit', proxyHostId);
+  if (operation === 'create') {
+    const input = CreateAdditionalRouteSchema.parse(args);
+    if (input.advancedConfig !== undefined && input.advancedConfig !== null) {
+      ensureResourceScope(user, 'proxy:advanced', proxyHostId);
+    }
+    await requirePagesForAdditionalTarget(input);
+    return service.present(await service.create(proxyHostId, input, user.id, user.scopes));
+  }
+  if (operation === 'update') {
+    const input = UpdateAdditionalRouteSchema.parse(args);
+    if (input.advancedConfig !== undefined) ensureResourceScope(user, 'proxy:advanced', proxyHostId);
+    await requirePagesForAdditionalTarget(input);
+    return service.present(await service.update(proxyHostId, requiredValue(routeId), input, user.id, user.scopes));
+  }
+  if (operation === 'retry') {
+    const existing = await service.get(proxyHostId, requiredValue(routeId));
+    if (existing.targetKind === 'pages') await container.resolve(LicensePolicyService).requireFeature('pages');
+    return service.present(await service.retry(proxyHostId, existing.id, user.id, user.scopes));
+  }
+  if (operation === 'delete') {
+    await service.remove(proxyHostId, requiredValue(routeId), user.id);
+    return { success: true };
+  }
+  throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported Additional Route operation: ${operation}`);
+}
+
+async function manageAdditionalSecureLink(user: User, args: Record<string, unknown>) {
+  const operation = requiredString(args.operation);
+  const proxyHostId = requiredString(args.proxyHostId);
+  const service = container.resolve(ProxyService);
+  if (operation === 'list') {
+    ensureResourceScope(user, 'proxy:view', proxyHostId);
+    return { data: await service.listAdditionalSecureLinks(proxyHostId) };
+  }
+  ensureResourceScope(user, 'proxy:edit', proxyHostId);
+  if (operation === 'create') {
+    return service.createAdditionalSecureLink(
+      proxyHostId,
+      {
+        name: requiredString(args.name),
+        upstreamKind: requiredEnum(args.upstreamKind, ['docker_container', 'docker_deployment']),
+        forwardScheme: requiredEnum(args.forwardScheme, ['http', 'https']),
+        dockerNodeId: optionalString(args.dockerNodeId),
+        dockerContainerName: optionalString(args.dockerContainerName),
+        dockerDeploymentId: optionalString(args.dockerDeploymentId),
+        dockerContainerPort: requiredNumber(args.dockerContainerPort),
+      },
+      user.id
+    );
+  }
+  const bindingId = requiredString(args.bindingId);
+  if (operation === 'retry') return service.retryAdditionalSecureLink(proxyHostId, bindingId, user.id);
+  if (operation === 'delete') {
+    await service.deleteAdditionalSecureLink(proxyHostId, bindingId, user.id);
+    return { success: true };
+  }
+  throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported Additional Secure Link operation: ${operation}`);
+}
+
+async function requirePagesForAdditionalTarget(input: {
+  targetKind?: string;
+  pageProjectId?: string | null;
+  pageTagId?: string | null;
+}): Promise<void> {
+  if (input.targetKind === 'pages' || input.pageProjectId !== undefined || input.pageTagId !== undefined) {
+    await container.resolve(LicensePolicyService).requireFeature('pages');
+  }
 }
 
 async function manageManagedDatabase(user: User, args: Record<string, unknown>) {
@@ -51,29 +282,29 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
 
   const databaseId = requiredString(args.databaseId);
   if (operation === 'get') {
-    ensureScope(user, 'databases:view');
+    ensureResourceScope(user, 'databases:view', databaseId);
     return service.get(databaseId);
   }
   if (operation === 'retry') {
-    ensureScope(user, 'databases:edit');
+    ensureResourceScope(user, 'databases:edit', databaseId);
     return service.retryProvisioning(databaseId, user.id);
   }
   if (operation === 'delete') {
-    ensureScope(user, 'databases:delete');
+    ensureResourceScope(user, 'databases:delete', databaseId);
     return service.delete(databaseId, user.id);
   }
   if (operation === 'list_bindings') {
-    ensureScope(user, 'databases:view');
+    ensureResourceScope(user, 'databases:view', databaseId);
     return bindings.list(databaseId);
   }
   if (operation === 'create_binding') {
-    ensureScope(user, 'databases:edit');
+    ensureResourceScope(user, 'databases:edit', databaseId);
     const input = CreateManagedDatabaseBindingSchema.parse(args);
     ensureBindingTargetScopes(user, input);
     return bindings.create(databaseId, input, user.id);
   }
   if (operation === 'delete_binding') {
-    ensureScope(user, 'databases:delete');
+    ensureResourceScope(user, 'databases:delete', databaseId);
     const bindingId = requiredString(args.bindingId);
     ensureBindingTargetScopes(user, await bindings.getTarget(databaseId, bindingId));
     return bindings.delete(databaseId, bindingId, user.id, DeleteManagedDatabaseBindingSchema.parse(args));
@@ -147,6 +378,18 @@ function ensureScope(user: User, scope: string) {
   if (!hasScope(user.scopes, scope)) throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
 }
 
+function ensureResourceScope(user: User, scope: string, resourceId: string) {
+  if (!hasScopeForResource(user.scopes, scope, resourceId)) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}:${resourceId}`);
+  }
+}
+
+function ensureAnyScopeBase(user: User, scopes: string[]) {
+  if (!scopes.some((scope) => hasScopeBase(user.scopes, scope))) {
+    throw new AppError(403, 'FORBIDDEN', `Missing one of required scopes: ${scopes.join(', ')}`);
+  }
+}
+
 function requiredString(value: unknown): string {
   const text = optionalString(value);
   if (!text) throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', 'Required value is missing');
@@ -159,4 +402,27 @@ function optionalString(value: unknown): string | undefined {
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function requiredNumber(value: unknown): number {
+  const number = optionalNumber(value);
+  if (number === undefined) throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', 'Required number is missing');
+  return number;
+}
+
+function requiredBoolean(value: unknown): boolean {
+  if (typeof value !== 'boolean') throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', 'Required boolean is missing');
+  return value;
+}
+
+function requiredValue<T>(value: T | undefined): T {
+  if (value === undefined) throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', 'Required value is missing');
+  return value;
+}
+
+function requiredEnum<const T extends readonly string[]>(value: unknown, values: T): T[number] {
+  if (typeof value !== 'string' || !values.includes(value)) {
+    throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', `Expected one of: ${values.join(', ')}`);
+  }
+  return value as T[number];
 }

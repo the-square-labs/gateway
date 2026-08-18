@@ -229,6 +229,7 @@ function resourceUiHref(resource: Omit<AIResourceReference, 'refId' | 'uiHref' |
       docker_network: '/docker/networks',
       docker_registry: '/settings/advanced',
       database: '/databases',
+      page_project: '/pages',
       logging_environment: '/logging/environments',
       logging_schema: '/logging/schemas',
       status_page_service: '/status-page/services',
@@ -263,6 +264,8 @@ function resourceUiHref(resource: Omit<AIResourceReference, 'refId' | 'uiHref' |
         : '/docker/volumes';
     case 'database':
       return `/databases/${segment(resource.slug ?? resource.resourceId)}`;
+    case 'page_project':
+      return `/pages/${segment(resource.slug ?? resource.resourceId)}`;
     case 'logging_environment':
       return `/logging/environments/${segment(resource.slug ?? resource.resourceId)}`;
     case 'logging_schema':
@@ -300,6 +303,7 @@ function inferResourceType(toolName: string, args: Record<string, unknown>): AIR
   }
   if (toolName.includes('certificate')) return 'pki_certificate';
   if (toolName.includes('database')) return 'database';
+  if (toolName === 'manage_pages' && String(args.operation ?? '').startsWith('project_')) return 'page_project';
   if (toolName === 'manage_logging') {
     return String(args.resource ?? '').startsWith('schema') ? 'logging_schema' : 'logging_environment';
   }
@@ -363,6 +367,7 @@ function resourceIdForType(
     docker_network: [data.id, value.id, args.networkId, args.name],
     docker_registry: [data.id, value.id, args.registryId, args.name],
     database: [data.id, value.id, args.databaseId, args.id],
+    page_project: [data.id, value.id, args.projectId, args.id],
     logging_environment: [data.id, value.id, args.environmentId, args.id, args.name],
     logging_schema: [data.id, value.id, args.schemaId, args.id, args.name],
     status_page_service: [data.id, value.id, args.serviceId, args.id, args.name],

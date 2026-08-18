@@ -186,6 +186,8 @@ By default, MCP starts with a compact core toolset. Clients call `discover_tools
 
 The `Ingress` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. For compatibility, callable tool names, resource URIs, OAuth scopes, and REST paths still use `proxy_host`, `proxy`, or `/api/proxy-hosts`; those identifiers refer to the Routes shown in the Operations Console.
 
+The same scoped automation surface includes managed database provisioning and workload bindings, Page Projects/Deployments/Tags/runtime configuration, path-based Additional Routes, and independent Additional Secure Link Bindings. Discover the `Databases`, `Pages`, or `Ingress` toolset before these workflows. Artifact bytes for Pages still use the resumable deploy API; the Pages MCP tool manages metadata and publication.
+
 Some MCP clients do not refresh their tool list after that notification. Enable **Extended MCP compatibility** in **Settings > Advanced** for those clients. In compatibility mode, the first `tools/list` response contains every tool allowed by the OAuth grant and `discover_tools` is omitted. This can expose hundreds of schemas, so keep the default discovery mode for clients that support list-change notifications.
 
 ### Scope Rules

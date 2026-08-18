@@ -28,7 +28,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 - After discovery, use internal_documentation for workflow details and argument shapes.
 
 Use find_resource whenever the user gives a name, domain, hostname, image, container name, certificate name, logging environment/schema name, database name, or other visible identifier and you need the actual ID or nodeId.
-Use find_resource with an empty query and a concrete type when the user asks to list resources by type, for example Docker containers.
+Use find_resource with an empty query and a concrete type when the user asks to list resources by type, for example Docker containers or Page Projects.
 
 ## Rule
 - Use get_current_context when the user refers to the page or resource they are currently viewing.
@@ -136,7 +136,7 @@ The UI calls these resources Routes. Existing REST paths, tool names, resource t
 - nodeId: the nginx ingress node this route is deployed on (required when creating).
 - domainNames: array of domains this route serves. Registered domains must be assigned to the same nginx node.
 - forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
-- upstreamKind: manual, docker_container, or docker_deployment. Docker upstreams store a stable container name or deployment ID plus a published TCP port and resolve the current node address at apply time.
+- upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a stable container name or deployment ID plus a published TCP port; Pages stores a Page Project and mutable Tag target.
 - sslEnabled: enable HTTPS. Requires sslCertificateId (SSL cert UUID, NOT PKI cert UUID).
 - sslForced: redirect HTTP to HTTPS.
 - http2Support: enable HTTP/2.
@@ -160,6 +160,10 @@ Ordinary list_proxy_hosts and get_proxy_host responses omit rawConfig and rawCon
 ## Docker Upstreams
 - The UI and REST API can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
 - The current Assistant create/update proxy tools support manual upstream fields only. Do not invent Docker-upstream arguments.
+
+## Additional Routes And Secure Links
+- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
+- Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
 
 ## Nginx Config
 Each route generates an nginx server block on its selected ingress node. Changes are applied by reloading nginx.
@@ -661,7 +665,7 @@ Managed database instances are not generic Docker workloads. The database node o
 - The tunnel terminates in Gateway's separate long-lived relay container. Ordinary app-only updates keep established binding traffic running; a red relay warning is a critical operator state after bounded automatic recovery fails, not a reason to publish a replacement port.
 - A TCP endpoint is an independent, explicit publication option for infrastructure outside Gateway. It requires engine authentication and may not be tunnel-encrypted unless the database engine is configured with TLS. Gateway does not change host firewalls automatically.
 - Each application binding gets a separate engine identity. Its URI and optional host/port/database/user/password environment values are injected into the selected application; do not reveal, log, or copy those values unless an explicit secret-reveal flow permits it.
-- Native assistant flows use \`manage_managed_database\` for catalog/list/get/create/retry/delete and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, and never reveal owner or binding credentials. MCP remains read-only for this workflow.
+- Assistant and MCP flows use \`manage_managed_database\` for catalog/list/get/create/retry/delete and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, then create a container or deployment binding; never reveal owner or binding credentials.
 
 ## Providers
 - **Postgres**: schema/table explorer, paginated row browser, row insert/update/delete for PK-backed tables, SQL console, monitoring.
@@ -686,6 +690,19 @@ Managed database instances are not generic Docker workloads. The database node o
 ## Audit
 - Connection CRUD, connection tests, credential reveals, data mutations, and console executions are audit logged.
 - Query text and command text are sanitized and truncated in the audit log to avoid leaking secrets.`,
+
+  pages: `# Pages
+
+Pages serves immutable static Deployments owned by a Page Project. Use \`find_resource({ types: ["page_project"] })\` and \`manage_pages\` for profile, project, deployment, Tag, migration, pinning, retention, and runtime-config operations.
+
+## Workflow
+- The Pages profile must be licensed and enabled. A Project is placed on one Pages-capable node and can be migrated with \`project_migrate\`.
+- Artifact bytes are uploaded through the resumable Pages deploy API; \`manage_pages\` operates deployment metadata and publication, not local archive bytes.
+- Deployments are immutable. Mutable Tags point at ready Deployments. Ingress Routes and Additional Routes target a Tag, never an immutable Deployment.
+- Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override.
+- Disabling Pages stops immutable preview publication but existing Tag routes and stored content continue to work.
+
+Required scopes are under \`pages:*\`; profile changes require \`pages:settings:*\`. Never bypass the Pages entitlement or daemon capability checks.`,
 
   postgres: `# Postgres in Gateway
 
@@ -1078,6 +1095,9 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 - Gateway MCP never delegates GitLab, GitHub, generic Git, or external SSH integration scopes. External agents must configure dedicated provider MCP servers for repository, CI, variable, webhook, registry, and SSH operations. Cloudflare DNS remains part of Gateway MCP because Gateway directly manages domain and ingress DNS state.
 - The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
 - The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. Stable tool names, resource URIs, scopes, and REST paths still use proxy-host identifiers for compatibility.
+- Use \`manage_additional_route\` for path-prefix locations inside a Route. It supports manual, Docker container/deployment, and Pages Tag targets plus location advanced config. Docker targets create and own their required Secure Link binding.
+- Use \`manage_additional_secure_link\` only for extra bindings referenced by a Route's advanced nginx config. Route-owned bindings are visible in its list but must be changed through \`manage_additional_route\`, not deleted independently.
+- The \`Pages\` toolset exposes Page Projects, Deployments, Tags, runtime configuration, profile settings, and project migration. The \`Databases\` toolset includes managed database provisioning and application bindings.
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings
@@ -1552,6 +1572,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   pki: 'pki:ca:view:root',
   ssl: 'ssl:cert:view',
   proxy: 'proxy:view',
+  pages: 'pages:view',
   domains: 'domains:view',
   'access-lists': 'acl:view',
   templates: 'pki:templates:view',

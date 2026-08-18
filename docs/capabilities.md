@@ -53,6 +53,7 @@ Pages workflows:
 - Serve public runtime configuration at `/_gateway/pages/config.js` as `window.runtime.config`. It is capped at 64 KiB, served with `no-store`, and does not change Deployment identity or artifact hashes.
 - Re-authorize resumable upload append/finalize requests and deploy-token Tag policy; publication verifies generation/status and rollback state before cleanup.
 - Integrate Pages with scopes, folders, EventBus/WebSocket, notifications, audit/SIEM, retention, navigation, search, cache, and resource context.
+- Operate Projects, Deployments, Tags, runtime configuration, placement migration, and profile settings through the scoped AI Workspace and remote MCP Pages toolset; upload artifact bytes through the resumable deploy API.
 
 ## Docker
 
@@ -141,6 +142,8 @@ Domain workflows:
 ## Databases
 
 Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes. Enrolling database nodes is available in every plan; creating managed database instances requires Personal or higher.
+
+AI Workspace and the remote MCP Databases toolset can read the managed catalog, provision/retry/delete instances, and create or remove application bindings under the same license and database/Docker scopes as the Operations Console.
 
 Managed instances are private by default. Gateway binds applications through a private connector and authenticated tunnel, with a separate engine identity per binding. Publishing TCP for external infrastructure is an explicit opt-in; it requires database authentication, Gateway does not open host firewalls automatically, and the path is not tunnel-encrypted unless native database TLS is configured.
 

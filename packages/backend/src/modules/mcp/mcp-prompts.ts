@@ -70,9 +70,9 @@ const prompts: PromptDefinition[] = [
   {
     name: 'plan-managed-database-access',
     title: 'Plan managed database access',
-    description: 'Explain the safe access model for a managed database without provisioning or exposing it.',
+    description: 'Plan or provision safe access to a managed database.',
     requiredScopes: ['databases:view'],
-    text: 'Plan access to a Gateway managed database. Read the databases internal documentation first. Treat the instance as private by default: application access uses a per-binding connector and authenticated Gateway tunnel, while a published TCP endpoint is a separate explicit choice for external infrastructure. Do not invent database deployment, binding, publication, or secret-reveal tool calls. Do not include credentials, connection URIs, binding environment variables, connector aliases, or daemon error text in the plan; direct the operator to the Databases or container/deployment Settings UI for supported changes.',
+    text: 'Plan or provision access to a Gateway managed database. Discover the Databases toolset and read the databases documentation first. Use manage_managed_database: catalog before create, keep the instance private unless explicit publication is requested, poll get until ready, then create a binding for the selected container or deployment. Do not include credentials, connection URIs, binding environment variables, connector aliases, or daemon error text in the response.',
   },
 ];
 

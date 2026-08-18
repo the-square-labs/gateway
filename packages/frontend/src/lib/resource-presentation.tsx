@@ -50,6 +50,7 @@ export const RESOURCE_LABELS: Record<ResourceSearchType, string> = {
   docker_network: "Docker network",
   docker_registry: "Docker registry",
   database: "Database",
+  page_project: "Page Project",
   logging_environment: "Logging environment",
   logging_schema: "Logging schema",
   status_page_service: "Status page service",
@@ -75,6 +76,7 @@ export const RESOURCE_ICONS: Record<ResourceSearchType, ElementType> = {
   docker_network: Network,
   docker_registry: KeyRound,
   database: Database,
+  page_project: Globe,
   logging_environment: ScrollText,
   logging_schema: FileText,
   status_page_service: Activity,
@@ -158,6 +160,8 @@ function resourceHref(resource: {
       return "/settings/advanced";
     case "database":
       return databaseRoute(resource.slug ?? resource.resourceId);
+    case "page_project":
+      return `/pages/${encodeURIComponent(resource.slug ?? resource.resourceId)}`;
     case "logging_environment":
       return loggingEnvironmentRoute(resource.slug ?? resource.resourceId);
     case "logging_schema":
@@ -207,6 +211,8 @@ function resourceParentHref(type: AIResourceReferenceType): string {
       return "/settings/advanced";
     case "database":
       return "/databases";
+    case "page_project":
+      return "/pages";
     case "logging_environment":
       return "/logging/environments";
     case "logging_schema":

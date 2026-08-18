@@ -61,7 +61,6 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'list_sandbox_jobs',
   'manage_node_config',
   'manage_node_file',
-  'manage_managed_database',
   'manage_docker_migration',
   'manage_logging_backend',
   'set_resource_pin',
@@ -153,8 +152,14 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   {
     id: 'databases',
     title: 'Databases',
-    description: 'Database connections, PostgreSQL data tools, and Redis data tools.',
-    toolNames: toolNamesForCategories(['Databases']),
+    description: 'Database connections, managed databases and bindings, PostgreSQL data tools, and Redis data tools.',
+    toolNames: toolNamesForCategories(['Databases', 'Managed Databases']),
+  },
+  {
+    id: 'pages',
+    title: 'Pages',
+    description: 'Static Page Projects, Deployments, Tags, runtime configuration, and Pages profile operations.',
+    toolNames: toolNamesForCategories(['Pages']),
   },
   {
     id: 'logging',
