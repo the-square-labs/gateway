@@ -23,6 +23,8 @@ describe("ProxyUpstreamTarget", () => {
     const name = screen.getByText("proxy-link-smoke");
     const badge = name.closest("div");
     expect(badge).toHaveClass("bg-muted");
+    expect(name).toHaveClass("min-w-0", "truncate");
+    expect(badge?.querySelector("svg")).toHaveClass("h-3.5", "w-3.5", "shrink-0");
     expect(badge?.querySelector("svg")).toBeInTheDocument();
     expect(screen.queryByText(/gateway-dind/)).not.toBeInTheDocument();
   });

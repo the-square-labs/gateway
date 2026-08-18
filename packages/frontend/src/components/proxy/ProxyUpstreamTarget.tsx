@@ -32,8 +32,8 @@ export function ProxyUpstreamTarget({
     const label = `${projectName} / ${tagName}`;
     const badge = (
       <Badge variant="secondary" size={size} className={appearance?.badgeClassName} title={label}>
-        <Globe2 className="mr-1.5 h-3.5 w-3.5" />
-        {label}
+        <Globe2 className="mr-1.5 h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{label}</span>
       </Badge>
     );
     return linkToResource ? <Link to={pageProjectRoute(projectSlug, "tags")}>{badge}</Link> : badge;
@@ -49,8 +49,8 @@ export function ProxyUpstreamTarget({
         className={appearance?.badgeClassName}
         title={resourceName}
       >
-        <Box className="mr-1.5 h-3.5 w-3.5" />
-        {resourceName}
+        <Box className="mr-1.5 h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{resourceName}</span>
       </Badge>
     );
     const nodeSlug = host.dockerNodeSlug ?? dockerNodeSlug;

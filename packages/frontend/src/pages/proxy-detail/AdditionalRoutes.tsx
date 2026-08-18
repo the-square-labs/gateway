@@ -1,7 +1,5 @@
 import {
-  Box,
   FileCode,
-  Globe2,
   Loader2,
   MoreVertical,
   Pencil,
@@ -25,6 +23,7 @@ import {
   ProxyUpstreamFields,
   type ProxyUpstreamSelection,
 } from "@/components/proxy/ProxyUpstreamEditor";
+import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -53,7 +52,6 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
-import { getNodeAppearanceColor } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
@@ -275,27 +273,34 @@ function routeTarget(
   dockerNodeColors: Record<string, DockerContainer["_nodeColor"]>
 ) {
   const label = routeTargetSummary(route);
-  if (route.targetKind === "pages") {
-    const appearance = getNodeAppearanceColor(route.pageProjectAppearanceColor);
-    return (
-      <Badge variant="secondary" className={appearance?.badgeClassName} title={label}>
-        <Globe2 className="mr-1.5 h-3.5 w-3.5" />
-        {label}
-      </Badge>
-    );
-  }
-  if (route.targetKind === "docker_container" || route.targetKind === "docker_deployment") {
-    const appearance = getNodeAppearanceColor(
-      route.dockerNodeId ? dockerNodeColors[route.dockerNodeId] : null
-    );
-    return (
-      <Badge variant="secondary" className={appearance?.badgeClassName} title={label}>
-        <Box className="mr-1.5 h-3.5 w-3.5" />
-        {label}
-      </Badge>
-    );
-  }
-  return <span>{label}</span>;
+  if (route.targetKind === "manual") return <span>{label}</span>;
+
+  return (
+    <ProxyUpstreamTarget
+      host={{
+        type: "proxy",
+        upstreamKind: route.targetKind,
+        forwardHost: route.forwardHost,
+        forwardPort: route.forwardPort,
+        forwardScheme: route.forwardScheme,
+        dockerNodeId: route.dockerNodeId,
+        dockerContainerName: route.dockerContainerName ?? "Container",
+        dockerDeploymentId: route.dockerDeploymentId ?? "deployment",
+        dockerDeploymentName:
+          route.dockerDeploymentName ?? route.dockerDeploymentId ?? "Deployment",
+        dockerNodeAppearanceColor: route.dockerNodeId ? dockerNodeColors[route.dockerNodeId] : null,
+        pageTarget:
+          route.targetKind === "pages"
+            ? {
+                projectName: route.pageProjectName ?? "Project",
+                projectSlug: route.pageProjectSlug ?? route.pageProjectId ?? "project",
+                projectAppearanceColor: route.pageProjectAppearanceColor ?? null,
+                tagName: route.pageTagName ?? "Tag",
+              }
+            : null,
+      }}
+    />
+  );
 }
 
 function pageTagReady(tag: PageTag | null): boolean {
