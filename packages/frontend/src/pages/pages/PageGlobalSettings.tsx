@@ -192,7 +192,7 @@ export function PagesSettingsSection() {
             <span className="inline-flex items-center gap-2">
               <span>Pages</span>
               <LicensePlanBadge plan="personal" label="Personal+" />
-              <Badge size="inline" variant="secondary">
+              <Badge size="inline" variant="warning">
                 BETA
               </Badge>
             </span>
@@ -206,7 +206,7 @@ export function PagesSettingsSection() {
               <span className="inline-flex items-center gap-2">
                 <span>Pages</span>
                 <LicensePlanBadge plan="personal" label="Personal+" />
-                <Badge size="inline" variant="secondary">
+                <Badge size="inline" variant="warning">
                   BETA
                 </Badge>
               </span>

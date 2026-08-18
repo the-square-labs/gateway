@@ -8,7 +8,7 @@ const LABELS: Record<PaidLicensePlan, string> = {
 };
 
 const VARIANTS: Record<PaidLicensePlan, "secondary" | "info" | "default"> = {
-  personal: "secondary",
+  personal: "default",
   business: "info",
   enterprise: "default",
 };

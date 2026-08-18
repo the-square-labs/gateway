@@ -221,7 +221,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       title={
         <span className="inline-flex items-center gap-2">
           <span>Status Page</span>
-          <LicensePlanBadge plan="personal" />
+          <LicensePlanBadge plan="personal" label="Personal+" />
         </span>
       }
       description="Enable the public status page and configure its custom domain"
