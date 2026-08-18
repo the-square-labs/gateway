@@ -448,6 +448,36 @@ describe('SSLService DNS-01 renewal', () => {
 });
 
 describe('SSLService pending ACME cancellation', () => {
+  it('refuses to delete a certificate used by the Pages wildcard profile', async () => {
+    const db = {
+      query: {
+        sslCertificates: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'cert-1', name: 'Pages', domainNames: ['*.pages.test'] }),
+        },
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ id: 'default' }]) })),
+        })),
+      })),
+    } as any;
+    const removeSslCertificateAsset = vi.fn();
+    const service = new SSLService(
+      db,
+      {} as any,
+      {} as any,
+      { log: vi.fn() } as any,
+      { removeSslCertificateAsset } as any
+    );
+
+    await expect(service.deleteCert('cert-1', 'user-1')).rejects.toMatchObject({
+      code: 'CERT_IN_USE',
+      details: { pagesProfileId: 'default' },
+    });
+    expect(removeSslCertificateAsset).not.toHaveBeenCalled();
+  });
+
   it('deletes an unfinished initial ACME request', async () => {
     const db = {
       query: {

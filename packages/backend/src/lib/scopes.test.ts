@@ -9,6 +9,7 @@ import {
   BUILTIN_GROUPS,
   canonicalizeScopes,
   extractBaseScope,
+  FOLDER_SCOPABLE,
   GUEST_SCOPES,
   isApiTokenScope,
   isMcpTokenScope,
@@ -140,6 +141,53 @@ describe('canonical scope definitions', () => {
     });
   });
 
+  it('applies the Pages built-in, resource, folder, and API-token scope contract', () => {
+    const operatorPages = [
+      'pages:view',
+      'pages:create',
+      'pages:edit',
+      'pages:deploy',
+      'pages:deployments:manage',
+      'pages:tags:manage',
+      'pages:folders:manage',
+      'pages:settings:view',
+    ];
+    for (const scope of operatorPages) {
+      expect(SYSTEM_ADMIN_SCOPES).toContain(scope);
+      expect(ADMIN_SCOPES).toContain(scope);
+      expect(OPERATOR_SCOPES).toContain(scope);
+    }
+    expect(OPERATOR_SCOPES).not.toContain('pages:delete');
+    expect(OPERATOR_SCOPES).not.toContain('pages:tokens:manage');
+    expect(OPERATOR_SCOPES).not.toContain('pages:settings:edit');
+    expect(VIEWER_SCOPES).toEqual(expect.arrayContaining(['pages:view', 'pages:settings:view']));
+    expect(VIEWER_SCOPES).not.toContain('pages:edit');
+
+    const projectScopes = [
+      'pages:view',
+      'pages:edit',
+      'pages:delete',
+      'pages:deploy',
+      'pages:deployments:manage',
+      'pages:tags:manage',
+      'pages:tokens:manage',
+    ];
+    for (const scope of projectScopes) {
+      expect(RESOURCE_SCOPABLE).toContain(scope);
+      expect(FOLDER_SCOPABLE).toContain(scope);
+      expect(isApiTokenScope(`${scope}:project-1`)).toBe(true);
+    }
+    for (const scope of ['pages:create', 'pages:folders:manage', 'pages:settings:view', 'pages:settings:edit']) {
+      expect(RESOURCE_SCOPABLE).not.toContain(scope);
+      expect(FOLDER_SCOPABLE).not.toContain(scope);
+    }
+    expect(canonicalizeScopes(['pages:view:project-2', 'pages:view:project-1'])).toEqual([
+      'pages:view:project-1',
+      'pages:view:project-2',
+    ]);
+    expect(extractBaseScope('pages:deployments:manage:project-1')).toBe('pages:deployments:manage');
+  });
+
   it('grants Docker migrations only to admin tiers and requires manual approval', () => {
     expect(SYSTEM_ADMIN_SCOPES).toContain('docker:containers:migrate');
     expect(ADMIN_SCOPES).toContain('docker:containers:migrate');
@@ -269,6 +317,9 @@ describe('canonical scope definitions', () => {
       'ssl:cert:revoke',
       'ssl:cert:export',
       'proxy:raw:bypass',
+      'pages:delete',
+      'pages:tokens:manage',
+      'pages:settings:edit',
       'nodes:console',
       'nodes:files:read',
       'nodes:files:write',

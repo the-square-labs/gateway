@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { PagesTargetPicker } from "@/components/proxy/PagesTargetPicker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,8 @@ import type {
   CreateProxyHostRequest,
   DockerContainer,
   ForwardScheme,
+  PageProject,
+  PageTag,
   ProxyHost,
   ProxyUpstreamKind,
 } from "@/types";
@@ -35,6 +38,8 @@ export interface ProxyUpstreamSelection {
   containerName: string | null;
   deploymentId: string | null;
   containerPort: number | null;
+  pageProjectId?: string;
+  pageTagId?: string;
 }
 
 interface ApplicationPort {
@@ -50,6 +55,8 @@ export const DEFAULT_PROXY_UPSTREAM: ProxyUpstreamSelection = {
   containerName: null,
   deploymentId: null,
   containerPort: null,
+  pageProjectId: "",
+  pageTagId: "",
 };
 
 export function proxyUpstreamFromHost(host: ProxyHost): ProxyUpstreamSelection {
@@ -62,6 +69,8 @@ export function proxyUpstreamFromHost(host: ProxyHost): ProxyUpstreamSelection {
     containerName: host.dockerContainerName ?? null,
     deploymentId: host.dockerDeploymentId ?? null,
     containerPort: host.dockerContainerPort ?? null,
+    pageProjectId: host.pageTarget?.projectId ?? "",
+    pageTagId: host.pageTarget?.tagId ?? "",
   };
 }
 
@@ -86,6 +95,13 @@ export function proxyUpstreamRequest(
       dockerProtocol: "tcp",
     };
   }
+  if (selection.kind === "pages") {
+    return {
+      upstreamKind: "pages",
+      pageProjectId: selection.pageProjectId ?? "",
+      pageTagId: selection.pageTagId ?? "",
+    };
+  }
   return {
     upstreamKind: "docker_deployment",
     forwardScheme: selection.scheme,
@@ -106,6 +122,7 @@ export function isProxyUpstreamValid(selection: ProxyUpstreamSelection): boolean
     return false;
   }
   if (selection.kind === "docker_deployment" && !selection.deploymentId) return false;
+  if (selection.kind === "pages") return !!selection.pageProjectId && !!selection.pageTagId;
   return !!selection.containerPort;
 }
 
@@ -168,17 +185,44 @@ export function ProxyUpstreamFields({
   containers,
   disabled = false,
   allowManual = true,
+  showTargetSelect = true,
 }: {
   value: ProxyUpstreamSelection;
   onChange: (value: ProxyUpstreamSelection) => void;
   containers: DockerContainer[];
   disabled?: boolean;
   allowManual?: boolean;
+  showTargetSelect?: boolean;
 }) {
   const selectedContainer = useMemo(
     () => containers.find((container) => targetKey(container) === selectedTargetKey(value)) ?? null,
     [containers, value]
   );
+  const [pageProjects, setPageProjects] = useState<PageProject[]>([]);
+  const [pageTags, setPageTags] = useState<PageTag[]>([]);
+  const [pageProjectsLoading, setPageProjectsLoading] = useState(false);
+  const [pageTagsLoading, setPageTagsLoading] = useState(false);
+
+  useEffect(() => {
+    if (value.kind !== "pages") return;
+    setPageProjectsLoading(true);
+    void api.listPageProjects({ page: 1, limit: 100 })
+      .then((response) => setPageProjects(response.data ?? []))
+      .catch(() => setPageProjects([]))
+      .finally(() => setPageProjectsLoading(false));
+  }, [value.kind]);
+
+  useEffect(() => {
+    if (value.kind !== "pages" || !value.pageProjectId) {
+      setPageTags([]);
+      return;
+    }
+    setPageTagsLoading(true);
+    void api.listPageTags(value.pageProjectId)
+      .then(setPageTags)
+      .catch(() => setPageTags([]))
+      .finally(() => setPageTagsLoading(false));
+  }, [value.kind, value.pageProjectId]);
   const candidates = useMemo(() => {
     const result = [...containers];
     const hasReferencedContainer =
@@ -234,7 +278,7 @@ export function ProxyUpstreamFields({
 
   return (
     <>
-      <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
+      {showTargetSelect ? <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
         <Select
           value={value.kind}
           onValueChange={(kind) =>
@@ -251,13 +295,28 @@ export function ProxyUpstreamFields({
           </SelectTrigger>
           <SelectContent>
             {allowManual ? <SelectItem value="manual">Manual address</SelectItem> : null}
-            <SelectItem value="docker_container">Docker container</SelectItem>
-            <SelectItem value="docker_deployment">Docker deployment</SelectItem>
+              <SelectItem value="docker_container">Docker container</SelectItem>
+              <SelectItem value="docker_deployment">Docker deployment</SelectItem>
+              <SelectItem value="pages">Pages</SelectItem>
           </SelectContent>
         </Select>
-      </SettingsControlRow>
+      </SettingsControlRow> : null}
 
-      {value.kind === "manual" ? (
+      {value.kind === "pages" ? (
+        <PagesTargetPicker
+          projectId={value.pageProjectId ?? ""}
+          tagId={value.pageTagId ?? ""}
+          onProjectChange={(pageProjectId) =>
+            onChange({ ...value, pageProjectId, pageTagId: "" })
+          }
+          onTagChange={(pageTagId) => onChange({ ...value, pageTagId })}
+          projects={pageProjects}
+          tags={pageTags}
+          projectsLoading={pageProjectsLoading}
+          tagsLoading={pageTagsLoading}
+          disabled={disabled}
+        />
+      ) : value.kind === "manual" ? (
         <>
           <SettingsControlRow
             title="Forward Host"
@@ -455,7 +514,7 @@ export function ProxyUpstreamPanel({
   return (
     <PanelShell
       title="Upstream"
-      description="Route traffic manually or to a Docker resource"
+      description="Route traffic manually, to Docker, or Pages"
       className="overflow-visible"
       actions={
         canManage ? (

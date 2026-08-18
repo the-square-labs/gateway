@@ -131,12 +131,26 @@ import { NotificationEvaluatorService } from '@/modules/notifications/notificati
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
+import { PageArtifactStore } from '@/modules/pages/artifacts/page-artifact-store.js';
+import { PageDeploymentService } from '@/modules/pages/deployments/page-deployment.service.js';
+import { PageProjectService } from '@/modules/pages/page-project.service.js';
+import { PageProjectFolderService } from '@/modules/pages/page-project-folder.service.js';
+import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
+import { PageMaintenanceService } from '@/modules/pages/retention/page-maintenance.service.js';
+import { PageRetentionService } from '@/modules/pages/retention/page-retention.service.js';
+import { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
+import { PageNodeRuntimeService } from '@/modules/pages/runtime/page-node-runtime.service.js';
+import { PageRuntimeConfigService } from '@/modules/pages/runtime-config/page-runtime-config.service.js';
+import { PagePublicationService } from '@/modules/pages/tags/page-publication.service.js';
+import { PageTagService } from '@/modules/pages/tags/page-tag.service.js';
+import { PageDeployTokenService } from '@/modules/pages/tokens/page-deploy-token.service.js';
 import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
 import { CRLService } from '@/modules/pki/crl.service.js';
 import { ExportService } from '@/modules/pki/export.service.js';
 import { OCSPService } from '@/modules/pki/ocsp.service.js';
 import { TemplatesService } from '@/modules/pki/templates.service.js';
+import { AdditionalRouteService } from '@/modules/proxy/additional-route.service.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
@@ -799,6 +813,15 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
+  const additionalRouteService = new AdditionalRouteService(
+    db,
+    auditService,
+    proxyDockerUpstreamService,
+    proxySecureLinkService
+  );
+  additionalRouteService.setEventBus(eventBus);
+  proxyService.setAdditionalRoutes(additionalRouteService);
+  container.registerInstance(AdditionalRouteService, additionalRouteService);
   nodesService.setProxyService(proxyService);
 
   const dockerMigrationDispatch = new DockerMigrationDispatchAdapter(nodeDispatch);
@@ -961,6 +984,61 @@ export async function initializeContainer(): Promise<void> {
   const domainFolderService = new DomainFolderService(db, auditService);
   domainFolderService.setEventBus(eventBus);
   container.registerInstance(DomainFolderService, domainFolderService);
+
+  // Pages control plane
+  const pageProjectService = new PageProjectService(db, auditService);
+  pageProjectService.setEventBus(eventBus);
+  container.registerInstance(PageProjectService, pageProjectService);
+  const pageProjectFolderService = new PageProjectFolderService(db, auditService);
+  pageProjectFolderService.setEventBus(eventBus);
+  container.registerInstance(PageProjectFolderService, pageProjectFolderService);
+  const pageArtifactStore = new PageArtifactStore(env.PAGES_STORAGE_DIR);
+  await pageArtifactStore.initialize();
+  container.registerInstance(PageArtifactStore, pageArtifactStore);
+  const pageDeployTokenService = new PageDeployTokenService(db, auditService);
+  container.registerInstance(PageDeployTokenService, pageDeployTokenService);
+  const pageDeploymentService = new PageDeploymentService(db, auditService, generalSettingsService, pageArtifactStore);
+  pageDeploymentService.setEventBus(eventBus);
+  container.registerInstance(PageDeploymentService, pageDeploymentService);
+  const pageTagService = new PageTagService(db, auditService);
+  pageTagService.setEventBus(eventBus);
+  container.registerInstance(PageTagService, pageTagService);
+  const pageRuntimeConfigService = new PageRuntimeConfigService(db, auditService);
+  pageRuntimeConfigService.setEventBus(eventBus);
+  container.registerInstance(PageRuntimeConfigService, pageRuntimeConfigService);
+  const pagePublicationService = new PagePublicationService(db, auditService, pageTagService);
+  pagePublicationService.setEventBus(eventBus);
+  container.registerInstance(PagePublicationService, pagePublicationService);
+  const pageRetentionService = new PageRetentionService(db, auditService, pageArtifactStore);
+  pageRetentionService.setEventBus(eventBus);
+  container.registerInstance(PageRetentionService, pageRetentionService);
+  pageDeploymentService.setRetentionService(pageRetentionService);
+  pageProjectService.setRetentionService(pageRetentionService);
+  const pageMaintenanceService = new PageMaintenanceService(db, pageArtifactStore, pageRetentionService, eventBus);
+  container.registerInstance(PageMaintenanceService, pageMaintenanceService);
+  const pageProfileService = new PageProfileService(db, auditService, env.APP_URL);
+  pageProfileService.setEventBus(eventBus);
+  container.registerInstance(PageProfileService, pageProfileService);
+  const pageNodeRuntimeService = new PageNodeRuntimeService(
+    db,
+    pageArtifactStore,
+    nodeDispatch,
+    nginxCertificateDistribution
+  );
+  container.registerInstance(PageNodeRuntimeService, pageNodeRuntimeService);
+  pageProjectService.setRuntimeAdapter(pageNodeRuntimeService);
+  pageMaintenanceService.setMigrationReconciler(pageProjectService);
+  const pageRouteService = new PageRouteService(db, pageNodeRuntimeService, auditService, pageRuntimeConfigService);
+  container.registerInstance(PageRouteService, pageRouteService);
+  pageRouteService.setAdditionalRoutePublicationAdapter(additionalRouteService);
+  pageProfileService.setRuntimeAdapter(pageNodeRuntimeService);
+  pagePublicationService.setDeploymentAdapter(pageNodeRuntimeService);
+  pagePublicationService.setAdapter(pageRouteService);
+  pageRuntimeConfigService.setPublicationAdapter(pageRouteService);
+  pageRetentionService.setRuntimeAdapter(pageNodeRuntimeService);
+  proxyService.setPageRoutes(pageRouteService);
+  additionalRouteService.setPageRuntime(pageNodeRuntimeService, pageRuntimeConfigService);
+  domainsService.setPageProfileService(pageProfileService);
 
   // Browser-based first-run setup.
   const setupTokenPolicyService = new SetupTokenPolicyService(db, env.SETUP_BOOTSTRAP);
@@ -1152,6 +1230,7 @@ export async function initializeContainer(): Promise<void> {
   housekeepingService.setDockerManagementService(dockerManagementService);
   housekeepingService.setLoggingMaintenanceService(loggingMaintenanceService);
   housekeepingService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
+  housekeepingService.setPagesMaintenanceService(pageMaintenanceService);
   container.registerInstance(HousekeepingService, housekeepingService);
 
   // Group service (injectable — resolve from container)
@@ -1331,6 +1410,18 @@ export async function initializeContainer(): Promise<void> {
   scheduler.registerInterval('docker-snapshot-housekeeping', 60 * 60 * 1000, () =>
     dockerSnapshotService.purgeOrphans()
   );
+  scheduler.registerInterval('pages-maintenance', 15 * 60 * 1000, async () => {
+    await pageMaintenanceService.run();
+  });
+  scheduler.registerInterval('pages-profile-reconcile', 60 * 1000, async () => {
+    await pageProfileService.reconcile();
+  });
+  scheduler.registerInterval('pages-route-reconcile', 60 * 1000, async () => {
+    await pageRouteService.reconcile();
+  });
+  scheduler.registerInterval('additional-route-reconcile', 60 * 1000, async () => {
+    await additionalRouteService.reconcile();
+  });
   scheduler.register('expiry-alerts', env.EXPIRY_CHECK_CRON, async () => {
     await Promise.all([expiryAlertJob.run(), notifEvaluatorService.evaluateCertificateExpiry()]);
   });

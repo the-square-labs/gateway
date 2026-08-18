@@ -9,7 +9,8 @@ export type ResolvedPageResourceType =
   | "logging-schema"
   | "docker-container"
   | "docker-deployment"
-  | "docker-volume";
+  | "docker-volume"
+  | "page-project";
 
 export interface ResolvedPageResource {
   resourceType: ResolvedPageResourceType;

@@ -109,6 +109,7 @@ const envSchema = z.object({
   GATEWAY_LOCAL_HOSTS: z.string().optional(),
   WEB_TLS_BOOTSTRAP_MODE: z.enum(['http', 'https']).optional(),
   WEB_TLS_AUTO_DIR: nonEmptyStringWithDefault('/var/lib/gateway/tls'),
+  PAGES_STORAGE_DIR: nonEmptyStringWithDefault('/var/lib/gateway/pages'),
 
   // First-party TCP connector for managed database bindings. Production must
   // provide an immutable release reference; development receives the fixed

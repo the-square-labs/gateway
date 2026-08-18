@@ -100,6 +100,9 @@ function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('docker.')) return 'docker:containers:view';
   if (channel === 'database.folder.changed') return 'databases:view';
   if (channel.startsWith('database.')) return 'databases:view';
+  if (channel === 'pages.profile.changed') return 'pages:settings:view';
+  if (channel === 'pages.folder.changed') return 'pages:view';
+  if (channel.startsWith('pages.')) return 'pages:view';
   if (channel.startsWith('proxy.host')) return 'proxy:view';
   if (channel.startsWith('ssl.cert')) return 'ssl:cert:view';
   if (channel === 'cert.changed') return 'pki:cert:view';
@@ -199,6 +202,15 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
     return scopes.some((scope) =>
       DATABASE_CHANNEL_SCOPE_BASES.some((base) => scope === base || scope.startsWith(`${base}:`))
     );
+  }
+  if (channel === 'pages.profile.changed') {
+    return hasScope(scopes, 'pages:settings:view');
+  }
+  if (channel === 'pages.folder.changed') {
+    return hasScopeBase(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage');
+  }
+  if (channel.startsWith('pages.')) {
+    return hasScopeBase(scopes, 'pages:view');
   }
   if (channel === 'domain.changed') {
     return hasScopeBase(scopes, 'domains:view') || hasScope(scopes, 'domains:folders:manage');
@@ -420,6 +432,19 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       DATABASE_CHANNEL_SCOPE_BASES.some((base) => hasScope(scopes, base)) ||
       !!(databaseId && DATABASE_CHANNEL_SCOPE_BASES.some((base) => hasScope(scopes, `${base}:${databaseId}`)))
     );
+  }
+  if (channel === 'pages.profile.changed') {
+    return hasScope(scopes, 'pages:settings:view');
+  }
+  if (channel === 'pages.folder.changed') {
+    return hasScope(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage');
+  }
+  if (channel.startsWith('pages.')) {
+    const projectId = (payload as { scopeResourceId?: string; projectId?: string } | undefined)?.scopeResourceId;
+    if (!projectId) {
+      return channel === 'pages.migration.changed' && hasScope(scopes, 'pages:settings:view');
+    }
+    return hasScope(scopes, 'pages:view') || hasScope(scopes, `pages:view:${projectId}`);
   }
   if (channel === 'logging.logs.ingested') {
     const environmentId = (payload as { environmentId?: string } | undefined)?.environmentId;

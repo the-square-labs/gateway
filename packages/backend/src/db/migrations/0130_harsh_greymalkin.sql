@@ -1,0 +1,1 @@
+ALTER TABLE "page_route_targets" ADD COLUMN "include_path" text;

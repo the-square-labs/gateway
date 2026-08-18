@@ -132,6 +132,24 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(body.data.rawConfigEnabled).toBe(true);
   });
 
+  it('does not disclose a Pages target without visibility of its Project', async () => {
+    const projectId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId, tagId: 'tag-1', deploymentId: 'deployment-1', status: 'ready' },
+    });
+    mocks.scopes = ['proxy:view:host-1'];
+
+    const hidden = await createApp().request('/host-1');
+    expect(((await hidden.json()) as any).data.pageTarget).toBeNull();
+
+    mocks.scopes = ['proxy:view:host-1', `pages:view:${projectId}`];
+    const visible = await createApp().request('/host-1');
+    expect(((await visible.json()) as any).data.pageTarget).toEqual(expect.objectContaining({ projectId }));
+  });
+
   it('returns raw config to browser detail response with raw read scope', async () => {
     mocks.authType = 'session';
     mocks.scopes = ['proxy:view:host-1', 'proxy:raw:read:host-1'];
@@ -415,6 +433,66 @@ describe('proxy routes programmatic raw config handling', () => {
         bypassRawValidation: true,
       })
     );
+  });
+
+  it('requires visibility of the selected Page Project when creating a Pages Route', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    const body = {
+      nodeId: '11111111-1111-4111-8111-111111111111',
+      domainNames: ['docs.example.com'],
+      upstreamKind: 'pages',
+      pageProjectId,
+      pageTagId: '33333333-3333-4333-8333-333333333333',
+    };
+    mocks.scopes = ['proxy:create'];
+    const denied = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(denied.status).toBe(403);
+    expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:create', `pages:view:${pageProjectId}`];
+    const allowed = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(allowed.status).toBe(201);
+    expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+      expect.objectContaining({ upstreamKind: 'pages', pageProjectId }),
+      'user-1',
+      expect.any(Object)
+    );
+  });
+
+  it('requires visibility of the current Page Project when editing a Pages Route', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId: pageProjectId },
+    });
+    mocks.scopes = ['proxy:edit:host-1'];
+
+    const denied = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cacheEnabled: true }),
+    });
+    expect(denied.status).toBe(403);
+    expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:edit:host-1', `pages:view:${pageProjectId}`];
+    const allowed = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cacheEnabled: true }),
+    });
+    expect(allowed.status).toBe(200);
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
   });
 
   it('passes resource-scoped raw bypass to service when updating raw config', async () => {

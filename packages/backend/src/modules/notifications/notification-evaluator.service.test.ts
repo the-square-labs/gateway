@@ -227,6 +227,49 @@ describe('NotificationEvaluatorService certificate expiry evaluation', () => {
 });
 
 describe('NotificationEvaluatorService stateful event evaluation', () => {
+  it('fires, deduplicates, and resolves a Project-scoped Pages quota event', async () => {
+    const pagesRule = {
+      ...BASE_EVENT_RULE,
+      id: 'pages-quota-rule',
+      name: 'Pages quota blocked',
+      category: 'pages',
+      severity: 'warning',
+      eventPattern: 'quota.blocked',
+      resolveAfterSeconds: 0,
+      resourceIds: ['page-project-1'],
+    };
+    const { evaluator, states } = createEvaluator([], [], [pagesRule]);
+    const blocked = {
+      action: 'quota.blocked',
+      projectId: 'page-project-1',
+      quotaUsedBytes: 1200,
+      quotaLimitBytes: 1000,
+      failureCode: 'PAGES_QUOTA_BLOCKED',
+    };
+
+    await (evaluator as any).handleBusEvent('pages.project.changed', blocked);
+    await (evaluator as any).handleBusEvent('pages.project.changed', blocked);
+
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({
+      resourceType: 'page_project',
+      resourceId: 'page-project-1',
+      status: 'firing',
+      context: {
+        event: { name: 'quota.blocked' },
+        state: { current: 'quota.blocked' },
+        failure: { code: 'PAGES_QUOTA_BLOCKED' },
+      },
+    });
+
+    await (evaluator as any).handleBusEvent('pages.project.changed', {
+      ...blocked,
+      action: 'quota.resolved',
+      failureCode: null,
+    });
+    expect(states[0].status).toBe('resolved');
+  });
+
   it('fires a stateful event rule when the observed state matches', async () => {
     const { evaluator, states } = createEvaluator([], [], [BASE_EVENT_RULE]);
 

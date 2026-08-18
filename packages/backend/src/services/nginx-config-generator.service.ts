@@ -54,6 +54,29 @@ export interface ProxyHostConfig {
   sslKeyPath: string | null;
   sslChainPath: string | null;
   templateVariables?: Record<string, string | number | boolean>;
+  pagesRouteIncludePath?: string;
+  additionalRoutes?: ProxyAdditionalRouteConfig[];
+}
+
+export interface ProxyAdditionalRouteConfig {
+  id: string;
+  path: string;
+  targetKind: 'manual' | 'docker_container' | 'docker_deployment' | 'pages';
+  forwardScheme: 'http' | 'https';
+  forwardHost: string | null;
+  forwardPort: number | null;
+  secureLinkUpstream?: boolean;
+  secureLinkSocketPath?: string;
+  pagesRouteIncludePath?: string;
+  pagesRuntimeConfigPath?: string;
+  advancedConfig?: string | null;
+  stripPrefix: boolean;
+  websocketSupport: boolean;
+  requestBuffering: boolean;
+  responseBuffering: boolean;
+  connectTimeoutSeconds: number;
+  readTimeoutSeconds: number;
+  sendTimeoutSeconds: number;
 }
 
 const DEFAULT_RATE_LIMIT_RPS = 1000;

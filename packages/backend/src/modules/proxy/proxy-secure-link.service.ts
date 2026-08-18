@@ -16,6 +16,8 @@ import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 type ProxyHostRow = typeof proxyHosts.$inferSelect;
 export type ProxyAdditionalSecureLinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
 
+export type ProxyAdditionalSecureLinkPurpose = 'user_managed' | 'additional_route';
+
 export interface CreateProxyAdditionalSecureLinkInput {
   name: string;
   upstreamKind: 'docker_container' | 'docker_deployment';
@@ -36,6 +38,11 @@ interface BindingDetail {
 const PROXY_SECURE_LINK_PROBE_ATTEMPTS = 6;
 const PROXY_SECURE_LINK_PROBE_RETRY_MS = 500;
 const logger = createChildLogger('ProxySecureLinkService');
+const DOCKER_UPSTREAM_KINDS = ['docker_container', 'docker_deployment'] as const;
+
+function isDockerUpstream(kind: string): kind is (typeof DOCKER_UPSTREAM_KINDS)[number] {
+  return (DOCKER_UPSTREAM_KINDS as readonly string[]).includes(kind);
+}
 
 export class ProxySecureLinkService {
   private eventBus?: EventBusService;
@@ -62,7 +69,7 @@ export class ProxySecureLinkService {
       const [hosts, additional] = await Promise.all([
         this.db.query.proxyHosts.findMany({
           where: and(
-            ne(proxyHosts.upstreamKind, 'manual'),
+            inArray(proxyHosts.upstreamKind, [...DOCKER_UPSTREAM_KINDS]),
             ne(proxyHosts.secureLinkStatus, 'cleanup_pending'),
             ne(proxyHosts.secureLinkGeneration, 0)
           ),
@@ -102,21 +109,50 @@ export class ProxySecureLinkService {
     return this.relayPolicy.getProxyRouteRuntime(linkId);
   }
 
-  async listAdditional(proxyHostId: string): Promise<ProxyAdditionalSecureLinkRow[]> {
+  async listAdditional(
+    proxyHostId: string,
+    purpose: ProxyAdditionalSecureLinkPurpose = 'user_managed'
+  ): Promise<ProxyAdditionalSecureLinkRow[]> {
+    return this.db.query.proxyAdditionalSecureLinks.findMany({
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, proxyHostId),
+        eq(proxyAdditionalSecureLinks.purpose, purpose)
+      ),
+      orderBy: (binding, { asc }) => [asc(binding.createdAt)],
+    });
+  }
+
+  async listAllAdditional(proxyHostId: string): Promise<ProxyAdditionalSecureLinkRow[]> {
     return this.db.query.proxyAdditionalSecureLinks.findMany({
       where: eq(proxyAdditionalSecureLinks.proxyHostId, proxyHostId),
       orderBy: (binding, { asc }) => [asc(binding.createdAt)],
     });
   }
 
-  async getActiveAdditional(proxyHostId: string): Promise<ProxyAdditionalSecureLinkRow[]> {
+  async getActiveAdditional(
+    proxyHostId: string,
+    purpose: ProxyAdditionalSecureLinkPurpose = 'user_managed'
+  ): Promise<ProxyAdditionalSecureLinkRow[]> {
     return this.db.query.proxyAdditionalSecureLinks.findMany({
       where: and(
         eq(proxyAdditionalSecureLinks.proxyHostId, proxyHostId),
+        eq(proxyAdditionalSecureLinks.purpose, purpose),
         eq(proxyAdditionalSecureLinks.status, 'active')
       ),
       orderBy: (binding, { asc }) => [asc(binding.name)],
     });
+  }
+
+  async getManagedRoute(routeId: string): Promise<ProxyAdditionalSecureLinkRow | null> {
+    return (
+      (await this.db.query.proxyAdditionalSecureLinks.findFirst({
+        where: and(
+          eq(proxyAdditionalSecureLinks.purpose, 'additional_route'),
+          eq(proxyAdditionalSecureLinks.referenceId, routeId)
+        ),
+        orderBy: (binding, { asc }) => [asc(binding.createdAt)],
+      })) ?? null
+    );
   }
 
   async createAdditional(
@@ -153,7 +189,11 @@ export class ProxySecureLinkService {
       throw new AppError(503, 'SECURE_LINK_CONNECTOR_UNAVAILABLE', 'Secure Link connector image is not configured');
     }
     const existing = await this.db.query.proxyAdditionalSecureLinks.findFirst({
-      where: and(eq(proxyAdditionalSecureLinks.proxyHostId, host.id), eq(proxyAdditionalSecureLinks.name, input.name)),
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+        eq(proxyAdditionalSecureLinks.purpose, 'user_managed'),
+        eq(proxyAdditionalSecureLinks.name, input.name)
+      ),
     });
     if (existing) throw new AppError(409, 'SECURE_LINK_NAME_EXISTS', 'A binding with this name already exists');
 
@@ -162,6 +202,8 @@ export class ProxySecureLinkService {
       .values({
         proxyHostId: host.id,
         name: input.name,
+        purpose: 'user_managed',
+        referenceId: null,
         upstreamKind: input.upstreamKind,
         forwardScheme: input.forwardScheme,
         sourceNodeId: host.nodeId,
@@ -186,8 +228,177 @@ export class ProxySecureLinkService {
     return created;
   }
 
+  /** Provision a route-owned binding synchronously enough for a route
+   * transaction: failures are persisted as `failed` and are retryable by the
+   * Additional Route service.  It never falls back to a direct Docker host. */
+  async createManagedRoute(
+    host: ProxyHostRow,
+    routeId: string,
+    input: CreateProxyAdditionalSecureLinkInput
+  ): Promise<ProxyAdditionalSecureLinkRow> {
+    if (host.type !== 'proxy' || host.rawConfigEnabled || !host.nodeId) {
+      throw new AppError(409, 'ADDITIONAL_ROUTE_UNAVAILABLE', 'Additional Routes require a managed proxy host');
+    }
+    const target = await this.resolveAdditionalTarget(input);
+    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId]))) {
+      throw new AppError(
+        409,
+        'PROXY_SECURE_LINK_UPDATE_REQUIRED',
+        'Update both Nginx and Docker daemons before provisioning this route'
+      );
+    }
+    if (!this.connectorImage) {
+      throw new AppError(503, 'SECURE_LINK_CONNECTOR_UNAVAILABLE', 'Secure Link connector image is not configured');
+    }
+    const existing = await this.getManagedRoute(routeId);
+    if (existing) {
+      if (existing.status === 'active') return existing;
+      if (existing.status === 'cleanup_pending') {
+        await this.deprovisionAdditionalRuntime(existing).catch(() => undefined);
+      }
+      await this.db
+        .update(proxyAdditionalSecureLinks)
+        .set({
+          status: 'provisioning',
+          generation: existing.generation + 1,
+          sourceNodeId: host.nodeId,
+          upstreamKind: input.upstreamKind,
+          forwardScheme: input.forwardScheme,
+          dockerNodeId: target.nodeId,
+          dockerContainerName: input.upstreamKind === 'docker_container' ? input.dockerContainerName : null,
+          dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
+          dockerContainerPort: input.dockerContainerPort,
+          dockerHostPort: target.targetPort,
+          targetNetwork: target.network,
+          targetContainer: target.container,
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(proxyAdditionalSecureLinks.id, existing.id));
+      return this.createAdditionalFromExisting(host, existing.id);
+    }
+    const [created] = await this.db
+      .insert(proxyAdditionalSecureLinks)
+      .values({
+        proxyHostId: host.id,
+        name: `route_${routeId.replace(/-/g, '')}`.slice(0, 64),
+        purpose: 'additional_route',
+        referenceId: routeId,
+        upstreamKind: input.upstreamKind,
+        forwardScheme: input.forwardScheme,
+        sourceNodeId: host.nodeId,
+        dockerNodeId: target.nodeId,
+        dockerContainerName: input.upstreamKind === 'docker_container' ? input.dockerContainerName : null,
+        dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
+        dockerContainerPort: input.dockerContainerPort,
+        dockerHostPort: target.targetPort,
+        targetNetwork: target.network,
+        targetContainer: target.container,
+      })
+      .returning();
+    if (!created) throw new AppError(500, 'SECURE_LINK_CREATE_FAILED', 'Managed route binding was not created');
+    this.emitAdditionalState(host, created, 'provisioning');
+    return this.createAdditionalFromExisting(host, created.id);
+  }
+
+  async deleteManagedRoute(host: ProxyHostRow, routeId: string): Promise<void> {
+    const binding = await this.getManagedRoute(routeId);
+    if (!binding) return;
+    await this.deleteManagedRouteBinding(host, binding.id);
+  }
+
+  /**
+   * Materialize a second source listener for a route move.  The existing
+   * binding is deliberately left untouched until the host's destination
+   * configuration has been applied successfully.
+   */
+  async stageManagedRouteMigration(
+    host: ProxyHostRow,
+    routeId: string,
+    targetNodeId: string
+  ): Promise<{ previousBindingId: string; stagedBindingId: string; generation: number }> {
+    const current = await this.getManagedRoute(routeId);
+    if (!current) throw new AppError(409, 'SECURE_LINK_ROUTE_NOT_READY', 'Managed route Secure Link is unavailable');
+    if (current.sourceNodeId === targetNodeId) {
+      return { previousBindingId: current.id, stagedBindingId: current.id, generation: current.generation };
+    }
+    const existing = await this.db.query.proxyAdditionalSecureLinks.findFirst({
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+        eq(proxyAdditionalSecureLinks.purpose, 'additional_route'),
+        eq(proxyAdditionalSecureLinks.referenceId, routeId),
+        eq(proxyAdditionalSecureLinks.sourceNodeId, targetNodeId),
+        inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'active'])
+      ),
+    });
+    if (existing) {
+      const ready =
+        existing.status === 'active'
+          ? existing
+          : await this.createAdditionalFromExisting({ ...host, nodeId: targetNodeId }, existing.id);
+      return { previousBindingId: current.id, stagedBindingId: ready.id, generation: ready.generation };
+    }
+    if (!(await this.nodesSupportSecureLinks([targetNodeId, current.dockerNodeId]))) {
+      throw new AppError(
+        409,
+        'PROXY_SECURE_LINK_UPDATE_REQUIRED',
+        'Update both Nginx and Docker daemons before moving this Additional Route'
+      );
+    }
+    const name = `route_${routeId.replace(/-/g, '')}_m${current.generation + 1}`.slice(0, 64);
+    const [staged] = await this.db
+      .insert(proxyAdditionalSecureLinks)
+      .values({
+        proxyHostId: host.id,
+        name,
+        purpose: 'additional_route',
+        referenceId: routeId,
+        upstreamKind: current.upstreamKind,
+        forwardScheme: current.forwardScheme,
+        sourceNodeId: targetNodeId,
+        dockerNodeId: current.dockerNodeId,
+        dockerContainerName: current.dockerContainerName,
+        dockerDeploymentId: current.dockerDeploymentId,
+        dockerContainerPort: current.dockerContainerPort,
+        dockerHostPort: current.dockerHostPort,
+        targetNetwork: current.targetNetwork,
+        targetContainer: current.targetContainer,
+        generation: current.generation + 1,
+        status: 'provisioning',
+      })
+      .returning();
+    if (!staged)
+      throw new AppError(500, 'SECURE_LINK_CREATE_FAILED', 'Managed route migration binding was not created');
+    try {
+      const ready = await this.createAdditionalFromExisting({ ...host, nodeId: targetNodeId }, staged.id);
+      if (ready.status !== 'active') {
+        throw new Error(ready.lastError ?? 'Managed route migration binding did not become active');
+      }
+      return { previousBindingId: current.id, stagedBindingId: ready.id, generation: ready.generation };
+    } catch (error) {
+      await this.deleteManagedRouteBinding(host, staged.id).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async deleteManagedRouteBinding(host: ProxyHostRow, bindingId: string): Promise<void> {
+    const binding = await this.db.query.proxyAdditionalSecureLinks.findFirst({
+      where: and(
+        eq(proxyAdditionalSecureLinks.id, bindingId),
+        eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+        eq(proxyAdditionalSecureLinks.purpose, 'additional_route')
+      ),
+    });
+    if (!binding) return;
+    await this.db
+      .update(proxyAdditionalSecureLinks)
+      .set({ status: 'cleanup_pending', lastError: null, updatedAt: new Date() })
+      .where(eq(proxyAdditionalSecureLinks.id, binding.id));
+    await this.finishAdditionalDeletion(host, binding);
+  }
+
   async retryAdditional(host: ProxyHostRow, bindingId: string): Promise<ProxyAdditionalSecureLinkRow> {
-    const binding = await this.requireAdditional(host.id, bindingId);
+    const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
     await this.db
       .update(proxyAdditionalSecureLinks)
       .set({ status: 'cleanup_pending', updatedAt: new Date() })
@@ -201,7 +412,7 @@ export class ProxySecureLinkService {
   }
 
   async deleteAdditional(host: ProxyHostRow, bindingId: string): Promise<void> {
-    const binding = await this.requireAdditional(host.id, bindingId);
+    const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
     const variable = `{{additionalSecureLinks.${binding.name}}}`;
     if (host.advancedConfig?.includes(variable)) {
       throw new AppError(
@@ -252,7 +463,12 @@ export class ProxySecureLinkService {
   }
 
   async cleanupAdditionalForHost(host: ProxyHostRow): Promise<void> {
-    const bindings = await this.listAdditional(host.id);
+    // Host deletion is the one lifecycle operation that must include hidden
+    // route-owned bindings.  User-facing list/get/reference methods remain
+    // purpose-filtered above.
+    const bindings = await this.db.query.proxyAdditionalSecureLinks.findMany({
+      where: eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+    });
     if (bindings.length === 0) return;
     await this.db
       .update(proxyAdditionalSecureLinks)
@@ -277,7 +493,9 @@ export class ProxySecureLinkService {
    * effort after the central grants have been revoked.
    */
   async abandonOfflineSource(host: ProxyHostRow): Promise<void> {
-    const bindings = await this.listAdditional(host.id);
+    const bindings = await this.db.query.proxyAdditionalSecureLinks.findMany({
+      where: eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+    });
     if (bindings.length > 0) {
       await this.db
         .update(proxyAdditionalSecureLinks)
@@ -417,9 +635,17 @@ export class ProxySecureLinkService {
     await Promise.all([this.syncSourceNode(binding.sourceNodeId), this.syncTargetNode(binding.dockerNodeId)]);
   }
 
-  private async requireAdditional(proxyHostId: string, bindingId: string): Promise<ProxyAdditionalSecureLinkRow> {
+  private async requireAdditional(
+    proxyHostId: string,
+    bindingId: string,
+    purpose?: ProxyAdditionalSecureLinkPurpose
+  ): Promise<ProxyAdditionalSecureLinkRow> {
     const binding = await this.db.query.proxyAdditionalSecureLinks.findFirst({
-      where: and(eq(proxyAdditionalSecureLinks.id, bindingId), eq(proxyAdditionalSecureLinks.proxyHostId, proxyHostId)),
+      where: and(
+        eq(proxyAdditionalSecureLinks.id, bindingId),
+        eq(proxyAdditionalSecureLinks.proxyHostId, proxyHostId),
+        purpose ? eq(proxyAdditionalSecureLinks.purpose, purpose) : undefined
+      ),
     });
     if (!binding) throw new AppError(404, 'SECURE_LINK_BINDING_NOT_FOUND', 'Additional Secure Link binding not found');
     return binding;
@@ -428,7 +654,11 @@ export class ProxySecureLinkService {
   private emitAdditionalState(host: ProxyHostRow, binding: ProxyAdditionalSecureLinkRow, action: string): void {
     const payload = { id: host.id, bindingId: binding.id, name: binding.name, action };
     this.eventBus?.publish('proxy.secure-link.changed', payload);
-    this.eventBus?.publish('proxy.host.changed', payload);
+    this.eventBus?.publish('proxy.host.changed', {
+      ...payload,
+      action: 'additional_secure_link_changed',
+      bindingAction: action,
+    });
   }
 
   async prepare(
@@ -457,7 +687,7 @@ export class ProxySecureLinkService {
   }
 
   private async prepareLocked(host: ProxyHostRow, requireCapabilities: boolean, force: boolean): Promise<ProxyHostRow> {
-    if (host.type !== 'proxy' || host.upstreamKind === 'manual' || !host.nodeId) return host;
+    if (host.type !== 'proxy' || !isDockerUpstream(host.upstreamKind) || !host.nodeId) return host;
     const target = await this.resolveTarget(host);
     const supported = await this.nodesSupportSecureLinks([host.nodeId, target.nodeId]);
     if (!supported) {
@@ -659,8 +889,8 @@ export class ProxySecureLinkService {
       await this.db
         .update(proxyHosts)
         .set({
-          ...(current?.upstreamKind === 'manual' ? { dockerNodeId: null } : {}),
-          ...(current?.upstreamKind === 'manual' || current?.type === 'raw' || current?.rawConfigEnabled
+          ...(!current || !isDockerUpstream(current.upstreamKind) ? { dockerNodeId: null } : {}),
+          ...(!current || !isDockerUpstream(current.upstreamKind) || current.type === 'raw' || current.rawConfigEnabled
             ? { secureLinkMigratedAt: null }
             : {}),
           secureLinkGeneration: 0,
@@ -875,7 +1105,7 @@ export class ProxySecureLinkService {
       const hosts = await this.db.query.proxyHosts.findMany({
         where: and(
           eq(proxyHosts.dockerNodeId, nodeId),
-          ne(proxyHosts.upstreamKind, 'manual'),
+          inArray(proxyHosts.upstreamKind, [...DOCKER_UPSTREAM_KINDS]),
           ne(proxyHosts.secureLinkStatus, 'cleanup_pending'),
           ne(proxyHosts.secureLinkGeneration, 0)
         ),
@@ -1010,7 +1240,7 @@ export class ProxySecureLinkService {
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
         eq(proxyHosts.nodeId, nodeId),
-        ne(proxyHosts.upstreamKind, 'manual'),
+        inArray(proxyHosts.upstreamKind, [...DOCKER_UPSTREAM_KINDS]),
         ne(proxyHosts.secureLinkStatus, 'cleanup_pending'),
         ne(proxyHosts.secureLinkGeneration, 0)
       ),

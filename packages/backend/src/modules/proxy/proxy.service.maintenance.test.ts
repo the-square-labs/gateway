@@ -390,4 +390,20 @@ describe('ProxyService maintenance lifecycle', () => {
     ).rejects.toMatchObject({ code: 'NGINX_TLS_DAEMON_UPDATE_REQUIRED', statusCode: 409 });
     expect(certificateDistribution.prepareForHost).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    'redirect',
+    '404',
+  ] as const)('rejects a Pages Route transition to %s before changing its host row', async (type) => {
+    const { service, db } = setup({ success: true }, { upstreamKind: 'pages' });
+
+    await expect(
+      service.updateProxyHost(
+        '11111111-1111-4111-8111-111111111111',
+        { type, ...(type === 'redirect' ? { redirectUrl: 'https://example.test' } : {}) } as any,
+        '33333333-3333-4333-8333-333333333333'
+      )
+    ).rejects.toMatchObject({ code: 'PAGES_ROUTE_TYPE_CHANGE_UNSUPPORTED', statusCode: 409 });
+    expect(db.update).not.toHaveBeenCalled();
+  });
 });

@@ -243,7 +243,7 @@ export function ProxyHostDetail({
       return;
     }
     if (ev.action === "deleted") {
-      toast.info("Proxy host was deleted");
+      toast.info("Route was deleted");
       navigate("/proxy-hosts");
       return;
     }
@@ -720,7 +720,7 @@ export function ProxyHostDetail({
     if (!ok) return;
     usePinnedProxiesStore.getState().removePin(deletingHostId);
     useFolderStore.getState().removeHost(deletingHostId);
-    toast.success("Proxy host deleted");
+    toast.success("Route deleted");
     navigate("/proxy-hosts");
   };
 

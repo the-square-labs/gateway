@@ -16,7 +16,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
-import type { ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
+import type { ProxyAdditionalRouteConfig, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
 
 const logger = createChildLogger('NginxTemplateService');
@@ -96,6 +96,138 @@ Handlebars.registerHelper('applyAccessListToAdvancedLocations', (advancedConfig:
     buildAccessListDirectives(accessList as ProxyHostConfig['accessList'])
   );
 });
+
+function routeNginxValue(value: string): string {
+  return value.replace(DANGEROUS_CHARS, '');
+}
+
+function routeRegexPath(path: string): string {
+  return path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function renderAdditionalRouteLocation(
+  route: ProxyAdditionalRouteConfig,
+  hostId: string,
+  accessList: ProxyHostConfig['accessList'],
+  rateLimitEnabled: boolean,
+  rateLimitBurst: number,
+  connectionsPerIp: number
+): string {
+  const path = routeNginxValue(route.path);
+  const upstreamName = `gateway_additional_secure_link_${route.id.replace(/-/g, '_')}`;
+  const upstream = route.secureLinkUpstream
+    ? `${route.forwardScheme}://${upstreamName}`
+    : `${route.forwardScheme}://${routeNginxValue(route.forwardHost ?? '')}:${route.forwardPort ?? 0}`;
+  const access = buildAccessListDirectives(accessList).map((directive) => `        ${directive}`);
+  const limits = rateLimitEnabled
+    ? [
+        '        limit_req_status 429;',
+        `        limit_req zone=ratelimit_${hostId} burst=${rateLimitBurst} nodelay;`,
+        '        limit_conn_status 429;',
+        `        limit_conn connlimit_${hostId} ${connectionsPerIp};`,
+      ]
+    : [];
+  const common = [...access, ...(access.length > 0 ? [''] : []), ...limits, ...(limits.length > 0 ? [''] : [])];
+  const advanced = route.advancedConfig
+    ? route.advancedConfig.split(/\r?\n/).map((line) => `        ${line}`)
+    : [];
+  if (route.targetKind === 'pages') {
+    const scopedConfigPath = `${path}/_gateway/pages/config.js`;
+    const escaped = routeRegexPath(path);
+    const pageBody = [
+      ...common,
+      '        limit_except GET HEAD { deny all; }',
+      '        add_header X-Content-Type-Options nosniff always;',
+      '        add_header Referrer-Policy same-origin always;',
+      `        rewrite ^${escaped}(?:/(.*))?$ /$1 break;`,
+      `        include ${routeNginxValue(route.pagesRouteIncludePath ?? '')};`,
+      ...advanced,
+      '        try_files $uri $uri/ =404;',
+      '        sub_filter_once on;',
+      `        sub_filter '</head>' '<script src="${scopedConfigPath}"></script></head>';`,
+    ];
+    const configLocation = [
+      `    location = ${scopedConfigPath} {`,
+      ...common,
+      '        limit_except GET HEAD { deny all; }',
+      `        alias ${routeNginxValue(route.pagesRuntimeConfigPath ?? '')};`,
+      '        default_type application/javascript;',
+      '        add_header Cache-Control "no-store" always;',
+      '    }',
+    ];
+    return [
+      `    location = ${path} {`,
+      ...common,
+      `        return 308 ${path}/;`,
+      '    }',
+      '',
+      ...configLocation,
+      '',
+      // Keep this a normal prefix so the following dot-file regex can win;
+      // `^~` would suppress regex locations and allow hidden files through.
+      `    location ${path}/ {`,
+      ...pageBody,
+      '    }',
+      '',
+      `    location ~ ^${escaped}/\\. { deny all; }`,
+    ].join('\n');
+  }
+
+  const body = [
+    ...common,
+    route.requestBuffering ? '        proxy_request_buffering on;' : '        proxy_request_buffering off;',
+    route.responseBuffering ? '        proxy_buffering on;' : '        proxy_buffering off;',
+    `        proxy_connect_timeout ${route.connectTimeoutSeconds}s;`,
+    `        proxy_read_timeout ${route.readTimeoutSeconds}s;`,
+    `        proxy_send_timeout ${route.sendTimeoutSeconds}s;`,
+    ...advanced,
+    ...(route.websocketSupport
+      ? [
+          '        proxy_http_version 1.1;',
+          '        proxy_set_header Upgrade $http_upgrade;',
+          '        proxy_set_header Connection "upgrade";',
+        ]
+      : ['        proxy_http_version 1.1;', '        proxy_set_header Connection "";']),
+    '        proxy_set_header Host $host;',
+    '        proxy_set_header X-Real-IP $remote_addr;',
+    '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+    '        proxy_set_header X-Forwarded-Proto $scheme;',
+    '        proxy_set_header X-Forwarded-Host $host;',
+    '        proxy_set_header X-Forwarded-Port $server_port;',
+    `        proxy_pass ${upstream}${route.stripPrefix ? '/' : ''};`,
+  ];
+  const exact = [`    location = ${path} {`, ...body, '    }'];
+  const prefix = [`    location ^~ ${path}/ {`, ...body, '    }'];
+  return [...exact, '', ...prefix].join('\n');
+}
+
+Handlebars.registerHelper(
+  'renderAdditionalRoutes',
+  (
+    routes: unknown,
+    hostId: unknown,
+    accessList: unknown,
+    rateLimitEnabled: unknown,
+    rateLimitBurst: unknown,
+    connectionsPerIp: unknown
+  ) => {
+    if (!Array.isArray(routes) || routes.length === 0) return '';
+    const rendered = routes
+      .filter((route): route is ProxyAdditionalRouteConfig => Boolean(route && typeof route === 'object'))
+      .sort((left, right) => right.path.length - left.path.length || left.path.localeCompare(right.path))
+      .map((route) =>
+        renderAdditionalRouteLocation(
+          route,
+          typeof hostId === 'string' ? hostId : '00000000-0000-0000-0000-000000000000',
+          accessList as ProxyHostConfig['accessList'],
+          rateLimitEnabled === true,
+          typeof rateLimitBurst === 'number' ? rateLimitBurst : DEFAULT_RATE_LIMIT_BURST,
+          typeof connectionsPerIp === 'number' ? connectionsPerIp : DEFAULT_CONNECTIONS_PER_IP
+        )
+      );
+    return new Handlebars.SafeString(rendered.join('\n\n'));
+  }
+);
 
 function buildAccessListDirectives(accessList: ProxyHostConfig['accessList']): string[] {
   if (!accessList) return [];
@@ -182,6 +314,43 @@ server {
     }
 
 {{/unless}}
+{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}
+{{#if pagesRouteIncludePath}}
+    include {{pagesRouteIncludePath}};
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+    location ~ /\\. { deny all; }
+
+    location = /_gateway/pages/config.js {
+{{#if accessList}}
+{{#each accessList.ipRules}}
+        {{sanitize this.type}} {{sanitize this.value}};
+{{/each}}
+{{#if accessListHasIpRules}}
+        deny all;
+{{/if}}
+{{#if accessList.basicAuthEnabled}}
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-{{accessList.id}};
+{{/if}}
+
+{{/if}}
+{{#if rateLimitEnabled}}
+        limit_req_status 429;
+        limit_req zone=ratelimit_{{id}} burst={{rateLimitBurst}} nodelay;
+        limit_conn_status 429;
+        limit_conn connlimit_{{id}} {{connectionsPerIp}};
+{{/if}}
+        limit_except GET HEAD { deny all; }
+        alias $gateway_pages_runtime_config_path;
+        default_type application/javascript;
+        add_header Cache-Control "no-store" always;
+{{#each customHeaders}}
+        add_header {{sanitize this.name}} "{{sanitize this.value}}" always;
+{{/each}}
+    }
+
+{{/if}}
     location / {
 {{#if accessList}}
 {{#each accessList.ipRules}}
@@ -203,12 +372,23 @@ server {
         limit_conn connlimit_{{id}} {{connectionsPerIp}};
 {{/if}}
 {{#if cacheEnabled}}
+{{#if pagesRouteIncludePath}}
+        expires {{cacheMaxAge}}s;
+        add_header Cache-Control "public, max-age={{cacheMaxAge}}" always;
+{{else}}
         proxy_cache cache_{{id}};
         proxy_cache_valid 200 301 302 {{cacheMaxAge}}s;
         proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
         proxy_cache_background_update on;
         add_header X-Cache-Status $upstream_cache_status;
 {{/if}}
+{{/if}}
+{{#if pagesRouteIncludePath}}
+        limit_except GET HEAD { deny all; }
+        sub_filter_once on;
+        sub_filter '</head>' '<script src="/_gateway/pages/config.js"></script></head>';
+        try_files $uri $uri/ =404;
+{{else}}
 {{#if secureLinkUpstream}}
         # gateway-managed-secure-link-upstream {{id}}
 {{/if}}
@@ -237,8 +417,13 @@ server {
         proxy_set_header Connection "upgrade";
 
 {{/if}}
+{{/if}}
 {{#each customHeaders}}
+{{#if ../pagesRouteIncludePath}}
+        add_header {{sanitize this.name}} "{{sanitize this.value}}" always;
+{{else}}
         proxy_set_header {{sanitize this.name}} "{{sanitize this.value}}";
+{{/if}}
 {{/each}}
 {{#each customRewrites}}
         rewrite {{sanitize this.source}} {{sanitize this.destination}} {{#if (eq this.type "permanent")}}permanent{{else}}redirect{{/if}};
@@ -701,9 +886,11 @@ export class NginxTemplateService {
 
   async renderForHost(host: ProxyHostConfig, templateId: string | null, hideExternalBranding = false): Promise<string> {
     let content: string;
+    let managedBuiltin = !templateId;
     if (templateId) {
       const template = await this.getTemplate(templateId);
       content = template.content;
+      managedBuiltin = template.isBuiltin && template.type === 'proxy';
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
@@ -711,7 +898,13 @@ export class NginxTemplateService {
       escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML),
       escapeNginxReturnText(gatewayNotFoundHtml(hideExternalBranding))
     );
-    return this.ensureManagedAdditionalSecureLinkUpstreams(this.ensureManagedSecureLinkUpstream(rendered, host), host);
+    const withSecureLinkUpstreams = this.ensureManagedAdditionalSecureLinkUpstreams(
+      this.ensureManagedSecureLinkUpstream(rendered, host),
+      host
+    );
+    return managedBuiltin
+      ? this.ensureManagedAdditionalRouteUpstreams(withSecureLinkUpstreams, host)
+      : withSecureLinkUpstreams;
   }
 
   private ensureManagedAdditionalSecureLinkUpstreams(rendered: string, host: ProxyHostConfig): string {
@@ -721,6 +914,18 @@ export class NginxTemplateService {
       if (declaration.test(rendered)) return [];
       return [`upstream ${upstreamName} {\n    server unix:${binding.socketPath};\n    keepalive 64;\n}`];
     });
+    return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
+  }
+
+  private ensureManagedAdditionalRouteUpstreams(rendered: string, host: ProxyHostConfig): string {
+    const declarations = (host.additionalRoutes ?? [])
+      .filter((route) => route.secureLinkUpstream && route.secureLinkSocketPath)
+      .flatMap((route) => {
+        const upstreamName = `gateway_additional_secure_link_${route.id.replace(/-/g, '_')}`;
+        const declaration = new RegExp(`(^|\\n)[\\t ]*upstream[\\t ]+${upstreamName}[\\t ]*\\{`, 'm');
+        if (declaration.test(rendered)) return [];
+        return [`upstream ${upstreamName} {\n    server unix:${route.secureLinkSocketPath};\n    keepalive 64;\n}`];
+      });
     return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
   }
 
@@ -933,6 +1138,8 @@ ${rendered}`;
       // Custom variables remain available to user templates; managed built-ins above
       // are written last so their derived values cannot become internally inconsistent.
       ...templateVariables,
+      pagesRouteIncludePath: host.pagesRouteIncludePath,
+      additionalRoutes: host.additionalRoutes ?? [],
       cacheEnabled,
       cacheMaxAge,
       rateLimitMode: configuredRateLimitMode,

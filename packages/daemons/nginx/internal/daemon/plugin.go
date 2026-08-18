@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,23 +22,27 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
+	"github.com/wiolett-industries/gateway/nginx-daemon/internal/pages"
 	"google.golang.org/grpc"
 )
 
 // NginxPlugin implements lifecycle.DaemonPlugin for the nginx daemon.
 type NginxPlugin struct {
-	cfg             *config.Config
-	baseCfg         *lifecycle.BaseConfig
-	mgr             *nginx.Manager
-	handler         *Handler
-	reporter        *Reporter
-	state           *sharedstate.State
-	logger          *slog.Logger
-	relayGrants     *relayGrantStore
-	secureLinks     *sourceLinkManager
-	secureLinkState *securelink.StateStore
-	relayTunnelMu   sync.Mutex
-	relayTunnels    []*nginxRelayTunnel
+	cfg                         *config.Config
+	baseCfg                     *lifecycle.BaseConfig
+	mgr                         *nginx.Manager
+	handler                     *Handler
+	reporter                    *Reporter
+	state                       *sharedstate.State
+	logger                      *slog.Logger
+	relayGrants                 *relayGrantStore
+	secureLinks                 *sourceLinkManager
+	secureLinkState             *securelink.StateStore
+	pagesRuntime                *pages.Runtime
+	pagesV1Available            bool
+	pagesRuntimeConfigAvailable bool
+	relayTunnelMu               sync.Mutex
+	relayTunnels                []*nginxRelayTunnel
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
@@ -127,6 +133,25 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)
+	}
+	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
+	if err != nil {
+		logger.Warn("Gateway Pages runtime is unavailable; Pages capability is disabled", "error", err)
+	} else if _, err := p.pagesRuntime.StoragePreflight(0); err != nil {
+		logger.Warn("Gateway Pages storage is unavailable; Pages capability is disabled", "error", err)
+		p.pagesRuntime = nil
+	} else {
+		// Set this only after every v1 runtime dependency has initialized and the
+		// confined storage root has passed a real filesystem preflight. This is
+		// deliberately a capability gate, not a daemon-version heuristic.
+		p.pagesV1Available = true
+		p.pagesRuntimeConfigAvailable, err = nginxBuildHasSubFilter(p.cfg.Nginx.Binary)
+		if err != nil {
+			logger.Warn("Gateway Pages runtime configuration is unavailable; capability is disabled", "error", err)
+			p.pagesRuntimeConfigAvailable = false
+		} else if !p.pagesRuntimeConfigAvailable {
+			logger.Warn("Gateway Pages runtime configuration is unavailable; nginx was built without http_sub_module")
+		}
 	}
 	if restored := p.secureLinkState.Get(); len(restored.Bindings) > 0 {
 		statuses, restoreErr := p.secureLinks.sync(restored)
@@ -223,7 +248,7 @@ func (p *NginxPlugin) reconcileRestoredSecureLinkPorts(
 // SetState is called by the daemon wrapper to provide the shared state.
 func (p *NginxPlugin) SetState(st *sharedstate.State) {
 	p.state = st
-	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState)
+	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState, p.pagesRuntime, p.pagesRuntimeConfigAvailable)
 	p.reporter = NewReporter(p.cfg, p.mgr, p.logger)
 }
 
@@ -271,7 +296,25 @@ func (p *NginxPlugin) capabilities() []string {
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
 	}
+	if p.pagesV1Available && p.pagesRuntime != nil {
+		capabilities = append(capabilities, "nginx_pages_v1")
+	}
+	if p.pagesRuntimeConfigAvailable && p.pagesRuntime != nil {
+		capabilities = append(capabilities, "nginx_pages_config_v1")
+	}
 	return capabilities
+}
+
+func nginxBuildHasSubFilter(binary string) (bool, error) {
+	output, err := exec.Command(binary, "-V").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("nginx build check failed: %w", err)
+	}
+	return nginxBuildOutputHasSubFilter(output), nil
+}
+
+func nginxBuildOutputHasSubFilter(output []byte) bool {
+	return strings.Contains(string(output), "--with-http_sub_module")
 }
 
 func (p *NginxPlugin) OnSessionStart(ctx context.Context, _ *stream.Writer) error {

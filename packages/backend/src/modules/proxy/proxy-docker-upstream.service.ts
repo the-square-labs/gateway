@@ -11,7 +11,7 @@ import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deploym
 import type { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
-export type ProxyUpstreamKind = 'manual' | 'docker_container' | 'docker_deployment';
+export type ProxyUpstreamKind = 'manual' | 'docker_container' | 'docker_deployment' | 'pages';
 
 export interface DockerUpstreamReference {
   upstreamKind: ProxyUpstreamKind;
@@ -24,7 +24,7 @@ export interface DockerUpstreamReference {
 }
 
 export interface ResolvedDockerUpstream {
-  upstreamKind: Exclude<ProxyUpstreamKind, 'manual'>;
+  upstreamKind: Exclude<ProxyUpstreamKind, 'manual' | 'pages'>;
   forwardHost: string;
   forwardPort: number;
   dockerNodeId: string | null;

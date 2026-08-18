@@ -1,0 +1,2 @@
+ALTER TABLE "page_deployment_replicas" ADD COLUMN "runtime_config_generation" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "page_route_targets" ADD COLUMN "runtime_config_generation" integer DEFAULT 0 NOT NULL;

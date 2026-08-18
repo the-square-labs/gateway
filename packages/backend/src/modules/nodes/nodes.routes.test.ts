@@ -110,6 +110,36 @@ describe('nodesRoutes list access', () => {
     });
   });
 
+  it('exposes only the safe Pages capabilities in compact Ingress discovery rows', async () => {
+    mocks.scopes = ['proxy:create:ingress-1'];
+    mocks.nodesService.list.mockResolvedValue({
+      data: [
+        {
+          id: 'ingress-1',
+          type: 'nginx',
+          hostname: 'nginx-1.internal',
+          displayName: 'Ingress 1',
+          status: 'online',
+          serviceCreationLocked: false,
+          capabilities: {
+            capabilities: ['nginx_pages_v1', 'nginx_pages_config_v1', 'private_daemon_capability'],
+          },
+          lastHealthReport: null,
+        },
+      ],
+      page: 1,
+      limit: 100,
+      total: 1,
+      totalPages: 1,
+    });
+
+    const response = await createApp().request('/?type=nginx&limit=100');
+    const body = (await response.json()) as { data: Array<Record<string, any>> };
+
+    expect(response.status).toBe(200);
+    expect(body.data[0].capabilities).toEqual({ nginx_pages_v1: true, nginx_pages_config_v1: true });
+  });
+
   it('keeps safe Docker runtime metadata in compact node discovery rows', async () => {
     mocks.scopes = ['docker:containers:view'];
     mocks.nodesService.list.mockResolvedValue({

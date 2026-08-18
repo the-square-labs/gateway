@@ -20,6 +20,9 @@ nginx:
   stub_status_url: "http://127.0.0.1/nginx_status"
   htpasswd_dir: "/etc/nginx/gateway/htpasswd"
   acme_challenge_dir: "/var/www/acme-challenge"
+  # Managed Pages releases, upload sessions, and generated fixed preview
+  # configurations. This directory is daemon-owned persistent state.
+  pages_root: "/var/lib/nginx-daemon/pages"
 
 console:
   user: ""  # OS user for host console sessions; empty = daemon's user

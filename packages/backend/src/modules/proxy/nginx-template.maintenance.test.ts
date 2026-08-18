@@ -49,6 +49,31 @@ function service() {
 }
 
 describe('canonical Gateway nginx pages', () => {
+  it('renders a Pages Route as a static root include without an upstream proxy', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        websocketSupport: false,
+        pagesRouteIncludePath: '/custom-nginx/conf.d/pages/routes/11111111-1111-4111-8111-111111111111.inc',
+      },
+      null
+    );
+
+    expect(rendered).toContain('include /custom-nginx/conf.d/pages/routes/11111111-1111-4111-8111-111111111111.inc;');
+    expect(rendered).toContain('limit_except GET HEAD { deny all; }');
+    expect(rendered).toContain('try_files $uri $uri/ =404;');
+    expect(rendered).toContain('location = /_gateway/pages/config.js');
+    expect(rendered).toContain('alias $gateway_pages_runtime_config_path;');
+    expect(rendered).toContain('default_type application/javascript;');
+    expect(rendered).toContain('add_header Cache-Control "no-store" always;');
+    expect(rendered).toContain(`sub_filter '</head>' '<script src="/_gateway/pages/config.js"></script></head>';`);
+    expect(rendered.match(/auth_basic "Restricted Access";/g)).toHaveLength(2);
+    expect(rendered.match(/limit_req zone=ratelimit_/g)).toHaveLength(2);
+    expect(rendered).toContain('location ~ /\\. { deny all; }');
+    expect(rendered).toContain('add_header X-Test "yes" always;');
+    expect(rendered).not.toContain('proxy_pass');
+  });
+
   it('uses the shared minimal error-page layout without the Gateway header', () => {
     for (const page of [GATEWAY_NOT_FOUND_HTML, GATEWAY_MAINTENANCE_HTML]) {
       expect(page).toContain('Powered by <a href="https://wiolett.net"');

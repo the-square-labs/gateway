@@ -1,9 +1,9 @@
 import { Key, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
+import { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ScopeList } from "@/components/common/ScopeList";
 import { Button } from "@/components/ui/button";
@@ -59,7 +59,6 @@ export function ApiTokensSection({
   const [tokenScopeSearch, setTokenScopeSearch] = useState("");
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
-  const createdSecretResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
   const allowedResourceIdsByScope = useMemo(
     () => deriveAllowedResourceIdsByScope(userScopes),
@@ -98,12 +97,6 @@ export function ApiTokensSection({
   useEffect(() => {
     loadTokens();
   }, [loadTokens]);
-
-  useEffect(() => {
-    return () => {
-      if (createdSecretResetTimerRef.current) clearTimeout(createdSecretResetTimerRef.current);
-    };
-  }, []);
 
   const openTokenEdit = (token: ApiToken) => {
     setEditingToken(token);
@@ -215,15 +208,6 @@ export function ApiTokensSection({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to revoke token");
     }
-  };
-
-  const closeCreatedSecretDialog = () => {
-    setCreatedSecretDialogOpen(false);
-    if (createdSecretResetTimerRef.current) clearTimeout(createdSecretResetTimerRef.current);
-    createdSecretResetTimerRef.current = setTimeout(() => {
-      setCreatedSecret(null);
-      createdSecretResetTimerRef.current = null;
-    }, 220);
   };
 
   return (
@@ -389,35 +373,14 @@ export function ApiTokensSection({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <OneTimeTokenDialog
         open={createdSecretDialogOpen}
-        onOpenChange={(open) => !open && closeCreatedSecretDialog()}
-      >
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>API Token Created</DialogTitle>
-            <DialogDescription>Copy the token before closing this dialog.</DialogDescription>
-          </DialogHeader>
-
-          {createdSecret && (
-            <div className="space-y-4">
-              <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-                <p className="font-medium">Copy this token now. It will not be shown again.</p>
-              </div>
-              <CopyValueField
-                label="API token"
-                value={createdSecret}
-                className="[&>p]:hidden"
-                valueClassName="font-mono"
-              />
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button onClick={closeCreatedSecretDialog}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setCreatedSecretDialogOpen}
+        title="API Token Created"
+        token={createdSecret}
+        tokenLabel="API token"
+        onClosed={() => setCreatedSecret(null)}
+      />
     </>
   );
 }

@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NodeDispatchService } from './node-dispatch.service.js';
 
-function createService(nodeType = 'docker') {
+function createService(
+  nodeType = 'docker',
+  node: Record<string, unknown> = { status: 'online', capabilities: { capabilities: [] } }
+) {
   const registry = {
     sendCommand: vi.fn().mockResolvedValue({ success: true }),
   };
   const db = {
     select: () => ({
       from: () => ({
-        where: () => ({ limit: vi.fn().mockResolvedValue([{ type: nodeType }]) }),
+        where: () => ({ limit: vi.fn().mockResolvedValue([{ type: nodeType, ...node }]) }),
       }),
     }),
   };
@@ -129,5 +132,63 @@ describe('NodeDispatchService', () => {
         configJson: '{}',
       },
     });
+  });
+
+  it('never dispatches a Pages mutation without nginx_pages_v1', async () => {
+    const { registry, service } = createService('nginx');
+
+    await expect(service.sendPagesCommand('node-1', { pagesInventory: {} })).rejects.toMatchObject({
+      code: 'PAGES_DAEMON_UPDATE_REQUIRED',
+    });
+    expect(registry.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('dispatches and parses capability-gated Pages command data', async () => {
+    const { registry, service } = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_pages_v1'] },
+    });
+    registry.sendCommand.mockResolvedValue({ success: true, data: Buffer.from('{"available":true}') });
+
+    await expect(
+      service.sendPagesCommand('node-1', { pagesStoragePreflight: { requiredBytes: '0' } })
+    ).resolves.toEqual({ available: true });
+    expect(registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      { pagesStoragePreflight: { requiredBytes: '0' } },
+      120_000
+    );
+  });
+
+  it('requires the separate runtime-config capability for config commands', async () => {
+    const withoutConfig = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_pages_v1'] },
+    });
+    await expect(
+      withoutConfig.service.sendPagesRuntimeConfigCommand('node-1', {
+        pagesActivateRuntimeConfig: {
+          bindingKind: 'PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE',
+          bindingId: '11111111-1111-4111-8111-111111111111',
+          generation: '1',
+        },
+      })
+    ).rejects.toMatchObject({ code: 'PAGES_DAEMON_UPDATE_REQUIRED' });
+    expect(withoutConfig.registry.sendCommand).not.toHaveBeenCalled();
+
+    const withConfig = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_pages_v1', 'nginx_pages_config_v1'] },
+    });
+    await expect(
+      withConfig.service.sendPagesRuntimeConfigCommand('node-1', {
+        pagesActivateRuntimeConfig: {
+          bindingKind: 'PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE',
+          bindingId: '11111111-1111-4111-8111-111111111111',
+          generation: '1',
+        },
+      })
+    ).resolves.toEqual({});
+    expect(withConfig.registry.sendCommand).toHaveBeenCalledOnce();
   });
 });

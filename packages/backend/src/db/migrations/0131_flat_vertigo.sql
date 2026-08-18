@@ -1,0 +1,1 @@
+ALTER TABLE "page_projects" ALTER COLUMN "storage_quota_bytes" SET DEFAULT 1073741824;

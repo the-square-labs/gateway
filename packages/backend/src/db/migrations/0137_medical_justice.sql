@@ -1,0 +1,1 @@
+ALTER TABLE "proxy_additional_routes" ADD COLUMN "advanced_config" text;

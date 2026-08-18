@@ -185,6 +185,36 @@ describe("AlertDialog", () => {
     expect(screen.queryByText("node-1")).not.toBeInTheDocument();
   });
 
+  it("loads Page Projects as resource scope options for Pages alerts", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getAlertCategories).mockResolvedValue([
+      { ...makeCategory(), id: "pages", label: "Pages" },
+    ]);
+    const listPageProjects = vi.spyOn(api, "listPageProjects").mockResolvedValue({
+      data: [{ id: "project-1", name: "Documentation" }],
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    } as never);
+
+    renderWithRouter(
+      <AlertDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        rule={{ ...makeRule(), category: "pages", resourceIds: ["project-1"] }}
+        onSaved={vi.fn()}
+      />,
+      { path: "/notifications", route: "/notifications" }
+    );
+
+    await screen.findByDisplayValue("CPU High");
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    expect(await screen.findByRole("checkbox", { name: "Documentation" })).toBeChecked();
+    expect(listPageProjects).toHaveBeenCalledWith({ page: 1, limit: 100 });
+  });
+
   it("targets a reported physical GPU when a GPU node alert is scoped to one node", async () => {
     const user = userEvent.setup();
     const gpuRule: AlertRule = {

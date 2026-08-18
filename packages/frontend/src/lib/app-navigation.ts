@@ -9,6 +9,7 @@ import {
   Globe2,
   LayoutDashboard,
   Lock,
+  PanelsTopLeft,
   ScrollText,
   Server,
   Settings,
@@ -31,6 +32,7 @@ export type AppNavigationItemId =
   | "authorities"
   | "certificates"
   | "docker"
+  | "pages"
   | "databases"
   | "logging"
   | "nodes"
@@ -154,6 +156,13 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
         icon: Box,
         shortcutKey: "8",
         keywords: ["containers", "deployments", "images", "volumes", "networks", "tasks"],
+      },
+      {
+        id: "pages",
+        name: "Pages",
+        href: "/pages",
+        icon: PanelsTopLeft,
+        keywords: ["static sites", "deployments", "tags", "previews", "webhook"],
       },
       {
         id: "databases",
@@ -336,6 +345,8 @@ export function canAccessNavigationItem(
           scopeMatches(scopes, "docker:containers:folders:manage"))
       );
     }
+    case "pages":
+      return hasScopeBase(scopes, "pages:view") || scopeMatches(scopes, "pages:folders:manage");
     case "databases":
       return (
         hasScopeBase(scopes, "databases:view") || scopeMatches(scopes, "databases:folders:manage")

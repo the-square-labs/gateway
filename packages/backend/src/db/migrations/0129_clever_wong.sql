@@ -1,0 +1,3 @@
+ALTER TABLE "page_deployments" ADD COLUMN "requested_tag" varchar(63);--> statement-breakpoint
+ALTER TABLE "page_deployments" ADD COLUMN "deploy_token_id" uuid;--> statement-breakpoint
+ALTER TABLE "page_deployments" ADD CONSTRAINT "page_deployments_deploy_token_id_page_deploy_tokens_id_fk" FOREIGN KEY ("deploy_token_id") REFERENCES "public"."page_deploy_tokens"("id") ON DELETE set null ON UPDATE no action;

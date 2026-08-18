@@ -27,6 +27,7 @@ import {
   UpdateFolderSchema,
 } from './folder.schemas.js';
 import { FolderService } from './folder.service.js';
+import { redactGroupedPageTargets } from './page-target-visibility.js';
 import {
   redactFolderTreeRawProxyConfigForBrowserResponse,
   redactGroupedRawProxyConfigForBrowserResponse,
@@ -84,12 +85,19 @@ folderRoutes.openapi(groupedProxyHostsRoute, async (c) => {
       ? { includeAllFolders: canManageFolders }
       : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'), includeAllFolders: canManageFolders }
   );
-  if (isProgrammaticAuth(c)) return c.json({ data: stripGroupedRawProxyConfigForProgrammaticResponse(result) });
+  if (isProgrammaticAuth(c)) {
+    return c.json({
+      data: redactGroupedPageTargets(stripGroupedRawProxyConfigForProgrammaticResponse(result), scopes),
+    });
+  }
   return c.json({
-    data: redactGroupedRawProxyConfigForBrowserResponse(result, (host) => {
-      const hostId = typeof host.id === 'string' ? host.id : undefined;
-      return scopes.includes('proxy:raw:read') || (hostId ? scopes.includes(`proxy:raw:read:${hostId}`) : false);
-    }),
+    data: redactGroupedPageTargets(
+      redactGroupedRawProxyConfigForBrowserResponse(result, (host) => {
+        const hostId = typeof host.id === 'string' ? host.id : undefined;
+        return scopes.includes('proxy:raw:read') || (hostId ? scopes.includes(`proxy:raw:read:${hostId}`) : false);
+      }),
+      scopes
+    ),
   });
 });
 

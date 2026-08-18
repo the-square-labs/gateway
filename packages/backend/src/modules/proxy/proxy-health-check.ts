@@ -47,7 +47,10 @@ export function runImmediateProxyHealthCheck({
 
       let status: 'online' | 'offline' | 'degraded' = 'offline';
       try {
-        if (host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null) {
+        if (
+          (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
+          host.secureLinkMigratedAt != null
+        ) {
           if (!host.nodeId || !nodeDispatch) throw new Error('Secure Link health probe is unavailable');
           const probe = await nodeDispatch.probeProxySecureLink(host.nodeId, {
             linkId: host.id,

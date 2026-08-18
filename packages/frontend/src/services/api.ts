@@ -11,8 +11,11 @@ import type {
   AuditLogEntry,
   AuthProvisioningSettings,
   BrowserSession,
+  ConfigurePageProfileRequest,
   CreateAccessListRequest,
   CreateDomainRequest,
+  CreatePageDeployTokenRequest,
+  CreatePageProjectRequest,
   DashboardBootstrap,
   DashboardBootstrapRequest,
   DashboardStats,
@@ -26,6 +29,19 @@ import type {
   FinalizeSetupStepStatus,
   LinkInternalCertRequest,
   NginxTemplate,
+  PageDeployment,
+  PageDeploymentUploadCreated,
+  PageDeployToken,
+  PageDeployTokenCreated,
+  PageProfile,
+  PageProfileOptions,
+  PageProject,
+  PageProjectFolderTreeNode,
+  PageProjectPlacementOption,
+  PageRuntimeConfigRecord,
+  PageRuntimeConfigsResponse,
+  PageTag,
+  PageTagMoveResult,
   PaginatedResponse,
   PermissionGroup,
   ProxyHost,
@@ -47,6 +63,8 @@ import type {
   TemplateVariableDef,
   UIBootstrapShell,
   UpdateDomainRequest,
+  UpdatePageProjectRequest,
+  UpdatePageRuntimeConfigRequest,
   UploadCertRequest,
   User,
 } from "@/types";
@@ -173,6 +191,16 @@ class ApiClient extends withInferenceApi(
       auth.hasScopedAccess("proxy:view"),
       "proxy-hosts",
       cache("proxy:grouped", () => this.getGroupedProxyHosts({}))
+    );
+    add(
+      auth.hasScopedAccess("pages:view"),
+      "pages-projects",
+      cache("pages:projects", () => this.listPageProjects({ page: 1, limit: 100 }))
+    );
+    add(
+      auth.hasScopedAccess("pages:view") || auth.hasScope("pages:folders:manage"),
+      "pages-project-folders",
+      cache("pages:project-folders", () => this.listPageProjectFolders())
     );
     add(
       auth.hasScopedAccess("ssl:cert:view"),
@@ -1706,6 +1734,339 @@ class ApiClient extends withInferenceApi(
 
   async getStatusPagePreview(): Promise<PublicStatusPageDto> {
     return this.unwrapData(this.request<{ data: PublicStatusPageDto }>("/status-page/preview"));
+  }
+
+  // ── Pages ──────────────────────────────────────────────────────
+
+  async listPageProjects(params?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    folderId?: string | null;
+  }): Promise<PaginatedResponse<PageProject>> {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set("page", String(params.page));
+    if (params?.limit) searchParams.set("limit", String(params.limit));
+    if (params?.search) searchParams.set("search", params.search);
+    if (params?.folderId !== undefined) {
+      if (params.folderId !== null) searchParams.set("folderId", params.folderId);
+      else searchParams.set("folderId", "");
+    }
+    const query = searchParams.toString();
+    return this.request<PaginatedResponse<PageProject>>(`/pages${query ? `?${query}` : ""}`);
+  }
+
+  async getPageProject(id: string): Promise<PageProject> {
+    return this.unwrapData(this.request<{ data: PageProject }>(`/pages/${id}`));
+  }
+
+  async getPageProjectBySlug(slug: string): Promise<PageProject> {
+    return this.unwrapData(
+      this.request<{ data: PageProject }>(`/pages/by-slug/${encodeURIComponent(slug)}`)
+    );
+  }
+
+  async createPageProject(data: CreatePageProjectRequest): Promise<PageProject> {
+    const project = await this.unwrapData(
+      this.request<{ data: PageProject }>("/pages", {
+        method: "POST",
+        body: JSON.stringify(data),
+      })
+    );
+    this.invalidateCache("pages:");
+    return project;
+  }
+
+  async listPageProjectPlacementOptions(): Promise<PageProjectPlacementOption[]> {
+    return this.unwrapData(
+      this.request<{ data: PageProjectPlacementOption[] }>("/pages/placement-options")
+    );
+  }
+
+  async migratePageProject(id: string, targetNodeId: string): Promise<PageProject> {
+    const project = await this.unwrapData(
+      this.request<{ data: PageProject }>(`/pages/${id}/migrate`, {
+        method: "POST",
+        body: JSON.stringify({ targetNodeId }),
+      })
+    );
+    this.invalidateCache("pages:");
+    return project;
+  }
+
+  async updatePageProject(id: string, data: UpdatePageProjectRequest): Promise<PageProject> {
+    const project = await this.unwrapData(
+      this.request<{ data: PageProject }>(`/pages/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      })
+    );
+    this.invalidateCache("pages:");
+    return project;
+  }
+
+  async getPageRuntimeConfigs(projectId: string): Promise<PageRuntimeConfigsResponse> {
+    return this.unwrapData(
+      this.request<{ data: PageRuntimeConfigsResponse }>(`/pages/${projectId}/runtime-configs`)
+    );
+  }
+
+  async updatePageRuntimeConfigDefault(
+    projectId: string,
+    data: UpdatePageRuntimeConfigRequest
+  ): Promise<PageRuntimeConfigRecord> {
+    const config = await this.unwrapData(
+      this.request<{ data: PageRuntimeConfigRecord }>(
+        `/pages/${projectId}/runtime-configs/default`,
+        {
+          method: "PUT",
+          body: JSON.stringify(data),
+        }
+      )
+    );
+    this.invalidateCache("pages:");
+    return config;
+  }
+
+  async updatePageRuntimeConfigTag(
+    projectId: string,
+    tagId: string,
+    data: UpdatePageRuntimeConfigRequest
+  ): Promise<PageRuntimeConfigRecord> {
+    const config = await this.unwrapData(
+      this.request<{ data: PageRuntimeConfigRecord }>(
+        `/pages/${projectId}/runtime-configs/tags/${tagId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(data),
+        }
+      )
+    );
+    this.invalidateCache("pages:");
+    return config;
+  }
+
+  async deletePageRuntimeConfigTag(
+    projectId: string,
+    tagId: string,
+    expectedGeneration: number
+  ): Promise<void> {
+    await this.request(`/pages/${projectId}/runtime-configs/tags/${tagId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expectedGeneration }),
+    });
+    this.invalidateCache("pages:");
+  }
+
+  async deletePageProject(id: string): Promise<void> {
+    await this.request(`/pages/${id}`, { method: "DELETE" });
+    this.invalidateCache("pages:");
+  }
+
+  async listPageProjectFolders(): Promise<PageProjectFolderTreeNode[]> {
+    return this.unwrapData(this.request<{ data: PageProjectFolderTreeNode[] }>("/pages/folders"));
+  }
+
+  async createPageProjectFolder(data: {
+    name: string;
+    parentId?: string;
+  }): Promise<import("@/types").ResourceFolder> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").ResourceFolder }>("/pages/folders", {
+        method: "POST",
+        body: JSON.stringify(data),
+      })
+    );
+  }
+
+  async updatePageProjectFolder(
+    id: string,
+    data: { name: string }
+  ): Promise<import("@/types").ResourceFolder> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").ResourceFolder }>(`/pages/folders/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      })
+    );
+  }
+
+  async deletePageProjectFolder(id: string): Promise<void> {
+    await this.request(`/pages/folders/${id}`, { method: "DELETE" });
+  }
+
+  async reorderPageProjectFolders(items: { id: string; sortOrder: number }[]): Promise<void> {
+    await this.request("/pages/folders/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ items }),
+    });
+  }
+
+  async movePageProjectsToFolder(ids: string[], folderId: string | null): Promise<void> {
+    await this.request("/pages/folders/move-projects", {
+      method: "POST",
+      body: JSON.stringify({ ids, folderId }),
+    });
+  }
+
+  async reorderPageProjects(items: { id: string; sortOrder: number }[]): Promise<void> {
+    await this.request("/pages/folders/reorder-projects", {
+      method: "PUT",
+      body: JSON.stringify({ items }),
+    });
+  }
+
+  async listPageDeployments(
+    projectId: string,
+    params?: { page?: number; limit?: number }
+  ): Promise<PaginatedResponse<PageDeployment>> {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set("page", String(params.page));
+    if (params?.limit) searchParams.set("limit", String(params.limit));
+    const query = searchParams.toString();
+    return this.request<PaginatedResponse<PageDeployment>>(
+      `/pages/${projectId}/deployments${query ? `?${query}` : ""}`
+    );
+  }
+
+  async uploadPageBuild(
+    projectId: string,
+    archive: File,
+    sha256: string,
+    tag: string | undefined,
+    onProgress?: (progress: number, phase: "uploading" | "finalizing") => void
+  ): Promise<PageDeployment> {
+    const created = await this.unwrapData(
+      this.request<{ data: PageDeploymentUploadCreated }>("/pages-deploy/deployments", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId,
+          declaredSizeBytes: archive.size,
+          sha256,
+          ...(tag ? { tag } : {}),
+          source: { provider: "manual" },
+        }),
+      })
+    );
+    const chunkSize = 8 * 1024 * 1024;
+    let offset = created.upload.offset;
+    while (offset < archive.size) {
+      const chunk = archive.slice(offset, Math.min(offset + chunkSize, archive.size));
+      const response = await this.unwrapData(
+        this.request<{ data: { offset: number } }>(
+          `/pages-deploy/uploads/${created.upload.id}/chunks`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Upload-Offset": String(offset),
+            },
+            body: chunk,
+          }
+        )
+      );
+      offset = response.offset;
+      onProgress?.(Math.min(100, Math.round((offset / archive.size) * 100)), "uploading");
+    }
+    onProgress?.(100, "finalizing");
+    const finalized = await this.unwrapData(
+      this.request<{ data: { deployment: PageDeployment } }>(
+        `/pages-deploy/uploads/${created.upload.id}/finalize`,
+        { method: "POST" }
+      )
+    );
+    this.invalidateCache("pages:");
+    return finalized.deployment;
+  }
+
+  async getPageDeployment(projectId: string, deploymentId: string): Promise<PageDeployment> {
+    return this.unwrapData(
+      this.request<{ data: PageDeployment }>(`/pages/${projectId}/deployments/${deploymentId}`)
+    );
+  }
+
+  async pinPageDeployment(projectId: string, deploymentId: string, pinned: boolean): Promise<void> {
+    await this.request(`/pages/${projectId}/deployments/${deploymentId}/pin`, {
+      method: "PATCH",
+      body: JSON.stringify({ pinned }),
+    });
+    this.invalidateCache("pages:");
+  }
+
+  async deletePageDeployment(projectId: string, deploymentId: string): Promise<void> {
+    await this.request(`/pages/${projectId}/deployments/${deploymentId}`, { method: "DELETE" });
+    this.invalidateCache("pages:");
+  }
+
+  async listPageTags(projectId: string): Promise<PageTag[]> {
+    return this.unwrapData(this.request<{ data: PageTag[] }>(`/pages/${projectId}/tags`));
+  }
+
+  async movePageTag(
+    projectId: string,
+    tag: string,
+    deploymentId: string
+  ): Promise<PageTagMoveResult> {
+    const result = await this.unwrapData(
+      this.request<{ data: PageTagMoveResult }>(
+        `/pages/${projectId}/tags/${encodeURIComponent(tag)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ deploymentId }),
+        }
+      )
+    );
+    this.invalidateCache("pages:");
+    return result;
+  }
+
+  async deletePageTag(projectId: string, tag: string): Promise<void> {
+    await this.request(`/pages/${projectId}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
+    this.invalidateCache("pages:");
+  }
+
+  async listPageDeployTokens(projectId: string): Promise<PageDeployToken[]> {
+    return this.unwrapData(this.request<{ data: PageDeployToken[] }>(`/pages/${projectId}/tokens`));
+  }
+
+  async createPageDeployToken(
+    projectId: string,
+    data: CreatePageDeployTokenRequest
+  ): Promise<PageDeployTokenCreated> {
+    const result = await this.unwrapData(
+      this.request<{ data: PageDeployTokenCreated }>(`/pages/${projectId}/tokens`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      })
+    );
+    this.invalidateCache("pages:");
+    return result;
+  }
+
+  async revokePageDeployToken(projectId: string, tokenId: string): Promise<void> {
+    await this.request(`/pages/${projectId}/tokens/${tokenId}`, { method: "DELETE" });
+    this.invalidateCache("pages:");
+  }
+
+  async getPageProfile(): Promise<PageProfile> {
+    return this.unwrapData(this.request<{ data: PageProfile }>("/pages/settings/profile"));
+  }
+
+  async getPageProfileOptions(): Promise<PageProfileOptions> {
+    return this.unwrapData(this.request<{ data: PageProfileOptions }>("/pages/settings/options"));
+  }
+
+  async updatePageProfile(
+    data: ConfigurePageProfileRequest | { enabled: false }
+  ): Promise<PageProfile> {
+    const result = await this.unwrapData(
+      this.request<{ data: PageProfile }>("/pages/settings/profile", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      })
+    );
+    this.invalidateCache("pages:");
+    return result;
   }
 
   async createFolder(data: { name: string; parentId?: string }): Promise<ProxyHostFolder> {

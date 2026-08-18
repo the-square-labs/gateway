@@ -14,6 +14,17 @@ import {
 } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
+  createAdditionalRouteRoute,
+  deleteAdditionalRouteRoute,
+  getAdditionalRouteRoute,
+  listAdditionalRoutesRoute,
+  retryAdditionalRouteRoute,
+  updateAdditionalRouteRoute,
+} from './additional-route.docs.js';
+import { AdditionalRouteService } from './additional-route.service.js';
+import { CreateAdditionalRouteSchema, UpdateAdditionalRouteSchema } from './additional-route.validation.js';
+import { redactPageTargetWithoutProjectAccess } from './page-target-visibility.js';
+import {
   createProxyHostRoute,
   deleteProxyHostRoute,
   getProxyHostBySlugRoute,
@@ -65,7 +76,12 @@ function canReadRawProxyConfig(scopes: string[], id: string) {
 }
 
 function serializeProxyHostForBrowser(host: Record<string, unknown>, scopes: string[], id: string) {
-  return canReadRawProxyConfig(scopes, id) ? host : redactRawProxyConfigForBrowser(host);
+  const scoped = redactPageTargetWithoutProjectAccess(host, scopes);
+  return canReadRawProxyConfig(scopes, id) ? scoped : redactRawProxyConfigForBrowser(scoped);
+}
+
+function serializeProxyHostForProgrammatic(host: Record<string, unknown>, scopes: string[]) {
+  return stripRawProxyConfigForProgrammatic(redactPageTargetWithoutProjectAccess(host, scopes));
 }
 
 proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('proxy:view') }, async (c) => {
@@ -76,10 +92,11 @@ proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('prox
     query,
     hasScope(scopes, 'proxy:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'proxy:view') }
   );
+  const scopedData = result.data.map((host) => redactPageTargetWithoutProjectAccess(host as any, scopes));
   if (isProgrammaticAuth(c)) {
-    return c.json({ ...result, data: stripRawProxyConfigArrayForProgrammatic(result.data as any[]) });
+    return c.json({ ...result, data: stripRawProxyConfigArrayForProgrammatic(scopedData as any[]) });
   }
-  return c.json(result);
+  return c.json({ ...result, data: scopedData });
 });
 
 proxyRoutes.openapi(getProxyHostBySlugRoute, async (c) => {
@@ -89,7 +106,7 @@ proxyRoutes.openapi(getProxyHostBySlugRoute, async (c) => {
   if (!hasScope(scopes, `proxy:view:${host.id}`)) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:view:${host.id}`);
   }
-  if (isProgrammaticAuth(c)) return c.json({ data: stripRawProxyConfigForProgrammatic(host as any) });
+  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, host.id) });
 });
 
@@ -97,8 +114,8 @@ proxyRoutes.openapi({ ...getProxyHostRoute, middleware: requireScopeForResource(
   const proxyService = container.resolve(ProxyService);
   const id = c.req.param('id')!;
   const host = await proxyService.getProxyHost(id);
-  if (isProgrammaticAuth(c)) return c.json({ data: stripRawProxyConfigForProgrammatic(host as any) });
   const scopes = c.get('effectiveScopes') || [];
+  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
 
@@ -175,6 +192,108 @@ proxyRoutes.delete(
   }
 );
 
+function serializeAdditionalRoute(route: Record<string, unknown>, scopes: string[]) {
+  const hostId = typeof route.proxyHostId === 'string' ? route.proxyHostId : null;
+  const visibleRoute =
+    hostId && hasScope(scopes, `proxy:advanced:${hostId}`) ? route : { ...route, advancedConfig: null };
+  if (route.targetKind !== 'pages') return visibleRoute;
+  const projectId = typeof route.pageProjectId === 'string' ? route.pageProjectId : null;
+  if (!projectId || !hasScope(scopes, `pages:view:${projectId}`)) {
+    return {
+      ...visibleRoute,
+      pageProjectId: null,
+      pageTagId: null,
+      activeDeploymentId: null,
+      includePath: null,
+      runtimeConfigPath: null,
+      runtimeConfigGeneration: 0,
+      pageProjectName: null,
+      pageProjectSlug: null,
+      pageProjectAppearanceColor: null,
+      pageTagName: null,
+    };
+  }
+  return visibleRoute;
+}
+
+proxyRoutes.openapi(
+  { ...listAdditionalRoutesRoute, middleware: requireScopeForResource('proxy:view', 'id') },
+  async (c) => {
+    const scopes = c.get('effectiveScopes') || [];
+    const rows = await container.resolve(AdditionalRouteService).list(c.req.param('id')!);
+    return c.json({ data: rows.map((row) => serializeAdditionalRoute(row as Record<string, unknown>, scopes)) });
+  }
+);
+
+proxyRoutes.openapi(
+  { ...createAdditionalRouteRoute, middleware: requireScopeForResource('proxy:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const scopes = c.get('effectiveScopes') || [];
+    const row = await container
+      .resolve(AdditionalRouteService)
+      .create(c.req.param('id')!, CreateAdditionalRouteSchema.parse(await c.req.json()), user.id, scopes);
+    const view = await container.resolve(AdditionalRouteService).present(row);
+    return c.json({ data: serializeAdditionalRoute(view as Record<string, unknown>, scopes) }, 201);
+  }
+);
+
+proxyRoutes.openapi(
+  { ...getAdditionalRouteRoute, middleware: requireScopeForResource('proxy:view', 'id') },
+  async (c) => {
+    const scopes = c.get('effectiveScopes') || [];
+    const row = await container.resolve(AdditionalRouteService).get(c.req.param('id')!, c.req.param('routeId')!);
+    const view = await container.resolve(AdditionalRouteService).present(row);
+    return c.json({ data: serializeAdditionalRoute(view as Record<string, unknown>, scopes) });
+  }
+);
+
+proxyRoutes.openapi(
+  { ...updateAdditionalRouteRoute, middleware: requireScopeForResource('proxy:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const scopes = c.get('effectiveScopes') || [];
+    const input = UpdateAdditionalRouteSchema.parse(await c.req.json());
+    if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
+      throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required');
+    }
+    const row = await container
+      .resolve(AdditionalRouteService)
+      .update(
+        c.req.param('id')!,
+        c.req.param('routeId')!,
+        input,
+        user.id,
+        scopes
+      );
+    const view = await container.resolve(AdditionalRouteService).present(row);
+    return c.json({ data: serializeAdditionalRoute(view as Record<string, unknown>, scopes) });
+  }
+);
+
+proxyRoutes.openapi(
+  { ...retryAdditionalRouteRoute, middleware: requireScopeForResource('proxy:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const scopes = c.get('effectiveScopes') || [];
+    const row = await container
+      .resolve(AdditionalRouteService)
+      .retry(c.req.param('id')!, c.req.param('routeId')!, user.id, scopes);
+    const view = await container.resolve(AdditionalRouteService).present(row);
+    return c.json({ data: serializeAdditionalRoute(view as Record<string, unknown>, scopes) });
+  }
+);
+
+proxyRoutes.openapi(
+  { ...deleteAdditionalRouteRoute, middleware: requireScopeForResource('proxy:edit', 'id') },
+  async (c) => {
+    await container
+      .resolve(AdditionalRouteService)
+      .remove(c.req.param('id')!, c.req.param('routeId')!, c.get('user')!.id);
+    return c.body(null, 204);
+  }
+);
+
 proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('proxy:create') }, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const user = c.get('user')!;
@@ -192,6 +311,12 @@ proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('pro
   if (input.advancedConfig && !hasScope(scopes, 'proxy:advanced')) {
     throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
   }
+  if (
+    input.upstreamKind === 'pages' &&
+    (!input.pageProjectId || !hasScope(scopes, `pages:view:${input.pageProjectId}`))
+  ) {
+    throw new AppError(403, 'FORBIDDEN', 'Viewing the selected Page Project is required');
+  }
   const bypassAdvancedValidation = hasScope(scopes, 'proxy:advanced:bypass');
   const bypassRawValidation = hasScope(scopes, 'proxy:raw:bypass');
   if (requestTogglesRawProxyConfig(input) && !hasScope(scopes, 'proxy:raw:toggle')) {
@@ -205,7 +330,7 @@ proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('pro
     bypassRawValidation,
     actorScopes: scopes,
   });
-  if (isProgrammaticAuth(c)) return c.json({ data: stripRawProxyConfigForProgrammatic(host as any) }, 201);
+  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) }, 201);
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, (host as any).id) }, 201);
 });
 
@@ -221,9 +346,24 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
     );
   }
   const scopes = c.get('effectiveScopes') || [];
+  const existing = await proxyService.getProxyHost(id);
+  const existingPageTarget = existing.pageTarget as { projectId?: unknown } | null | undefined;
+  if (
+    existing.upstreamKind === 'pages' &&
+    (typeof existingPageTarget?.projectId !== 'string' ||
+      !hasScope(scopes, `pages:view:${existingPageTarget.projectId}`))
+  ) {
+    throw new AppError(403, 'FORBIDDEN', 'Viewing the selected Page Project is required');
+  }
   const rawOnlyUpdate = requestOnlyUpdatesRawProxyConfig(input);
   if (!rawOnlyUpdate && !hasScope(scopes, `proxy:edit:${id}`)) {
     throw new AppError(403, 'FORBIDDEN', 'Editing proxy host settings requires proxy:edit scope');
+  }
+  if (
+    (input.pageProjectId !== undefined || input.pageTagId !== undefined) &&
+    (!input.pageProjectId || !input.pageTagId || !hasScope(scopes, `pages:view:${input.pageProjectId}`))
+  ) {
+    throw new AppError(403, 'FORBIDDEN', 'Viewing the selected Page Project is required');
   }
   if (input.advancedConfig && !hasScope(scopes, `proxy:advanced:${id}`)) {
     throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
@@ -245,7 +385,7 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
     bypassRawValidation,
     actorScopes: scopes,
   });
-  if (isProgrammaticAuth(c)) return c.json({ data: stripRawProxyConfigForProgrammatic(host as any) });
+  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
 
@@ -266,8 +406,8 @@ proxyRoutes.openapi({ ...toggleProxyHostRoute, middleware: requireScopeForResour
   const id = c.req.param('id')!;
   const { enabled } = ToggleProxyHostSchema.parse(await c.req.json());
   const host = await proxyService.toggleProxyHost(id, enabled, user.id);
-  if (isProgrammaticAuth(c)) return c.json({ data: stripRawProxyConfigForProgrammatic(host as any) });
   const scopes = c.get('effectiveScopes') || [];
+  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
 
@@ -279,8 +419,8 @@ proxyRoutes.openapi(
     const id = c.req.param('id')!;
     const { enabled } = ToggleProxyMaintenanceSchema.parse(await c.req.json());
     const host = await proxyService.toggleMaintenance(id, enabled, user.id);
-    if (isProgrammaticAuth(c)) return c.json({ data: stripRawProxyConfigForProgrammatic(host as any) });
     const scopes = c.get('effectiveScopes') || [];
+    if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
     return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
   }
 );

@@ -49,7 +49,7 @@ export const CreateProxyHostSchema = z
     domainNames: z.array(DomainNameSchema).min(1, 'At least one domain name is required'),
 
     // Upstream — proxy type
-    upstreamKind: z.enum(['manual', 'docker_container', 'docker_deployment']).default('manual'),
+    upstreamKind: z.enum(['manual', 'docker_container', 'docker_deployment', 'pages']).default('manual'),
     forwardHost: z
       .string()
       .min(1)
@@ -64,6 +64,8 @@ export const CreateProxyHostSchema = z
     dockerContainerPort: z.number().int().min(1).max(65535).optional(),
     dockerHostPort: z.number().int().min(1).max(65535).optional(),
     dockerProtocol: z.literal('tcp').optional(),
+    pageProjectId: z.string().uuid().optional(),
+    pageTagId: z.string().uuid().optional(),
 
     // SSL
     sslEnabled: z.boolean().default(false),
@@ -159,10 +161,33 @@ export const CreateProxyHostSchema = z
       }
     }
 
+    if (data.type === 'proxy' && data.upstreamKind === 'pages') {
+      for (const [field, value, message] of [
+        ['pageProjectId', data.pageProjectId, 'Page Project is required'],
+        ['pageTagId', data.pageTagId, 'Page Tag is required'],
+      ] as const) {
+        if (value === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [field] });
+      }
+      if (data.rawConfigEnabled || data.nginxTemplateId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Pages Routes require the managed proxy template',
+          path: ['upstreamKind'],
+        });
+      }
+      if (data.websocketSupport || data.healthCheckEnabled) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'WebSocket and upstream health checks are not available for static Pages Routes',
+          path: ['upstreamKind'],
+        });
+      }
+    }
+
     if (data.type !== 'proxy' && data.upstreamKind !== 'manual') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Docker upstreams are only available for proxy routes',
+        message: 'Managed upstreams are only available for proxy routes',
         path: ['upstreamKind'],
       });
     }
@@ -195,7 +220,7 @@ export const UpdateProxyHostSchema = z.object({
   nodeId: z.string().uuid().optional(),
   domainNames: z.array(DomainNameSchema).min(1, 'At least one domain name is required').optional(),
 
-  upstreamKind: z.enum(['manual', 'docker_container', 'docker_deployment']).optional(),
+  upstreamKind: z.enum(['manual', 'docker_container', 'docker_deployment', 'pages']).optional(),
 
   forwardHost: z
     .string()
@@ -212,6 +237,8 @@ export const UpdateProxyHostSchema = z.object({
   dockerContainerPort: z.number().int().min(1).max(65535).optional().nullable(),
   dockerHostPort: z.number().int().min(1).max(65535).optional().nullable(),
   dockerProtocol: z.literal('tcp').optional().nullable(),
+  pageProjectId: z.string().uuid().optional().nullable(),
+  pageTagId: z.string().uuid().optional().nullable(),
 
   sslEnabled: z.boolean().optional(),
   sslForced: z.boolean().optional(),

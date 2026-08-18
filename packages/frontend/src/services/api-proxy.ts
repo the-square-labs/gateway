@@ -1,15 +1,18 @@
 import type {
   CertificateDistributionState,
+  CreateProxyAdditionalRouteRequest,
   CreateProxyAdditionalSecureLinkRequest,
   CreateProxyHostRequest,
   FolderTreeNode,
   GroupedProxyHostsResponse,
   HealthStatus,
   PaginatedResponse,
+  ProxyAdditionalRoute,
   ProxyAdditionalSecureLink,
   ProxyHost,
   ProxyHostType,
   ProxySecureLinkStatus,
+  UpdateProxyAdditionalRouteRequest,
 } from "@/types";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
@@ -117,6 +120,63 @@ export function withProxyApi<TBase extends ApiClientBaseConstructor>(Base: TBase
 
     async deleteProxyAdditionalSecureLink(id: string, bindingId: string): Promise<void> {
       await this.request(`/proxy-hosts/${id}/additional-secure-links/${bindingId}`, {
+        method: "DELETE",
+      });
+    }
+
+    async listProxyAdditionalRoutes(id: string): Promise<ProxyAdditionalRoute[]> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalRoute[] }>(`/proxy-hosts/${id}/additional-routes`)
+      );
+    }
+
+    async getProxyAdditionalRoute(id: string, routeId: string): Promise<ProxyAdditionalRoute> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalRoute }>(
+          `/proxy-hosts/${id}/additional-routes/${routeId}`
+        )
+      );
+    }
+
+    async createProxyAdditionalRoute(
+      id: string,
+      data: CreateProxyAdditionalRouteRequest
+    ): Promise<ProxyAdditionalRoute> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalRoute }>(`/proxy-hosts/${id}/additional-routes`, {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateProxyAdditionalRoute(
+      id: string,
+      routeId: string,
+      data: UpdateProxyAdditionalRouteRequest
+    ): Promise<ProxyAdditionalRoute> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalRoute }>(
+          `/proxy-hosts/${id}/additional-routes/${routeId}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(data),
+          }
+        )
+      );
+    }
+
+    async retryProxyAdditionalRoute(id: string, routeId: string): Promise<ProxyAdditionalRoute> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalRoute }>(
+          `/proxy-hosts/${id}/additional-routes/${routeId}/retry`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async deleteProxyAdditionalRoute(id: string, routeId: string): Promise<void> {
+      await this.request(`/proxy-hosts/${id}/additional-routes/${routeId}`, {
         method: "DELETE",
       });
     }

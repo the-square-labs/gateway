@@ -5,7 +5,8 @@ export type ResourceFolderType =
   | "logging-environment"
   | "logging-schema"
   | "admin-user"
-  | "admin-group";
+  | "admin-group"
+  | "pages-project";
 
 export interface ResourceFolder {
   id: string;

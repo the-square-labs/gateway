@@ -42,6 +42,7 @@ const RESOURCE_TYPES: ResourceFolderType[] = [
   "logging-schema",
   "admin-user",
   "admin-group",
+  "pages-project",
 ];
 const EXPANDED_STORAGE_KEY = "resource-folder-expanded";
 
@@ -231,6 +232,8 @@ function listFolders(type: ResourceFolderType): Promise<ResourceFolderTreeNode[]
       return api.listAdminUserFolders();
     case "admin-group":
       return api.listAdminGroupFolders();
+    case "pages-project":
+      return api.listPageProjectFolders();
   }
 }
 
@@ -253,6 +256,8 @@ function createFolderByType(
       return api.createAdminUserFolder(data);
     case "admin-group":
       return api.createAdminGroupFolder(data);
+    case "pages-project":
+      return api.createPageProjectFolder(data);
   }
 }
 
@@ -276,6 +281,8 @@ function updateFolderByType(
       return api.updateAdminUserFolder(id, data);
     case "admin-group":
       return api.updateAdminGroupFolder(id, data);
+    case "pages-project":
+      return api.updatePageProjectFolder(id, data);
   }
 }
 
@@ -295,6 +302,8 @@ function deleteFolderByType(type: ResourceFolderType, id: string): Promise<void>
       return api.deleteAdminUserFolder(id);
     case "admin-group":
       return api.deleteAdminGroupFolder(id);
+    case "pages-project":
+      return api.deletePageProjectFolder(id);
   }
 }
 
@@ -317,6 +326,8 @@ function reorderFoldersByType(
       return api.reorderAdminUserFolders(items);
     case "admin-group":
       return api.reorderAdminGroupFolders(items);
+    case "pages-project":
+      return api.reorderPageProjectFolders(items);
   }
 }
 
@@ -340,6 +351,8 @@ function moveResourcesToFolderByType(
       return api.moveAdminUsersToFolder(ids, folderId);
     case "admin-group":
       return api.moveAdminGroupsToFolder(ids, folderId);
+    case "pages-project":
+      return api.movePageProjectsToFolder(ids, folderId);
   }
 }
 
@@ -362,5 +375,7 @@ function reorderResourcesByType(
       return api.reorderAdminUsers(items);
     case "admin-group":
       return api.reorderAdminGroups(items);
+    case "pages-project":
+      return api.reorderPageProjects(items);
   }
 }

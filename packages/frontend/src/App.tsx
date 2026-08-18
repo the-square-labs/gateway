@@ -64,6 +64,8 @@ import { OAuthError } from "@/pages/OAuthError";
 import { Profile } from "@/pages/Profile";
 import { ProxyHostDetail } from "@/pages/ProxyHostDetail";
 import { ProxyHosts } from "@/pages/ProxyHosts";
+import { PageProjectDetail } from "@/pages/pages/PageProjectDetail";
+import { Pages } from "@/pages/pages/Pages";
 import { Settings } from "@/pages/Settings";
 import { SetupWizardPage } from "@/pages/SetupWizard";
 import { SSLCertificates } from "@/pages/SSLCertificates";
@@ -99,6 +101,8 @@ const REALTIME_RECONCILIATION_CACHE_PREFIXES = [
   "req:/api/proxy-hosts",
   "req:/api/proxy-host-folders/grouped",
   "proxy:grouped",
+  "req:/api/pages",
+  "pages:",
   "req:/api/ssl-certificates",
   "ssl:list:",
   "req:/api/certificates",
@@ -444,6 +448,36 @@ function ProxyHostsPageGuard({ create = false }: { create?: boolean } = {}) {
   }
 
   return <ProxyHosts initialCreateDialogOpen={create} />;
+}
+
+function PagesPageGuard() {
+  const hasScope = useAuthStore((state) => state.hasScope);
+  const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
+  if (!hasScopedAccess("pages:view") && !hasScope("pages:folders:manage")) {
+    return <Navigate to="/" replace />;
+  }
+  return <Pages />;
+}
+
+function PageProjectDetailGuard() {
+  const { projectSlug } = useParams<{ projectSlug: string }>();
+  const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
+  const canAccess = hasScopedAccess("pages:view");
+  const resolved = useResolvedPageRoute(
+    canAccess && projectSlug ? `/pages/${projectSlug}` : undefined,
+    () => api.getPageProjectBySlug(projectSlug!),
+    (project) => ({
+      resourceType: "page-project",
+      resourceId: project.id,
+      scopeResourceId: project.id,
+      label: project.name,
+    })
+  );
+  if (!canAccess) return <Navigate to="/" replace />;
+  if (resolved.loading) return <DetailRouteLoading />;
+  if (resolved.error) return <DetailRouteFailure error={resolved.error} fallbackPath="/pages" />;
+  if (!resolved.data) return <Navigate to="/pages" replace />;
+  return <PageProjectDetail projectId={resolved.data.id} resolvedSlug={resolved.data.slug} />;
 }
 
 function CAsPageGuard() {
@@ -1300,6 +1334,8 @@ export default function App() {
               <Route path="/proxy-hosts" element={<ProxyHostsPageGuard />} />
               <Route path="/proxy-hosts/new" element={<ProxyHostsPageGuard create />} />
               <Route path="/proxy-hosts/:proxySlug/:tab?" element={<ProxyHostDetailGuard />} />
+              <Route path="/pages/:projectSlug/:tab?" element={<PageProjectDetailGuard />} />
+              <Route path="/pages" element={<PagesPageGuard />} />
               <Route path="/nginx-templates/new" element={<NginxTemplateEditGuard />} />
               <Route path="/nginx-templates/:id" element={<NginxTemplateEditGuard />} />
               <Route

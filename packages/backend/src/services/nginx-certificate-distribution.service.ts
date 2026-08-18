@@ -193,7 +193,9 @@ export class NginxCertificateDistributionService {
   }
 
   /** Ensure canonical material and an eligible node before a TLS config is activated. */
-  async prepareForHost(host: ProxyHostRow): Promise<PreparedTlsCertificate | null> {
+  async prepareForHost(
+    host: Pick<ProxyHostRow, 'sslEnabled' | 'sslCertificateId' | 'internalCertificateId' | 'nodeId'>
+  ): Promise<PreparedTlsCertificate | null> {
     const reference = referenceForHost(host);
     if (!reference) return null;
     const targetNodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
@@ -231,6 +233,48 @@ export class NginxCertificateDistributionService {
       keyPem: Buffer.from(material.keyPem),
       chainPem: Buffer.from(material.chainPem ?? ''),
     };
+  }
+
+  /** Deploy a certificate for a daemon-owned Pages preview config without exposing private material. */
+  async deployForPages(
+    nodeId: string,
+    certificateId: string
+  ): Promise<{ certificateId: string; certificateVersion: string }> {
+    const prepared = await this.prepareForHost({
+      sslEnabled: true,
+      sslCertificateId: certificateId,
+      internalCertificateId: null,
+      nodeId,
+    });
+    if (!prepared) throw new AppError(409, 'PAGES_CERTIFICATE_INVALID', 'Pages certificate is unavailable');
+    try {
+      await this.nodeDispatch.sendPagesCommand(prepared.nodeId, {
+        pagesDeployCertificate: {
+          certId: prepared.daemonCertId,
+          certPem: prepared.certificatePem,
+          keyPem: prepared.keyPem,
+          chainPem: prepared.chainPem,
+          version: prepared.version,
+          replicaGeneration: prepared.replicaGeneration,
+        },
+      });
+      await this.markReplicaById(prepared.assetId, prepared.nodeId, {
+        status: 'ready',
+        desiredVersion: prepared.version,
+        appliedVersion: prepared.version,
+        observedFingerprint: prepared.fingerprint,
+        cleanupAfter: null,
+        lastError: null,
+        lastVerifiedAt: new Date(),
+      });
+      return { certificateId: prepared.daemonCertId, certificateVersion: prepared.version };
+    } catch (error) {
+      await this.markReplicaById(prepared.assetId, prepared.nodeId, {
+        status: 'failed',
+        lastError: safeError(error),
+      });
+      throw new AppError(500, 'PAGES_CERTIFICATE_DEPLOY_FAILED', 'Failed to deploy the Pages certificate');
+    }
   }
 
   /** Atomically applies a TLS bundle and records only its confirmed deployment. */

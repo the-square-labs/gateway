@@ -43,6 +43,34 @@ describe("ProxyUpstreamTarget", () => {
     expect(screen.getByText("http://backend.internal:8080").tagName).toBe("SPAN");
   });
 
+  it("renders a Pages target with the Project appearance color", () => {
+    render(
+      <MemoryRouter>
+        <ProxyUpstreamTarget
+          linkToResource
+          host={{
+            type: "proxy",
+            upstreamKind: "pages",
+            forwardHost: null,
+            forwardPort: null,
+            forwardScheme: "http",
+            pageTarget: {
+              projectName: "Docs",
+              projectSlug: "docs",
+              projectAppearanceColor: "purple",
+              tagName: "production",
+            },
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole("link", { name: "Docs / production" });
+    expect(link).toHaveAttribute("href", "/pages/docs/tags");
+    expect(link.firstElementChild).toHaveClass("bg-violet-500/15");
+    expect(link.querySelector("svg")).toBeInTheDocument();
+  });
+
   it("links a Secure Link target badge to the Docker resource when requested", () => {
     useDockerStore.setState({
       dockerNodes: [makeNode({ id: "node-1", slug: "docker-one", type: "docker" })],

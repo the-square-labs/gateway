@@ -5,6 +5,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import type { DnsRecords } from '@/db/schema/domains.js';
 import { domains } from '@/db/schema/domains.js';
 import { nodes } from '@/db/schema/nodes.js';
+import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -14,6 +15,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CloudflareClient, CloudflareDnsRecordInput } from '@/modules/integrations/cloudflare-client.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { getEffectiveNginxIngressAddresses } from '@/modules/nodes/node-service-address.js';
+import type { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -100,6 +102,7 @@ export class DomainsService {
   private integrationsService?: IntegrationsService;
   private nodeRegistry?: NodeRegistryService;
   private proxyService?: ProxyService;
+  private pageProfileService?: PageProfileService;
   private ingressReconcileRunning = false;
   private ingressReconcileQueued = false;
   private cloudflareMigrationRunning = false;
@@ -139,6 +142,10 @@ export class DomainsService {
 
   setProxyService(service: ProxyService) {
     this.proxyService = service;
+  }
+
+  setPageProfileService(service: PageProfileService) {
+    this.pageProfileService = service;
   }
 
   startIngressTargetReconciliation() {
@@ -254,7 +261,7 @@ export class DomainsService {
           throw new AppError(
             409,
             'DOMAIN_INGRESS_EXTERNAL_DNS_NOT_READY',
-            'External DNS must point to the target before moving a Docker-backed proxy host',
+            'External DNS must point to the target before moving a managed Route',
             {
               domain: domain.domain,
               targetIps: this.getAllowedIngressAddresses(impact.targetNode),
@@ -291,6 +298,7 @@ export class DomainsService {
           skipDomainNodeValidation: true,
           preserveFormerNodeConfig: true,
           allowSystemNodeMove: true,
+          allowPagesNodeMove: host.upstreamKind === 'pages',
         });
         movedHostIds.push(host.id);
       }
@@ -305,6 +313,8 @@ export class DomainsService {
           updatedAt: new Date(),
         })
         .where(inArray(domains.id, domainIds));
+
+      await this.pageProfileService?.migrateDomainIngress(domainIds, impact.targetNode.id, userId);
 
       const migratedRows = await this.db.select().from(domains).where(inArray(domains.id, domainIds));
       for (const row of migratedRows) {
@@ -677,6 +687,17 @@ export class DomainsService {
     const [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new AppError(404, 'NOT_FOUND', 'Domain not found');
     if (row.isSystem) throw new AppError(409, 'SYSTEM_DOMAIN', 'System domains cannot be deleted');
+
+    const [pagesProfile] = await this.db
+      .select({ id: pageWildcardProfiles.id })
+      .from(pageWildcardProfiles)
+      .where(and(eq(pageWildcardProfiles.domainId, id), eq(pageWildcardProfiles.enabled, true)))
+      .limit(1);
+    if (pagesProfile) {
+      throw new AppError(409, 'DOMAIN_IN_USE', 'Domain is in use by the Pages wildcard profile', {
+        pagesProfileId: pagesProfile.id,
+      });
+    }
 
     const usage = await this.getUsage(row.domain);
 
@@ -1066,6 +1087,21 @@ export class DomainsService {
         });
       }
     }
+    try {
+      await this.pageProfileService?.cleanupMigratedSource(
+        impact.domains.map((domain) => domain.id),
+        impact.sourceNode.id
+      );
+    } catch (error) {
+      // Target delivery is already live and Gateway retains the canonical artifact.
+      // An unavailable source can therefore be cleaned after it reconnects.
+      cleanupPending = true;
+      logger.warn('Pages preview source cleanup was deferred', {
+        migrationId: impact.migrationId,
+        sourceNodeId: impact.sourceNode.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (cleanupPending) {
       await this.db
         .update(domains)
@@ -1125,8 +1161,11 @@ export class DomainsService {
         await this.proxyService?.updateProxyHost(hostId, { nodeId: impact.sourceNode.id }, userId, {
           skipDomainNodeValidation: true,
           allowSystemNodeMove: true,
+          allowPagesNodeMove: true,
         });
       }
+
+      await this.pageProfileService?.migrateDomainIngress(domainIds, impact.sourceNode.id, userId);
 
       const restoredRows = await this.db.select().from(domains).where(inArray(domains.id, domainIds));
       for (const row of restoredRows) {

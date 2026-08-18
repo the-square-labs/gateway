@@ -77,6 +77,11 @@ import { nodesRoutes } from '@/modules/nodes/nodes.routes.js';
 import { notificationRoutes } from '@/modules/notifications/notification.routes.js';
 import { oauthMetadataRoutes, oauthRoutes } from '@/modules/oauth/oauth.routes.js';
 import { finalizeSetupRoutes } from '@/modules/onboarding/finalize-setup.routes.js';
+import { PAGE_UPLOAD_CHUNK_MAX_BYTES } from '@/modules/pages/deployments/page-deployment.service.js';
+import { pageDeployRoutes } from '@/modules/pages/page-deploy.routes.js';
+import { pageManagementRoutes } from '@/modules/pages/page-management.routes.js';
+import { pageProjectRoutes } from '@/modules/pages/page-project.routes.js';
+import { pageProfileRoutes } from '@/modules/pages/profile/page-profile.routes.js';
 import { caRoutes } from '@/modules/pki/ca.routes.js';
 import { certRoutes } from '@/modules/pki/cert.routes.js';
 import { publicPkiRoutes } from '@/modules/pki/public.routes.js';
@@ -106,6 +111,7 @@ const GATEWAY_RESTARTING_SCRIPT_PATH = '/gateway-restarting.js';
 const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
+const PAGES_UPLOAD_CHUNK_PATH = /^\/api\/pages-deploy\/uploads\/[^/]+\/chunks$/;
 const DOCKER_ARCHIVE_IMPORT_PATH = /^\/api\/docker\/nodes\/[^/]+\/containers\/archive$/;
 const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
@@ -555,6 +561,7 @@ export function createApp(): GatewayAppRuntime {
     '/api/nodes/:id/files/uploads/:uploadId/chunks',
     requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
   );
+  app.use('/api/pages-deploy/uploads/:id/chunks', requestBodyLimit(PAGE_UPLOAD_CHUNK_MAX_BYTES));
   app.use('/api/setup/*', setupApiDisabledMiddleware);
   app.use(
     '/api/*',
@@ -563,6 +570,7 @@ export function createApp(): GatewayAppRuntime {
       (path) =>
         DOCKER_FILE_BODY_LIMIT_PATH.test(path) ||
         NODE_FILE_BODY_LIMIT_PATH.test(path) ||
+        PAGES_UPLOAD_CHUNK_PATH.test(path) ||
         DOCKER_ARCHIVE_IMPORT_PATH.test(path) ||
         isInferenceDataPlanePath(path)
     )
@@ -710,6 +718,10 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/nginx-templates', nginxTemplateRoutes);
   app.route('/api/ssl-certificates', sslRoutes);
   app.route('/api/domains', domainRoutes);
+  app.route('/api/pages', pageProjectRoutes);
+  app.route('/api/pages', pageManagementRoutes);
+  app.route('/api/pages/settings', pageProfileRoutes);
+  app.route('/api/pages-deploy', pageDeployRoutes);
   app.route('/api/access-lists', accessListRoutes);
   app.route('/api/monitoring', monitoringRoutes);
   app.route('/api/setup', setupRoutes);

@@ -27,6 +27,13 @@ describe("canonicalizeScopeSelection", () => {
     expect(scopeMatches(["inference:models:manage"], "inference:providers:view")).toBe(true);
   });
 
+  it("lets Project-scoped Pages managers read only the same Project", () => {
+    expect(scopeMatches(["pages:edit:project-1"], "pages:view:project-1")).toBe(true);
+    expect(scopeMatches(["pages:tags:manage:project-1"], "pages:view:project-1")).toBe(true);
+    expect(scopeMatches(["pages:edit:project-1"], "pages:view:project-2")).toBe(false);
+    expect(scopeMatches(["pages:settings:edit"], "pages:settings:view")).toBe(true);
+  });
+
   it("uses the canonical AI scope for Workspace and Inference access", () => {
     expect(scopeMatches(["feat:ai:use"], "feat:ai:use")).toBe(true);
     expect(scopeMatches([], "feat:ai:use")).toBe(false);

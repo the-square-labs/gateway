@@ -1,0 +1,545 @@
+import {
+  ArrowRightLeft,
+  Copy,
+  ExternalLink,
+  FileCode2,
+  Settings,
+  Trash2,
+  UploadCloud,
+} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
+import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
+import { CopyValueField } from "@/components/common/CopyValueField";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageTransition } from "@/components/common/PageTransition";
+import {
+  HEADER_ACTION_PRIORITY,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useRealtime } from "@/hooks/use-realtime";
+import { useUrlTab } from "@/hooks/use-url-tab";
+import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import type { PageProject, PageProjectPlacementOption } from "@/types";
+import { PageDeploymentsTab } from "./PageDeploymentsTab";
+import { PageManualDeployDialog } from "./PageManualDeployDialog";
+import { PageProjectSettingsDialog } from "./PageProjectSettingsTab";
+import { PageRuntimeConfigTab } from "./PageRuntimeConfigTab";
+import { PageTagsTab } from "./PageTagsTab";
+import { PageTokensTab } from "./PageTokensTab";
+
+const PROJECT_TABS = ["deployments", "tags", "tokens", "configuration"] as const;
+
+function MigrateProjectDialog({
+  open,
+  onOpenChange,
+  project,
+  onMigrated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  project: PageProject;
+  onMigrated: (project: PageProject) => void;
+}) {
+  const [nodes, setNodes] = useState<PageProjectPlacementOption[]>([]);
+  const [targetNodeId, setTargetNodeId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setTargetNodeId("");
+    setLoading(true);
+    void api
+      .listPageProjectPlacementOptions()
+      .then(setNodes)
+      .catch((error) =>
+        toast.error(error instanceof Error ? error.message : "Failed to load Pages nodes")
+      )
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const migrate = async () => {
+    if (!targetNodeId || saving) return;
+    setSaving(true);
+    try {
+      const updated = await api.migratePageProject(project.id, targetNodeId);
+      onMigrated(updated);
+      toast.success(
+        updated.migrationStatus === "cleanup_pending"
+          ? "Page Project migrated; source cleanup is pending"
+          : "Page Project migrated"
+      );
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to migrate Page Project");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Migrate Page Project</DialogTitle>
+          <DialogDescription>
+            Stage static releases and previews on another Pages-capable node, then switch this
+            Project.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <label htmlFor="page-project-migration-node" className="text-sm font-medium">
+            Target node
+          </label>
+          <Select value={targetNodeId} onValueChange={setTargetNodeId} disabled={loading || saving}>
+            <SelectTrigger id="page-project-migration-node">
+              <SelectValue placeholder={loading ? "Loading nodes…" : "Select a node"} />
+            </SelectTrigger>
+            <SelectContent>
+              {nodes
+                .filter((node) => node.id !== project.nodeId)
+                .map((node) => (
+                  <SelectItem
+                    key={node.id}
+                    value={node.id}
+                    disabled={node.status !== "online" || !node.pagesCapable}
+                  >
+                    {node.displayName || node.hostname}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={() => void migrate()} disabled={!targetNodeId || saving}>
+            <ArrowRightLeft className="h-4 w-4" />
+            {saving ? "Migrating…" : "Migrate"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeployInstructionsDialog({
+  open,
+  onOpenChange,
+  projectId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  projectId: string;
+}) {
+  const endpoint = `${window.location.origin}/api/pages-deploy/deployments`;
+  const payload = JSON.stringify(
+    {
+      projectId,
+      declaredSizeBytes: 0,
+      sha256: "…",
+      tag: "preview-mr-42",
+      source: { provider: "gitlab", mergeRequest: "!42" },
+    },
+    null,
+    2
+  );
+  const createCommand = `curl -X POST '${endpoint}' \\
+  -H 'Authorization: Bearer <deploy-token>' \\
+  -H 'Content-Type: application/json' \\
+  --data '${payload}'`;
+  const uploadCommand = `curl -X PUT '${window.location.origin}/api/pages-deploy/uploads/<upload-id>/chunks' \\
+  -H 'Authorization: Bearer <deploy-token>' \\
+  -H 'Content-Type: application/octet-stream' \\
+  -H 'Upload-Offset: 0' \\
+  --data-binary @site.tar.gz
+
+curl -X POST '${window.location.origin}/api/pages-deploy/uploads/<upload-id>/finalize' \\
+  -H 'Authorization: Bearer <deploy-token>'`;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Deploy instructions</DialogTitle>
+          <DialogDescription>
+            Upload a prebuilt static archive through the resumable webhook API.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Create Upload</label>
+            <p className="text-xs text-muted-foreground">
+              Create a resumable upload session using a Pages deploy token.
+            </p>
+            <CopyCodeBlock
+              label="Create upload command"
+              value={createCommand}
+              className="[&>p]:hidden"
+              codeClassName="min-h-0"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Upload and Finalize</label>
+            <p className="text-xs text-muted-foreground">
+              Replace upload-id with the ID returned above. Gateway then publishes latest and the
+              requested Tag.
+            </p>
+            <CopyCodeBlock
+              label="Upload and finalize commands"
+              value={uploadCommand}
+              className="[&>p]:hidden"
+              codeClassName="min-h-0"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Project ID</label>
+            <p className="text-xs text-muted-foreground">Use this ID in the deployment payload.</p>
+            <CopyValueField label="Project ID" value={projectId} />
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function PageProjectDetail({
+  projectId,
+  resolvedSlug,
+}: {
+  projectId: string;
+  resolvedSlug: string;
+}) {
+  const navigate = useNavigate();
+  const canView = useAuthStore((state) => state.hasScopedAccess(`pages:view:${projectId}`));
+  const canDeploy = useAuthStore((state) => state.hasScopedAccess(`pages:deploy:${projectId}`));
+  const canEdit = useAuthStore((state) => state.hasScopedAccess(`pages:edit:${projectId}`));
+  const canDelete = useAuthStore((state) => state.hasScopedAccess(`pages:delete:${projectId}`));
+  const [project, setProject] = useState<PageProject | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [deployInstructionsOpen, setDeployInstructionsOpen] = useState(false);
+  const [manualDeployOpen, setManualDeployOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [migrateOpen, setMigrateOpen] = useState(false);
+  const [migrationAvailable, setMigrationAvailable] = useState(false);
+  const [latestPreviewHostname, setLatestPreviewHostname] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useUrlTab(
+    [...PROJECT_TABS],
+    "deployments",
+    (tab) => `/pages/${resolvedSlug}/${tab}`
+  );
+
+  const load = useCallback(async () => {
+    try {
+      const next = await api.getPageProject(projectId);
+      setProject(next);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load Page Project");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (canView) void load();
+  }, [canView, load]);
+  useRealtime("pages.project.changed", (payload) => {
+    const event = payload as { projectId?: string };
+    if (!event.projectId || event.projectId === projectId) void load();
+  });
+
+  useEffect(() => {
+    if (!canEdit || !project) {
+      setMigrationAvailable(false);
+      return;
+    }
+
+    let active = true;
+    void api
+      .listPageProjectPlacementOptions()
+      .then((nodes) => {
+        if (!active) return;
+        setMigrationAvailable(
+          nodes.some(
+            (node) => node.id !== project.nodeId && node.status === "online" && node.pagesCapable
+          )
+        );
+      })
+      .catch(() => {
+        if (active) setMigrationAvailable(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [canEdit, project]);
+
+  const latestPreviewUrl = latestPreviewHostname
+    ? `${window.location.protocol}//${latestPreviewHostname}`
+    : null;
+  const visibleTab = PROJECT_TABS.includes(activeTab as (typeof PROJECT_TABS)[number])
+    ? activeTab
+    : "deployments";
+
+  const remove = async () => {
+    if (!project) return;
+    if (
+      !(await confirm({
+        title: "Delete Page Project",
+        description: `Delete ${project.name}? The Project must have no Deployments or Pages Routes.`,
+        confirmLabel: "Delete Project",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
+    try {
+      await api.deletePageProject(project.id);
+      toast.success("Page Project deleted");
+      navigate("/pages");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete Page Project");
+    }
+  };
+
+  if (!canView) return null;
+  if (loading && !project) return <DetailPageSkeleton label="Loading Page Project" tabs={4} />;
+  if (!project) return null;
+
+  return (
+    <PageTransition>
+      <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
+        <div className="flex shrink-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <PageBackButton onClick={() => navigate("/pages")} label="Back to Pages" />
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 className="min-w-0 truncate text-2xl font-bold">{project.name}</h1>
+                <Badge variant="secondary" size="inline">
+                  Pages Project
+                </Badge>
+              </div>
+              <p className="truncate text-sm text-muted-foreground">
+                {project.slug}
+                {project.description ? ` · ${project.description}` : ""}
+              </p>
+            </div>
+          </div>
+          <ResponsiveHeaderActions
+            actions={[
+              ...(canDeploy
+                ? [
+                    {
+                      id: "deploy",
+                      label: "Deploy",
+                      icon: <UploadCloud className="h-4 w-4" />,
+                      onClick: () => setManualDeployOpen(true),
+                      priority: HEADER_ACTION_PRIORITY.primary,
+                    },
+                    {
+                      id: "deploy-instructions",
+                      label: "Deploy instructions",
+                      icon: <FileCode2 className="h-4 w-4" />,
+                      onClick: () => setDeployInstructionsOpen(true),
+                      alwaysOverflow: true,
+                      priority: 20,
+                    },
+                  ]
+                : []),
+              ...(canEdit
+                ? [
+                    {
+                      id: "project-settings",
+                      label: "Settings",
+                      icon: <Settings className="h-4 w-4" />,
+                      onClick: () => setSettingsOpen(true),
+                      priority: 50,
+                    },
+                    {
+                      id: "migrate-project",
+                      label: "Migrate",
+                      icon: <ArrowRightLeft className="h-4 w-4" />,
+                      onClick: () => setMigrateOpen(true),
+                      disabled: !migrationAvailable,
+                      disabledReason: "No other Pages-capable node is available",
+                      alwaysOverflow: true,
+                      priority: 10,
+                    },
+                  ]
+                : []),
+              ...(latestPreviewUrl
+                ? [
+                    {
+                      id: "copy-latest-preview",
+                      label: "Copy latest preview",
+                      icon: <Copy className="h-4 w-4" />,
+                      onClick: () => {
+                        void navigator.clipboard?.writeText(latestPreviewUrl);
+                        toast.success("Copied");
+                      },
+                      priority: 40,
+                    },
+                  ]
+                : []),
+              ...(canDelete
+                ? [
+                    {
+                      id: "delete-project",
+                      label: "Delete project",
+                      icon: <Trash2 className="h-4 w-4" />,
+                      onClick: () => void remove(),
+                      destructive: true,
+                      separatorBefore: true,
+                    },
+                  ]
+                : []),
+            ]}
+          >
+            {canDeploy && (
+              <Button onClick={() => setManualDeployOpen(true)}>
+                <UploadCloud className="h-4 w-4" />
+                Deploy
+              </Button>
+            )}
+            {canDeploy && (
+              <Button variant="outline" onClick={() => setDeployInstructionsOpen(true)}>
+                <FileCode2 className="h-4 w-4" />
+                Deploy instructions
+              </Button>
+            )}
+            {canEdit && (
+              <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+                <Settings className="h-4 w-4" />
+                Settings
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                variant="outline"
+                onClick={() => setMigrateOpen(true)}
+                disabled={!migrationAvailable}
+              >
+                <ArrowRightLeft className="h-4 w-4" />
+                Migrate
+              </Button>
+            )}
+            {latestPreviewUrl && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(latestPreviewUrl);
+                  toast.success("Copied");
+                }}
+              >
+                <Copy className="h-4 w-4" />
+                Copy preview
+              </Button>
+            )}
+            {canDelete && (
+              <Button variant="destructive" onClick={() => void remove()}>
+                <Trash2 className="h-4 w-4" />
+                Delete project
+              </Button>
+            )}
+          </ResponsiveHeaderActions>
+        </div>
+
+        {latestPreviewUrl && (
+          <CopyValueField
+            label="Latest immutable preview"
+            value={latestPreviewHostname ?? latestPreviewUrl}
+            copyValue={latestPreviewUrl}
+            actions={
+              <Button asChild variant="ghost" size="icon" className="rounded-none border-l">
+                <a
+                  href={latestPreviewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Open preview"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </Button>
+            }
+          />
+        )}
+
+        <Tabs
+          value={visibleTab}
+          onValueChange={setActiveTab}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <TabsList className="shrink-0">
+            <TabsTrigger value="deployments">Deployments</TabsTrigger>
+            <TabsTrigger value="tags">Tags</TabsTrigger>
+            <TabsTrigger value="tokens">Deploy tokens</TabsTrigger>
+            <TabsTrigger value="configuration">Configuration</TabsTrigger>
+          </TabsList>
+          <TabsContent value="deployments" className="pb-0">
+            <PageDeploymentsTab
+              projectId={project.id}
+              onLatestPreviewChange={setLatestPreviewHostname}
+            />
+          </TabsContent>
+          <TabsContent value="tags" className="pb-0">
+            <PageTagsTab projectId={project.id} />
+          </TabsContent>
+          <TabsContent value="tokens" className="pb-0">
+            <PageTokensTab projectId={project.id} />
+          </TabsContent>
+          <TabsContent value="configuration" className="flex min-h-0 flex-1 flex-col pb-0">
+            <PageRuntimeConfigTab projectId={project.id} />
+          </TabsContent>
+        </Tabs>
+      </div>
+      <DeployInstructionsDialog
+        open={deployInstructionsOpen}
+        onOpenChange={setDeployInstructionsOpen}
+        projectId={project.id}
+      />
+      <PageManualDeployDialog
+        open={manualDeployOpen}
+        onOpenChange={setManualDeployOpen}
+        projectId={project.id}
+        onUploaded={() => setActiveTab("deployments")}
+      />
+      <PageProjectSettingsDialog
+        project={project}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        onProjectChange={setProject}
+      />
+      <MigrateProjectDialog
+        project={project}
+        open={migrateOpen}
+        onOpenChange={setMigrateOpen}
+        onMigrated={setProject}
+      />
+    </PageTransition>
+  );
+}

@@ -59,7 +59,6 @@ interface CreateProxyHostDialogProps {
   /** Called on successful create/update with the host ID and returned host payload when available. */
   onSuccess?: (hostId: string, host?: ProxyHost) => void;
 }
-
 interface NodeOption {
   id: string;
   hostname: string;

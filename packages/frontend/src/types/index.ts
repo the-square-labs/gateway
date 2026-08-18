@@ -43,6 +43,7 @@ export {
 } from "./nodes";
 export type * from "./notifications";
 export type * from "./onboarding";
+export type * from "./pages";
 export type * from "./pki";
 export type * from "./proxy";
 export type * from "./resource-folders";

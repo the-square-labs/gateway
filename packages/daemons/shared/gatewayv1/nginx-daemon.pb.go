@@ -21,6 +21,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type PagesRuntimeConfigBindingKind int32
+
+const (
+	PagesRuntimeConfigBindingKind_PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED PagesRuntimeConfigBindingKind = 0
+	PagesRuntimeConfigBindingKind_PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE       PagesRuntimeConfigBindingKind = 1
+	PagesRuntimeConfigBindingKind_PAGES_RUNTIME_CONFIG_BINDING_KIND_PREVIEW     PagesRuntimeConfigBindingKind = 2
+)
+
+// Enum value maps for PagesRuntimeConfigBindingKind.
+var (
+	PagesRuntimeConfigBindingKind_name = map[int32]string{
+		0: "PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED",
+		1: "PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE",
+		2: "PAGES_RUNTIME_CONFIG_BINDING_KIND_PREVIEW",
+	}
+	PagesRuntimeConfigBindingKind_value = map[string]int32{
+		"PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED": 0,
+		"PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE":       1,
+		"PAGES_RUNTIME_CONFIG_BINDING_KIND_PREVIEW":     2,
+	}
+)
+
+func (x PagesRuntimeConfigBindingKind) Enum() *PagesRuntimeConfigBindingKind {
+	p := new(PagesRuntimeConfigBindingKind)
+	*p = x
+	return p
+}
+
+func (x PagesRuntimeConfigBindingKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PagesRuntimeConfigBindingKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_gateway_v1_nginx_daemon_proto_enumTypes[0].Descriptor()
+}
+
+func (PagesRuntimeConfigBindingKind) Type() protoreflect.EnumType {
+	return &file_gateway_v1_nginx_daemon_proto_enumTypes[0]
+}
+
+func (x PagesRuntimeConfigBindingKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PagesRuntimeConfigBindingKind.Descriptor instead.
+func (PagesRuntimeConfigBindingKind) EnumDescriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{0}
+}
+
 type EnrollRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
@@ -1514,6 +1563,21 @@ type GatewayCommand struct {
 	//	*GatewayCommand_SyncProxySecureLinks
 	//	*GatewayCommand_ProbeProxySecureLink
 	//	*GatewayCommand_DockerRuntime
+	//	*GatewayCommand_PagesUploadInit
+	//	*GatewayCommand_PagesUploadChunk
+	//	*GatewayCommand_PagesUploadFinalize
+	//	*GatewayCommand_PagesVerifyRelease
+	//	*GatewayCommand_PagesMaterializePreview
+	//	*GatewayCommand_PagesRemovePreview
+	//	*GatewayCommand_PagesActivateTagRoute
+	//	*GatewayCommand_PagesDeactivateTagRoute
+	//	*GatewayCommand_PagesCleanupDeployment
+	//	*GatewayCommand_PagesInventory
+	//	*GatewayCommand_PagesStoragePreflight
+	//	*GatewayCommand_PagesDeployCertificate
+	//	*GatewayCommand_PagesStageRuntimeConfig
+	//	*GatewayCommand_PagesActivateRuntimeConfig
+	//	*GatewayCommand_PagesRemoveRuntimeConfig
 	Payload       isGatewayCommand_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1914,6 +1978,141 @@ func (x *GatewayCommand) GetDockerRuntime() *DockerRuntimeCommand {
 	return nil
 }
 
+func (x *GatewayCommand) GetPagesUploadInit() *PagesUploadInitCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesUploadInit); ok {
+			return x.PagesUploadInit
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesUploadChunk() *PagesUploadChunkCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesUploadChunk); ok {
+			return x.PagesUploadChunk
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesUploadFinalize() *PagesUploadFinalizeCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesUploadFinalize); ok {
+			return x.PagesUploadFinalize
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesVerifyRelease() *PagesVerifyReleaseCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesVerifyRelease); ok {
+			return x.PagesVerifyRelease
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesMaterializePreview() *PagesMaterializePreviewCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesMaterializePreview); ok {
+			return x.PagesMaterializePreview
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesRemovePreview() *PagesRemovePreviewCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesRemovePreview); ok {
+			return x.PagesRemovePreview
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesActivateTagRoute() *PagesActivateTagRouteCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesActivateTagRoute); ok {
+			return x.PagesActivateTagRoute
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesDeactivateTagRoute() *PagesDeactivateTagRouteCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesDeactivateTagRoute); ok {
+			return x.PagesDeactivateTagRoute
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesCleanupDeployment() *PagesCleanupDeploymentCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesCleanupDeployment); ok {
+			return x.PagesCleanupDeployment
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesInventory() *PagesInventoryCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesInventory); ok {
+			return x.PagesInventory
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesStoragePreflight() *PagesStoragePreflightCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesStoragePreflight); ok {
+			return x.PagesStoragePreflight
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesDeployCertificate() *PagesDeployCertificateCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesDeployCertificate); ok {
+			return x.PagesDeployCertificate
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesStageRuntimeConfig() *PagesStageRuntimeConfigCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesStageRuntimeConfig); ok {
+			return x.PagesStageRuntimeConfig
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesActivateRuntimeConfig() *PagesActivateRuntimeConfigCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesActivateRuntimeConfig); ok {
+			return x.PagesActivateRuntimeConfig
+		}
+	}
+	return nil
+}
+
+func (x *GatewayCommand) GetPagesRemoveRuntimeConfig() *PagesRemoveRuntimeConfigCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayCommand_PagesRemoveRuntimeConfig); ok {
+			return x.PagesRemoveRuntimeConfig
+		}
+	}
+	return nil
+}
+
 type isGatewayCommand_Payload interface {
 	isGatewayCommand_Payload()
 }
@@ -2084,6 +2283,71 @@ type GatewayCommand_DockerRuntime struct {
 	DockerRuntime *DockerRuntimeCommand `protobuf:"bytes,41,opt,name=docker_runtime,json=dockerRuntime,proto3,oneof"`
 }
 
+type GatewayCommand_PagesUploadInit struct {
+	// Gateway Pages v1. Nginx daemon accepts these only as its bounded Pages
+	// runtime, which owns all paths below nginx.pages_root.
+	PagesUploadInit *PagesUploadInitCommand `protobuf:"bytes,42,opt,name=pages_upload_init,json=pagesUploadInit,proto3,oneof"`
+}
+
+type GatewayCommand_PagesUploadChunk struct {
+	PagesUploadChunk *PagesUploadChunkCommand `protobuf:"bytes,43,opt,name=pages_upload_chunk,json=pagesUploadChunk,proto3,oneof"`
+}
+
+type GatewayCommand_PagesUploadFinalize struct {
+	PagesUploadFinalize *PagesUploadFinalizeCommand `protobuf:"bytes,44,opt,name=pages_upload_finalize,json=pagesUploadFinalize,proto3,oneof"`
+}
+
+type GatewayCommand_PagesVerifyRelease struct {
+	PagesVerifyRelease *PagesVerifyReleaseCommand `protobuf:"bytes,45,opt,name=pages_verify_release,json=pagesVerifyRelease,proto3,oneof"`
+}
+
+type GatewayCommand_PagesMaterializePreview struct {
+	PagesMaterializePreview *PagesMaterializePreviewCommand `protobuf:"bytes,46,opt,name=pages_materialize_preview,json=pagesMaterializePreview,proto3,oneof"`
+}
+
+type GatewayCommand_PagesRemovePreview struct {
+	PagesRemovePreview *PagesRemovePreviewCommand `protobuf:"bytes,47,opt,name=pages_remove_preview,json=pagesRemovePreview,proto3,oneof"`
+}
+
+type GatewayCommand_PagesActivateTagRoute struct {
+	PagesActivateTagRoute *PagesActivateTagRouteCommand `protobuf:"bytes,48,opt,name=pages_activate_tag_route,json=pagesActivateTagRoute,proto3,oneof"`
+}
+
+type GatewayCommand_PagesDeactivateTagRoute struct {
+	PagesDeactivateTagRoute *PagesDeactivateTagRouteCommand `protobuf:"bytes,49,opt,name=pages_deactivate_tag_route,json=pagesDeactivateTagRoute,proto3,oneof"`
+}
+
+type GatewayCommand_PagesCleanupDeployment struct {
+	PagesCleanupDeployment *PagesCleanupDeploymentCommand `protobuf:"bytes,50,opt,name=pages_cleanup_deployment,json=pagesCleanupDeployment,proto3,oneof"`
+}
+
+type GatewayCommand_PagesInventory struct {
+	PagesInventory *PagesInventoryCommand `protobuf:"bytes,51,opt,name=pages_inventory,json=pagesInventory,proto3,oneof"`
+}
+
+type GatewayCommand_PagesStoragePreflight struct {
+	PagesStoragePreflight *PagesStoragePreflightCommand `protobuf:"bytes,52,opt,name=pages_storage_preflight,json=pagesStoragePreflight,proto3,oneof"`
+}
+
+type GatewayCommand_PagesDeployCertificate struct {
+	PagesDeployCertificate *PagesDeployCertificateCommand `protobuf:"bytes,53,opt,name=pages_deploy_certificate,json=pagesDeployCertificate,proto3,oneof"`
+}
+
+type GatewayCommand_PagesStageRuntimeConfig struct {
+	// Gateway Pages runtime configuration v1. These commands only accept
+	// opaque route IDs or validated preview hostnames; the daemon derives all
+	// runtime-config paths below nginx.pages_root.
+	PagesStageRuntimeConfig *PagesStageRuntimeConfigCommand `protobuf:"bytes,54,opt,name=pages_stage_runtime_config,json=pagesStageRuntimeConfig,proto3,oneof"`
+}
+
+type GatewayCommand_PagesActivateRuntimeConfig struct {
+	PagesActivateRuntimeConfig *PagesActivateRuntimeConfigCommand `protobuf:"bytes,55,opt,name=pages_activate_runtime_config,json=pagesActivateRuntimeConfig,proto3,oneof"`
+}
+
+type GatewayCommand_PagesRemoveRuntimeConfig struct {
+	PagesRemoveRuntimeConfig *PagesRemoveRuntimeConfigCommand `protobuf:"bytes,56,opt,name=pages_remove_runtime_config,json=pagesRemoveRuntimeConfig,proto3,oneof"`
+}
+
 func (*GatewayCommand_ApplyConfig) isGatewayCommand_Payload() {}
 
 func (*GatewayCommand_RemoveConfig) isGatewayCommand_Payload() {}
@@ -2162,6 +2426,914 @@ func (*GatewayCommand_ProbeProxySecureLink) isGatewayCommand_Payload() {}
 
 func (*GatewayCommand_DockerRuntime) isGatewayCommand_Payload() {}
 
+func (*GatewayCommand_PagesUploadInit) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesUploadChunk) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesUploadFinalize) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesVerifyRelease) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesMaterializePreview) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesRemovePreview) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesActivateTagRoute) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesDeactivateTagRoute) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesCleanupDeployment) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesInventory) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesStoragePreflight) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesDeployCertificate) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesStageRuntimeConfig) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesActivateRuntimeConfig) isGatewayCommand_Payload() {}
+
+func (*GatewayCommand_PagesRemoveRuntimeConfig) isGatewayCommand_Payload() {}
+
+// Gateway Pages v1 commands intentionally expose no operator-controlled
+// filesystem paths or nginx snippets. IDs are opaque UUIDs and hostnames are
+// DNS names validated by the daemon. The daemon derives all locations from its
+// configured Pages root and its nginx config directory.
+type PagesUploadInitCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UploadId      string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
+	DeploymentId  string                 `protobuf:"bytes,2,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	ExpectedSize  int64                  `protobuf:"varint,3,opt,name=expected_size,json=expectedSize,proto3" json:"expected_size,omitempty"`
+	Sha256        string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesUploadInitCommand) Reset() {
+	*x = PagesUploadInitCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesUploadInitCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesUploadInitCommand) ProtoMessage() {}
+
+func (x *PagesUploadInitCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesUploadInitCommand.ProtoReflect.Descriptor instead.
+func (*PagesUploadInitCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *PagesUploadInitCommand) GetUploadId() string {
+	if x != nil {
+		return x.UploadId
+	}
+	return ""
+}
+
+func (x *PagesUploadInitCommand) GetDeploymentId() string {
+	if x != nil {
+		return x.DeploymentId
+	}
+	return ""
+}
+
+func (x *PagesUploadInitCommand) GetExpectedSize() int64 {
+	if x != nil {
+		return x.ExpectedSize
+	}
+	return 0
+}
+
+func (x *PagesUploadInitCommand) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+type PagesUploadChunkCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UploadId      string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
+	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Content       []byte                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesUploadChunkCommand) Reset() {
+	*x = PagesUploadChunkCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesUploadChunkCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesUploadChunkCommand) ProtoMessage() {}
+
+func (x *PagesUploadChunkCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesUploadChunkCommand.ProtoReflect.Descriptor instead.
+func (*PagesUploadChunkCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *PagesUploadChunkCommand) GetUploadId() string {
+	if x != nil {
+		return x.UploadId
+	}
+	return ""
+}
+
+func (x *PagesUploadChunkCommand) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *PagesUploadChunkCommand) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+type PagesUploadFinalizeCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UploadId      string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
+	DeploymentId  string                 `protobuf:"bytes,2,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesUploadFinalizeCommand) Reset() {
+	*x = PagesUploadFinalizeCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesUploadFinalizeCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesUploadFinalizeCommand) ProtoMessage() {}
+
+func (x *PagesUploadFinalizeCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesUploadFinalizeCommand.ProtoReflect.Descriptor instead.
+func (*PagesUploadFinalizeCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *PagesUploadFinalizeCommand) GetUploadId() string {
+	if x != nil {
+		return x.UploadId
+	}
+	return ""
+}
+
+func (x *PagesUploadFinalizeCommand) GetDeploymentId() string {
+	if x != nil {
+		return x.DeploymentId
+	}
+	return ""
+}
+
+type PagesVerifyReleaseCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeploymentId  string                 `protobuf:"bytes,1,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	Sha256        string                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesVerifyReleaseCommand) Reset() {
+	*x = PagesVerifyReleaseCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesVerifyReleaseCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesVerifyReleaseCommand) ProtoMessage() {}
+
+func (x *PagesVerifyReleaseCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesVerifyReleaseCommand.ProtoReflect.Descriptor instead.
+func (*PagesVerifyReleaseCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PagesVerifyReleaseCommand) GetDeploymentId() string {
+	if x != nil {
+		return x.DeploymentId
+	}
+	return ""
+}
+
+func (x *PagesVerifyReleaseCommand) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+// Creates or atomically updates the fixed immutable preview server for one
+// stored deployment. profile_id is exactly the v1 singleton `default`.
+// certificate_id and certificate_version are both empty for HTTP-only; when
+// supplied, the config references that immutable certificate version directly.
+type PagesMaterializePreviewCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProfileId     string                 `protobuf:"bytes,1,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
+	DeploymentId  string                 `protobuf:"bytes,2,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	CertificateId string                 `protobuf:"bytes,4,opt,name=certificate_id,json=certificateId,proto3" json:"certificate_id,omitempty"`
+	// Required together with certificate_id. Pages previews deliberately point
+	// at an immutable version, so a failed config switch keeps serving the old
+	// certificate instead of observing a changed current pointer on a later
+	// unrelated reload.
+	CertificateVersion string `protobuf:"bytes,5,opt,name=certificate_version,json=certificateVersion,proto3" json:"certificate_version,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *PagesMaterializePreviewCommand) Reset() {
+	*x = PagesMaterializePreviewCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesMaterializePreviewCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesMaterializePreviewCommand) ProtoMessage() {}
+
+func (x *PagesMaterializePreviewCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesMaterializePreviewCommand.ProtoReflect.Descriptor instead.
+func (*PagesMaterializePreviewCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PagesMaterializePreviewCommand) GetProfileId() string {
+	if x != nil {
+		return x.ProfileId
+	}
+	return ""
+}
+
+func (x *PagesMaterializePreviewCommand) GetDeploymentId() string {
+	if x != nil {
+		return x.DeploymentId
+	}
+	return ""
+}
+
+func (x *PagesMaterializePreviewCommand) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *PagesMaterializePreviewCommand) GetCertificateId() string {
+	if x != nil {
+		return x.CertificateId
+	}
+	return ""
+}
+
+func (x *PagesMaterializePreviewCommand) GetCertificateVersion() string {
+	if x != nil {
+		return x.CertificateVersion
+	}
+	return ""
+}
+
+// Stages and atomically activates a versioned certificate for a Pages-only
+// preview. Gateway obtains version and replica_generation from its existing
+// certificate distribution state. This must be used instead of deploy_cert,
+// whose legacy layout has no current/versions tree.
+type PagesDeployCertificateCommand struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	CertId            string                 `protobuf:"bytes,1,opt,name=cert_id,json=certId,proto3" json:"cert_id,omitempty"`
+	CertPem           []byte                 `protobuf:"bytes,2,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	KeyPem            []byte                 `protobuf:"bytes,3,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
+	ChainPem          []byte                 `protobuf:"bytes,4,opt,name=chain_pem,json=chainPem,proto3" json:"chain_pem,omitempty"`
+	Version           string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
+	ReplicaGeneration string                 `protobuf:"bytes,6,opt,name=replica_generation,json=replicaGeneration,proto3" json:"replica_generation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PagesDeployCertificateCommand) Reset() {
+	*x = PagesDeployCertificateCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesDeployCertificateCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesDeployCertificateCommand) ProtoMessage() {}
+
+func (x *PagesDeployCertificateCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesDeployCertificateCommand.ProtoReflect.Descriptor instead.
+func (*PagesDeployCertificateCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PagesDeployCertificateCommand) GetCertId() string {
+	if x != nil {
+		return x.CertId
+	}
+	return ""
+}
+
+func (x *PagesDeployCertificateCommand) GetCertPem() []byte {
+	if x != nil {
+		return x.CertPem
+	}
+	return nil
+}
+
+func (x *PagesDeployCertificateCommand) GetKeyPem() []byte {
+	if x != nil {
+		return x.KeyPem
+	}
+	return nil
+}
+
+func (x *PagesDeployCertificateCommand) GetChainPem() []byte {
+	if x != nil {
+		return x.ChainPem
+	}
+	return nil
+}
+
+func (x *PagesDeployCertificateCommand) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *PagesDeployCertificateCommand) GetReplicaGeneration() string {
+	if x != nil {
+		return x.ReplicaGeneration
+	}
+	return ""
+}
+
+type PagesRemovePreviewCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Hostname      string                 `protobuf:"bytes,1,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesRemovePreviewCommand) Reset() {
+	*x = PagesRemovePreviewCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesRemovePreviewCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesRemovePreviewCommand) ProtoMessage() {}
+
+func (x *PagesRemovePreviewCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesRemovePreviewCommand.ProtoReflect.Descriptor instead.
+func (*PagesRemovePreviewCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *PagesRemovePreviewCommand) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+// Writes an atomically switched root fragment that a normal Gateway Route
+// includes from <nginx.config_dir>/pages/routes/<route_id>.inc. The fragment
+// permits the Route to retain its existing TLS, ACL, headers, rewrites and
+// other host-level settings while a Tag moves between immutable deployments.
+// On success CommandResult.data is JSON with the daemon-derived includePath;
+// Gateway validates its fixed /pages/routes/<route UUID>.inc suffix before
+// placing it in a generated host config.
+type PagesActivateTagRouteCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RouteId       string                 `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	DeploymentId  string                 `protobuf:"bytes,2,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesActivateTagRouteCommand) Reset() {
+	*x = PagesActivateTagRouteCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesActivateTagRouteCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesActivateTagRouteCommand) ProtoMessage() {}
+
+func (x *PagesActivateTagRouteCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesActivateTagRouteCommand.ProtoReflect.Descriptor instead.
+func (*PagesActivateTagRouteCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PagesActivateTagRouteCommand) GetRouteId() string {
+	if x != nil {
+		return x.RouteId
+	}
+	return ""
+}
+
+func (x *PagesActivateTagRouteCommand) GetDeploymentId() string {
+	if x != nil {
+		return x.DeploymentId
+	}
+	return ""
+}
+
+type PagesDeactivateTagRouteCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RouteId       string                 `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesDeactivateTagRouteCommand) Reset() {
+	*x = PagesDeactivateTagRouteCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesDeactivateTagRouteCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesDeactivateTagRouteCommand) ProtoMessage() {}
+
+func (x *PagesDeactivateTagRouteCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesDeactivateTagRouteCommand.ProtoReflect.Descriptor instead.
+func (*PagesDeactivateTagRouteCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *PagesDeactivateTagRouteCommand) GetRouteId() string {
+	if x != nil {
+		return x.RouteId
+	}
+	return ""
+}
+
+// Deletes a materialized release only after its daemon-owned preview and tag
+// route fragments no longer reference it.
+type PagesCleanupDeploymentCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeploymentId  string                 `protobuf:"bytes,1,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesCleanupDeploymentCommand) Reset() {
+	*x = PagesCleanupDeploymentCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesCleanupDeploymentCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesCleanupDeploymentCommand) ProtoMessage() {}
+
+func (x *PagesCleanupDeploymentCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesCleanupDeploymentCommand.ProtoReflect.Descriptor instead.
+func (*PagesCleanupDeploymentCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *PagesCleanupDeploymentCommand) GetDeploymentId() string {
+	if x != nil {
+		return x.DeploymentId
+	}
+	return ""
+}
+
+type PagesInventoryCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesInventoryCommand) Reset() {
+	*x = PagesInventoryCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesInventoryCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesInventoryCommand) ProtoMessage() {}
+
+func (x *PagesInventoryCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesInventoryCommand.ProtoReflect.Descriptor instead.
+func (*PagesInventoryCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{25}
+}
+
+type PagesStoragePreflightCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequiredBytes int64                  `protobuf:"varint,1,opt,name=required_bytes,json=requiredBytes,proto3" json:"required_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesStoragePreflightCommand) Reset() {
+	*x = PagesStoragePreflightCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesStoragePreflightCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesStoragePreflightCommand) ProtoMessage() {}
+
+func (x *PagesStoragePreflightCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesStoragePreflightCommand.ProtoReflect.Descriptor instead.
+func (*PagesStoragePreflightCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *PagesStoragePreflightCommand) GetRequiredBytes() int64 {
+	if x != nil {
+		return x.RequiredBytes
+	}
+	return 0
+}
+
+// Stages one canonical JSON object as an immutable generation for a Route or
+// Preview binding. The daemon validates the object and emits JavaScript itself;
+// callers must never send JavaScript, paths, or nginx syntax.
+type PagesStageRuntimeConfigCommand struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	BindingKind   PagesRuntimeConfigBindingKind `protobuf:"varint,1,opt,name=binding_kind,json=bindingKind,proto3,enum=gateway.v1.PagesRuntimeConfigBindingKind" json:"binding_kind,omitempty"`
+	BindingId     string                        `protobuf:"bytes,2,opt,name=binding_id,json=bindingId,proto3" json:"binding_id,omitempty"`
+	Generation    uint64                        `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	Json          []byte                        `protobuf:"bytes,4,opt,name=json,proto3" json:"json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesStageRuntimeConfigCommand) Reset() {
+	*x = PagesStageRuntimeConfigCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesStageRuntimeConfigCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesStageRuntimeConfigCommand) ProtoMessage() {}
+
+func (x *PagesStageRuntimeConfigCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesStageRuntimeConfigCommand.ProtoReflect.Descriptor instead.
+func (*PagesStageRuntimeConfigCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *PagesStageRuntimeConfigCommand) GetBindingKind() PagesRuntimeConfigBindingKind {
+	if x != nil {
+		return x.BindingKind
+	}
+	return PagesRuntimeConfigBindingKind_PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED
+}
+
+func (x *PagesStageRuntimeConfigCommand) GetBindingId() string {
+	if x != nil {
+		return x.BindingId
+	}
+	return ""
+}
+
+func (x *PagesStageRuntimeConfigCommand) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *PagesStageRuntimeConfigCommand) GetJson() []byte {
+	if x != nil {
+		return x.Json
+	}
+	return nil
+}
+
+// Atomically switches a binding's stable current.js to an already staged
+// generation. Activating an older generation is the rollback operation.
+// CommandResult.data contains the daemon-derived stable configPath.
+type PagesActivateRuntimeConfigCommand struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	BindingKind   PagesRuntimeConfigBindingKind `protobuf:"varint,1,opt,name=binding_kind,json=bindingKind,proto3,enum=gateway.v1.PagesRuntimeConfigBindingKind" json:"binding_kind,omitempty"`
+	BindingId     string                        `protobuf:"bytes,2,opt,name=binding_id,json=bindingId,proto3" json:"binding_id,omitempty"`
+	Generation    uint64                        `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesActivateRuntimeConfigCommand) Reset() {
+	*x = PagesActivateRuntimeConfigCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesActivateRuntimeConfigCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesActivateRuntimeConfigCommand) ProtoMessage() {}
+
+func (x *PagesActivateRuntimeConfigCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesActivateRuntimeConfigCommand.ProtoReflect.Descriptor instead.
+func (*PagesActivateRuntimeConfigCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *PagesActivateRuntimeConfigCommand) GetBindingKind() PagesRuntimeConfigBindingKind {
+	if x != nil {
+		return x.BindingKind
+	}
+	return PagesRuntimeConfigBindingKind_PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED
+}
+
+func (x *PagesActivateRuntimeConfigCommand) GetBindingId() string {
+	if x != nil {
+		return x.BindingId
+	}
+	return ""
+}
+
+func (x *PagesActivateRuntimeConfigCommand) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+// Removes all staged generations and the stable current.js for the binding
+// when generation is zero. A positive generation discards only that staged
+// generation and refuses to remove it when current.js points at it.
+type PagesRemoveRuntimeConfigCommand struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	BindingKind   PagesRuntimeConfigBindingKind `protobuf:"varint,1,opt,name=binding_kind,json=bindingKind,proto3,enum=gateway.v1.PagesRuntimeConfigBindingKind" json:"binding_kind,omitempty"`
+	BindingId     string                        `protobuf:"bytes,2,opt,name=binding_id,json=bindingId,proto3" json:"binding_id,omitempty"`
+	Generation    uint64                        `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PagesRemoveRuntimeConfigCommand) Reset() {
+	*x = PagesRemoveRuntimeConfigCommand{}
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PagesRemoveRuntimeConfigCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PagesRemoveRuntimeConfigCommand) ProtoMessage() {}
+
+func (x *PagesRemoveRuntimeConfigCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PagesRemoveRuntimeConfigCommand.ProtoReflect.Descriptor instead.
+func (*PagesRemoveRuntimeConfigCommand) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *PagesRemoveRuntimeConfigCommand) GetBindingKind() PagesRuntimeConfigBindingKind {
+	if x != nil {
+		return x.BindingKind
+	}
+	return PagesRuntimeConfigBindingKind_PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED
+}
+
+func (x *PagesRemoveRuntimeConfigCommand) GetBindingId() string {
+	if x != nil {
+		return x.BindingId
+	}
+	return ""
+}
+
+func (x *PagesRemoveRuntimeConfigCommand) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
 type SyncRelayGrantsCommand struct {
 	state          protoimpl.MessageState  `protogen:"open.v1"`
 	PolicyRevision uint64                  `protobuf:"varint,1,opt,name=policy_revision,json=policyRevision,proto3" json:"policy_revision,omitempty"`
@@ -2176,7 +3348,7 @@ type SyncRelayGrantsCommand struct {
 
 func (x *SyncRelayGrantsCommand) Reset() {
 	*x = SyncRelayGrantsCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[15]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2188,7 +3360,7 @@ func (x *SyncRelayGrantsCommand) String() string {
 func (*SyncRelayGrantsCommand) ProtoMessage() {}
 
 func (x *SyncRelayGrantsCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[15]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2201,7 +3373,7 @@ func (x *SyncRelayGrantsCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncRelayGrantsCommand.ProtoReflect.Descriptor instead.
 func (*SyncRelayGrantsCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{15}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SyncRelayGrantsCommand) GetPolicyRevision() uint64 {
@@ -2254,7 +3426,7 @@ type RelayGrantAssignment struct {
 
 func (x *RelayGrantAssignment) Reset() {
 	*x = RelayGrantAssignment{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[16]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2266,7 +3438,7 @@ func (x *RelayGrantAssignment) String() string {
 func (*RelayGrantAssignment) ProtoMessage() {}
 
 func (x *RelayGrantAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[16]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2279,7 +3451,7 @@ func (x *RelayGrantAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayGrantAssignment.ProtoReflect.Descriptor instead.
 func (*RelayGrantAssignment) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{16}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RelayGrantAssignment) GetRole() string {
@@ -2342,7 +3514,7 @@ type RelaySignedGrant struct {
 
 func (x *RelaySignedGrant) Reset() {
 	*x = RelaySignedGrant{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[17]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2354,7 +3526,7 @@ func (x *RelaySignedGrant) String() string {
 func (*RelaySignedGrant) ProtoMessage() {}
 
 func (x *RelaySignedGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[17]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2367,7 +3539,7 @@ func (x *RelaySignedGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelaySignedGrant.ProtoReflect.Descriptor instead.
 func (*RelaySignedGrant) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{17}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *RelaySignedGrant) GetKeyId() string {
@@ -2400,7 +3572,7 @@ type SyncProxySecureLinksCommand struct {
 
 func (x *SyncProxySecureLinksCommand) Reset() {
 	*x = SyncProxySecureLinksCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[18]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2412,7 +3584,7 @@ func (x *SyncProxySecureLinksCommand) String() string {
 func (*SyncProxySecureLinksCommand) ProtoMessage() {}
 
 func (x *SyncProxySecureLinksCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[18]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +3597,7 @@ func (x *SyncProxySecureLinksCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncProxySecureLinksCommand.ProtoReflect.Descriptor instead.
 func (*SyncProxySecureLinksCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{18}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SyncProxySecureLinksCommand) GetBindings() []*ProxySecureLinkBinding {
@@ -2465,7 +3637,7 @@ type ProxySecureLinkBinding struct {
 
 func (x *ProxySecureLinkBinding) Reset() {
 	*x = ProxySecureLinkBinding{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[19]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2477,7 +3649,7 @@ func (x *ProxySecureLinkBinding) String() string {
 func (*ProxySecureLinkBinding) ProtoMessage() {}
 
 func (x *ProxySecureLinkBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[19]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2490,7 +3662,7 @@ func (x *ProxySecureLinkBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxySecureLinkBinding.ProtoReflect.Descriptor instead.
 func (*ProxySecureLinkBinding) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{19}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ProxySecureLinkBinding) GetLinkId() string {
@@ -2592,7 +3764,7 @@ type ProbeProxySecureLinkCommand struct {
 
 func (x *ProbeProxySecureLinkCommand) Reset() {
 	*x = ProbeProxySecureLinkCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[20]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2604,7 +3776,7 @@ func (x *ProbeProxySecureLinkCommand) String() string {
 func (*ProbeProxySecureLinkCommand) ProtoMessage() {}
 
 func (x *ProbeProxySecureLinkCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[20]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2617,7 +3789,7 @@ func (x *ProbeProxySecureLinkCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeProxySecureLinkCommand.ProtoReflect.Descriptor instead.
 func (*ProbeProxySecureLinkCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{20}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ProbeProxySecureLinkCommand) GetLinkId() string {
@@ -2683,7 +3855,7 @@ type NodeExecCommand struct {
 
 func (x *NodeExecCommand) Reset() {
 	*x = NodeExecCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[21]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2695,7 +3867,7 @@ func (x *NodeExecCommand) String() string {
 func (*NodeExecCommand) ProtoMessage() {}
 
 func (x *NodeExecCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[21]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2708,7 +3880,7 @@ func (x *NodeExecCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeExecCommand.ProtoReflect.Descriptor instead.
 func (*NodeExecCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{21}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *NodeExecCommand) GetAction() string {
@@ -2766,7 +3938,7 @@ type NodeFileCommand struct {
 
 func (x *NodeFileCommand) Reset() {
 	*x = NodeFileCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[22]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2778,7 +3950,7 @@ func (x *NodeFileCommand) String() string {
 func (*NodeFileCommand) ProtoMessage() {}
 
 func (x *NodeFileCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[22]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2791,7 +3963,7 @@ func (x *NodeFileCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeFileCommand.ProtoReflect.Descriptor instead.
 func (*NodeFileCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{22}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *NodeFileCommand) GetAction() string {
@@ -2841,7 +4013,7 @@ type ApplyConfigCommand struct {
 
 func (x *ApplyConfigCommand) Reset() {
 	*x = ApplyConfigCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[23]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2853,7 +4025,7 @@ func (x *ApplyConfigCommand) String() string {
 func (*ApplyConfigCommand) ProtoMessage() {}
 
 func (x *ApplyConfigCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[23]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2866,7 +4038,7 @@ func (x *ApplyConfigCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyConfigCommand.ProtoReflect.Descriptor instead.
 func (*ApplyConfigCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{23}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ApplyConfigCommand) GetHostId() string {
@@ -2907,7 +4079,7 @@ type RemoveConfigCommand struct {
 
 func (x *RemoveConfigCommand) Reset() {
 	*x = RemoveConfigCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[24]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2919,7 +4091,7 @@ func (x *RemoveConfigCommand) String() string {
 func (*RemoveConfigCommand) ProtoMessage() {}
 
 func (x *RemoveConfigCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[24]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2932,7 +4104,7 @@ func (x *RemoveConfigCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveConfigCommand.ProtoReflect.Descriptor instead.
 func (*RemoveConfigCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{24}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *RemoveConfigCommand) GetHostId() string {
@@ -2956,7 +4128,7 @@ type DeployCertCommand struct {
 
 func (x *DeployCertCommand) Reset() {
 	*x = DeployCertCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[25]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2968,7 +4140,7 @@ func (x *DeployCertCommand) String() string {
 func (*DeployCertCommand) ProtoMessage() {}
 
 func (x *DeployCertCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[25]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2981,7 +4153,7 @@ func (x *DeployCertCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployCertCommand.ProtoReflect.Descriptor instead.
 func (*DeployCertCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{25}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *DeployCertCommand) GetCertId() string {
@@ -3028,7 +4200,7 @@ type ApplyTlsBundleCommand struct {
 
 func (x *ApplyTlsBundleCommand) Reset() {
 	*x = ApplyTlsBundleCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[26]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3040,7 +4212,7 @@ func (x *ApplyTlsBundleCommand) String() string {
 func (*ApplyTlsBundleCommand) ProtoMessage() {}
 
 func (x *ApplyTlsBundleCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[26]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3053,7 +4225,7 @@ func (x *ApplyTlsBundleCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyTlsBundleCommand.ProtoReflect.Descriptor instead.
 func (*ApplyTlsBundleCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{26}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ApplyTlsBundleCommand) GetHostId() string {
@@ -3105,7 +4277,7 @@ type VersionedCertBundle struct {
 
 func (x *VersionedCertBundle) Reset() {
 	*x = VersionedCertBundle{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[27]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3117,7 +4289,7 @@ func (x *VersionedCertBundle) String() string {
 func (*VersionedCertBundle) ProtoMessage() {}
 
 func (x *VersionedCertBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[27]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3130,7 +4302,7 @@ func (x *VersionedCertBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionedCertBundle.ProtoReflect.Descriptor instead.
 func (*VersionedCertBundle) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{27}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *VersionedCertBundle) GetCertId() string {
@@ -3186,7 +4358,7 @@ type InspectCertificatesCommand struct {
 
 func (x *InspectCertificatesCommand) Reset() {
 	*x = InspectCertificatesCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[28]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3198,7 +4370,7 @@ func (x *InspectCertificatesCommand) String() string {
 func (*InspectCertificatesCommand) ProtoMessage() {}
 
 func (x *InspectCertificatesCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[28]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3211,7 +4383,7 @@ func (x *InspectCertificatesCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectCertificatesCommand.ProtoReflect.Descriptor instead.
 func (*InspectCertificatesCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{28}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *InspectCertificatesCommand) GetCertIds() []string {
@@ -3230,7 +4402,7 @@ type ExportLegacyCertificatesCommand struct {
 
 func (x *ExportLegacyCertificatesCommand) Reset() {
 	*x = ExportLegacyCertificatesCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[29]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3242,7 +4414,7 @@ func (x *ExportLegacyCertificatesCommand) String() string {
 func (*ExportLegacyCertificatesCommand) ProtoMessage() {}
 
 func (x *ExportLegacyCertificatesCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[29]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3255,7 +4427,7 @@ func (x *ExportLegacyCertificatesCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportLegacyCertificatesCommand.ProtoReflect.Descriptor instead.
 func (*ExportLegacyCertificatesCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{29}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ExportLegacyCertificatesCommand) GetCertIds() []string {
@@ -3276,7 +4448,7 @@ type RemoveCertificateReplicaCommand struct {
 
 func (x *RemoveCertificateReplicaCommand) Reset() {
 	*x = RemoveCertificateReplicaCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[30]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3288,7 +4460,7 @@ func (x *RemoveCertificateReplicaCommand) String() string {
 func (*RemoveCertificateReplicaCommand) ProtoMessage() {}
 
 func (x *RemoveCertificateReplicaCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[30]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3301,7 +4473,7 @@ func (x *RemoveCertificateReplicaCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveCertificateReplicaCommand.ProtoReflect.Descriptor instead.
 func (*RemoveCertificateReplicaCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{30}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *RemoveCertificateReplicaCommand) GetCertId() string {
@@ -3334,7 +4506,7 @@ type RemoveCertCommand struct {
 
 func (x *RemoveCertCommand) Reset() {
 	*x = RemoveCertCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[31]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3346,7 +4518,7 @@ func (x *RemoveCertCommand) String() string {
 func (*RemoveCertCommand) ProtoMessage() {}
 
 func (x *RemoveCertCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[31]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3359,7 +4531,7 @@ func (x *RemoveCertCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveCertCommand.ProtoReflect.Descriptor instead.
 func (*RemoveCertCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{31}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *RemoveCertCommand) GetCertId() string {
@@ -3382,7 +4554,7 @@ type FullSyncCommand struct {
 
 func (x *FullSyncCommand) Reset() {
 	*x = FullSyncCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[32]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3394,7 +4566,7 @@ func (x *FullSyncCommand) String() string {
 func (*FullSyncCommand) ProtoMessage() {}
 
 func (x *FullSyncCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[32]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3407,7 +4579,7 @@ func (x *FullSyncCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FullSyncCommand.ProtoReflect.Descriptor instead.
 func (*FullSyncCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{32}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *FullSyncCommand) GetHosts() []*HostConfig {
@@ -3456,7 +4628,7 @@ type HostConfig struct {
 
 func (x *HostConfig) Reset() {
 	*x = HostConfig{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[33]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3468,7 +4640,7 @@ func (x *HostConfig) String() string {
 func (*HostConfig) ProtoMessage() {}
 
 func (x *HostConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[33]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3481,7 +4653,7 @@ func (x *HostConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostConfig.ProtoReflect.Descriptor instead.
 func (*HostConfig) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{33}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *HostConfig) GetHostId() string {
@@ -3517,7 +4689,7 @@ type CertBundle struct {
 
 func (x *CertBundle) Reset() {
 	*x = CertBundle{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[34]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3529,7 +4701,7 @@ func (x *CertBundle) String() string {
 func (*CertBundle) ProtoMessage() {}
 
 func (x *CertBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[34]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3542,7 +4714,7 @@ func (x *CertBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertBundle.ProtoReflect.Descriptor instead.
 func (*CertBundle) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{34}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *CertBundle) GetCertId() string {
@@ -3583,7 +4755,7 @@ type HtpasswdFile struct {
 
 func (x *HtpasswdFile) Reset() {
 	*x = HtpasswdFile{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[35]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3595,7 +4767,7 @@ func (x *HtpasswdFile) String() string {
 func (*HtpasswdFile) ProtoMessage() {}
 
 func (x *HtpasswdFile) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[35]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3608,7 +4780,7 @@ func (x *HtpasswdFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HtpasswdFile.ProtoReflect.Descriptor instead.
 func (*HtpasswdFile) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{35}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *HtpasswdFile) GetAccessListId() string {
@@ -3635,7 +4807,7 @@ type UpdateGlobalConfigCommand struct {
 
 func (x *UpdateGlobalConfigCommand) Reset() {
 	*x = UpdateGlobalConfigCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[36]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3647,7 +4819,7 @@ func (x *UpdateGlobalConfigCommand) String() string {
 func (*UpdateGlobalConfigCommand) ProtoMessage() {}
 
 func (x *UpdateGlobalConfigCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[36]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3660,7 +4832,7 @@ func (x *UpdateGlobalConfigCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGlobalConfigCommand.ProtoReflect.Descriptor instead.
 func (*UpdateGlobalConfigCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{36}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *UpdateGlobalConfigCommand) GetContent() string {
@@ -3687,7 +4859,7 @@ type DeployHtpasswdCommand struct {
 
 func (x *DeployHtpasswdCommand) Reset() {
 	*x = DeployHtpasswdCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[37]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3699,7 +4871,7 @@ func (x *DeployHtpasswdCommand) String() string {
 func (*DeployHtpasswdCommand) ProtoMessage() {}
 
 func (x *DeployHtpasswdCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[37]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3712,7 +4884,7 @@ func (x *DeployHtpasswdCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployHtpasswdCommand.ProtoReflect.Descriptor instead.
 func (*DeployHtpasswdCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{37}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *DeployHtpasswdCommand) GetAccessListId() string {
@@ -3738,7 +4910,7 @@ type RemoveHtpasswdCommand struct {
 
 func (x *RemoveHtpasswdCommand) Reset() {
 	*x = RemoveHtpasswdCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[38]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3750,7 +4922,7 @@ func (x *RemoveHtpasswdCommand) String() string {
 func (*RemoveHtpasswdCommand) ProtoMessage() {}
 
 func (x *RemoveHtpasswdCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[38]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3763,7 +4935,7 @@ func (x *RemoveHtpasswdCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveHtpasswdCommand.ProtoReflect.Descriptor instead.
 func (*RemoveHtpasswdCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{38}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *RemoveHtpasswdCommand) GetAccessListId() string {
@@ -3781,7 +4953,7 @@ type TestConfigCommand struct {
 
 func (x *TestConfigCommand) Reset() {
 	*x = TestConfigCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[39]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3793,7 +4965,7 @@ func (x *TestConfigCommand) String() string {
 func (*TestConfigCommand) ProtoMessage() {}
 
 func (x *TestConfigCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[39]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3806,7 +4978,7 @@ func (x *TestConfigCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestConfigCommand.ProtoReflect.Descriptor instead.
 func (*TestConfigCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{39}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{54}
 }
 
 type RequestHealthCommand struct {
@@ -3817,7 +4989,7 @@ type RequestHealthCommand struct {
 
 func (x *RequestHealthCommand) Reset() {
 	*x = RequestHealthCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[40]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3829,7 +5001,7 @@ func (x *RequestHealthCommand) String() string {
 func (*RequestHealthCommand) ProtoMessage() {}
 
 func (x *RequestHealthCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[40]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3842,7 +5014,7 @@ func (x *RequestHealthCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestHealthCommand.ProtoReflect.Descriptor instead.
 func (*RequestHealthCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{40}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{55}
 }
 
 type RequestStatsCommand struct {
@@ -3853,7 +5025,7 @@ type RequestStatsCommand struct {
 
 func (x *RequestStatsCommand) Reset() {
 	*x = RequestStatsCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[41]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3865,7 +5037,7 @@ func (x *RequestStatsCommand) String() string {
 func (*RequestStatsCommand) ProtoMessage() {}
 
 func (x *RequestStatsCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[41]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3878,7 +5050,7 @@ func (x *RequestStatsCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestStatsCommand.ProtoReflect.Descriptor instead.
 func (*RequestStatsCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{41}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{56}
 }
 
 // Controls daemon log streaming over the command channel
@@ -3893,7 +5065,7 @@ type SetDaemonLogStreamCommand struct {
 
 func (x *SetDaemonLogStreamCommand) Reset() {
 	*x = SetDaemonLogStreamCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[42]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3905,7 +5077,7 @@ func (x *SetDaemonLogStreamCommand) String() string {
 func (*SetDaemonLogStreamCommand) ProtoMessage() {}
 
 func (x *SetDaemonLogStreamCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[42]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3918,7 +5090,7 @@ func (x *SetDaemonLogStreamCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDaemonLogStreamCommand.ProtoReflect.Descriptor instead.
 func (*SetDaemonLogStreamCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{42}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *SetDaemonLogStreamCommand) GetEnabled() bool {
@@ -3953,7 +5125,7 @@ type DeployAcmeChallengeCommand struct {
 
 func (x *DeployAcmeChallengeCommand) Reset() {
 	*x = DeployAcmeChallengeCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[43]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3965,7 +5137,7 @@ func (x *DeployAcmeChallengeCommand) String() string {
 func (*DeployAcmeChallengeCommand) ProtoMessage() {}
 
 func (x *DeployAcmeChallengeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[43]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3978,7 +5150,7 @@ func (x *DeployAcmeChallengeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployAcmeChallengeCommand.ProtoReflect.Descriptor instead.
 func (*DeployAcmeChallengeCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{43}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *DeployAcmeChallengeCommand) GetToken() string {
@@ -4004,7 +5176,7 @@ type RemoveAcmeChallengeCommand struct {
 
 func (x *RemoveAcmeChallengeCommand) Reset() {
 	*x = RemoveAcmeChallengeCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[44]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4016,7 +5188,7 @@ func (x *RemoveAcmeChallengeCommand) String() string {
 func (*RemoveAcmeChallengeCommand) ProtoMessage() {}
 
 func (x *RemoveAcmeChallengeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[44]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4029,7 +5201,7 @@ func (x *RemoveAcmeChallengeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveAcmeChallengeCommand.ProtoReflect.Descriptor instead.
 func (*RemoveAcmeChallengeCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{44}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RemoveAcmeChallengeCommand) GetToken() string {
@@ -4048,7 +5220,7 @@ type ReadGlobalConfigCommand struct {
 
 func (x *ReadGlobalConfigCommand) Reset() {
 	*x = ReadGlobalConfigCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[45]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4060,7 +5232,7 @@ func (x *ReadGlobalConfigCommand) String() string {
 func (*ReadGlobalConfigCommand) ProtoMessage() {}
 
 func (x *ReadGlobalConfigCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[45]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4073,7 +5245,7 @@ func (x *ReadGlobalConfigCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadGlobalConfigCommand.ProtoReflect.Descriptor instead.
 func (*ReadGlobalConfigCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{45}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{60}
 }
 
 // Request traffic stats from daemon log parsing — response JSON is in CommandResult.detail
@@ -4088,7 +5260,7 @@ type RequestTrafficStatsCommand struct {
 
 func (x *RequestTrafficStatsCommand) Reset() {
 	*x = RequestTrafficStatsCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[46]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4100,7 +5272,7 @@ func (x *RequestTrafficStatsCommand) String() string {
 func (*RequestTrafficStatsCommand) ProtoMessage() {}
 
 func (x *RequestTrafficStatsCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[46]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4113,7 +5285,7 @@ func (x *RequestTrafficStatsCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestTrafficStatsCommand.ProtoReflect.Descriptor instead.
 func (*RequestTrafficStatsCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{46}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *RequestTrafficStatsCommand) GetTailLines() int32 {
@@ -4152,7 +5324,7 @@ type DockerContainerCommand struct {
 
 func (x *DockerContainerCommand) Reset() {
 	*x = DockerContainerCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[47]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4164,7 +5336,7 @@ func (x *DockerContainerCommand) String() string {
 func (*DockerContainerCommand) ProtoMessage() {}
 
 func (x *DockerContainerCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[47]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4177,7 +5349,7 @@ func (x *DockerContainerCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainerCommand.ProtoReflect.Descriptor instead.
 func (*DockerContainerCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{47}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *DockerContainerCommand) GetAction() string {
@@ -4241,7 +5413,7 @@ type DockerImageCommand struct {
 
 func (x *DockerImageCommand) Reset() {
 	*x = DockerImageCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[48]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4253,7 +5425,7 @@ func (x *DockerImageCommand) String() string {
 func (*DockerImageCommand) ProtoMessage() {}
 
 func (x *DockerImageCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[48]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4266,7 +5438,7 @@ func (x *DockerImageCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerImageCommand.ProtoReflect.Descriptor instead.
 func (*DockerImageCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{48}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DockerImageCommand) GetAction() string {
@@ -4314,7 +5486,7 @@ type DockerVolumeCommand struct {
 
 func (x *DockerVolumeCommand) Reset() {
 	*x = DockerVolumeCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[49]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4326,7 +5498,7 @@ func (x *DockerVolumeCommand) String() string {
 func (*DockerVolumeCommand) ProtoMessage() {}
 
 func (x *DockerVolumeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[49]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4339,7 +5511,7 @@ func (x *DockerVolumeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerVolumeCommand.ProtoReflect.Descriptor instead.
 func (*DockerVolumeCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{49}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *DockerVolumeCommand) GetAction() string {
@@ -4419,7 +5591,7 @@ type DockerNetworkCommand struct {
 
 func (x *DockerNetworkCommand) Reset() {
 	*x = DockerNetworkCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[50]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4431,7 +5603,7 @@ func (x *DockerNetworkCommand) String() string {
 func (*DockerNetworkCommand) ProtoMessage() {}
 
 func (x *DockerNetworkCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[50]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4444,7 +5616,7 @@ func (x *DockerNetworkCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerNetworkCommand.ProtoReflect.Descriptor instead.
 func (*DockerNetworkCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{50}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DockerNetworkCommand) GetAction() string {
@@ -4502,7 +5674,7 @@ type DockerDeploymentCommand struct {
 
 func (x *DockerDeploymentCommand) Reset() {
 	*x = DockerDeploymentCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[51]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4514,7 +5686,7 @@ func (x *DockerDeploymentCommand) String() string {
 func (*DockerDeploymentCommand) ProtoMessage() {}
 
 func (x *DockerDeploymentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[51]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4527,7 +5699,7 @@ func (x *DockerDeploymentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerDeploymentCommand.ProtoReflect.Descriptor instead.
 func (*DockerDeploymentCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{51}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *DockerDeploymentCommand) GetAction() string {
@@ -4575,7 +5747,7 @@ type DockerRuntimeCommand struct {
 
 func (x *DockerRuntimeCommand) Reset() {
 	*x = DockerRuntimeCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[52]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4587,7 +5759,7 @@ func (x *DockerRuntimeCommand) String() string {
 func (*DockerRuntimeCommand) ProtoMessage() {}
 
 func (x *DockerRuntimeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[52]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4600,7 +5772,7 @@ func (x *DockerRuntimeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerRuntimeCommand.ProtoReflect.Descriptor instead.
 func (*DockerRuntimeCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{52}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *DockerRuntimeCommand) GetAction() string {
@@ -4635,7 +5807,7 @@ type DockerRuntimeStatus struct {
 
 func (x *DockerRuntimeStatus) Reset() {
 	*x = DockerRuntimeStatus{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[53]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4647,7 +5819,7 @@ func (x *DockerRuntimeStatus) String() string {
 func (*DockerRuntimeStatus) ProtoMessage() {}
 
 func (x *DockerRuntimeStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[53]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4660,7 +5832,7 @@ func (x *DockerRuntimeStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerRuntimeStatus.ProtoReflect.Descriptor instead.
 func (*DockerRuntimeStatus) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{53}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *DockerRuntimeStatus) GetState() string {
@@ -4750,7 +5922,7 @@ type DockerExecCommand struct {
 
 func (x *DockerExecCommand) Reset() {
 	*x = DockerExecCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[54]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4762,7 +5934,7 @@ func (x *DockerExecCommand) String() string {
 func (*DockerExecCommand) ProtoMessage() {}
 
 func (x *DockerExecCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[54]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4775,7 +5947,7 @@ func (x *DockerExecCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerExecCommand.ProtoReflect.Descriptor instead.
 func (*DockerExecCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{54}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *DockerExecCommand) GetAction() string {
@@ -4855,7 +6027,7 @@ type DockerFileCommand struct {
 
 func (x *DockerFileCommand) Reset() {
 	*x = DockerFileCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[55]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4867,7 +6039,7 @@ func (x *DockerFileCommand) String() string {
 func (*DockerFileCommand) ProtoMessage() {}
 
 func (x *DockerFileCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[55]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4880,7 +6052,7 @@ func (x *DockerFileCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerFileCommand.ProtoReflect.Descriptor instead.
 func (*DockerFileCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{55}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *DockerFileCommand) GetAction() string {
@@ -4935,7 +6107,7 @@ type DockerConfigPushCommand struct {
 
 func (x *DockerConfigPushCommand) Reset() {
 	*x = DockerConfigPushCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[56]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4947,7 +6119,7 @@ func (x *DockerConfigPushCommand) String() string {
 func (*DockerConfigPushCommand) ProtoMessage() {}
 
 func (x *DockerConfigPushCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[56]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4960,7 +6132,7 @@ func (x *DockerConfigPushCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerConfigPushCommand.ProtoReflect.Descriptor instead.
 func (*DockerConfigPushCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{56}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *DockerConfigPushCommand) GetRegistries() []*RegistryConfig {
@@ -4988,7 +6160,7 @@ type RegistryConfig struct {
 
 func (x *RegistryConfig) Reset() {
 	*x = RegistryConfig{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[57]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5000,7 +6172,7 @@ func (x *RegistryConfig) String() string {
 func (*RegistryConfig) ProtoMessage() {}
 
 func (x *RegistryConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[57]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5013,7 +6185,7 @@ func (x *RegistryConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegistryConfig.ProtoReflect.Descriptor instead.
 func (*RegistryConfig) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{57}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *RegistryConfig) GetUrl() string {
@@ -5051,7 +6223,7 @@ type DockerLogsCommand struct {
 
 func (x *DockerLogsCommand) Reset() {
 	*x = DockerLogsCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[58]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5063,7 +6235,7 @@ func (x *DockerLogsCommand) String() string {
 func (*DockerLogsCommand) ProtoMessage() {}
 
 func (x *DockerLogsCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[58]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5076,7 +6248,7 @@ func (x *DockerLogsCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerLogsCommand.ProtoReflect.Descriptor instead.
 func (*DockerLogsCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{58}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DockerLogsCommand) GetContainerId() string {
@@ -5131,7 +6303,7 @@ type ExecInput struct {
 
 func (x *ExecInput) Reset() {
 	*x = ExecInput{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[59]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5143,7 +6315,7 @@ func (x *ExecInput) String() string {
 func (*ExecInput) ProtoMessage() {}
 
 func (x *ExecInput) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[59]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5156,7 +6328,7 @@ func (x *ExecInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecInput.ProtoReflect.Descriptor instead.
 func (*ExecInput) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{59}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ExecInput) GetExecId() string {
@@ -5185,7 +6357,7 @@ type ExecOutput struct {
 
 func (x *ExecOutput) Reset() {
 	*x = ExecOutput{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[60]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5197,7 +6369,7 @@ func (x *ExecOutput) String() string {
 func (*ExecOutput) ProtoMessage() {}
 
 func (x *ExecOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[60]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5210,7 +6382,7 @@ func (x *ExecOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecOutput.ProtoReflect.Descriptor instead.
 func (*ExecOutput) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{60}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ExecOutput) GetExecId() string {
@@ -5261,7 +6433,7 @@ type ContainerStats struct {
 
 func (x *ContainerStats) Reset() {
 	*x = ContainerStats{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[61]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5273,7 +6445,7 @@ func (x *ContainerStats) String() string {
 func (*ContainerStats) ProtoMessage() {}
 
 func (x *ContainerStats) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[61]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5286,7 +6458,7 @@ func (x *ContainerStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContainerStats.ProtoReflect.Descriptor instead.
 func (*ContainerStats) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{61}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ContainerStats) GetContainerId() string {
@@ -5404,7 +6576,7 @@ type GpuDevice struct {
 
 func (x *GpuDevice) Reset() {
 	*x = GpuDevice{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[62]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5416,7 +6588,7 @@ func (x *GpuDevice) String() string {
 func (*GpuDevice) ProtoMessage() {}
 
 func (x *GpuDevice) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[62]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5429,7 +6601,7 @@ func (x *GpuDevice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GpuDevice.ProtoReflect.Descriptor instead.
 func (*GpuDevice) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{62}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *GpuDevice) GetId() string {
@@ -5585,7 +6757,7 @@ type LogStreamMessage struct {
 
 func (x *LogStreamMessage) Reset() {
 	*x = LogStreamMessage{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[63]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5597,7 +6769,7 @@ func (x *LogStreamMessage) String() string {
 func (*LogStreamMessage) ProtoMessage() {}
 
 func (x *LogStreamMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[63]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5610,7 +6782,7 @@ func (x *LogStreamMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamMessage.ProtoReflect.Descriptor instead.
 func (*LogStreamMessage) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{63}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *LogStreamMessage) GetPayload() isLogStreamMessage_Payload {
@@ -5663,7 +6835,7 @@ type LogSubscribeAck struct {
 
 func (x *LogSubscribeAck) Reset() {
 	*x = LogSubscribeAck{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[64]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5675,7 +6847,7 @@ func (x *LogSubscribeAck) String() string {
 func (*LogSubscribeAck) ProtoMessage() {}
 
 func (x *LogSubscribeAck) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[64]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5688,7 +6860,7 @@ func (x *LogSubscribeAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogSubscribeAck.ProtoReflect.Descriptor instead.
 func (*LogSubscribeAck) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{64}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *LogSubscribeAck) GetHostId() string {
@@ -5719,7 +6891,7 @@ type LogEntry struct {
 
 func (x *LogEntry) Reset() {
 	*x = LogEntry{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[65]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5731,7 +6903,7 @@ func (x *LogEntry) String() string {
 func (*LogEntry) ProtoMessage() {}
 
 func (x *LogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[65]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5744,7 +6916,7 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{65}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *LogEntry) GetHostId() string {
@@ -5851,7 +7023,7 @@ type LogStreamControl struct {
 
 func (x *LogStreamControl) Reset() {
 	*x = LogStreamControl{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[66]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5863,7 +7035,7 @@ func (x *LogStreamControl) String() string {
 func (*LogStreamControl) ProtoMessage() {}
 
 func (x *LogStreamControl) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[66]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5876,7 +7048,7 @@ func (x *LogStreamControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamControl.ProtoReflect.Descriptor instead.
 func (*LogStreamControl) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{66}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *LogStreamControl) GetPayload() isLogStreamControl_Payload {
@@ -5930,7 +7102,7 @@ type LogSubscribe struct {
 
 func (x *LogSubscribe) Reset() {
 	*x = LogSubscribe{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[67]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5942,7 +7114,7 @@ func (x *LogSubscribe) String() string {
 func (*LogSubscribe) ProtoMessage() {}
 
 func (x *LogSubscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[67]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5955,7 +7127,7 @@ func (x *LogSubscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogSubscribe.ProtoReflect.Descriptor instead.
 func (*LogSubscribe) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{67}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *LogSubscribe) GetHostId() string {
@@ -5981,7 +7153,7 @@ type LogUnsubscribe struct {
 
 func (x *LogUnsubscribe) Reset() {
 	*x = LogUnsubscribe{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[68]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5993,7 +7165,7 @@ func (x *LogUnsubscribe) String() string {
 func (*LogUnsubscribe) ProtoMessage() {}
 
 func (x *LogUnsubscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[68]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6006,7 +7178,7 @@ func (x *LogUnsubscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogUnsubscribe.ProtoReflect.Descriptor instead.
 func (*LogUnsubscribe) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{68}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *LogUnsubscribe) GetHostId() string {
@@ -6028,7 +7200,7 @@ type UpdateDaemonCommand struct {
 
 func (x *UpdateDaemonCommand) Reset() {
 	*x = UpdateDaemonCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[69]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6040,7 +7212,7 @@ func (x *UpdateDaemonCommand) String() string {
 func (*UpdateDaemonCommand) ProtoMessage() {}
 
 func (x *UpdateDaemonCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[69]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6053,7 +7225,7 @@ func (x *UpdateDaemonCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDaemonCommand.ProtoReflect.Descriptor instead.
 func (*UpdateDaemonCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{69}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *UpdateDaemonCommand) GetDownloadUrl() string {
@@ -6100,7 +7272,7 @@ type DockerMigrationCommand struct {
 
 func (x *DockerMigrationCommand) Reset() {
 	*x = DockerMigrationCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[70]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6112,7 +7284,7 @@ func (x *DockerMigrationCommand) String() string {
 func (*DockerMigrationCommand) ProtoMessage() {}
 
 func (x *DockerMigrationCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[70]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6125,7 +7297,7 @@ func (x *DockerMigrationCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerMigrationCommand.ProtoReflect.Descriptor instead.
 func (*DockerMigrationCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{70}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *DockerMigrationCommand) GetAction() string {
@@ -6184,7 +7356,7 @@ type DockerDatabaseCommand struct {
 
 func (x *DockerDatabaseCommand) Reset() {
 	*x = DockerDatabaseCommand{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[71]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6196,7 +7368,7 @@ func (x *DockerDatabaseCommand) String() string {
 func (*DockerDatabaseCommand) ProtoMessage() {}
 
 func (x *DockerDatabaseCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[71]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6209,7 +7381,7 @@ func (x *DockerDatabaseCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerDatabaseCommand.ProtoReflect.Descriptor instead.
 func (*DockerDatabaseCommand) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{71}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *DockerDatabaseCommand) GetAction() string {
@@ -6248,7 +7420,7 @@ type MigrationTransferMessage struct {
 
 func (x *MigrationTransferMessage) Reset() {
 	*x = MigrationTransferMessage{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[72]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6260,7 +7432,7 @@ func (x *MigrationTransferMessage) String() string {
 func (*MigrationTransferMessage) ProtoMessage() {}
 
 func (x *MigrationTransferMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[72]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6273,7 +7445,7 @@ func (x *MigrationTransferMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationTransferMessage.ProtoReflect.Descriptor instead.
 func (*MigrationTransferMessage) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{72}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *MigrationTransferMessage) GetPayload() isMigrationTransferMessage_Payload {
@@ -6364,7 +7536,7 @@ type MigrationTransferControl struct {
 
 func (x *MigrationTransferControl) Reset() {
 	*x = MigrationTransferControl{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[73]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6376,7 +7548,7 @@ func (x *MigrationTransferControl) String() string {
 func (*MigrationTransferControl) ProtoMessage() {}
 
 func (x *MigrationTransferControl) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[73]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6389,7 +7561,7 @@ func (x *MigrationTransferControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationTransferControl.ProtoReflect.Descriptor instead.
 func (*MigrationTransferControl) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{73}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *MigrationTransferControl) GetPayload() isMigrationTransferControl_Payload {
@@ -6504,7 +7676,7 @@ type MigrationTransferHello struct {
 
 func (x *MigrationTransferHello) Reset() {
 	*x = MigrationTransferHello{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[74]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6516,7 +7688,7 @@ func (x *MigrationTransferHello) String() string {
 func (*MigrationTransferHello) ProtoMessage() {}
 
 func (x *MigrationTransferHello) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[74]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6529,7 +7701,7 @@ func (x *MigrationTransferHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationTransferHello.ProtoReflect.Descriptor instead.
 func (*MigrationTransferHello) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{74}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *MigrationTransferHello) GetNodeId() string {
@@ -6564,7 +7736,7 @@ type MigrationArtifactRead struct {
 
 func (x *MigrationArtifactRead) Reset() {
 	*x = MigrationArtifactRead{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[75]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6576,7 +7748,7 @@ func (x *MigrationArtifactRead) String() string {
 func (*MigrationArtifactRead) ProtoMessage() {}
 
 func (x *MigrationArtifactRead) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[75]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6589,7 +7761,7 @@ func (x *MigrationArtifactRead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationArtifactRead.ProtoReflect.Descriptor instead.
 func (*MigrationArtifactRead) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{75}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *MigrationArtifactRead) GetMigrationId() string {
@@ -6624,7 +7796,7 @@ type MigrationArtifactWrite struct {
 
 func (x *MigrationArtifactWrite) Reset() {
 	*x = MigrationArtifactWrite{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[76]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6636,7 +7808,7 @@ func (x *MigrationArtifactWrite) String() string {
 func (*MigrationArtifactWrite) ProtoMessage() {}
 
 func (x *MigrationArtifactWrite) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[76]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6649,7 +7821,7 @@ func (x *MigrationArtifactWrite) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationArtifactWrite.ProtoReflect.Descriptor instead.
 func (*MigrationArtifactWrite) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{76}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *MigrationArtifactWrite) GetMigrationId() string {
@@ -6686,7 +7858,7 @@ type MigrationArtifactChunk struct {
 
 func (x *MigrationArtifactChunk) Reset() {
 	*x = MigrationArtifactChunk{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[77]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6698,7 +7870,7 @@ func (x *MigrationArtifactChunk) String() string {
 func (*MigrationArtifactChunk) ProtoMessage() {}
 
 func (x *MigrationArtifactChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[77]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6711,7 +7883,7 @@ func (x *MigrationArtifactChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationArtifactChunk.ProtoReflect.Descriptor instead.
 func (*MigrationArtifactChunk) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{77}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *MigrationArtifactChunk) GetMigrationId() string {
@@ -6761,7 +7933,7 @@ type MigrationArtifactAck struct {
 
 func (x *MigrationArtifactAck) Reset() {
 	*x = MigrationArtifactAck{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[78]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6773,7 +7945,7 @@ func (x *MigrationArtifactAck) String() string {
 func (*MigrationArtifactAck) ProtoMessage() {}
 
 func (x *MigrationArtifactAck) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[78]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6786,7 +7958,7 @@ func (x *MigrationArtifactAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationArtifactAck.ProtoReflect.Descriptor instead.
 func (*MigrationArtifactAck) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{78}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *MigrationArtifactAck) GetMigrationId() string {
@@ -6828,7 +8000,7 @@ type MigrationArtifactError struct {
 
 func (x *MigrationArtifactError) Reset() {
 	*x = MigrationArtifactError{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[79]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6840,7 +8012,7 @@ func (x *MigrationArtifactError) String() string {
 func (*MigrationArtifactError) ProtoMessage() {}
 
 func (x *MigrationArtifactError) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[79]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6853,7 +8025,7 @@ func (x *MigrationArtifactError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationArtifactError.ProtoReflect.Descriptor instead.
 func (*MigrationArtifactError) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{79}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *MigrationArtifactError) GetMigrationId() string {
@@ -6886,7 +8058,7 @@ type MigrationHeartbeat struct {
 
 func (x *MigrationHeartbeat) Reset() {
 	*x = MigrationHeartbeat{}
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[80]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6898,7 +8070,7 @@ func (x *MigrationHeartbeat) String() string {
 func (*MigrationHeartbeat) ProtoMessage() {}
 
 func (x *MigrationHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[80]
+	mi := &file_gateway_v1_nginx_daemon_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6911,7 +8083,7 @@ func (x *MigrationHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationHeartbeat.ProtoReflect.Descriptor instead.
 func (*MigrationHeartbeat) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{80}
+	return file_gateway_v1_nginx_daemon_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *MigrationHeartbeat) GetMigrationId() string {
@@ -7072,7 +8244,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"tx_packets\x18\x05 \x01(\x03R\ttxPackets\x12\x1b\n" +
 	"\trx_errors\x18\x06 \x01(\x03R\brxErrors\x12\x1b\n" +
 	"\ttx_errors\x18\a \x01(\x03R\btxErrors\x12!\n" +
-	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\xb4\x18\n" +
+	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\xf6#\n" +
 	"\x0eGatewayCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12C\n" +
@@ -7122,8 +8294,86 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x11sync_relay_grants\x18& \x01(\v2\".gateway.v1.SyncRelayGrantsCommandH\x00R\x0fsyncRelayGrants\x12`\n" +
 	"\x17sync_proxy_secure_links\x18' \x01(\v2'.gateway.v1.SyncProxySecureLinksCommandH\x00R\x14syncProxySecureLinks\x12`\n" +
 	"\x17probe_proxy_secure_link\x18( \x01(\v2'.gateway.v1.ProbeProxySecureLinkCommandH\x00R\x14probeProxySecureLink\x12I\n" +
-	"\x0edocker_runtime\x18) \x01(\v2 .gateway.v1.DockerRuntimeCommandH\x00R\rdockerRuntimeB\t\n" +
-	"\apayload\"\xf5\x01\n" +
+	"\x0edocker_runtime\x18) \x01(\v2 .gateway.v1.DockerRuntimeCommandH\x00R\rdockerRuntime\x12P\n" +
+	"\x11pages_upload_init\x18* \x01(\v2\".gateway.v1.PagesUploadInitCommandH\x00R\x0fpagesUploadInit\x12S\n" +
+	"\x12pages_upload_chunk\x18+ \x01(\v2#.gateway.v1.PagesUploadChunkCommandH\x00R\x10pagesUploadChunk\x12\\\n" +
+	"\x15pages_upload_finalize\x18, \x01(\v2&.gateway.v1.PagesUploadFinalizeCommandH\x00R\x13pagesUploadFinalize\x12Y\n" +
+	"\x14pages_verify_release\x18- \x01(\v2%.gateway.v1.PagesVerifyReleaseCommandH\x00R\x12pagesVerifyRelease\x12h\n" +
+	"\x19pages_materialize_preview\x18. \x01(\v2*.gateway.v1.PagesMaterializePreviewCommandH\x00R\x17pagesMaterializePreview\x12Y\n" +
+	"\x14pages_remove_preview\x18/ \x01(\v2%.gateway.v1.PagesRemovePreviewCommandH\x00R\x12pagesRemovePreview\x12c\n" +
+	"\x18pages_activate_tag_route\x180 \x01(\v2(.gateway.v1.PagesActivateTagRouteCommandH\x00R\x15pagesActivateTagRoute\x12i\n" +
+	"\x1apages_deactivate_tag_route\x181 \x01(\v2*.gateway.v1.PagesDeactivateTagRouteCommandH\x00R\x17pagesDeactivateTagRoute\x12e\n" +
+	"\x18pages_cleanup_deployment\x182 \x01(\v2).gateway.v1.PagesCleanupDeploymentCommandH\x00R\x16pagesCleanupDeployment\x12L\n" +
+	"\x0fpages_inventory\x183 \x01(\v2!.gateway.v1.PagesInventoryCommandH\x00R\x0epagesInventory\x12b\n" +
+	"\x17pages_storage_preflight\x184 \x01(\v2(.gateway.v1.PagesStoragePreflightCommandH\x00R\x15pagesStoragePreflight\x12e\n" +
+	"\x18pages_deploy_certificate\x185 \x01(\v2).gateway.v1.PagesDeployCertificateCommandH\x00R\x16pagesDeployCertificate\x12i\n" +
+	"\x1apages_stage_runtime_config\x186 \x01(\v2*.gateway.v1.PagesStageRuntimeConfigCommandH\x00R\x17pagesStageRuntimeConfig\x12r\n" +
+	"\x1dpages_activate_runtime_config\x187 \x01(\v2-.gateway.v1.PagesActivateRuntimeConfigCommandH\x00R\x1apagesActivateRuntimeConfig\x12l\n" +
+	"\x1bpages_remove_runtime_config\x188 \x01(\v2+.gateway.v1.PagesRemoveRuntimeConfigCommandH\x00R\x18pagesRemoveRuntimeConfigB\t\n" +
+	"\apayload\"\x97\x01\n" +
+	"\x16PagesUploadInitCommand\x12\x1b\n" +
+	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12#\n" +
+	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\x12#\n" +
+	"\rexpected_size\x18\x03 \x01(\x03R\fexpectedSize\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"h\n" +
+	"\x17PagesUploadChunkCommand\x12\x1b\n" +
+	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\fR\acontent\"^\n" +
+	"\x1aPagesUploadFinalizeCommand\x12\x1b\n" +
+	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12#\n" +
+	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\"X\n" +
+	"\x19PagesVerifyReleaseCommand\x12#\n" +
+	"\rdeployment_id\x18\x01 \x01(\tR\fdeploymentId\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\xd8\x01\n" +
+	"\x1ePagesMaterializePreviewCommand\x12\x1d\n" +
+	"\n" +
+	"profile_id\x18\x01 \x01(\tR\tprofileId\x12#\n" +
+	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\x12\x1a\n" +
+	"\bhostname\x18\x03 \x01(\tR\bhostname\x12%\n" +
+	"\x0ecertificate_id\x18\x04 \x01(\tR\rcertificateId\x12/\n" +
+	"\x13certificate_version\x18\x05 \x01(\tR\x12certificateVersion\"\xd2\x01\n" +
+	"\x1dPagesDeployCertificateCommand\x12\x17\n" +
+	"\acert_id\x18\x01 \x01(\tR\x06certId\x12\x19\n" +
+	"\bcert_pem\x18\x02 \x01(\fR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\x03 \x01(\fR\x06keyPem\x12\x1b\n" +
+	"\tchain_pem\x18\x04 \x01(\fR\bchainPem\x12\x18\n" +
+	"\aversion\x18\x05 \x01(\tR\aversion\x12-\n" +
+	"\x12replica_generation\x18\x06 \x01(\tR\x11replicaGeneration\"7\n" +
+	"\x19PagesRemovePreviewCommand\x12\x1a\n" +
+	"\bhostname\x18\x01 \x01(\tR\bhostname\"^\n" +
+	"\x1cPagesActivateTagRouteCommand\x12\x19\n" +
+	"\broute_id\x18\x01 \x01(\tR\arouteId\x12#\n" +
+	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\";\n" +
+	"\x1ePagesDeactivateTagRouteCommand\x12\x19\n" +
+	"\broute_id\x18\x01 \x01(\tR\arouteId\"D\n" +
+	"\x1dPagesCleanupDeploymentCommand\x12#\n" +
+	"\rdeployment_id\x18\x01 \x01(\tR\fdeploymentId\"\x17\n" +
+	"\x15PagesInventoryCommand\"E\n" +
+	"\x1cPagesStoragePreflightCommand\x12%\n" +
+	"\x0erequired_bytes\x18\x01 \x01(\x03R\rrequiredBytes\"\xc1\x01\n" +
+	"\x1ePagesStageRuntimeConfigCommand\x12L\n" +
+	"\fbinding_kind\x18\x01 \x01(\x0e2).gateway.v1.PagesRuntimeConfigBindingKindR\vbindingKind\x12\x1d\n" +
+	"\n" +
+	"binding_id\x18\x02 \x01(\tR\tbindingId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\x12\x12\n" +
+	"\x04json\x18\x04 \x01(\fR\x04json\"\xb0\x01\n" +
+	"!PagesActivateRuntimeConfigCommand\x12L\n" +
+	"\fbinding_kind\x18\x01 \x01(\x0e2).gateway.v1.PagesRuntimeConfigBindingKindR\vbindingKind\x12\x1d\n" +
+	"\n" +
+	"binding_id\x18\x02 \x01(\tR\tbindingId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\"\xae\x01\n" +
+	"\x1fPagesRemoveRuntimeConfigCommand\x12L\n" +
+	"\fbinding_kind\x18\x01 \x01(\x0e2).gateway.v1.PagesRuntimeConfigBindingKindR\vbindingKind\x12\x1d\n" +
+	"\n" +
+	"binding_id\x18\x02 \x01(\tR\tbindingId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\"\xf5\x01\n" +
 	"\x16SyncRelayGrantsCommand\x12'\n" +
 	"\x0fpolicy_revision\x18\x01 \x01(\x04R\x0epolicyRevision\x128\n" +
 	"\x06grants\x18\x02 \x03(\v2 .gateway.v1.RelayGrantAssignmentR\x06grants\x12/\n" +
@@ -7523,7 +8773,11 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"artifactId\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\"7\n" +
 	"\x12MigrationHeartbeat\x12!\n" +
-	"\fmigration_id\x18\x01 \x01(\tR\vmigrationId2\xa2\x01\n" +
+	"\fmigration_id\x18\x01 \x01(\tR\vmigrationId*\xae\x01\n" +
+	"\x1dPagesRuntimeConfigBindingKind\x121\n" +
+	"-PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED\x10\x00\x12+\n" +
+	"'PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE\x10\x01\x12-\n" +
+	")PAGES_RUNTIME_CONFIG_BINDING_KIND_PREVIEW\x10\x022\xa2\x01\n" +
 	"\x0eNodeEnrollment\x12?\n" +
 	"\x06Enroll\x12\x19.gateway.v1.EnrollRequest\x1a\x1a.gateway.v1.EnrollResponse\x12O\n" +
 	"\x10RenewCertificate\x12\x1c.gateway.v1.RenewCertRequest\x1a\x1d.gateway.v1.RenewCertResponse2Y\n" +
@@ -7549,185 +8803,220 @@ func file_gateway_v1_nginx_daemon_proto_rawDescGZIP() []byte {
 	return file_gateway_v1_nginx_daemon_proto_rawDescData
 }
 
-var file_gateway_v1_nginx_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
+var file_gateway_v1_nginx_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_gateway_v1_nginx_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 98)
 var file_gateway_v1_nginx_daemon_proto_goTypes = []any{
-	(*EnrollRequest)(nil),                   // 0: gateway.v1.EnrollRequest
-	(*EnrollResponse)(nil),                  // 1: gateway.v1.EnrollResponse
-	(*RenewCertRequest)(nil),                // 2: gateway.v1.RenewCertRequest
-	(*RenewCertResponse)(nil),               // 3: gateway.v1.RenewCertResponse
-	(*MaintenanceAccessRedeemRequest)(nil),  // 4: gateway.v1.MaintenanceAccessRedeemRequest
-	(*MaintenanceAccessReply)(nil),          // 5: gateway.v1.MaintenanceAccessReply
-	(*DaemonMessage)(nil),                   // 6: gateway.v1.DaemonMessage
-	(*DaemonLogEntry)(nil),                  // 7: gateway.v1.DaemonLogEntry
-	(*RegisterMessage)(nil),                 // 8: gateway.v1.RegisterMessage
-	(*CommandResult)(nil),                   // 9: gateway.v1.CommandResult
-	(*HealthReport)(nil),                    // 10: gateway.v1.HealthReport
-	(*StatsReport)(nil),                     // 11: gateway.v1.StatsReport
-	(*DiskMount)(nil),                       // 12: gateway.v1.DiskMount
-	(*NetworkInterface)(nil),                // 13: gateway.v1.NetworkInterface
-	(*GatewayCommand)(nil),                  // 14: gateway.v1.GatewayCommand
-	(*SyncRelayGrantsCommand)(nil),          // 15: gateway.v1.SyncRelayGrantsCommand
-	(*RelayGrantAssignment)(nil),            // 16: gateway.v1.RelayGrantAssignment
-	(*RelaySignedGrant)(nil),                // 17: gateway.v1.RelaySignedGrant
-	(*SyncProxySecureLinksCommand)(nil),     // 18: gateway.v1.SyncProxySecureLinksCommand
-	(*ProxySecureLinkBinding)(nil),          // 19: gateway.v1.ProxySecureLinkBinding
-	(*ProbeProxySecureLinkCommand)(nil),     // 20: gateway.v1.ProbeProxySecureLinkCommand
-	(*NodeExecCommand)(nil),                 // 21: gateway.v1.NodeExecCommand
-	(*NodeFileCommand)(nil),                 // 22: gateway.v1.NodeFileCommand
-	(*ApplyConfigCommand)(nil),              // 23: gateway.v1.ApplyConfigCommand
-	(*RemoveConfigCommand)(nil),             // 24: gateway.v1.RemoveConfigCommand
-	(*DeployCertCommand)(nil),               // 25: gateway.v1.DeployCertCommand
-	(*ApplyTlsBundleCommand)(nil),           // 26: gateway.v1.ApplyTlsBundleCommand
-	(*VersionedCertBundle)(nil),             // 27: gateway.v1.VersionedCertBundle
-	(*InspectCertificatesCommand)(nil),      // 28: gateway.v1.InspectCertificatesCommand
-	(*ExportLegacyCertificatesCommand)(nil), // 29: gateway.v1.ExportLegacyCertificatesCommand
-	(*RemoveCertificateReplicaCommand)(nil), // 30: gateway.v1.RemoveCertificateReplicaCommand
-	(*RemoveCertCommand)(nil),               // 31: gateway.v1.RemoveCertCommand
-	(*FullSyncCommand)(nil),                 // 32: gateway.v1.FullSyncCommand
-	(*HostConfig)(nil),                      // 33: gateway.v1.HostConfig
-	(*CertBundle)(nil),                      // 34: gateway.v1.CertBundle
-	(*HtpasswdFile)(nil),                    // 35: gateway.v1.HtpasswdFile
-	(*UpdateGlobalConfigCommand)(nil),       // 36: gateway.v1.UpdateGlobalConfigCommand
-	(*DeployHtpasswdCommand)(nil),           // 37: gateway.v1.DeployHtpasswdCommand
-	(*RemoveHtpasswdCommand)(nil),           // 38: gateway.v1.RemoveHtpasswdCommand
-	(*TestConfigCommand)(nil),               // 39: gateway.v1.TestConfigCommand
-	(*RequestHealthCommand)(nil),            // 40: gateway.v1.RequestHealthCommand
-	(*RequestStatsCommand)(nil),             // 41: gateway.v1.RequestStatsCommand
-	(*SetDaemonLogStreamCommand)(nil),       // 42: gateway.v1.SetDaemonLogStreamCommand
-	(*DeployAcmeChallengeCommand)(nil),      // 43: gateway.v1.DeployAcmeChallengeCommand
-	(*RemoveAcmeChallengeCommand)(nil),      // 44: gateway.v1.RemoveAcmeChallengeCommand
-	(*ReadGlobalConfigCommand)(nil),         // 45: gateway.v1.ReadGlobalConfigCommand
-	(*RequestTrafficStatsCommand)(nil),      // 46: gateway.v1.RequestTrafficStatsCommand
-	(*DockerContainerCommand)(nil),          // 47: gateway.v1.DockerContainerCommand
-	(*DockerImageCommand)(nil),              // 48: gateway.v1.DockerImageCommand
-	(*DockerVolumeCommand)(nil),             // 49: gateway.v1.DockerVolumeCommand
-	(*DockerNetworkCommand)(nil),            // 50: gateway.v1.DockerNetworkCommand
-	(*DockerDeploymentCommand)(nil),         // 51: gateway.v1.DockerDeploymentCommand
-	(*DockerRuntimeCommand)(nil),            // 52: gateway.v1.DockerRuntimeCommand
-	(*DockerRuntimeStatus)(nil),             // 53: gateway.v1.DockerRuntimeStatus
-	(*DockerExecCommand)(nil),               // 54: gateway.v1.DockerExecCommand
-	(*DockerFileCommand)(nil),               // 55: gateway.v1.DockerFileCommand
-	(*DockerConfigPushCommand)(nil),         // 56: gateway.v1.DockerConfigPushCommand
-	(*RegistryConfig)(nil),                  // 57: gateway.v1.RegistryConfig
-	(*DockerLogsCommand)(nil),               // 58: gateway.v1.DockerLogsCommand
-	(*ExecInput)(nil),                       // 59: gateway.v1.ExecInput
-	(*ExecOutput)(nil),                      // 60: gateway.v1.ExecOutput
-	(*ContainerStats)(nil),                  // 61: gateway.v1.ContainerStats
-	(*GpuDevice)(nil),                       // 62: gateway.v1.GpuDevice
-	(*LogStreamMessage)(nil),                // 63: gateway.v1.LogStreamMessage
-	(*LogSubscribeAck)(nil),                 // 64: gateway.v1.LogSubscribeAck
-	(*LogEntry)(nil),                        // 65: gateway.v1.LogEntry
-	(*LogStreamControl)(nil),                // 66: gateway.v1.LogStreamControl
-	(*LogSubscribe)(nil),                    // 67: gateway.v1.LogSubscribe
-	(*LogUnsubscribe)(nil),                  // 68: gateway.v1.LogUnsubscribe
-	(*UpdateDaemonCommand)(nil),             // 69: gateway.v1.UpdateDaemonCommand
-	(*DockerMigrationCommand)(nil),          // 70: gateway.v1.DockerMigrationCommand
-	(*DockerDatabaseCommand)(nil),           // 71: gateway.v1.DockerDatabaseCommand
-	(*MigrationTransferMessage)(nil),        // 72: gateway.v1.MigrationTransferMessage
-	(*MigrationTransferControl)(nil),        // 73: gateway.v1.MigrationTransferControl
-	(*MigrationTransferHello)(nil),          // 74: gateway.v1.MigrationTransferHello
-	(*MigrationArtifactRead)(nil),           // 75: gateway.v1.MigrationArtifactRead
-	(*MigrationArtifactWrite)(nil),          // 76: gateway.v1.MigrationArtifactWrite
-	(*MigrationArtifactChunk)(nil),          // 77: gateway.v1.MigrationArtifactChunk
-	(*MigrationArtifactAck)(nil),            // 78: gateway.v1.MigrationArtifactAck
-	(*MigrationArtifactError)(nil),          // 79: gateway.v1.MigrationArtifactError
-	(*MigrationHeartbeat)(nil),              // 80: gateway.v1.MigrationHeartbeat
-	nil,                                     // 81: gateway.v1.DaemonLogEntry.FieldsEntry
-	nil,                                     // 82: gateway.v1.DockerVolumeCommand.LabelsEntry
+	(PagesRuntimeConfigBindingKind)(0),        // 0: gateway.v1.PagesRuntimeConfigBindingKind
+	(*EnrollRequest)(nil),                     // 1: gateway.v1.EnrollRequest
+	(*EnrollResponse)(nil),                    // 2: gateway.v1.EnrollResponse
+	(*RenewCertRequest)(nil),                  // 3: gateway.v1.RenewCertRequest
+	(*RenewCertResponse)(nil),                 // 4: gateway.v1.RenewCertResponse
+	(*MaintenanceAccessRedeemRequest)(nil),    // 5: gateway.v1.MaintenanceAccessRedeemRequest
+	(*MaintenanceAccessReply)(nil),            // 6: gateway.v1.MaintenanceAccessReply
+	(*DaemonMessage)(nil),                     // 7: gateway.v1.DaemonMessage
+	(*DaemonLogEntry)(nil),                    // 8: gateway.v1.DaemonLogEntry
+	(*RegisterMessage)(nil),                   // 9: gateway.v1.RegisterMessage
+	(*CommandResult)(nil),                     // 10: gateway.v1.CommandResult
+	(*HealthReport)(nil),                      // 11: gateway.v1.HealthReport
+	(*StatsReport)(nil),                       // 12: gateway.v1.StatsReport
+	(*DiskMount)(nil),                         // 13: gateway.v1.DiskMount
+	(*NetworkInterface)(nil),                  // 14: gateway.v1.NetworkInterface
+	(*GatewayCommand)(nil),                    // 15: gateway.v1.GatewayCommand
+	(*PagesUploadInitCommand)(nil),            // 16: gateway.v1.PagesUploadInitCommand
+	(*PagesUploadChunkCommand)(nil),           // 17: gateway.v1.PagesUploadChunkCommand
+	(*PagesUploadFinalizeCommand)(nil),        // 18: gateway.v1.PagesUploadFinalizeCommand
+	(*PagesVerifyReleaseCommand)(nil),         // 19: gateway.v1.PagesVerifyReleaseCommand
+	(*PagesMaterializePreviewCommand)(nil),    // 20: gateway.v1.PagesMaterializePreviewCommand
+	(*PagesDeployCertificateCommand)(nil),     // 21: gateway.v1.PagesDeployCertificateCommand
+	(*PagesRemovePreviewCommand)(nil),         // 22: gateway.v1.PagesRemovePreviewCommand
+	(*PagesActivateTagRouteCommand)(nil),      // 23: gateway.v1.PagesActivateTagRouteCommand
+	(*PagesDeactivateTagRouteCommand)(nil),    // 24: gateway.v1.PagesDeactivateTagRouteCommand
+	(*PagesCleanupDeploymentCommand)(nil),     // 25: gateway.v1.PagesCleanupDeploymentCommand
+	(*PagesInventoryCommand)(nil),             // 26: gateway.v1.PagesInventoryCommand
+	(*PagesStoragePreflightCommand)(nil),      // 27: gateway.v1.PagesStoragePreflightCommand
+	(*PagesStageRuntimeConfigCommand)(nil),    // 28: gateway.v1.PagesStageRuntimeConfigCommand
+	(*PagesActivateRuntimeConfigCommand)(nil), // 29: gateway.v1.PagesActivateRuntimeConfigCommand
+	(*PagesRemoveRuntimeConfigCommand)(nil),   // 30: gateway.v1.PagesRemoveRuntimeConfigCommand
+	(*SyncRelayGrantsCommand)(nil),            // 31: gateway.v1.SyncRelayGrantsCommand
+	(*RelayGrantAssignment)(nil),              // 32: gateway.v1.RelayGrantAssignment
+	(*RelaySignedGrant)(nil),                  // 33: gateway.v1.RelaySignedGrant
+	(*SyncProxySecureLinksCommand)(nil),       // 34: gateway.v1.SyncProxySecureLinksCommand
+	(*ProxySecureLinkBinding)(nil),            // 35: gateway.v1.ProxySecureLinkBinding
+	(*ProbeProxySecureLinkCommand)(nil),       // 36: gateway.v1.ProbeProxySecureLinkCommand
+	(*NodeExecCommand)(nil),                   // 37: gateway.v1.NodeExecCommand
+	(*NodeFileCommand)(nil),                   // 38: gateway.v1.NodeFileCommand
+	(*ApplyConfigCommand)(nil),                // 39: gateway.v1.ApplyConfigCommand
+	(*RemoveConfigCommand)(nil),               // 40: gateway.v1.RemoveConfigCommand
+	(*DeployCertCommand)(nil),                 // 41: gateway.v1.DeployCertCommand
+	(*ApplyTlsBundleCommand)(nil),             // 42: gateway.v1.ApplyTlsBundleCommand
+	(*VersionedCertBundle)(nil),               // 43: gateway.v1.VersionedCertBundle
+	(*InspectCertificatesCommand)(nil),        // 44: gateway.v1.InspectCertificatesCommand
+	(*ExportLegacyCertificatesCommand)(nil),   // 45: gateway.v1.ExportLegacyCertificatesCommand
+	(*RemoveCertificateReplicaCommand)(nil),   // 46: gateway.v1.RemoveCertificateReplicaCommand
+	(*RemoveCertCommand)(nil),                 // 47: gateway.v1.RemoveCertCommand
+	(*FullSyncCommand)(nil),                   // 48: gateway.v1.FullSyncCommand
+	(*HostConfig)(nil),                        // 49: gateway.v1.HostConfig
+	(*CertBundle)(nil),                        // 50: gateway.v1.CertBundle
+	(*HtpasswdFile)(nil),                      // 51: gateway.v1.HtpasswdFile
+	(*UpdateGlobalConfigCommand)(nil),         // 52: gateway.v1.UpdateGlobalConfigCommand
+	(*DeployHtpasswdCommand)(nil),             // 53: gateway.v1.DeployHtpasswdCommand
+	(*RemoveHtpasswdCommand)(nil),             // 54: gateway.v1.RemoveHtpasswdCommand
+	(*TestConfigCommand)(nil),                 // 55: gateway.v1.TestConfigCommand
+	(*RequestHealthCommand)(nil),              // 56: gateway.v1.RequestHealthCommand
+	(*RequestStatsCommand)(nil),               // 57: gateway.v1.RequestStatsCommand
+	(*SetDaemonLogStreamCommand)(nil),         // 58: gateway.v1.SetDaemonLogStreamCommand
+	(*DeployAcmeChallengeCommand)(nil),        // 59: gateway.v1.DeployAcmeChallengeCommand
+	(*RemoveAcmeChallengeCommand)(nil),        // 60: gateway.v1.RemoveAcmeChallengeCommand
+	(*ReadGlobalConfigCommand)(nil),           // 61: gateway.v1.ReadGlobalConfigCommand
+	(*RequestTrafficStatsCommand)(nil),        // 62: gateway.v1.RequestTrafficStatsCommand
+	(*DockerContainerCommand)(nil),            // 63: gateway.v1.DockerContainerCommand
+	(*DockerImageCommand)(nil),                // 64: gateway.v1.DockerImageCommand
+	(*DockerVolumeCommand)(nil),               // 65: gateway.v1.DockerVolumeCommand
+	(*DockerNetworkCommand)(nil),              // 66: gateway.v1.DockerNetworkCommand
+	(*DockerDeploymentCommand)(nil),           // 67: gateway.v1.DockerDeploymentCommand
+	(*DockerRuntimeCommand)(nil),              // 68: gateway.v1.DockerRuntimeCommand
+	(*DockerRuntimeStatus)(nil),               // 69: gateway.v1.DockerRuntimeStatus
+	(*DockerExecCommand)(nil),                 // 70: gateway.v1.DockerExecCommand
+	(*DockerFileCommand)(nil),                 // 71: gateway.v1.DockerFileCommand
+	(*DockerConfigPushCommand)(nil),           // 72: gateway.v1.DockerConfigPushCommand
+	(*RegistryConfig)(nil),                    // 73: gateway.v1.RegistryConfig
+	(*DockerLogsCommand)(nil),                 // 74: gateway.v1.DockerLogsCommand
+	(*ExecInput)(nil),                         // 75: gateway.v1.ExecInput
+	(*ExecOutput)(nil),                        // 76: gateway.v1.ExecOutput
+	(*ContainerStats)(nil),                    // 77: gateway.v1.ContainerStats
+	(*GpuDevice)(nil),                         // 78: gateway.v1.GpuDevice
+	(*LogStreamMessage)(nil),                  // 79: gateway.v1.LogStreamMessage
+	(*LogSubscribeAck)(nil),                   // 80: gateway.v1.LogSubscribeAck
+	(*LogEntry)(nil),                          // 81: gateway.v1.LogEntry
+	(*LogStreamControl)(nil),                  // 82: gateway.v1.LogStreamControl
+	(*LogSubscribe)(nil),                      // 83: gateway.v1.LogSubscribe
+	(*LogUnsubscribe)(nil),                    // 84: gateway.v1.LogUnsubscribe
+	(*UpdateDaemonCommand)(nil),               // 85: gateway.v1.UpdateDaemonCommand
+	(*DockerMigrationCommand)(nil),            // 86: gateway.v1.DockerMigrationCommand
+	(*DockerDatabaseCommand)(nil),             // 87: gateway.v1.DockerDatabaseCommand
+	(*MigrationTransferMessage)(nil),          // 88: gateway.v1.MigrationTransferMessage
+	(*MigrationTransferControl)(nil),          // 89: gateway.v1.MigrationTransferControl
+	(*MigrationTransferHello)(nil),            // 90: gateway.v1.MigrationTransferHello
+	(*MigrationArtifactRead)(nil),             // 91: gateway.v1.MigrationArtifactRead
+	(*MigrationArtifactWrite)(nil),            // 92: gateway.v1.MigrationArtifactWrite
+	(*MigrationArtifactChunk)(nil),            // 93: gateway.v1.MigrationArtifactChunk
+	(*MigrationArtifactAck)(nil),              // 94: gateway.v1.MigrationArtifactAck
+	(*MigrationArtifactError)(nil),            // 95: gateway.v1.MigrationArtifactError
+	(*MigrationHeartbeat)(nil),                // 96: gateway.v1.MigrationHeartbeat
+	nil,                                       // 97: gateway.v1.DaemonLogEntry.FieldsEntry
+	nil,                                       // 98: gateway.v1.DockerVolumeCommand.LabelsEntry
 }
 var file_gateway_v1_nginx_daemon_proto_depIdxs = []int32{
-	8,  // 0: gateway.v1.DaemonMessage.register:type_name -> gateway.v1.RegisterMessage
-	9,  // 1: gateway.v1.DaemonMessage.command_result:type_name -> gateway.v1.CommandResult
-	10, // 2: gateway.v1.DaemonMessage.health_report:type_name -> gateway.v1.HealthReport
-	11, // 3: gateway.v1.DaemonMessage.stats_report:type_name -> gateway.v1.StatsReport
-	7,  // 4: gateway.v1.DaemonMessage.daemon_log:type_name -> gateway.v1.DaemonLogEntry
-	60, // 5: gateway.v1.DaemonMessage.exec_output:type_name -> gateway.v1.ExecOutput
-	53, // 6: gateway.v1.DaemonMessage.docker_runtime_status:type_name -> gateway.v1.DockerRuntimeStatus
-	81, // 7: gateway.v1.DaemonLogEntry.fields:type_name -> gateway.v1.DaemonLogEntry.FieldsEntry
-	53, // 8: gateway.v1.RegisterMessage.docker_runtime_status:type_name -> gateway.v1.DockerRuntimeStatus
-	12, // 9: gateway.v1.HealthReport.disk_mounts:type_name -> gateway.v1.DiskMount
-	13, // 10: gateway.v1.HealthReport.network_interfaces:type_name -> gateway.v1.NetworkInterface
-	61, // 11: gateway.v1.HealthReport.container_stats:type_name -> gateway.v1.ContainerStats
-	62, // 12: gateway.v1.HealthReport.gpu_devices:type_name -> gateway.v1.GpuDevice
-	23, // 13: gateway.v1.GatewayCommand.apply_config:type_name -> gateway.v1.ApplyConfigCommand
-	24, // 14: gateway.v1.GatewayCommand.remove_config:type_name -> gateway.v1.RemoveConfigCommand
-	25, // 15: gateway.v1.GatewayCommand.deploy_cert:type_name -> gateway.v1.DeployCertCommand
-	31, // 16: gateway.v1.GatewayCommand.remove_cert:type_name -> gateway.v1.RemoveCertCommand
-	32, // 17: gateway.v1.GatewayCommand.full_sync:type_name -> gateway.v1.FullSyncCommand
-	36, // 18: gateway.v1.GatewayCommand.update_global_config:type_name -> gateway.v1.UpdateGlobalConfigCommand
-	37, // 19: gateway.v1.GatewayCommand.deploy_htpasswd:type_name -> gateway.v1.DeployHtpasswdCommand
-	39, // 20: gateway.v1.GatewayCommand.test_config:type_name -> gateway.v1.TestConfigCommand
-	40, // 21: gateway.v1.GatewayCommand.request_health:type_name -> gateway.v1.RequestHealthCommand
-	41, // 22: gateway.v1.GatewayCommand.request_stats:type_name -> gateway.v1.RequestStatsCommand
-	42, // 23: gateway.v1.GatewayCommand.set_daemon_log_stream:type_name -> gateway.v1.SetDaemonLogStreamCommand
-	38, // 24: gateway.v1.GatewayCommand.remove_htpasswd:type_name -> gateway.v1.RemoveHtpasswdCommand
-	43, // 25: gateway.v1.GatewayCommand.deploy_acme_challenge:type_name -> gateway.v1.DeployAcmeChallengeCommand
-	44, // 26: gateway.v1.GatewayCommand.remove_acme_challenge:type_name -> gateway.v1.RemoveAcmeChallengeCommand
-	45, // 27: gateway.v1.GatewayCommand.read_global_config:type_name -> gateway.v1.ReadGlobalConfigCommand
-	46, // 28: gateway.v1.GatewayCommand.request_traffic_stats:type_name -> gateway.v1.RequestTrafficStatsCommand
-	47, // 29: gateway.v1.GatewayCommand.docker_container:type_name -> gateway.v1.DockerContainerCommand
-	48, // 30: gateway.v1.GatewayCommand.docker_image:type_name -> gateway.v1.DockerImageCommand
-	49, // 31: gateway.v1.GatewayCommand.docker_volume:type_name -> gateway.v1.DockerVolumeCommand
-	50, // 32: gateway.v1.GatewayCommand.docker_network:type_name -> gateway.v1.DockerNetworkCommand
-	54, // 33: gateway.v1.GatewayCommand.docker_exec:type_name -> gateway.v1.DockerExecCommand
-	55, // 34: gateway.v1.GatewayCommand.docker_file:type_name -> gateway.v1.DockerFileCommand
-	56, // 35: gateway.v1.GatewayCommand.docker_config_push:type_name -> gateway.v1.DockerConfigPushCommand
-	58, // 36: gateway.v1.GatewayCommand.docker_logs:type_name -> gateway.v1.DockerLogsCommand
-	59, // 37: gateway.v1.GatewayCommand.exec_input:type_name -> gateway.v1.ExecInput
-	21, // 38: gateway.v1.GatewayCommand.node_exec:type_name -> gateway.v1.NodeExecCommand
-	69, // 39: gateway.v1.GatewayCommand.update_daemon:type_name -> gateway.v1.UpdateDaemonCommand
-	51, // 40: gateway.v1.GatewayCommand.docker_deployment:type_name -> gateway.v1.DockerDeploymentCommand
-	22, // 41: gateway.v1.GatewayCommand.node_file:type_name -> gateway.v1.NodeFileCommand
-	70, // 42: gateway.v1.GatewayCommand.docker_migration:type_name -> gateway.v1.DockerMigrationCommand
-	71, // 43: gateway.v1.GatewayCommand.docker_database:type_name -> gateway.v1.DockerDatabaseCommand
-	26, // 44: gateway.v1.GatewayCommand.apply_tls_bundle:type_name -> gateway.v1.ApplyTlsBundleCommand
-	28, // 45: gateway.v1.GatewayCommand.inspect_certificates:type_name -> gateway.v1.InspectCertificatesCommand
-	29, // 46: gateway.v1.GatewayCommand.export_legacy_certificates:type_name -> gateway.v1.ExportLegacyCertificatesCommand
-	30, // 47: gateway.v1.GatewayCommand.remove_certificate_replica:type_name -> gateway.v1.RemoveCertificateReplicaCommand
-	15, // 48: gateway.v1.GatewayCommand.sync_relay_grants:type_name -> gateway.v1.SyncRelayGrantsCommand
-	18, // 49: gateway.v1.GatewayCommand.sync_proxy_secure_links:type_name -> gateway.v1.SyncProxySecureLinksCommand
-	20, // 50: gateway.v1.GatewayCommand.probe_proxy_secure_link:type_name -> gateway.v1.ProbeProxySecureLinkCommand
-	52, // 51: gateway.v1.GatewayCommand.docker_runtime:type_name -> gateway.v1.DockerRuntimeCommand
-	16, // 52: gateway.v1.SyncRelayGrantsCommand.grants:type_name -> gateway.v1.RelayGrantAssignment
-	17, // 53: gateway.v1.RelayGrantAssignment.grant:type_name -> gateway.v1.RelaySignedGrant
-	19, // 54: gateway.v1.SyncProxySecureLinksCommand.bindings:type_name -> gateway.v1.ProxySecureLinkBinding
-	27, // 55: gateway.v1.ApplyTlsBundleCommand.certificates:type_name -> gateway.v1.VersionedCertBundle
-	33, // 56: gateway.v1.FullSyncCommand.hosts:type_name -> gateway.v1.HostConfig
-	34, // 57: gateway.v1.FullSyncCommand.certs:type_name -> gateway.v1.CertBundle
-	35, // 58: gateway.v1.FullSyncCommand.htpasswd_files:type_name -> gateway.v1.HtpasswdFile
-	82, // 59: gateway.v1.DockerVolumeCommand.labels:type_name -> gateway.v1.DockerVolumeCommand.LabelsEntry
-	57, // 60: gateway.v1.DockerConfigPushCommand.registries:type_name -> gateway.v1.RegistryConfig
-	64, // 61: gateway.v1.LogStreamMessage.subscribe_ack:type_name -> gateway.v1.LogSubscribeAck
-	65, // 62: gateway.v1.LogStreamMessage.entry:type_name -> gateway.v1.LogEntry
-	67, // 63: gateway.v1.LogStreamControl.subscribe:type_name -> gateway.v1.LogSubscribe
-	68, // 64: gateway.v1.LogStreamControl.unsubscribe:type_name -> gateway.v1.LogUnsubscribe
-	74, // 65: gateway.v1.MigrationTransferMessage.hello:type_name -> gateway.v1.MigrationTransferHello
-	77, // 66: gateway.v1.MigrationTransferMessage.chunk:type_name -> gateway.v1.MigrationArtifactChunk
-	78, // 67: gateway.v1.MigrationTransferMessage.ack:type_name -> gateway.v1.MigrationArtifactAck
-	79, // 68: gateway.v1.MigrationTransferMessage.error:type_name -> gateway.v1.MigrationArtifactError
-	75, // 69: gateway.v1.MigrationTransferControl.read:type_name -> gateway.v1.MigrationArtifactRead
-	76, // 70: gateway.v1.MigrationTransferControl.write:type_name -> gateway.v1.MigrationArtifactWrite
-	77, // 71: gateway.v1.MigrationTransferControl.chunk:type_name -> gateway.v1.MigrationArtifactChunk
-	78, // 72: gateway.v1.MigrationTransferControl.ack:type_name -> gateway.v1.MigrationArtifactAck
-	79, // 73: gateway.v1.MigrationTransferControl.error:type_name -> gateway.v1.MigrationArtifactError
-	80, // 74: gateway.v1.MigrationTransferControl.heartbeat:type_name -> gateway.v1.MigrationHeartbeat
-	0,  // 75: gateway.v1.NodeEnrollment.Enroll:input_type -> gateway.v1.EnrollRequest
-	2,  // 76: gateway.v1.NodeEnrollment.RenewCertificate:input_type -> gateway.v1.RenewCertRequest
-	6,  // 77: gateway.v1.NodeControl.CommandStream:input_type -> gateway.v1.DaemonMessage
-	4,  // 78: gateway.v1.MaintenanceAccess.Redeem:input_type -> gateway.v1.MaintenanceAccessRedeemRequest
-	72, // 79: gateway.v1.MigrationTransfer.Transfer:input_type -> gateway.v1.MigrationTransferMessage
-	63, // 80: gateway.v1.LogStream.StreamLogs:input_type -> gateway.v1.LogStreamMessage
-	1,  // 81: gateway.v1.NodeEnrollment.Enroll:output_type -> gateway.v1.EnrollResponse
-	3,  // 82: gateway.v1.NodeEnrollment.RenewCertificate:output_type -> gateway.v1.RenewCertResponse
-	14, // 83: gateway.v1.NodeControl.CommandStream:output_type -> gateway.v1.GatewayCommand
-	5,  // 84: gateway.v1.MaintenanceAccess.Redeem:output_type -> gateway.v1.MaintenanceAccessReply
-	73, // 85: gateway.v1.MigrationTransfer.Transfer:output_type -> gateway.v1.MigrationTransferControl
-	66, // 86: gateway.v1.LogStream.StreamLogs:output_type -> gateway.v1.LogStreamControl
-	81, // [81:87] is the sub-list for method output_type
-	75, // [75:81] is the sub-list for method input_type
-	75, // [75:75] is the sub-list for extension type_name
-	75, // [75:75] is the sub-list for extension extendee
-	0,  // [0:75] is the sub-list for field type_name
+	9,  // 0: gateway.v1.DaemonMessage.register:type_name -> gateway.v1.RegisterMessage
+	10, // 1: gateway.v1.DaemonMessage.command_result:type_name -> gateway.v1.CommandResult
+	11, // 2: gateway.v1.DaemonMessage.health_report:type_name -> gateway.v1.HealthReport
+	12, // 3: gateway.v1.DaemonMessage.stats_report:type_name -> gateway.v1.StatsReport
+	8,  // 4: gateway.v1.DaemonMessage.daemon_log:type_name -> gateway.v1.DaemonLogEntry
+	76, // 5: gateway.v1.DaemonMessage.exec_output:type_name -> gateway.v1.ExecOutput
+	69, // 6: gateway.v1.DaemonMessage.docker_runtime_status:type_name -> gateway.v1.DockerRuntimeStatus
+	97, // 7: gateway.v1.DaemonLogEntry.fields:type_name -> gateway.v1.DaemonLogEntry.FieldsEntry
+	69, // 8: gateway.v1.RegisterMessage.docker_runtime_status:type_name -> gateway.v1.DockerRuntimeStatus
+	13, // 9: gateway.v1.HealthReport.disk_mounts:type_name -> gateway.v1.DiskMount
+	14, // 10: gateway.v1.HealthReport.network_interfaces:type_name -> gateway.v1.NetworkInterface
+	77, // 11: gateway.v1.HealthReport.container_stats:type_name -> gateway.v1.ContainerStats
+	78, // 12: gateway.v1.HealthReport.gpu_devices:type_name -> gateway.v1.GpuDevice
+	39, // 13: gateway.v1.GatewayCommand.apply_config:type_name -> gateway.v1.ApplyConfigCommand
+	40, // 14: gateway.v1.GatewayCommand.remove_config:type_name -> gateway.v1.RemoveConfigCommand
+	41, // 15: gateway.v1.GatewayCommand.deploy_cert:type_name -> gateway.v1.DeployCertCommand
+	47, // 16: gateway.v1.GatewayCommand.remove_cert:type_name -> gateway.v1.RemoveCertCommand
+	48, // 17: gateway.v1.GatewayCommand.full_sync:type_name -> gateway.v1.FullSyncCommand
+	52, // 18: gateway.v1.GatewayCommand.update_global_config:type_name -> gateway.v1.UpdateGlobalConfigCommand
+	53, // 19: gateway.v1.GatewayCommand.deploy_htpasswd:type_name -> gateway.v1.DeployHtpasswdCommand
+	55, // 20: gateway.v1.GatewayCommand.test_config:type_name -> gateway.v1.TestConfigCommand
+	56, // 21: gateway.v1.GatewayCommand.request_health:type_name -> gateway.v1.RequestHealthCommand
+	57, // 22: gateway.v1.GatewayCommand.request_stats:type_name -> gateway.v1.RequestStatsCommand
+	58, // 23: gateway.v1.GatewayCommand.set_daemon_log_stream:type_name -> gateway.v1.SetDaemonLogStreamCommand
+	54, // 24: gateway.v1.GatewayCommand.remove_htpasswd:type_name -> gateway.v1.RemoveHtpasswdCommand
+	59, // 25: gateway.v1.GatewayCommand.deploy_acme_challenge:type_name -> gateway.v1.DeployAcmeChallengeCommand
+	60, // 26: gateway.v1.GatewayCommand.remove_acme_challenge:type_name -> gateway.v1.RemoveAcmeChallengeCommand
+	61, // 27: gateway.v1.GatewayCommand.read_global_config:type_name -> gateway.v1.ReadGlobalConfigCommand
+	62, // 28: gateway.v1.GatewayCommand.request_traffic_stats:type_name -> gateway.v1.RequestTrafficStatsCommand
+	63, // 29: gateway.v1.GatewayCommand.docker_container:type_name -> gateway.v1.DockerContainerCommand
+	64, // 30: gateway.v1.GatewayCommand.docker_image:type_name -> gateway.v1.DockerImageCommand
+	65, // 31: gateway.v1.GatewayCommand.docker_volume:type_name -> gateway.v1.DockerVolumeCommand
+	66, // 32: gateway.v1.GatewayCommand.docker_network:type_name -> gateway.v1.DockerNetworkCommand
+	70, // 33: gateway.v1.GatewayCommand.docker_exec:type_name -> gateway.v1.DockerExecCommand
+	71, // 34: gateway.v1.GatewayCommand.docker_file:type_name -> gateway.v1.DockerFileCommand
+	72, // 35: gateway.v1.GatewayCommand.docker_config_push:type_name -> gateway.v1.DockerConfigPushCommand
+	74, // 36: gateway.v1.GatewayCommand.docker_logs:type_name -> gateway.v1.DockerLogsCommand
+	75, // 37: gateway.v1.GatewayCommand.exec_input:type_name -> gateway.v1.ExecInput
+	37, // 38: gateway.v1.GatewayCommand.node_exec:type_name -> gateway.v1.NodeExecCommand
+	85, // 39: gateway.v1.GatewayCommand.update_daemon:type_name -> gateway.v1.UpdateDaemonCommand
+	67, // 40: gateway.v1.GatewayCommand.docker_deployment:type_name -> gateway.v1.DockerDeploymentCommand
+	38, // 41: gateway.v1.GatewayCommand.node_file:type_name -> gateway.v1.NodeFileCommand
+	86, // 42: gateway.v1.GatewayCommand.docker_migration:type_name -> gateway.v1.DockerMigrationCommand
+	87, // 43: gateway.v1.GatewayCommand.docker_database:type_name -> gateway.v1.DockerDatabaseCommand
+	42, // 44: gateway.v1.GatewayCommand.apply_tls_bundle:type_name -> gateway.v1.ApplyTlsBundleCommand
+	44, // 45: gateway.v1.GatewayCommand.inspect_certificates:type_name -> gateway.v1.InspectCertificatesCommand
+	45, // 46: gateway.v1.GatewayCommand.export_legacy_certificates:type_name -> gateway.v1.ExportLegacyCertificatesCommand
+	46, // 47: gateway.v1.GatewayCommand.remove_certificate_replica:type_name -> gateway.v1.RemoveCertificateReplicaCommand
+	31, // 48: gateway.v1.GatewayCommand.sync_relay_grants:type_name -> gateway.v1.SyncRelayGrantsCommand
+	34, // 49: gateway.v1.GatewayCommand.sync_proxy_secure_links:type_name -> gateway.v1.SyncProxySecureLinksCommand
+	36, // 50: gateway.v1.GatewayCommand.probe_proxy_secure_link:type_name -> gateway.v1.ProbeProxySecureLinkCommand
+	68, // 51: gateway.v1.GatewayCommand.docker_runtime:type_name -> gateway.v1.DockerRuntimeCommand
+	16, // 52: gateway.v1.GatewayCommand.pages_upload_init:type_name -> gateway.v1.PagesUploadInitCommand
+	17, // 53: gateway.v1.GatewayCommand.pages_upload_chunk:type_name -> gateway.v1.PagesUploadChunkCommand
+	18, // 54: gateway.v1.GatewayCommand.pages_upload_finalize:type_name -> gateway.v1.PagesUploadFinalizeCommand
+	19, // 55: gateway.v1.GatewayCommand.pages_verify_release:type_name -> gateway.v1.PagesVerifyReleaseCommand
+	20, // 56: gateway.v1.GatewayCommand.pages_materialize_preview:type_name -> gateway.v1.PagesMaterializePreviewCommand
+	22, // 57: gateway.v1.GatewayCommand.pages_remove_preview:type_name -> gateway.v1.PagesRemovePreviewCommand
+	23, // 58: gateway.v1.GatewayCommand.pages_activate_tag_route:type_name -> gateway.v1.PagesActivateTagRouteCommand
+	24, // 59: gateway.v1.GatewayCommand.pages_deactivate_tag_route:type_name -> gateway.v1.PagesDeactivateTagRouteCommand
+	25, // 60: gateway.v1.GatewayCommand.pages_cleanup_deployment:type_name -> gateway.v1.PagesCleanupDeploymentCommand
+	26, // 61: gateway.v1.GatewayCommand.pages_inventory:type_name -> gateway.v1.PagesInventoryCommand
+	27, // 62: gateway.v1.GatewayCommand.pages_storage_preflight:type_name -> gateway.v1.PagesStoragePreflightCommand
+	21, // 63: gateway.v1.GatewayCommand.pages_deploy_certificate:type_name -> gateway.v1.PagesDeployCertificateCommand
+	28, // 64: gateway.v1.GatewayCommand.pages_stage_runtime_config:type_name -> gateway.v1.PagesStageRuntimeConfigCommand
+	29, // 65: gateway.v1.GatewayCommand.pages_activate_runtime_config:type_name -> gateway.v1.PagesActivateRuntimeConfigCommand
+	30, // 66: gateway.v1.GatewayCommand.pages_remove_runtime_config:type_name -> gateway.v1.PagesRemoveRuntimeConfigCommand
+	0,  // 67: gateway.v1.PagesStageRuntimeConfigCommand.binding_kind:type_name -> gateway.v1.PagesRuntimeConfigBindingKind
+	0,  // 68: gateway.v1.PagesActivateRuntimeConfigCommand.binding_kind:type_name -> gateway.v1.PagesRuntimeConfigBindingKind
+	0,  // 69: gateway.v1.PagesRemoveRuntimeConfigCommand.binding_kind:type_name -> gateway.v1.PagesRuntimeConfigBindingKind
+	32, // 70: gateway.v1.SyncRelayGrantsCommand.grants:type_name -> gateway.v1.RelayGrantAssignment
+	33, // 71: gateway.v1.RelayGrantAssignment.grant:type_name -> gateway.v1.RelaySignedGrant
+	35, // 72: gateway.v1.SyncProxySecureLinksCommand.bindings:type_name -> gateway.v1.ProxySecureLinkBinding
+	43, // 73: gateway.v1.ApplyTlsBundleCommand.certificates:type_name -> gateway.v1.VersionedCertBundle
+	49, // 74: gateway.v1.FullSyncCommand.hosts:type_name -> gateway.v1.HostConfig
+	50, // 75: gateway.v1.FullSyncCommand.certs:type_name -> gateway.v1.CertBundle
+	51, // 76: gateway.v1.FullSyncCommand.htpasswd_files:type_name -> gateway.v1.HtpasswdFile
+	98, // 77: gateway.v1.DockerVolumeCommand.labels:type_name -> gateway.v1.DockerVolumeCommand.LabelsEntry
+	73, // 78: gateway.v1.DockerConfigPushCommand.registries:type_name -> gateway.v1.RegistryConfig
+	80, // 79: gateway.v1.LogStreamMessage.subscribe_ack:type_name -> gateway.v1.LogSubscribeAck
+	81, // 80: gateway.v1.LogStreamMessage.entry:type_name -> gateway.v1.LogEntry
+	83, // 81: gateway.v1.LogStreamControl.subscribe:type_name -> gateway.v1.LogSubscribe
+	84, // 82: gateway.v1.LogStreamControl.unsubscribe:type_name -> gateway.v1.LogUnsubscribe
+	90, // 83: gateway.v1.MigrationTransferMessage.hello:type_name -> gateway.v1.MigrationTransferHello
+	93, // 84: gateway.v1.MigrationTransferMessage.chunk:type_name -> gateway.v1.MigrationArtifactChunk
+	94, // 85: gateway.v1.MigrationTransferMessage.ack:type_name -> gateway.v1.MigrationArtifactAck
+	95, // 86: gateway.v1.MigrationTransferMessage.error:type_name -> gateway.v1.MigrationArtifactError
+	91, // 87: gateway.v1.MigrationTransferControl.read:type_name -> gateway.v1.MigrationArtifactRead
+	92, // 88: gateway.v1.MigrationTransferControl.write:type_name -> gateway.v1.MigrationArtifactWrite
+	93, // 89: gateway.v1.MigrationTransferControl.chunk:type_name -> gateway.v1.MigrationArtifactChunk
+	94, // 90: gateway.v1.MigrationTransferControl.ack:type_name -> gateway.v1.MigrationArtifactAck
+	95, // 91: gateway.v1.MigrationTransferControl.error:type_name -> gateway.v1.MigrationArtifactError
+	96, // 92: gateway.v1.MigrationTransferControl.heartbeat:type_name -> gateway.v1.MigrationHeartbeat
+	1,  // 93: gateway.v1.NodeEnrollment.Enroll:input_type -> gateway.v1.EnrollRequest
+	3,  // 94: gateway.v1.NodeEnrollment.RenewCertificate:input_type -> gateway.v1.RenewCertRequest
+	7,  // 95: gateway.v1.NodeControl.CommandStream:input_type -> gateway.v1.DaemonMessage
+	5,  // 96: gateway.v1.MaintenanceAccess.Redeem:input_type -> gateway.v1.MaintenanceAccessRedeemRequest
+	88, // 97: gateway.v1.MigrationTransfer.Transfer:input_type -> gateway.v1.MigrationTransferMessage
+	79, // 98: gateway.v1.LogStream.StreamLogs:input_type -> gateway.v1.LogStreamMessage
+	2,  // 99: gateway.v1.NodeEnrollment.Enroll:output_type -> gateway.v1.EnrollResponse
+	4,  // 100: gateway.v1.NodeEnrollment.RenewCertificate:output_type -> gateway.v1.RenewCertResponse
+	15, // 101: gateway.v1.NodeControl.CommandStream:output_type -> gateway.v1.GatewayCommand
+	6,  // 102: gateway.v1.MaintenanceAccess.Redeem:output_type -> gateway.v1.MaintenanceAccessReply
+	89, // 103: gateway.v1.MigrationTransfer.Transfer:output_type -> gateway.v1.MigrationTransferControl
+	82, // 104: gateway.v1.LogStream.StreamLogs:output_type -> gateway.v1.LogStreamControl
+	99, // [99:105] is the sub-list for method output_type
+	93, // [93:99] is the sub-list for method input_type
+	93, // [93:93] is the sub-list for extension type_name
+	93, // [93:93] is the sub-list for extension extendee
+	0,  // [0:93] is the sub-list for field type_name
 }
 
 func init() { file_gateway_v1_nginx_daemon_proto_init() }
@@ -7784,22 +9073,37 @@ func file_gateway_v1_nginx_daemon_proto_init() {
 		(*GatewayCommand_SyncProxySecureLinks)(nil),
 		(*GatewayCommand_ProbeProxySecureLink)(nil),
 		(*GatewayCommand_DockerRuntime)(nil),
+		(*GatewayCommand_PagesUploadInit)(nil),
+		(*GatewayCommand_PagesUploadChunk)(nil),
+		(*GatewayCommand_PagesUploadFinalize)(nil),
+		(*GatewayCommand_PagesVerifyRelease)(nil),
+		(*GatewayCommand_PagesMaterializePreview)(nil),
+		(*GatewayCommand_PagesRemovePreview)(nil),
+		(*GatewayCommand_PagesActivateTagRoute)(nil),
+		(*GatewayCommand_PagesDeactivateTagRoute)(nil),
+		(*GatewayCommand_PagesCleanupDeployment)(nil),
+		(*GatewayCommand_PagesInventory)(nil),
+		(*GatewayCommand_PagesStoragePreflight)(nil),
+		(*GatewayCommand_PagesDeployCertificate)(nil),
+		(*GatewayCommand_PagesStageRuntimeConfig)(nil),
+		(*GatewayCommand_PagesActivateRuntimeConfig)(nil),
+		(*GatewayCommand_PagesRemoveRuntimeConfig)(nil),
 	}
-	file_gateway_v1_nginx_daemon_proto_msgTypes[63].OneofWrappers = []any{
+	file_gateway_v1_nginx_daemon_proto_msgTypes[78].OneofWrappers = []any{
 		(*LogStreamMessage_SubscribeAck)(nil),
 		(*LogStreamMessage_Entry)(nil),
 	}
-	file_gateway_v1_nginx_daemon_proto_msgTypes[66].OneofWrappers = []any{
+	file_gateway_v1_nginx_daemon_proto_msgTypes[81].OneofWrappers = []any{
 		(*LogStreamControl_Subscribe)(nil),
 		(*LogStreamControl_Unsubscribe)(nil),
 	}
-	file_gateway_v1_nginx_daemon_proto_msgTypes[72].OneofWrappers = []any{
+	file_gateway_v1_nginx_daemon_proto_msgTypes[87].OneofWrappers = []any{
 		(*MigrationTransferMessage_Hello)(nil),
 		(*MigrationTransferMessage_Chunk)(nil),
 		(*MigrationTransferMessage_Ack)(nil),
 		(*MigrationTransferMessage_Error)(nil),
 	}
-	file_gateway_v1_nginx_daemon_proto_msgTypes[73].OneofWrappers = []any{
+	file_gateway_v1_nginx_daemon_proto_msgTypes[88].OneofWrappers = []any{
 		(*MigrationTransferControl_Read)(nil),
 		(*MigrationTransferControl_Write)(nil),
 		(*MigrationTransferControl_Chunk)(nil),
@@ -7812,13 +9116,14 @@ func file_gateway_v1_nginx_daemon_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_v1_nginx_daemon_proto_rawDesc), len(file_gateway_v1_nginx_daemon_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   83,
+			NumEnums:      1,
+			NumMessages:   98,
 			NumExtensions: 0,
 			NumServices:   5,
 		},
 		GoTypes:           file_gateway_v1_nginx_daemon_proto_goTypes,
 		DependencyIndexes: file_gateway_v1_nginx_daemon_proto_depIdxs,
+		EnumInfos:         file_gateway_v1_nginx_daemon_proto_enumTypes,
 		MessageInfos:      file_gateway_v1_nginx_daemon_proto_msgTypes,
 	}.Build()
 	File_gateway_v1_nginx_daemon_proto = out.File

@@ -232,6 +232,34 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(proxyService.cleanupMigratedHostSource).not.toHaveBeenCalled();
   });
 
+  it('completes cutover when an offline source defers immutable preview cleanup', async () => {
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: updateWhere })) })),
+    };
+    const audit = { log: vi.fn() };
+    const service = new DomainsService(db as never, audit as never);
+    service.setProxyService({ cleanupMigratedHostSource: vi.fn() } as never);
+    const cleanupMigratedSource = vi.fn().mockRejectedValue(new Error('source offline'));
+    service.setPageProfileService({ cleanupMigratedSource } as never);
+    const impact = {
+      root: { id: 'domain-1' },
+      sourceNode: { id: 'node-source' },
+      targetNode: { id: 'node-target', effectiveAddress: '1.1.1.1' },
+      domains: [{ id: 'domain-1', domain: '*.pages.example.net', dnsProvider: 'legacy', dnsStatus: 'valid' }],
+      proxyHosts: [],
+      pending: true,
+      migrationId: 'migration-1',
+    };
+    vi.spyOn(service as any, 'refreshExternalMigrationDns').mockResolvedValue(impact.domains[0]);
+
+    const result = await (service as any).completeIngressMigration(impact, 'user-1');
+
+    expect(result.status).toBe('cleanup_pending');
+    expect(cleanupMigratedSource).toHaveBeenCalledWith(['domain-1'], 'node-source');
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
   it('assigns legacy domains without inventing a managed DNS target', async () => {
     const legacyDomain = {
       id: 'domain-1',

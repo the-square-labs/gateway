@@ -73,9 +73,24 @@ export function AdditionalSecureLinkBindings({
   useRealtime("docker.deployment.changed", load);
 
   const validName = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name);
-  const canProvision = validName && selection.kind !== "manual" && isProxyUpstreamValid(selection);
+  const canProvision =
+    validName &&
+    (selection.kind === "docker_container" || selection.kind === "docker_deployment") &&
+    isProxyUpstreamValid(selection);
   const variableFor = (binding: ProxyAdditionalSecureLink) =>
     `{{additionalSecureLinks.${binding.name}}}`;
+  const actionColumnCount = bindings?.some(
+    (binding) => binding.purpose === "user_managed" && binding.status === "failed"
+  )
+    ? 2
+    : bindings?.some(
+          (binding) => binding.purpose === "user_managed" && binding.status === "active"
+        )
+      ? 1
+      : 0;
+  const bindingGridTemplate = `minmax(0,9rem) minmax(0,11rem) minmax(0,5rem) minmax(0,5rem) minmax(18rem,1fr) minmax(0,7rem)${
+    actionColumnCount > 0 ? ` repeat(${actionColumnCount}, 2.25rem)` : ""
+  }`;
 
   const resetDraft = () => {
     setAdding(false);
@@ -84,7 +99,11 @@ export function AdditionalSecureLinkBindings({
   };
 
   const provision = async () => {
-    if (!canProvision || selection.kind === "manual") return;
+    if (
+      !canProvision ||
+      (selection.kind !== "docker_container" && selection.kind !== "docker_deployment")
+    )
+      return;
     setPending(true);
     try {
       const binding = await api.createProxyAdditionalSecureLink(hostId, {
@@ -188,22 +207,32 @@ export function AdditionalSecureLinkBindings({
       ) : (
         <div className="overflow-x-auto">
           <div className="min-w-[900px]">
-            <div className="grid grid-cols-[minmax(0,9rem)_minmax(0,11rem)_minmax(0,5rem)_minmax(0,5rem)_minmax(18rem,1fr)_minmax(0,7rem)_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div
+              className="grid border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground"
+              style={{ gridTemplateColumns: bindingGridTemplate }}
+            >
               <div className="px-3 py-2">Name</div>
               <div className="border-l border-border px-3 py-2">Resource</div>
               <div className="border-l border-border px-3 py-2">Port</div>
               <div className="border-l border-border px-3 py-2">Scheme</div>
               <div className="border-l border-border px-3 py-2">Variable</div>
               <div className="border-l border-border px-3 py-2 text-center">Status</div>
-              <div className="border-l border-border" />
+              {Array.from({ length: actionColumnCount }, (_, index) => (
+                <div key={index} className="border-l border-border" />
+              ))}
             </div>
             {bindings.map((binding) => (
               <div
                 key={binding.id}
-                className="grid grid-cols-[minmax(0,9rem)_minmax(0,11rem)_minmax(0,5rem)_minmax(0,5rem)_minmax(18rem,1fr)_minmax(0,7rem)_2.25rem] border-b border-border last:border-b-0"
+                className="grid border-b border-border last:border-b-0"
+                style={{ gridTemplateColumns: bindingGridTemplate }}
               >
                 <div className="flex min-w-0 items-center px-3 py-2">
-                  <p className="truncate text-sm font-medium">{binding.name}</p>
+                  <p className="truncate text-sm font-medium">
+                    {binding.purpose === "additional_route"
+                      ? binding.managedRoutePath ?? "Managed route"
+                      : binding.name}
+                  </p>
                 </div>
                 <div
                   className="flex min-w-0 items-center border-l border-border px-3 py-2"
@@ -218,9 +247,15 @@ export function AdditionalSecureLinkBindings({
                   {binding.forwardScheme.toUpperCase()}
                 </div>
                 <div className="flex min-w-0 items-center border-l border-border px-3 py-2">
-                  <p className="truncate font-mono text-xs" title={variableFor(binding)}>
-                    {variableFor(binding)}
-                  </p>
+                  {binding.purpose === "additional_route" ? (
+                    <p className="truncate text-sm text-muted-foreground">
+                      Managed by Additional Route
+                    </p>
+                  ) : (
+                    <p className="truncate font-mono text-xs" title={variableFor(binding)}>
+                      {variableFor(binding)}
+                    </p>
+                  )}
                 </div>
                 <div className="flex min-h-9 items-stretch border-l border-border">
                   <Badge
@@ -236,35 +271,43 @@ export function AdditionalSecureLinkBindings({
                     {binding.status.replace("_", " ")}
                   </Badge>
                 </div>
-                {binding.status === "failed" ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-none border-l border-border"
-                    onClick={() => void retry(binding)}
-                    disabled={!canManage || retryingId === binding.id}
-                    aria-label={`Retry ${binding.name}`}
-                    title="Retry"
-                  >
-                    {retryingId === binding.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-4 w-4" />
-                    )}
-                  </Button>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-none border-l border-border"
-                    onClick={() => remove(binding)}
-                    disabled={!canManage || binding.status !== "active"}
-                    aria-label={`Remove ${binding.name}`}
-                    title="Remove"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
+                {actionColumnCount === 2 &&
+                  (binding.purpose === "user_managed" && binding.status === "failed" ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-none border-l border-border"
+                      onClick={() => void retry(binding)}
+                      disabled={!canManage || retryingId === binding.id}
+                      aria-label={`Retry ${binding.name}`}
+                      title="Retry"
+                    >
+                      {retryingId === binding.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                    </Button>
+                  ) : (
+                    <div className="h-9 w-9 border-l border-border" />
+                  ))}
+                {actionColumnCount >= 1 &&
+                  (binding.purpose === "user_managed" &&
+                  (binding.status === "active" || binding.status === "failed") ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-none border-l border-border"
+                      onClick={() => remove(binding)}
+                      disabled={!canManage}
+                      aria-label={`Remove ${binding.name}`}
+                      title="Remove"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <div className="h-9 w-9 border-l border-border" />
+                  ))}
               </div>
             ))}
           </div>

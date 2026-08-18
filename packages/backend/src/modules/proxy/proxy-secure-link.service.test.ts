@@ -114,6 +114,14 @@ describe('ProxySecureLinkService migration rollback', () => {
       'proxy.secure-link.changed',
       expect.objectContaining({ bindingId: binding.id, action: 'cleanup_pending' })
     );
+    expect(publish).toHaveBeenCalledWith(
+      'proxy.host.changed',
+      expect.objectContaining({
+        id: host.id,
+        action: 'additional_secure_link_changed',
+        bindingAction: 'cleanup_pending',
+      })
+    );
   });
 
   it('accepts only active additional binding variables', async () => {

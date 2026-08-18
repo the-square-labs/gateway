@@ -14,6 +14,7 @@ export interface AlertRule {
     | "integration"
     | "certificate"
     | "security"
+    | "pages"
     | "database_postgres"
     | "database_clickhouse"
     | "database_redis";
