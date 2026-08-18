@@ -1036,6 +1036,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(PageMaintenanceService, pageMaintenanceService);
   const pageProfileService = new PageProfileService(db, auditService, env.APP_URL);
   pageProfileService.setEventBus(eventBus);
+  pageProfileService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(PageProfileService, pageProfileService);
   const pageNodeRuntimeService = new PageNodeRuntimeService(
     db,
@@ -1197,6 +1198,7 @@ export async function initializeContainer(): Promise<void> {
     loggingRuntimeService,
     eventBus
   );
+  licenseEntitlementReconciler.setPageProfileService(pageProfileService);
   container.registerInstance(LicenseEntitlementReconcilerService, licenseEntitlementReconciler);
   const loggingMaintenanceService = new LoggingMaintenanceService(loggingClickHouseService, loggingFeatureService);
   loggingMaintenanceService.setEventBus(eventBus);

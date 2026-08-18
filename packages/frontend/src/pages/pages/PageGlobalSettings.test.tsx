@@ -92,7 +92,7 @@ describe("PagesSettingsSection", () => {
     );
 
     expect(await screen.findByText("Personal+")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save profile" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Enable Pages" })).toBeEnabled();
     expect(screen.getByRole("textbox")).toBeEnabled();
     for (const control of screen.getAllByRole("combobox")) {
@@ -102,7 +102,7 @@ describe("PagesSettingsSection", () => {
     expect(api.getPageProfileOptions).toHaveBeenCalledOnce();
 
     await user.type(screen.getByRole("textbox"), "-preview");
-    await user.click(screen.getByRole("button", { name: "Save profile" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(useLicensePaywallStore.getState().request).toMatchObject({
       capability: "Pages",
@@ -124,7 +124,7 @@ describe("PagesSettingsSection", () => {
       </MemoryRouter>
     );
 
-    const save = await screen.findByRole("button", { name: "Save profile" });
+    const save = await screen.findByRole("button", { name: "Save" });
     const toggle = screen.getByRole("button", { name: "Enable Pages" });
     const panel = screen.getByText("Pages").closest("div.border") as HTMLElement;
 
@@ -159,6 +159,6 @@ describe("PagesSettingsSection", () => {
     expect(input).toHaveClass("border-destructive");
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(screen.queryByText(/Template must|Rendered template/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save profile" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });

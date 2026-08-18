@@ -17,6 +17,7 @@ import { confirmAction } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import { PagesFeatureDisabledDialog } from "@/components/pages/PagesFeatureDisabledDialog";
 import { PagesTargetPicker } from "@/components/proxy/PagesTargetPicker";
 import {
   DEFAULT_PROXY_UPSTREAM,
@@ -54,7 +55,7 @@ import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { getNodeAppearanceColor } from "@/lib/node-appearance";
 import { api } from "@/services/api";
-import { requireLicenseFeature } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   CreateProxyAdditionalRouteRequest,
   DockerContainer,
@@ -712,6 +713,10 @@ function AdditionalRouteWizard({
   const [tags, setTags] = useState<PageTag[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [tagsLoading, setTagsLoading] = useState(false);
+  const [pagesDisabledDialogOpen, setPagesDisabledDialogOpen] = useState(false);
+  const pagesEnabled = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.pagesEnabled === true
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -721,18 +726,24 @@ function AdditionalRouteWizard({
       .listDockerContainerSnapshots()
       .then(setContainers)
       .catch(() => setContainers([]));
-    setProjectsLoading(true);
-    void api
-      .listPageProjects({ page: 1, limit: 100 })
-      .then((response) => setProjects(response.data ?? []))
-      .catch(() => setProjects([]))
-      .finally(() => setProjectsLoading(false));
-  }, [open, route]);
+    if (pagesEnabled) {
+      setProjectsLoading(true);
+      void api
+        .listPageProjects({ page: 1, limit: 100 })
+        .then((response) => setProjects(response.data ?? []))
+        .catch(() => setProjects([]))
+        .finally(() => setProjectsLoading(false));
+    } else {
+      setProjects([]);
+      setProjectsLoading(false);
+    }
+  }, [open, pagesEnabled, route]);
 
   useEffect(() => {
     if (!open) return;
-    if (!draft.pageProjectId) {
+    if (!draft.pageProjectId || !pagesEnabled) {
       setTags([]);
+      setTagsLoading(false);
       return;
     }
     setTagsLoading(true);
@@ -741,7 +752,7 @@ function AdditionalRouteWizard({
       .then(setTags)
       .catch(() => setTags([]))
       .finally(() => setTagsLoading(false));
-  }, [draft.pageProjectId, open]);
+  }, [draft.pageProjectId, open, pagesEnabled]);
 
   const selectedTag = useMemo(
     () => tags.find((tag) => tag.id === draft.pageTagId) ?? null,
@@ -837,7 +848,10 @@ function AdditionalRouteWizard({
             <Select
               value={draft.targetKind}
               onValueChange={(value) => {
-                if (value === "pages" && !requireLicenseFeature("pages", "Pages")) return;
+                if (value === "pages" && !pagesEnabled) {
+                  setPagesDisabledDialogOpen(true);
+                  return;
+                }
                 setTargetKind(value as ProxyAdditionalRouteTargetKind);
               }}
               disabled={saving}
@@ -865,9 +879,15 @@ function AdditionalRouteWizard({
               tags={tags}
               projectsLoading={projectsLoading}
               tagsLoading={tagsLoading}
-              availability={pageAvailability}
+              availability={pagesEnabled ? pageAvailability : undefined}
               availabilityDescription="The selected Tag must point to a ready Deployment."
-              disabled={saving}
+              disabled={saving || !pagesEnabled}
+              selectedProjectLabel={
+                route?.pageProjectName
+                  ? `${route.pageProjectName} · ${route.pageProjectSlug ?? "Project"}`
+                  : undefined
+              }
+              selectedTagLabel={route?.pageTagName ?? undefined}
             />
           ) : (
             <ProxyUpstreamFields
@@ -892,6 +912,10 @@ function AdditionalRouteWizard({
             {saving ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
+        <PagesFeatureDisabledDialog
+          open={pagesDisabledDialogOpen}
+          onOpenChange={setPagesDisabledDialogOpen}
+        />
       </DialogContent>
     </Dialog>
   );

@@ -47,8 +47,8 @@ const configSnapshot = { ...nodeSnapshot, data: configData };
 const statusPageSnapshot = { ...nodeSnapshot, data: { enabled: true } };
 const cloudflareSnapshot = { ...nodeSnapshot, data: true };
 const license = {
-  status: 'community' as const,
-  plan: 'community' as const,
+  status: 'active' as const,
+  plan: 'personal' as const,
   licensed: true,
   expiresAt: null,
   graceUntil: null,
@@ -58,8 +58,8 @@ const license = {
     managedNodes: 100,
     users: 10,
     customPermissionGroups: 5,
-    supportLevel: 'community',
-    features: ['infrastructure'],
+    supportLevel: 'personal',
+    features: ['infrastructure', 'pages'],
   },
 };
 
@@ -107,6 +107,7 @@ function makeService() {
     aiRuntime,
     statusPage,
     integrations,
+    licensePolicy,
   };
 }
 
@@ -158,6 +159,24 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.dockerNodes).toEqual([]);
     expect(updates.getCachedStatus).not.toHaveBeenCalled();
     expect(aiRuntime.statusForUser).not.toHaveBeenCalled();
+  });
+
+  it('hides Pages navigation when the persisted profile is enabled without the entitlement', async () => {
+    const { service, licensePolicy } = makeService();
+    licensePolicy.getSummary.mockResolvedValue({
+      ...license,
+      status: 'community',
+      plan: 'community',
+      entitlements: {
+        ...license.entitlements,
+        supportLevel: 'community',
+        features: ['infrastructure'],
+      },
+    } as never);
+
+    const shell = await service.getShell({ id: 'user-1', scopes: ['pages:view'] } as never, ['pages:view']);
+
+    expect(shell.navigation.pagesEnabled).toBe(false);
   });
 
   it('rebuilds a cold shell from safe persisted sources without waiting for managed resources', async () => {

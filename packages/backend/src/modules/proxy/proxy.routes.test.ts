@@ -530,6 +530,35 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
   });
 
+  it('allows switching an existing Pages Route to another target after entitlement loss', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId: pageProjectId },
+    });
+    mocks.scopes = ['proxy:edit:host-1', `pages:view:${pageProjectId}`];
+    mocks.licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required')
+    );
+
+    const response = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        upstreamKind: 'manual',
+        forwardHost: 'backend.internal',
+        forwardPort: 8080,
+        forwardScheme: 'http',
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.licensePolicy.requireFeature).not.toHaveBeenCalled();
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
+  });
+
   it('passes resource-scoped raw bypass to service when updating raw config', async () => {
     mocks.authType = 'session';
     mocks.scopes = ['proxy:edit:host-1', 'proxy:raw:write:host-1', 'proxy:raw:bypass:host-1'];

@@ -181,7 +181,7 @@ export class UIBootstrapService {
         hasNginxNodes: true,
         hasCloudflareIntegration: cloudflareSnapshot.data,
         statusPageEnabled: hasScope(scopes, 'status-page:view') && statusPageSnapshot.data.enabled,
-        pagesEnabled,
+        pagesEnabled: pagesEnabled && license.entitlements.features.includes('pages'),
         dockerNodes,
         nodes: { ...nodeSnapshot, data: visibleNodes },
       },

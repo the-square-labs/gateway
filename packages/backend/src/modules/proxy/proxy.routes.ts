@@ -257,8 +257,7 @@ proxyRoutes.openapi(
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
     const input = UpdateAdditionalRouteSchema.parse(await c.req.json());
-    const existing = await container.resolve(AdditionalRouteService).get(c.req.param('id')!, c.req.param('routeId')!);
-    if (input.targetKind === 'pages' || existing.targetKind === 'pages') {
+    if (input.targetKind === 'pages' || input.pageProjectId !== undefined || input.pageTagId !== undefined) {
       await container.resolve(LicensePolicyService).requireFeature('pages');
     }
     if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
@@ -355,12 +354,7 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   }
   const scopes = c.get('effectiveScopes') || [];
   const existing = await proxyService.getProxyHost(id);
-  if (
-    existing.upstreamKind === 'pages' ||
-    input.upstreamKind === 'pages' ||
-    input.pageProjectId !== undefined ||
-    input.pageTagId !== undefined
-  ) {
+  if (input.upstreamKind === 'pages' || input.pageProjectId !== undefined || input.pageTagId !== undefined) {
     await container.resolve(LicensePolicyService).requireFeature('pages');
   }
   const existingPageTarget = existing.pageTarget as { projectId?: unknown } | null | undefined;

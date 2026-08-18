@@ -10,6 +10,11 @@ import {
   defaultProxyUpstreamForDockerTargets,
 } from "./CreateProxyHostDialog";
 
+vi.mock("react-router-dom", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react-router-dom")>()),
+  useNavigate: () => vi.fn(),
+}));
+
 Object.defineProperties(window.HTMLElement.prototype, {
   hasPointerCapture: { configurable: true, value: () => false },
   setPointerCapture: { configurable: true, value: () => undefined },
@@ -53,7 +58,10 @@ describe("CreateProxyHostDialog", () => {
       isLoading: false,
     });
     useUIBootstrapStore.setState({
-      snapshot: { license: { plan: "personal", entitlements: { features: ["pages"] } } } as never,
+      snapshot: {
+        license: { plan: "personal", entitlements: { features: ["pages"] } },
+        navigation: { pagesEnabled: true },
+      } as never,
     });
   });
 

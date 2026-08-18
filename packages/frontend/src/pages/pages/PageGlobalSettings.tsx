@@ -191,6 +191,7 @@ export function PagesSettingsSection() {
           title={
             <span className="inline-flex items-center gap-2">
               Pages <LicensePlanBadge plan="personal" label="Personal+" />
+              <Badge variant="secondary">BETA</Badge>
             </span>
           }
           description="Loading wildcard deployment preview settings…"
@@ -201,13 +202,14 @@ export function PagesSettingsSection() {
             title={
               <span className="inline-flex items-center gap-2">
                 Pages <LicensePlanBadge plan="personal" label="Personal+" />
+                <Badge variant="secondary">BETA</Badge>
               </span>
             }
             description="Each immutable Deployment gets one hostname label under this wildcard Domain."
             actions={
               <Button onClick={() => void save()} disabled={!canSave}>
                 <Save className="h-4 w-4" />
-                {saving ? "Saving…" : "Save profile"}
+                {saving ? "Saving…" : "Save"}
               </Button>
             }
             dirty={dirty}

@@ -10,6 +10,7 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { PAGE_EVENT_CHANNELS, pageProjectEvent } from '../page-events.js';
 import { compareRegistrableDomains, normalizePagesHostname } from './page-domain-isolation.js';
@@ -39,6 +40,7 @@ export function renderPageHostname(labelTemplate: string, hash: string, project:
 
 export class PageProfileService {
   private eventBus?: EventBusService;
+  private licensePolicy?: LicensePolicyService;
   private runtimeAdapter?: PageProfileRuntimeAdapter;
   private readonly gatewayHost: string;
 
@@ -58,7 +60,12 @@ export class PageProfileService {
     this.runtimeAdapter = adapter;
   }
 
+  setLicensePolicyService(policy: LicensePolicyService): void {
+    this.licensePolicy = policy;
+  }
+
   async isEnabled(): Promise<boolean> {
+    if (!(await this.hasEntitlement())) return false;
     const [profile] = await this.db
       .select({ enabled: pageWildcardProfiles.enabled })
       .from(pageWildcardProfiles)
@@ -74,6 +81,7 @@ export class PageProfileService {
       .where(eq(pageWildcardProfiles.id, PROFILE_ID))
       .limit(1);
     if (!profile) return { enabled: false, status: 'disabled', id: PROFILE_ID };
+    const entitled = await this.hasEntitlement();
     const [domain, node, certificate] = await Promise.all([
       profile.domainId
         ? this.db
@@ -115,6 +123,8 @@ export class PageProfileService {
     );
     return {
       ...profile,
+      enabled: profile.enabled && entitled,
+      status: entitled ? profile.status : 'disabled',
       createdAt: profile.createdAt.toISOString(),
       updatedAt: profile.updatedAt.toISOString(),
       overrideAcknowledgedAt: profile.overrideAcknowledgedAt?.toISOString() ?? null,
@@ -342,7 +352,7 @@ export class PageProfileService {
     await this.runtimeAdapter?.cleanupNode?.({ domain: normalizePagesHostname(profile.domain), nodeId: sourceNodeId });
   }
 
-  async disable(userId: string) {
+  async disable(userId: string | null, reason: 'user' | 'license_entitlement_loss' = 'user') {
     const [existing] = await this.db
       .select()
       .from(pageWildcardProfiles)
@@ -363,12 +373,20 @@ export class PageProfileService {
       action: 'page_profile.disable',
       resourceType: 'page_profile',
       resourceId: PROFILE_ID,
-      details: { domainId: domain.id },
+      details: { domainId: domain.id, reason },
     });
     return this.get();
   }
 
+  async disableForEntitlementLoss(): Promise<void> {
+    await this.disable(null, 'license_entitlement_loss');
+  }
+
   async reconcile(allowDnsPending = false): Promise<void> {
+    if (!(await this.hasEntitlement())) {
+      await this.disableForEntitlementLoss();
+      return;
+    }
     const [profile] = await this.db
       .select()
       .from(pageWildcardProfiles)
@@ -459,6 +477,10 @@ export class PageProfileService {
       throw new AppError(409, 'PAGES_CERTIFICATE_INVALID', 'Select an active certificate covering the wildcard Domain');
     }
     return { domain, certificate, baseDomain };
+  }
+
+  private async hasEntitlement(): Promise<boolean> {
+    return this.licensePolicy ? this.licensePolicy.hasFeature('pages') : true;
   }
 
   private async assertDomainReplacementAllowed(nextDomainId: string): Promise<void> {

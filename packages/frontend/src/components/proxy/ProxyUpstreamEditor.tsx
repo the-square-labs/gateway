@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { PagesFeatureDisabledDialog } from "@/components/pages/PagesFeatureDisabledDialog";
 import { PagesTargetPicker } from "@/components/proxy/PagesTargetPicker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import {
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
-import { requireLicenseFeature } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   CreateProxyHostRequest,
   DockerContainer,
@@ -41,6 +42,8 @@ export interface ProxyUpstreamSelection {
   containerPort: number | null;
   pageProjectId?: string;
   pageTagId?: string;
+  pageProjectLabel?: string;
+  pageTagLabel?: string;
 }
 
 interface ApplicationPort {
@@ -72,6 +75,10 @@ export function proxyUpstreamFromHost(host: ProxyHost): ProxyUpstreamSelection {
     containerPort: host.dockerContainerPort ?? null,
     pageProjectId: host.pageTarget?.projectId ?? "",
     pageTagId: host.pageTarget?.tagId ?? "",
+    pageProjectLabel: host.pageTarget
+      ? `${host.pageTarget.projectName} · ${host.pageTarget.projectSlug}`
+      : undefined,
+    pageTagLabel: host.pageTarget?.tagName,
   };
 }
 
@@ -203,20 +210,30 @@ export function ProxyUpstreamFields({
   const [pageTags, setPageTags] = useState<PageTag[]>([]);
   const [pageProjectsLoading, setPageProjectsLoading] = useState(false);
   const [pageTagsLoading, setPageTagsLoading] = useState(false);
+  const [pagesDisabledDialogOpen, setPagesDisabledDialogOpen] = useState(false);
+  const pagesEnabled = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.pagesEnabled === true
+  );
 
   useEffect(() => {
     if (value.kind !== "pages") return;
+    if (!pagesEnabled) {
+      setPageProjects([]);
+      setPageProjectsLoading(false);
+      return;
+    }
     setPageProjectsLoading(true);
     void api
       .listPageProjects({ page: 1, limit: 100 })
       .then((response) => setPageProjects(response.data ?? []))
       .catch(() => setPageProjects([]))
       .finally(() => setPageProjectsLoading(false));
-  }, [value.kind]);
+  }, [pagesEnabled, value.kind]);
 
   useEffect(() => {
-    if (value.kind !== "pages" || !value.pageProjectId) {
+    if (value.kind !== "pages" || !value.pageProjectId || !pagesEnabled) {
       setPageTags([]);
+      setPageTagsLoading(false);
       return;
     }
     setPageTagsLoading(true);
@@ -225,7 +242,7 @@ export function ProxyUpstreamFields({
       .then(setPageTags)
       .catch(() => setPageTags([]))
       .finally(() => setPageTagsLoading(false));
-  }, [value.kind, value.pageProjectId]);
+  }, [pagesEnabled, value.kind, value.pageProjectId]);
   const candidates = useMemo(() => {
     const result = [...containers];
     const hasReferencedContainer =
@@ -286,7 +303,10 @@ export function ProxyUpstreamFields({
           <Select
             value={value.kind}
             onValueChange={(kind) => {
-              if (kind === "pages" && !requireLicenseFeature("pages", "Pages")) return;
+              if (kind === "pages" && !pagesEnabled) {
+                setPagesDisabledDialogOpen(true);
+                return;
+              }
               onChange({
                 ...DEFAULT_PROXY_UPSTREAM,
                 scheme: value.scheme,
@@ -318,7 +338,9 @@ export function ProxyUpstreamFields({
           tags={pageTags}
           projectsLoading={pageProjectsLoading}
           tagsLoading={pageTagsLoading}
-          disabled={disabled}
+          disabled={disabled || !pagesEnabled}
+          selectedProjectLabel={value.pageProjectLabel}
+          selectedTagLabel={value.pageTagLabel}
         />
       ) : value.kind === "manual" ? (
         <>
@@ -439,6 +461,10 @@ export function ProxyUpstreamFields({
           </SettingsControlRow>
         </>
       )}
+      <PagesFeatureDisabledDialog
+        open={pagesDisabledDialogOpen}
+        onOpenChange={setPagesDisabledDialogOpen}
+      />
     </>
   );
 }

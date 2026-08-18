@@ -19,6 +19,8 @@ export interface PagesTargetPickerProps {
   projectsLoading?: boolean;
   tagsLoading?: boolean;
   disabled?: boolean;
+  selectedProjectLabel?: string;
+  selectedTagLabel?: string;
   availability?: {
     label: string;
     variant: BadgeProps["variant"];
@@ -42,9 +44,15 @@ export function PagesTargetPicker({
   projectsLoading = false,
   tagsLoading = false,
   disabled = false,
+  selectedProjectLabel,
+  selectedTagLabel,
   availability,
   availabilityDescription,
 }: PagesTargetPickerProps) {
+  const showProjectFallback =
+    Boolean(projectId) && !projects.some((project) => project.id === projectId);
+  const showTagFallback = Boolean(tagId) && !tags.some((tag) => tag.id === tagId);
+
   return (
     <>
       <SettingsControlRow
@@ -57,7 +65,9 @@ export function PagesTargetPicker({
           disabled={projectsLoading || disabled}
         >
           <SelectTrigger aria-label="Page Project">
-            <SelectValue placeholder={projectsLoading ? "Loading Projects…" : "Select a Project"} />
+            <SelectValue placeholder={projectsLoading ? "Loading Projects…" : "Select a Project"}>
+              {showProjectFallback ? selectedProjectLabel : undefined}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__" disabled>
@@ -68,6 +78,11 @@ export function PagesTargetPicker({
                 {project.name} · {project.slug}
               </SelectItem>
             ))}
+            {showProjectFallback ? (
+              <SelectItem value={projectId}>
+                {selectedProjectLabel ?? "Selected Project"}
+              </SelectItem>
+            ) : null}
           </SelectContent>
         </Select>
       </SettingsControlRow>
@@ -81,7 +96,9 @@ export function PagesTargetPicker({
           disabled={!projectId || tagsLoading || disabled}
         >
           <SelectTrigger aria-label="Tag">
-            <SelectValue placeholder={tagsLoading ? "Loading Tags…" : "Select a Tag"} />
+            <SelectValue placeholder={tagsLoading ? "Loading Tags…" : "Select a Tag"}>
+              {showTagFallback ? selectedTagLabel : undefined}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__" disabled>
@@ -94,6 +111,9 @@ export function PagesTargetPicker({
                 {tag.deployment ? ` · ${tag.deployment.publicSlug}` : " · no Deployment"}
               </SelectItem>
             ))}
+            {showTagFallback ? (
+              <SelectItem value={tagId}>{selectedTagLabel ?? "Selected Tag"}</SelectItem>
+            ) : null}
           </SelectContent>
         </Select>
       </SettingsControlRow>

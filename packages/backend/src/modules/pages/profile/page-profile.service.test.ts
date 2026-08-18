@@ -67,6 +67,41 @@ function selection(overrides?: { domain?: Record<string, unknown>; node?: Record
 }
 
 describe('PageProfileService', () => {
+  it('reports Pages disabled when the saved profile lacks the current entitlement', async () => {
+    const { db, raw } = mockDb([]);
+    const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');
+    service.setLicensePolicyService({ hasFeature: vi.fn(async () => false) } as never);
+
+    await expect(service.isEnabled()).resolves.toBe(false);
+    expect(raw.select).not.toHaveBeenCalled();
+  });
+
+  it('removes immutable previews on entitlement loss while retaining the Pages data model', async () => {
+    const profile = {
+      id: 'default',
+      enabled: true,
+      domainId: DOMAIN_ID,
+      updatedById: 'user-1',
+    };
+    const domain = { id: DOMAIN_ID, domain: '*.pages.example.net' };
+    const { db, updateSets } = mockDb([[profile], [domain], []]);
+    const audit = { log: vi.fn(async () => true) };
+    const service = new PageProfileService(db, audit as never, 'https://gateway.example.com');
+    const runtime = { apply: vi.fn(), disable: vi.fn(async () => undefined) };
+    service.setRuntimeAdapter(runtime);
+
+    await service.disableForEntitlementLoss();
+
+    expect(runtime.disable).toHaveBeenCalledWith({ domain: 'pages.example.net' });
+    expect(updateSets).toContainEqual(expect.objectContaining({ enabled: false, status: 'disabled' }));
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'page_profile.disable',
+        details: { domainId: DOMAIN_ID, reason: 'license_entitlement_loss' },
+      })
+    );
+  });
+
   it('returns safe wildcard profile options with per-domain isolation state', async () => {
     const expiresAt = new Date(Date.now() + 86_400_000);
     const { db } = mockDb([
