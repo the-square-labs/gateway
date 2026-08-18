@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   retention: { setPinned: vi.fn(), deleteDeployment: vi.fn() },
   runtimeConfig: { list: vi.fn(), saveDefault: vi.fn(), saveTag: vi.fn(), resetTag: vi.fn() },
   licensePolicy: { requireFeature: vi.fn() },
+  pageProfile: { requireEnabled: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
@@ -30,6 +31,7 @@ vi.mock('@/container.js', () => ({
       if (name === 'PagePublicationService') return mocks.publication;
       if (name === 'PageRuntimeConfigService') return mocks.runtimeConfig;
       if (name === 'LicensePolicyService') return mocks.licensePolicy;
+      if (name === 'PageProfileService') return mocks.pageProfile;
       return mocks.retention;
     }),
   },
@@ -72,6 +74,7 @@ describe('Pages management authorization', () => {
     vi.clearAllMocks();
     mocks.scopes = [];
     mocks.licensePolicy.requireFeature.mockResolvedValue(undefined);
+    mocks.pageProfile.requireEnabled.mockResolvedValue(undefined);
     mocks.tag.list.mockResolvedValue([]);
     mocks.publication.moveUserTag.mockResolvedValue({ changed: true });
     mocks.retention.setPinned.mockResolvedValue({ id: DEPLOYMENT_ID, pinned: true });
@@ -108,6 +111,20 @@ describe('Pages management authorization', () => {
     expect((await jsonRequest('GET', `/${PROJECT_2}/tags`)).status).toBe(403);
     expect(mocks.tag.list).toHaveBeenCalledOnce();
     expect(mocks.tag.list).toHaveBeenCalledWith(PROJECT_1);
+  });
+
+  it('keeps reads available but rejects mutations while Pages is disabled', async () => {
+    mocks.scopes = [`pages:view:${PROJECT_1}`, `pages:tags:manage:${PROJECT_1}`];
+    mocks.pageProfile.requireEnabled.mockRejectedValue(
+      new AppError(409, 'PAGES_FEATURE_DISABLED', 'Enable Pages in Features before making changes')
+    );
+
+    expect((await jsonRequest('GET', `/${PROJECT_1}/tags`)).status).toBe(200);
+    const mutation = await jsonRequest('PUT', `/${PROJECT_1}/tags/demo`, { deploymentId: DEPLOYMENT_ID });
+
+    expect(mutation.status).toBe(409);
+    expect(mocks.tag.list).toHaveBeenCalledOnce();
+    expect(mocks.publication.moveUserTag).not.toHaveBeenCalled();
   });
 
   it('requires Project-qualified Tag management and keeps latest system-managed', async () => {

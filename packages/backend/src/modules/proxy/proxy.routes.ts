@@ -13,6 +13,7 @@ import {
   sessionOnly,
 } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   createAdditionalRouteRoute,
@@ -234,6 +235,7 @@ proxyRoutes.openapi(
     const input = CreateAdditionalRouteSchema.parse(await c.req.json());
     if (input.targetKind === 'pages') {
       await container.resolve(LicensePolicyService).requireFeature('pages');
+      await container.resolve(PageProfileService).requireEnabled();
     }
     const row = await container.resolve(AdditionalRouteService).create(c.req.param('id')!, input, user.id, scopes);
     const view = await container.resolve(AdditionalRouteService).present(row);
@@ -257,8 +259,9 @@ proxyRoutes.openapi(
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
     const input = UpdateAdditionalRouteSchema.parse(await c.req.json());
-    if (input.targetKind === 'pages' || input.pageProjectId !== undefined || input.pageTagId !== undefined) {
+    if (input.targetKind === 'pages' || input.pageProjectId != null || input.pageTagId != null) {
       await container.resolve(LicensePolicyService).requireFeature('pages');
+      await container.resolve(PageProfileService).requireEnabled();
     }
     if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
       throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required');
@@ -305,6 +308,7 @@ proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('pro
   const scopes = c.get('effectiveScopes') || [];
   if (input.upstreamKind === 'pages') {
     await container.resolve(LicensePolicyService).requireFeature('pages');
+    await container.resolve(PageProfileService).requireEnabled();
   }
   if (!hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
@@ -354,8 +358,9 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   }
   const scopes = c.get('effectiveScopes') || [];
   const existing = await proxyService.getProxyHost(id);
-  if (input.upstreamKind === 'pages' || input.pageProjectId !== undefined || input.pageTagId !== undefined) {
+  if (input.upstreamKind === 'pages' || input.pageProjectId != null || input.pageTagId != null) {
     await container.resolve(LicensePolicyService).requireFeature('pages');
+    await container.resolve(PageProfileService).requireEnabled();
   }
   const existingPageTarget = existing.pageTarget as { projectId?: unknown } | null | undefined;
   if (

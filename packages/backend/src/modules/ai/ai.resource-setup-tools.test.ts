@@ -25,7 +25,9 @@ describe('resource setup AI tools', () => {
       requireFeature: vi.fn().mockResolvedValue(undefined),
     } as unknown as LicensePolicyService);
     container.registerInstance(PageProjectService, {} as PageProjectService);
-    container.registerInstance(PageProfileService, {} as PageProfileService);
+    container.registerInstance(PageProfileService, {
+      requireEnabled: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PageProfileService);
     container.registerInstance(PageDeployTokenService, { list, create, revoke } as unknown as PageDeployTokenService);
 
     await expect(

@@ -47,10 +47,12 @@ import {
 import { PageProjectService } from './page-project.service.js';
 import { canAccessEveryPageProject, canAccessPageProject, visiblePageProjectIds } from './page-project-access.js';
 import { PageProjectFolderService } from './page-project-folder.service.js';
+import { requirePagesEnabledForMutation } from './profile/page-enabled.middleware.js';
 
 export const pageProjectRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 pageProjectRoutes.use('*', authMiddleware);
 pageProjectRoutes.use('*', requireLicenseFeature('pages'));
+pageProjectRoutes.use('*', requirePagesEnabledForMutation);
 
 pageProjectRoutes.openapi(
   { ...listPageProjectFoldersRoute, middleware: requireAnyScopeBase('pages:view', 'pages:folders:manage') },

@@ -14,6 +14,7 @@ import {
   PageDeploymentService,
   type PageDeployPrincipal,
 } from './deployments/page-deployment.service.js';
+import { requirePagesEnabledForMutation } from './profile/page-enabled.middleware.js';
 import { PagePublicationService } from './tags/page-publication.service.js';
 import { PageDeployTokenService } from './tokens/page-deploy-token.service.js';
 
@@ -75,6 +76,8 @@ pageDeployRoutes.use('*', async (c, next) => {
     await next();
   });
 });
+
+pageDeployRoutes.use('*', requirePagesEnabledForMutation);
 
 pageDeployRoutes.openapi(createDeploymentRoute, async (c) => {
   const input = CreatePageDeploymentSchema.parse(await c.req.json());

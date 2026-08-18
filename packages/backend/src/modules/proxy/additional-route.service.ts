@@ -453,13 +453,6 @@ export class AdditionalRouteService {
       const enabled = input.enabled === undefined ? existing.enabled : Boolean(input.enabled);
       const options = this.routeOptions({ ...existing, ...input }, target);
       const targetChanged = this.targetChanged(existing, target);
-      if (targetChanged) {
-        throw new AppError(
-          409,
-          'ADDITIONAL_ROUTE_RETARGET_RECREATE_REQUIRED',
-          'Create a replacement Additional Route before removing the current target'
-        );
-      }
       const resetMaterialization = !enabled
         ? {
             secureLinkId: null,
@@ -495,9 +488,23 @@ export class AdditionalRouteService {
       try {
         const ready = enabled ? await this.provision(staged, host, target) : staged;
         if (!enabled || target.targetKind !== 'pages') await this.hostRuntime?.reconcileAdditionalRouteHost(host.id);
-        if (!enabled && this.secureLinks && isDockerKind(existing.targetKind))
-          await this.secureLinks.deleteManagedRoute(host, routeId);
-        if (!enabled && existing.targetKind === 'pages') await this.cleanupPages(existing, host.nodeId);
+        try {
+          if (
+            (!enabled || (targetChanged && !isDockerKind(target.targetKind))) &&
+            this.secureLinks &&
+            isDockerKind(existing.targetKind)
+          ) {
+            await this.secureLinks.deleteManagedRoute(host, routeId);
+          }
+          if ((!enabled || (targetChanged && target.targetKind !== 'pages')) && existing.targetKind === 'pages') {
+            await this.cleanupPages(existing, host.nodeId);
+          }
+        } catch (cleanupError) {
+          logger.warn('Additional Route previous target cleanup failed after successful retarget', {
+            routeId,
+            cleanupError,
+          });
+        }
         await this.auditService.log({
           userId,
           action: 'proxy.additional_route.update',
@@ -1467,6 +1474,10 @@ export class AdditionalRouteService {
         .update(proxyAdditionalRoutes)
         .set({
           secureLinkId: binding.id,
+          activeDeploymentId: null,
+          includePath: null,
+          runtimeConfigPath: null,
+          runtimeConfigGeneration: 0,
           status: 'ready',
           lastError: null,
           generation: route.generation + 1,
@@ -1482,7 +1493,17 @@ export class AdditionalRouteService {
     }
     const [ready] = await this.db
       .update(proxyAdditionalRoutes)
-      .set({ status: 'ready', lastError: null, generation: route.generation + 1, updatedAt: new Date() })
+      .set({
+        secureLinkId: null,
+        activeDeploymentId: null,
+        includePath: null,
+        runtimeConfigPath: null,
+        runtimeConfigGeneration: 0,
+        status: 'ready',
+        lastError: null,
+        generation: route.generation + 1,
+        updatedAt: new Date(),
+      })
       .where(eq(proxyAdditionalRoutes.id, route.id))
       .returning();
     return ready ?? route;
@@ -1510,6 +1531,7 @@ export class AdditionalRouteService {
       const [ready] = await this.db
         .update(proxyAdditionalRoutes)
         .set({
+          secureLinkId: null,
           activeDeploymentId: deploymentId,
           includePath,
           runtimeConfigPath,
@@ -1579,6 +1601,7 @@ export class AdditionalRouteService {
     const [restored] = await this.db
       .update(proxyAdditionalRoutes)
       .set({
+        secureLinkId: previous.secureLinkId,
         activeDeploymentId: previous.activeDeploymentId,
         includePath: previous.includePath,
         runtimeConfigPath: previous.runtimeConfigPath,
@@ -1636,7 +1659,6 @@ export class AdditionalRouteService {
       existing.dockerContainerPort !== target.dockerContainerPort ||
       existing.dockerHostPort !== target.dockerHostPort ||
       existing.dockerProtocol !== target.dockerProtocol ||
-      existing.dockerHostPort !== target.dockerHostPort ||
       existing.pageProjectId !== target.pageProjectId ||
       existing.pageTagId !== target.pageTagId
     );

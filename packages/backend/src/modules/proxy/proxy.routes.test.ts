@@ -22,11 +22,16 @@ const mocks = vi.hoisted(() => ({
   licensePolicy: {
     requireFeature: vi.fn(),
   },
+  pageProfile: { requireEnabled: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn((token) => (token?.name === 'LicensePolicyService' ? mocks.licensePolicy : mocks.proxyService)),
+    resolve: vi.fn((token) => {
+      if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
+      if (token?.name === 'PageProfileService') return mocks.pageProfile;
+      return mocks.proxyService;
+    }),
   },
 }));
 
@@ -92,6 +97,7 @@ describe('proxy routes programmatic raw config handling', () => {
     mocks.scopes = ['proxy:view', 'proxy:create', 'proxy:view:host-1', 'proxy:edit:host-1', 'proxy:advanced:host-1'];
     vi.clearAllMocks();
     mocks.licensePolicy.requireFeature.mockResolvedValue(undefined);
+    mocks.pageProfile.requireEnabled.mockResolvedValue(undefined);
     mocks.proxyService.listProxyHosts.mockResolvedValue({ data: [rawHost], total: 1 });
     mocks.proxyService.getProxyHost.mockResolvedValue(rawHost);
     mocks.proxyService.createProxyHost.mockResolvedValue(rawHost);

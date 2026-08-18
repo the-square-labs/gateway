@@ -69,6 +69,17 @@ function selection(overrides?: { domain?: Record<string, unknown>; node?: Record
 }
 
 describe('PageProfileService', () => {
+  it('rejects mutations while Pages is disabled', async () => {
+    const { db } = mockDb([[{ enabled: false }]]);
+    const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');
+    service.setLicensePolicyService({ hasFeature: vi.fn(async () => true) } as never);
+
+    await expect(service.requireEnabled()).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'PAGES_FEATURE_DISABLED',
+    });
+  });
+
   it('reports Pages disabled when the saved profile lacks the current entitlement', async () => {
     const { db, raw } = mockDb([]);
     const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');

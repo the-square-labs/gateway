@@ -56,6 +56,7 @@ const mocks = vi.hoisted(() => {
       deleteFolder: vi.fn(),
     },
     licensePolicy: { requireFeature: vi.fn() },
+    pageProfile: { requireEnabled: vi.fn() },
   };
 });
 
@@ -63,6 +64,7 @@ vi.mock('@/container.js', () => ({
   container: {
     resolve: vi.fn((token) => {
       if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
+      if (token?.name === 'PageProfileService') return mocks.pageProfile;
       return token?.name === 'PageProjectFolderService' ? mocks.folderService : mocks.projectService;
     }),
   },
@@ -119,6 +121,7 @@ describe('Page Project routes authorization', () => {
   beforeEach(() => {
     mocks.scopes = [];
     vi.clearAllMocks();
+    mocks.pageProfile.requireEnabled.mockResolvedValue(undefined);
     mocks.projectService.list.mockResolvedValue({ data: [], pagination: { page: 1, limit: 20, total: 0 } });
     mocks.projectService.get.mockResolvedValue({ id: PROJECT_1, name: 'Docs' });
     mocks.projectService.getBySlug.mockResolvedValue({ id: PROJECT_1, name: 'Docs', slug: 'docs' });

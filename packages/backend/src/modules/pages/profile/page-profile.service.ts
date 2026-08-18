@@ -117,6 +117,12 @@ export class PageProfileService {
     return profile?.enabled === true;
   }
 
+  async requireEnabled(): Promise<void> {
+    if (!(await this.isEnabled())) {
+      throw new AppError(409, 'PAGES_FEATURE_DISABLED', 'Enable Pages in Features before making changes');
+    }
+  }
+
   async get() {
     const [profile] = await this.db
       .select()

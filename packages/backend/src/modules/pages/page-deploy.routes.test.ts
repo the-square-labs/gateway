@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   },
   publicationService: { markDeploymentReady: vi.fn() },
   licensePolicy: { requireFeature: vi.fn() },
+  pageProfile: { requireEnabled: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
@@ -32,6 +33,7 @@ vi.mock('@/container.js', () => ({
       if (token?.name === 'PageDeployTokenService') return mocks.tokenService;
       if (token?.name === 'PagePublicationService') return mocks.publicationService;
       if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
+      if (token?.name === 'PageProfileService') return mocks.pageProfile;
       return mocks.deploymentService;
     }),
   },
@@ -82,6 +84,7 @@ describe('Pages Deploy API authorization', () => {
     mocks.deploymentService.finalize.mockResolvedValue({ deployment: { id: DEPLOYMENT_ID, status: 'stored' } });
     mocks.deploymentService.get.mockResolvedValue({ id: DEPLOYMENT_ID, status: 'ready' });
     mocks.tokenService.validate.mockResolvedValue(null);
+    mocks.pageProfile.requireEnabled.mockResolvedValue(undefined);
   });
 
   it('accepts a Project-scoped user or API-token principal only for that Project', async () => {

@@ -7,6 +7,7 @@ import { requireLicenseFeature } from '@/modules/license/license-policy.middlewa
 import type { AppEnv } from '@/types.js';
 import { PageDeploymentListQuerySchema } from './deployments/page-deployment.schemas.js';
 import { PageDeploymentService } from './deployments/page-deployment.service.js';
+import { requirePagesEnabledForMutation } from './profile/page-enabled.middleware.js';
 import { PageRetentionService } from './retention/page-retention.service.js';
 import {
   PageRuntimeConfigTagParamSchema,
@@ -29,6 +30,7 @@ const PinPageDeploymentSchema = z.object({ pinned: z.boolean() });
 export const pageManagementRoutes = new OpenAPIHono<AppEnv>();
 pageManagementRoutes.use('*', authMiddleware);
 pageManagementRoutes.use('*', requireLicenseFeature('pages'));
+pageManagementRoutes.use('*', requirePagesEnabledForMutation);
 
 pageManagementRoutes.openapi(
   {

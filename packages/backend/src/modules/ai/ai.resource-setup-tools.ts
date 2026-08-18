@@ -91,6 +91,17 @@ async function managePages(user: User, args: Record<string, unknown>) {
     return profile.disable(user.id);
   }
 
+  const readOperations = new Set([
+    'project_list',
+    'project_get',
+    'deployment_list',
+    'deployment_get',
+    'tag_list',
+    'token_list',
+    'config_list',
+  ]);
+  if (!readOperations.has(operation)) await profile.requireEnabled();
+
   const projects = container.resolve(PageProjectService);
   if (operation === 'project_list') {
     ensureAnyScopeBase(user, ['pages:view', 'pages:create']);
@@ -275,8 +286,9 @@ async function requirePagesForAdditionalTarget(input: {
   pageProjectId?: string | null;
   pageTagId?: string | null;
 }): Promise<void> {
-  if (input.targetKind === 'pages' || input.pageProjectId !== undefined || input.pageTagId !== undefined) {
+  if (input.targetKind === 'pages' || input.pageProjectId != null || input.pageTagId != null) {
     await container.resolve(LicensePolicyService).requireFeature('pages');
+    await container.resolve(PageProfileService).requireEnabled();
   }
 }
 
