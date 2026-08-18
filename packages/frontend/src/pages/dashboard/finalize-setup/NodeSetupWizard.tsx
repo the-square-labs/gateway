@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/services/api";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { CreateNodeResponse, NodeType } from "@/types";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
@@ -135,7 +136,11 @@ export function NodeSetupWizard({
     try {
       setEnrollment(await api.createNode({ type, hostname: "pending", displayName: name.trim() }));
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Failed to create the node enrollment");
+      if (!handleLicenseApiError(cause, "Managed nodes")) {
+        toast.error(
+          cause instanceof Error ? cause.message : "Failed to create the node enrollment"
+        );
+      }
     } finally {
       setSaving(false);
     }

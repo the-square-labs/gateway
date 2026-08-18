@@ -4,6 +4,8 @@ import { vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { useLicensePaywallStore } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { renderWithRouter } from "@/test/render";
 import type { Node } from "@/types";
 import { DockerDeployDialog } from "./DockerDeployDialog";
@@ -38,6 +40,15 @@ describe("DockerDeployDialog runtime section", () => {
       isLoading: false,
     });
     useDockerStore.setState({ dockerNodes: [] });
+    useUIBootstrapStore.setState({
+      snapshot: {
+        license: {
+          plan: "enterprise",
+          entitlements: { features: ["secure-runtime", "blue-green"] },
+        },
+      } as never,
+    });
+    useLicensePaywallStore.setState({ request: null });
   });
 
   it("hides the GPU section until a node is selected", () => {
@@ -131,5 +142,42 @@ describe("DockerDeployDialog runtime section", () => {
         runtimeProfile: "secure",
       })
     );
+  });
+
+  it("intercepts unavailable runtime and blue-green choices with the shared paywall", async () => {
+    const user = userEvent.setup();
+    const secureNode = {
+      ...baseNode,
+      capabilities: { dockerRuntimeStatus: { state: "healthy" } },
+    } satisfies Node;
+    useUIBootstrapStore.setState({
+      snapshot: {
+        license: { plan: "community", entitlements: { features: [] } },
+      } as never,
+    });
+
+    renderWithRouter(
+      <DockerDeployDialog
+        open
+        onOpenChange={vi.fn()}
+        nodeId={secureNode.id}
+        dockerNodes={[secureNode]}
+      />
+    );
+
+    const runtimeSelect = screen.getAllByRole("combobox")[1]!;
+    fireEvent.keyDown(runtimeSelect, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      capability: "Secure Runtime",
+      requiredPlan: "business",
+    });
+
+    useLicensePaywallStore.setState({ request: null });
+    await user.click(screen.getByRole("tab", { name: "Blue/green" }));
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      capability: "Blue/green deployments",
+      requiredPlan: "personal",
+    });
   });
 });

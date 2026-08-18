@@ -59,6 +59,7 @@ import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import type { DockerHealthCheck, DockerMigration } from "@/types";
@@ -644,12 +645,16 @@ export function DockerContainerDetail({
         dismissible: true,
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to export archive", {
-        id: toastId,
-        description: null,
-        duration: 8000,
-        dismissible: true,
-      });
+      if (handleLicenseApiError(err, "Container archive export")) {
+        toast.dismiss(toastId);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Failed to export archive", {
+          id: toastId,
+          description: null,
+          duration: 8000,
+          dismissible: true,
+        });
+      }
     } finally {
       setArchiveExporting(false);
     }
@@ -764,7 +769,10 @@ export function DockerContainerDetail({
           {
             label: "Migrate",
             icon: <Truck className="h-4 w-4" />,
-            onClick: () => setMigrationOpen(true),
+            onClick: () => {
+              if (!requireLicenseFeature("cross-node-migration", "Cross-node migration")) return;
+              setMigrationOpen(true);
+            },
             disabled: Boolean(migrationDisabledReason),
             disabledReason: migrationDisabledReason,
           },
@@ -836,6 +844,7 @@ export function DockerContainerDetail({
             label: "Export archive",
             icon: <Archive className="h-4 w-4" />,
             onClick: () => {
+              if (!requireLicenseFeature("container-export", "Container archive export")) return;
               setArchiveDevPreview(false);
               setArchiveImageMode(archiveCapabilities.canExportPortable ? "portable" : "registry");
               setArchiveWritableLayer(false);

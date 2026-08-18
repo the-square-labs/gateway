@@ -23,6 +23,7 @@ import {
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { CertificateType, KeyAlgorithm, Template } from "@/types";
 
 interface CertificateIssueDialogProps {
@@ -124,7 +125,9 @@ export function CertificateIssueDialog({
       onOpenChange(false);
       onSuccess?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to issue certificate");
+      if (!handleLicenseApiError(err, "Internal PKI certificates")) {
+        toast.error(err instanceof Error ? err.message : "Failed to issue certificate");
+      }
     } finally {
       setIsIssuing(false);
     }

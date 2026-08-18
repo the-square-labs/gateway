@@ -185,7 +185,9 @@ export class HealthCheckJob {
         );
       }
 
-      // Log status transitions and publish event
+      // Keep alerts/logging transition-based, but publish every persisted sample so
+      // an open detail page can advance its health history without a reload.
+      let healthAction = 'health.sampled';
       if (previousStatus !== newStatus) {
         logger.info(`Health status changed for ${host.domainNames?.join(', ') || host.id}`, {
           hostId: host.id,
@@ -193,15 +195,15 @@ export class HealthCheckJob {
           newStatus,
           forwardHost: host.forwardHost,
         });
-        const healthAction =
+        healthAction =
           newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded';
-        this.eventBus?.publish('proxy.host.changed', {
-          id: host.id,
-          action: healthAction,
-          domain: host.domainNames?.[0],
-          health_status: newStatus,
-        });
       }
+      this.eventBus?.publish('proxy.host.changed', {
+        id: host.id,
+        action: healthAction,
+        domain: host.domainNames?.[0],
+        health_status: newStatus,
+      });
 
       return { hostId: host.id, status: newStatus };
     };
@@ -267,7 +269,7 @@ export class HealthCheckJob {
       [...existingHistory, { ts: new Date(now).toISOString(), status: 'unknown' }],
       { nowMs: now }
     );
-    await this.db
+    const persisted = await this.db
       .update(proxyHosts)
       .set({ lastHealthCheckAt: new Date(now), healthHistory })
       .where(
@@ -277,7 +279,16 @@ export class HealthCheckJob {
           eq(proxyHosts.healthCheckEnabled, true),
           eq(proxyHosts.maintenanceEnabled, false)
         )
-      );
+      )
+      .returning({ id: proxyHosts.id });
+    if (persisted.length > 0) {
+      this.eventBus?.publish('proxy.host.changed', {
+        id: host.id,
+        action: 'health.sampled',
+        domain: host.domainNames?.[0],
+        health_status: host.healthStatus,
+      });
+    }
   }
 
   private async recordProbeIndeterminate(host: typeof proxyHosts.$inferSelect): Promise<void> {

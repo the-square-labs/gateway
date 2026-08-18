@@ -14,7 +14,7 @@ const BASE_USER = {
 };
 
 function createService(caService: Record<string, unknown>) {
-  return new AIService(
+  const service = new AIService(
     {} as never,
     caService as never,
     {} as never,
@@ -32,9 +32,25 @@ function createService(caService: Record<string, unknown>) {
     {} as never,
     {} as never
   );
+  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  return service;
 }
 
 describe('AIService PKI CA tool routing', () => {
+  it('checks the Enterprise PKI entitlement before invoking a PKI tool', async () => {
+    const caService = { getCATree: vi.fn() };
+    const service = createService(caService);
+    const error = new Error('license denied');
+    const policy = { requireFeature: vi.fn().mockRejectedValue(error) };
+    (service as unknown as { licensePolicyService: typeof policy }).licensePolicyService = policy;
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', {})
+    ).resolves.toMatchObject({ error: 'license denied' });
+    expect(policy.requireFeature).toHaveBeenCalledWith('internal-pki');
+    expect(caService.getCATree).not.toHaveBeenCalled();
+  });
+
   it('routes CA list/get/create operations through the CA service with type-specific scopes', async () => {
     const caService = {
       getCATree: vi.fn().mockResolvedValue([

@@ -35,6 +35,7 @@ import {
   getAuditEntryUserLabel,
 } from "@/pages/audit-log/audit-format";
 import { api } from "@/services/api";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { AuditLogEntry } from "@/types";
 
 const PAGE_SIZE = 100;
@@ -590,6 +591,7 @@ export function AuditLog({
   };
 
   const openExportDialog = (format: AuditExportFormat) => {
+    if (!requireLicenseFeature("audit-export", "Audit log export")) return;
     setExportFormat(format);
     setExportActions(actionFilter !== "all" ? [actionFilter] : []);
     setExportResourceTypes(resourceFilter !== "all" ? [resourceFilter] : []);
@@ -632,31 +634,23 @@ export function AuditLog({
   const runExport = async () => {
     setExporting(true);
     try {
-      const exportedEntries: AuditLogEntry[] = [];
-      let page = 1;
-      while (true) {
-        const result = await api.getAuditLog({
-          page,
-          limit: PAGE_SIZE,
-          actions: exportActions,
-          resourceTypes: exportResourceTypes,
-          userIds: exportUserIds,
-          from: localDateTimeToIso(exportFrom),
-          to: localDateTimeToIso(exportTo),
-          excludedActions: viewConfig.excludedActions,
-          excludedResourceTypes: viewConfig.excludedResourceTypes,
-        });
-        exportedEntries.push(...(result.data ?? []));
-        const totalPages = result.pagination?.totalPages ?? 1;
-        if (page >= totalPages) break;
-        page += 1;
-      }
+      const exportedEntries = await api.exportAuditLog({
+        actions: exportActions,
+        resourceTypes: exportResourceTypes,
+        userIds: exportUserIds,
+        from: localDateTimeToIso(exportFrom),
+        to: localDateTimeToIso(exportTo),
+        excludedActions: viewConfig.excludedActions,
+        excludedResourceTypes: viewConfig.excludedResourceTypes,
+      });
       const { content, type } = formatAuditExport(exportedEntries, exportFormat);
       downloadTextFile(content, buildAuditExportFilename(exportFormat), type);
       closeExportDialog();
       toast.success(`Exported ${exportedEntries.length} audit log entries`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to export audit log");
+      if (!handleLicenseApiError(error, "Audit log export")) {
+        toast.error(error instanceof Error ? error.message : "Failed to export audit log");
+      }
     } finally {
       setExporting(false);
     }

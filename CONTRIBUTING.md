@@ -1,47 +1,28 @@
 # Contributing to Gateway
 
-Thank you for your interest in contributing to Gateway!
+Thank you for your interest in Gateway. Bug reports, reproducible issue descriptions, and feature requests are welcome through [GitHub Issues](https://github.com/wiolett-industries/gateway/issues).
 
-## Getting Started
+## Source-code changes
 
-1. Fork the repository on [GitHub](https://github.com/wiolett-industries/gateway)
-2. Clone your fork and create a new branch
-3. Set up the development environment:
+Gateway is source-available under the [PolyForm Strict License 1.0.0](LICENSE.md). That license does not permit modifying the software or creating derivative works.
 
-```bash
-pnpm install
-pnpm dev:infra
-pnpm db:migrate
-pnpm dev:all
-```
+Do not fork the repository to prepare or distribute code changes unless Wiolett Industries has given you prior written authorization. Authorized contributors receive the applicable development access and separate contribution terms before work begins.
 
-## Submitting Changes
+To propose a code contribution, first email [contact@wiolett.net](mailto:contact@wiolett.net) with a short description of the intended change. An issue or pull request by itself does not grant permission to modify Gateway or require Wiolett Industries to accept the contribution.
 
-1. Create an [issue](https://github.com/wiolett-industries/gateway/issues) describing the change you'd like to make
-2. Fork the repo and create a feature branch from `main`
-3. Make your changes, keeping commits focused and well-described
-4. Ensure `pnpm lint` and `pnpm test` pass
-5. Submit a pull request against `main`
+## Reporting bugs
 
-## Guidelines
+Please include:
 
-- Keep pull requests focused on a single change
-- Follow the existing code style and conventions
-- Update documentation if your change affects user-facing behavior
-- Add tests for new functionality where applicable
+- steps to reproduce;
+- expected and actual behavior;
+- Gateway version and environment details; and
+- relevant logs with secrets and personal data removed.
 
-## Reporting Bugs
+## Security reports
 
-Please use [GitHub Issues](https://github.com/wiolett-industries/gateway/issues) to report bugs. Include:
-
-- Steps to reproduce
-- Expected vs actual behavior
-- Gateway version and environment details
-
-## Core Maintainers
-
-If you're interested in becoming a core maintainer with direct access to the primary [Wiolett GitLab](https://gitlab.wiolett.net/wiolett/gateway) repository, you can request an account by opening a [GitHub issue](https://github.com/wiolett-industries/gateway/issues) or emailing [contact@wiolett.net](mailto:contact@wiolett.net).
+Do not disclose a suspected vulnerability publicly before Wiolett Industries has had a reasonable opportunity to investigate it. Send security reports to [contact@wiolett.net](mailto:contact@wiolett.net).
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [PolyForm Small Business License 1.0.0](LICENSE.md).
+Use of Gateway remains subject to [LICENSE.md](LICENSE.md). Commercial users with a Wiolett-issued paid key are additionally subject to [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md). Contributions accepted under separate written contribution terms may be licensed by Wiolett Industries as part of Gateway.

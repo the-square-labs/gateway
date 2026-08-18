@@ -36,6 +36,22 @@ const SNAPSHOT = {
   update: null,
   aiStatus: null,
   aiWorkspace: { configured: false, installationOwner: false },
+  license: {
+    status: "community",
+    plan: "community",
+    licensed: true,
+    expiresAt: null,
+    graceUntil: null,
+    offlineGraceUntil: null,
+    entitlementsVersion: 2,
+    entitlements: {
+      managedNodes: 100,
+      users: 10,
+      customPermissionGroups: 5,
+      supportLevel: "community",
+      features: [],
+    },
+  },
 } as UIBootstrapShell;
 
 describe("UI bootstrap store", () => {

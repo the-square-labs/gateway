@@ -30,6 +30,7 @@ import {
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DockerNetwork, DockerVolume, Node as GatewayNode } from "@/types";
 
 const BRIDGE_NETWORK: DockerNetwork = {
@@ -327,12 +328,16 @@ export function GwcaImportDialog({
       onOpenChange(false);
       await onImported();
     } catch (error) {
-      toast.error("Failed to import container archive", {
-        id: toastId,
-        description: error instanceof Error ? error.message : undefined,
-        duration: 8000,
-        dismissible: true,
-      });
+      if (handleLicenseApiError(error, "Container archive import")) {
+        toast.dismiss(toastId);
+      } else {
+        toast.error("Failed to import container archive", {
+          id: toastId,
+          description: error instanceof Error ? error.message : undefined,
+          duration: 8000,
+          dismissible: true,
+        });
+      }
     } finally {
       setImporting(false);
     }

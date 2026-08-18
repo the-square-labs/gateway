@@ -1,0 +1,80 @@
+import { KeyRound } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useAuthStore } from "@/stores/auth";
+import { type PaidLicensePlan, useLicensePaywallStore } from "@/stores/license-paywall";
+import type { LicensePlan } from "@/types";
+
+const PLAN_LABELS: Record<LicensePlan, string> = {
+  community: "Community",
+  personal: "Personal",
+  business: "Business",
+  enterprise: "Enterprise",
+};
+
+function planLabel(plan: PaidLicensePlan): string {
+  return PLAN_LABELS[plan];
+}
+
+export function LicenseUpgradeDialog() {
+  const navigate = useNavigate();
+  const request = useLicensePaywallStore((state) => state.request);
+  const close = useLicensePaywallStore((state) => state.close);
+  const canManageLicense = useAuthStore((state) => state.hasScope("license:manage"));
+
+  const goToLicense = () => {
+    close();
+    navigate("/settings/general", { state: { scrollTarget: "gateway-license" } });
+  };
+
+  return (
+    <Dialog open={request !== null} onOpenChange={(open) => !open && close()}>
+      <DialogContent className="sm:max-w-md">
+        {request ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{planLabel(request.requiredPlan)} plan required</DialogTitle>
+              <DialogDescription>
+                {request.capability} requires the {planLabel(request.requiredPlan)} plan. This
+                Gateway is currently on the {PLAN_LABELS[request.currentPlan]} plan.
+              </DialogDescription>
+            </DialogHeader>
+
+            {request.quota?.limit !== undefined ? (
+              <p className="text-sm text-muted-foreground">
+                The current plan limit is {request.quota.limit}
+                {request.quota.resource ? ` for ${request.quota.resource}` : ""}.
+              </p>
+            ) : null}
+
+            {!canManageLicense ? (
+              <p className="text-sm text-muted-foreground">
+                Contact your administrator to upgrade the Gateway license.
+              </p>
+            ) : null}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={close}>
+                Close
+              </Button>
+              {canManageLicense ? (
+                <Button onClick={goToLicense}>
+                  <KeyRound className="h-4 w-4" />
+                  Upgrade license key
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -3,6 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
 import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   createTemplateRoute,
@@ -18,6 +19,7 @@ export const templateRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiVali
 
 templateRoutes.use('*', authMiddleware);
 templateRoutes.use('*', requireGatewayFeature('pkiEnabled', 'PKI'));
+templateRoutes.use('*', requireLicenseFeature('internal-pki'));
 
 // List templates
 templateRoutes.openapi({ ...listTemplatesRoute, middleware: requireScope('pki:templates:view') }, async (c) => {

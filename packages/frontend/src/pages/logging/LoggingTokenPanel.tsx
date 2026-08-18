@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { LoggingEnvironment, LoggingIngestToken } from "@/types";
 
 export function LoggingTokenPanel({
@@ -54,7 +55,9 @@ export function LoggingTokenPanel({
       setName("");
       load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create token");
+      if (!handleLicenseApiError(error, "Logging ingest tokens")) {
+        toast.error(error instanceof Error ? error.message : "Failed to create token");
+      }
     }
   };
 

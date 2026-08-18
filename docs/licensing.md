@@ -6,15 +6,17 @@ Gateway is offered in four product plans: Community, Personal, Business, and Ent
 
 The plan limits and feature availability below define the product access granted by each plan.
 
-The source-code license remains defined by [LICENSE.md](../LICENSE.md). This document describes product plans, feature availability, pricing, and product-license activation. Product plan names do not change the permissions granted by the source-code license. If a legal-use summary conflicts with `LICENSE.md`, the license text controls.
+Community is available only for noncommercial purposes permitted by the [PolyForm Strict License 1.0.0](../LICENSE.md). A Personal, Business, or Enterprise key issued by Wiolett Industries automatically grants the person or organization named in the license record limited commercial-use rights for one official, unmodified Gateway installation under the [Wiolett Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md).
+
+The commercial grant begins when the key is issued, continues through its expiration date, and remains in effect for 30 calendar days afterwards. A key without an expiration date grants commercial use while it remains active. Revocation for breach, fraud, chargeback, or refund ends the grant immediately without grace. Neither license permits modification, derivative works, or redistribution.
 
 ## Plan Positioning
 
 | Plan | Best fit | Scale | Support |
 |---|---|---|---|
-| **Community** | Personal infrastructure, evaluation, and small self-hosted environments | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
-| **Personal** | Operators and production teams that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
-| **Business** | Teams that need security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
+| **Community** | Noncommercial personal, hobby, educational, research, and qualifying noncommercial use | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
+| **Personal** | Commercially operated installations that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
+| **Business** | Teams that need Secure Runtime isolation, security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
 ## Feature Availability
@@ -22,20 +24,21 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 | Feature | Status | Community | Personal | Business | Enterprise |
 |---|---|:---:|:---:|:---:|:---:|
 | Infrastructure Node Management | Ready | ✅ | ✅ | ✅ | ✅ |
-| Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
-| Docker Container Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Multi-Node Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Docker Container Management — Default Runtime (`runc`) | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker ↔ Nginx Secure Links | Ready | ✅ | ✅ | ✅ | ✅ |
 | SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Domain and DNS Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | External Database Connections and Explorers | Ready | ✅ | ✅ | ✅ | ✅ |
 | Infrastructure Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
+| Physical GPU Discovery, Attachment, and Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
 | Alerts and Webhook Notifications | Ready | ✅ | ✅ | ✅ | ✅ |
 | Authentication, OIDC, and MFA | Ready | ✅ | ✅ | ✅ | ✅ |
-| Role-Based Access Control | Ready | ✅ | ✅ | ✅ | ✅ |
+| Folder- and Resource-Scoped Role-Based Access Control | Ready | ✅ | ✅ | ✅ | ✅ |
 | Audit Log | Ready | ✅ | ✅ | ✅ | ✅ |
 | REST API, OAuth, and MCP Automation | Ready | ✅ | ✅ | ✅ | ✅ |
 | GitLab Integration | Ready | ✅ | ✅ | ✅ | ✅ |
-| AI Workspace, Plan Mode, Scenarios, and Sandboxed Execution | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
+| AI Workspace, Plan Mode, Scenarios, and AI Sandboxes | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
 | Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Coming soon | ✅ | ✅ | ✅ | ✅ |
@@ -51,6 +54,7 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
 | Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
 | Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |
+| Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
 | Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
@@ -63,6 +67,12 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 
 `Coming soon` and `In development` identify product availability separately from plan entitlement. A checkmark on such a row means the feature is included in that plan when released.
 
+Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
+
+On downgrade, Gateway preserves existing premium resources and their data. New premium resources and one-shot operations such as archive import/export, migration, and audit export are blocked. Existing Secure Runtime workloads and blue/green deployments remain manageable, but selecting Secure Runtime for a new or previously default-runtime workload requires Business. Internal PKI, SIEM export, and structured logging are switchable modules: Gateway disables them when their entitlement is lost while preserving their configuration and stored data, and never automatically re-enables them after an upgrade.
+
+The Operations Console shows plan badges on whole premium modules and uses one shared upgrade dialog for blocked actions. This UI is explanatory only; the backend independently enforces the same entitlements across REST, OAuth/MCP, AI tools, background workers, public PKI routes, and domain services. Missing features return `LICENSE_ENTITLEMENT_REQUIRED` (HTTP 403), reached plan limits return `LICENSE_QUOTA_EXCEEDED` (HTTP 409), and an internally inconsistent protected policy fails closed with a generic `SERVICE_UNAVAILABLE` response.
+
 AI Workspace and the separate multi-provider Gateway Inference are available in every plan. Both are opt-in and use administrator-configured providers, published models, access rules, and limits. Neither is required to operate Gateway through the Operations Console, REST API, OAuth, or MCP.
 
 AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode researches the requested outcome with read-only planning tools, validates a structured plan, and waits for explicit user confirmation before implementation. Confirmed plans expose progress controls and finish with a separate verification pass.
@@ -70,7 +80,7 @@ AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode rese
 ## Pricing
 
 > [!IMPORTANT]
-> Pricing in this document is preliminary, does not constitute an offer, and is subject to change until commercial terms are finalized. Confirm the current price and applicable terms before purchase.
+> Pricing in this document is preliminary, does not constitute an offer, and is subject to change. The current legal-use terms are defined by [LICENSE.md](../LICENSE.md) and [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md); confirm current pricing before purchase.
 
 | Plan | Monthly | Annual |
 |---|---:|---:|
@@ -101,10 +111,20 @@ Registration and activation flow:
 4. The server returns the effective plan, license metadata, expiration, activation details, and
    versioned entitlements. Gateway stores credentials encrypted and caches the latest state.
 
+Issuance of a paid key also activates the legal commercial-use grant described in [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md). Activation binds that grant to one installation at a time. The legal grant and technical entitlements are related but distinct: paid product features can end when the server reports an authoritative non-valid state even when a 30-day post-expiration commercial-use grace period is still running.
+
 Gateway sends paid heartbeats every 15 minutes and Community heartbeats every 30 minutes. If the
 license server is unreachable, a previously valid paid installation uses its cached state for a
-30-day offline grace period. An authoritative `expired`, `revoked`, `replaced`, or `deactivated`
-response immediately returns the installation to Community entitlements.
+30-day technical offline-validation grace period. This is separate from the commercial license's
+30-day post-expiration legal-use grace period and cannot extend paid product access beyond a known
+expiration deadline.
+
+After `expiresAt`, paid product entitlements remain active for 24 hours on Personal, 3 days on
+Business, and 7 days on Enterprise. During this period the server and Gateway report
+`expired_grace`, retain the original paid plan, expose `graceUntil`, and show an authenticated
+critical Dashboard warning. Gateway evaluates the deadline locally for every protected operation;
+at or after `graceUntil` it uses Community entitlements without waiting for another heartbeat.
+`revoked`, `replaced`, and `deactivated` remain immediate and receive no entitlement grace.
 
 Data sent to the license server:
 
@@ -123,10 +143,11 @@ The installation name is derived from Gateway's persisted canonical public URL w
 |---|---|
 | `community` | No paid product key is installed; Gateway is using Community status. |
 | `valid` | The installed key is valid. |
+| `expired_grace` | The key expired, but its original paid entitlements remain active until the plan-specific `graceUntil` deadline. |
 | `valid_with_warning` | The key was previously valid, but the license server is unreachable and Gateway remains within grace. |
 | `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired. |
 | `invalid` | The license key is not valid. |
-| `expired` | The license key expired. |
+| `expired` | The plan-specific expiration grace ended and Gateway is using Community entitlements. |
 | `revoked` | The license key was revoked. |
 | `replaced` | The license activation moved to another installation. |
 | `deactivated` | The paid license was explicitly detached from this installation. |
@@ -138,6 +159,10 @@ installation token, the encrypted paid key when one is installed, and the cached
 the license server. Administrators can deactivate a paid license from **Settings > General >
 License**; the server binding is released before the local key is removed.
 
-## Source License
+## Legal-use boundary
 
-The source license lives in [LICENSE.md](../LICENSE.md). It defines permitted personal, noncommercial, small-business, and separately licensed commercial use. Product plan packaging and feature availability do not replace or modify those legal terms.
+Wiolett-owned Gateway source is publicly available under the [PolyForm Strict License 1.0.0](../LICENSE.md). It permits noncommercial use, including the personal and qualifying noncommercial-organization purposes stated in that license. It does not permit modification, derivative works, or distribution.
+
+The [Wiolett Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md) is a narrow additional grant attached automatically to a Wiolett-issued Personal, Business, or Enterprise key. It permits commercial use of one official, unmodified installation during the key term and for 30 calendar days after expiration, subject to its revocation rules. It does not permit modifying, redistributing, sublicensing, transferring, or reselling Gateway.
+
+Third-party components remain governed by their own licenses. Already published Gateway releases remain governed by the terms distributed with those releases.

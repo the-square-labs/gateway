@@ -65,17 +65,6 @@ Installer запускает Gateway и выводит одноразовый к
 | Запустить проект локально или внести вклад | [Development guide](docs/development.md) |
 | Посмотреть permission scopes | [SCOPES.md](SCOPES.md) |
 
-## Настройка AI harnesses
-
-Пакет [`@wiolett/gateway-inference`](packages/gateway-inference) настраивает поддерживаемые AI harnesses, не записывая Gateway inference token в их конфигурационные файлы. Сначала включите **Inference** в **Settings > General > General settings**, затем включите **Harness-specific endpoints** в **Settings > Inference** и выполните одну из команд:
-
-```bash
-npx -y @wiolett/gateway-inference@latest setup codex
-npx -y @wiolett/gateway-inference@latest setup claude-code
-```
-
-Если активного подключения нет, CLI запросит URL Gateway и выполнит OAuth-авторизацию. Для Codex Desktop также требуется обычный вход в OpenAI account и полный перезапуск приложения после настройки. Для Claude Code требуется версия 2.1.129 или новее; настраивается только CLI, но не Claude Desktop и не VS Code extension. Полный lifecycle и ручная настройка API описаны в [README пакета](packages/gateway-inference/README.md) и [руководстве по inference](docs/inference.md).
-
 ## Обзор продукта
 
 <table>
@@ -102,7 +91,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Область | Кратко |
 |---------|--------|
 | Ingress | Домен выбирает публичную nginx ingress-ноду; route направляет трафик на адрес, Docker container или deployment; SSL-сертификат раскладывается только на nginx-ноды, где его используют активные TLS routes. Также доступны maintenance mode, redirects, WebSockets, access lists, health checks, folders, templates, logs и stats. REST API сохраняет идентификаторы `proxy-host` для совместимости. |
-| Docker | Container lifecycle, профили runtime Default (`runc`) и Secure (`runsc`/gVisor), Gateway-managed volumes, deployments, rollout/rollback, подключение shared физических NVIDIA/AMD/Intel GPU, допустимые cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports и cleanup. Secure workloads не поддерживают GPU, migration и export; GPU-attached workloads в v1 также нельзя мигрировать или экспортировать. |
+| Docker | Container lifecycle, профиль runtime Default (`runc`) во всех планах и Secure (`runsc`/gVisor) в Business и Enterprise, Gateway-managed volumes, deployments, rollout/rollback, подключение shared физических NVIDIA/AMD/Intel GPU, допустимые cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports и cleanup. Secure workloads не поддерживают GPU, migration и export; GPU-attached workloads в v1 также нельзя мигрировать или экспортировать. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и привязка к routes. |
 | Domains | Единый реестр hostnames, выбор nginx ingress-ноды, внешний или Cloudflare-managed DNS, validation, usage tracking и явная ingress migration. |
 | Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads. |
@@ -237,16 +226,20 @@ Managed services продолжают работать. Existing nginx configs �
 
 У Gateway четыре продуктовых плана. Платные планы применяются к одной self-hosted установке без отдельной оплаты за managed nodes, пользователей или custom permission groups.
 
+Community предназначен только для некоммерческого использования по [PolyForm Strict License 1.0.0](LICENSE.md). Ключ Personal, Business или Enterprise, выданный Wiolett Industries, автоматически даёт указанному в лицензии владельцу ограниченное право коммерческого использования одной официальной немодифицированной установки по [Commercial Key License](COMMERCIAL-LICENSE.md), включая 30 календарных дней после истечения ключа. Ни одна из лицензий не разрешает модификацию или распространение.
+
 > [!NOTE]
 > Цены предварительные, не являются офертой и могут измениться. Перед покупкой уточните актуальные цены и условия.
 
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Ядро платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Неограниченный масштаб, lifecycle контейнеров, managed databases с Secure Links и публичные status pages. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также structured logging, security scanning, audit export и guided onboarding. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages и registry discovery. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также Docker Secure Runtime, structured logging, audit export, guided onboarding и security scanning после выпуска. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business, а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
 
 Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).
+
+После истечения платного ключа технические entitlements продолжают действовать 24 часа для Personal, 3 дня для Business или 7 дней для Enterprise. Этот продуктовый grace period не связан ни с offline validation, ни с 30-дневным правом коммерческого использования, описанным выше.
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

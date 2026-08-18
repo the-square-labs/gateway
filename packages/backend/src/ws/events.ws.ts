@@ -77,6 +77,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'logging.environment.changed') return 'logs:environments:view';
   if (channel === 'logging.schema.changed') return 'logs:schemas:view';
   if (channel === 'system.update.changed') return 'admin:update';
+  if (channel === 'system.license.changed') return null;
   if (channel === 'system.config.changed') return null;
   if (channel === 'status-page.changed') return 'status-page:view';
   if (channel === 'pki.template.changed') return 'pki:templates:view';
@@ -129,6 +130,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return true;
   if (channel === 'read-model.refreshed') return true;
   if (channel === 'system.update.changed') return true;
+  if (channel === 'system.license.changed') return true;
   if (channel === 'system.config.changed') return true;
   if (channel === 'system.relay.health.changed') return true;
   if (channel === 'integration.connector.changed') {
@@ -318,6 +320,7 @@ function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unkn
 
 function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown, userId?: string): boolean {
   if (channel === 'system.update.changed') return true;
+  if (channel === 'system.license.changed') return true;
   if (channel === 'system.config.changed') return true;
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
     const event = payload as Partial<InferenceUsageChangedEvent> | undefined;

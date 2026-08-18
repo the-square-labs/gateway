@@ -1044,6 +1044,11 @@ function RealtimeBridge() {
 
   useEffect(() => {
     if (!user) return;
+    return eventStream.subscribe("system.license.changed", invalidateUIBootstrap);
+  }, [invalidateUIBootstrap, user]);
+
+  useEffect(() => {
+    if (!user) return;
     return eventStream.subscribe("integration.connector.changed", invalidateUIBootstrap);
   }, [invalidateUIBootstrap, user]);
 

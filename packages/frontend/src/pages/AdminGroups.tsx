@@ -58,6 +58,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DatabaseConnection, LoggingSchema, Node, PermissionGroup, ProxyHost } from "@/types";
 import { GROUP_ASSIGNABLE_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
 
@@ -363,7 +364,9 @@ export function AdminGroups({
       setDialogOpen(false);
       fetchGroups();
     } catch (err: any) {
-      toast.error(err?.message ?? "Failed to save group");
+      if (!handleLicenseApiError(err, "Permission groups")) {
+        toast.error(err?.message ?? "Failed to save group");
+      }
     } finally {
       setSaving(false);
     }

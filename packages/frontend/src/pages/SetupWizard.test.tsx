@@ -41,6 +41,7 @@ const CONFIG = {
       lastCheckedAt: null,
       lastValidAt: null,
       graceUntil: null,
+      offlineGraceUntil: null,
       activeInstallationId: null,
       activeInstallationName: null,
       errorMessage: null,
@@ -572,7 +573,12 @@ describe("SetupWizardPage", () => {
     });
     expect(JSON.parse(String(init.body)).administrator).not.toHaveProperty("password");
     expect(await screen.findByRole("heading", { name: "Gateway edition" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Continue with Community" }));
+    expect(screen.getByText(/Community is for noncommercial use only/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Commercial Key License" })).toHaveAttribute(
+      "href",
+      "https://gitlab.wiolett.net/wiolett/gateway/-/blob/main/COMMERCIAL-LICENSE.md"
+    );
+    await user.click(screen.getByRole("button", { name: "Continue for noncommercial use" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
     const [licensePath, licenseInit] = fetchMock.mock.calls[4] as [string, RequestInit];
     expect(licensePath).toBe("/api/setup/wizard/license/community");

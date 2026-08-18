@@ -45,6 +45,7 @@ import { dockerDeploymentRoute } from "@/lib/resource-routes";
 import { getReturnNavigationTarget, preserveReturnNavigationState } from "@/lib/return-navigation";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import type {
   DockerDeployment,
@@ -477,7 +478,9 @@ export function DockerDeploymentDetail({
       await fn();
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Deployment action failed");
+      if (!handleLicenseApiError(err, "Secure Runtime")) {
+        toast.error(err instanceof Error ? err.message : "Deployment action failed");
+      }
       await load().catch(() => {
         if (transition) {
           setDeployment((current) =>
@@ -539,7 +542,10 @@ export function DockerDeploymentDetail({
           {
             label: "Migrate",
             icon: <Truck className="h-4 w-4" />,
-            onClick: () => setMigrationOpen(true),
+            onClick: () => {
+              if (!requireLicenseFeature("cross-node-migration", "Cross-node migration")) return;
+              setMigrationOpen(true);
+            },
             disabled: Boolean(migrationDisabledReason),
             disabledReason: migrationDisabledReason,
           },

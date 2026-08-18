@@ -8,6 +8,7 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { StatusBadge } from "@/components/common/StatusBadge";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
@@ -25,6 +26,7 @@ import { daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import { useUIStore } from "@/stores/ui";
 import type { Certificate, CertificateStatus, CertificateType } from "@/types";
 
@@ -65,6 +67,10 @@ export function Certificates() {
   const initialLoading = useInitialLoading(isLoading);
   const [searchInput, setSearchInput] = useState(filters.search);
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  const openIssueDialog = () => {
+    if (!requireLicenseFeature("internal-pki", "Internal PKI certificates")) return;
+    setIssueDialogOpen(true);
+  };
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -179,7 +185,10 @@ export function Certificates() {
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
-              <h1 className="text-2xl font-bold">Certificates</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold">Certificates</h1>
+                <LicensePlanBadge plan="enterprise" />
+              </div>
               <p className="text-sm text-muted-foreground">{total} certificates total</p>
             </div>
           </div>
@@ -190,14 +199,14 @@ export function Certificates() {
                     {
                       label: "Issue Certificate",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setIssueDialogOpen(true),
+                      onClick: openIssueDialog,
                     },
                   ]
                 : []
             }
           >
             {hasScopedAccess("pki:cert:issue") && (
-              <Button onClick={() => setIssueDialogOpen(true)}>
+              <Button onClick={openIssueDialog}>
                 <Plus className="h-4 w-4" />
                 Issue Certificate
               </Button>
@@ -302,7 +311,7 @@ export function Certificates() {
           <EmptyState
             message="No certificates."
             {...(hasScopedAccess("pki:cert:issue")
-              ? { actionLabel: "Issue one", onAction: () => setIssueDialogOpen(true) }
+              ? { actionLabel: "Issue one", onAction: openIssueDialog }
               : {})}
             hasActiveFilters={hasActiveFilters}
             onReset={() => {

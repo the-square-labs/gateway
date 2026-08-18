@@ -2,6 +2,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeployments, dockerEnvVars, dockerSecrets, nodes, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { DockerManagementService } from './docker.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
@@ -52,6 +53,7 @@ function hasMigrationCapability(node: NodeRow): boolean {
 }
 
 export class DockerMigrationPreflightService {
+  private licensePolicy?: LicensePolicyService;
   constructor(
     private db: DrizzleClient,
     private docker: DockerManagementService,
@@ -59,11 +61,17 @@ export class DockerMigrationPreflightService {
     private dispatch: DockerMigrationDispatchAdapter
   ) {}
 
+  setLicensePolicyService(service: LicensePolicyService): void {
+    this.licensePolicy = service;
+  }
+
   async run(
     input: DockerMigrationPreflightInput,
     scopes: string[],
     enforcePermissions = true
   ): Promise<DockerMigrationPreflight> {
+    // LICENSE ENFORCEMENT: Starting migration discovery requires Personal under the project license/TOS.
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('cross-node-migration');
     const blockers: Issue[] = [];
     const warnings: Issue[] = [];
     if (input.sourceNodeId === input.targetNodeId) {

@@ -53,7 +53,7 @@ export interface DockerContainerMutationContext {
   validateDockerNode(nodeId: string): Promise<unknown>;
   assertDockerGpuCapability(nodeId: string): Promise<void>;
   assertDockerPortBindIpCapability(nodeId: string): Promise<void>;
-  assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown): Promise<void>;
+  assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown, currentProfile?: unknown): Promise<void>;
   assertNameAvailable(nodeId: string, name: string): Promise<void>;
   assertNotManagedDeploymentInternal(nodeId: string, containerId: string): Promise<void>;
   translateNameConflict(err: unknown, name: string): never;
@@ -857,7 +857,8 @@ export async function recreateWithConfig(
     delete config.env;
   }
   const inspect = await ctx.inspectContainer(nodeId, containerId);
-  await ctx.assertDockerRuntimeProfileAvailable(nodeId, config.runtimeProfile);
+  const currentRuntimeProfile = inspect?.HostConfig?.Runtime === 'runsc' ? 'secure' : 'default';
+  await ctx.assertDockerRuntimeProfileAvailable(nodeId, config.runtimeProfile, currentRuntimeProfile);
   assertSecureRuntimeConfiguration(config, inspect);
   if (hasRequestedGpuChange(config) && dockerGpuAttachmentFromInspect(inspect).mode === 'external') {
     throw new AppError(

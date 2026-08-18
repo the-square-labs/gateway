@@ -40,7 +40,12 @@ import { aiRoutes } from '@/modules/ai/ai.routes.js';
 import { authenticateWSConnection, createWSHandlers } from '@/modules/ai/ai.ws.js';
 import { alertRoutes } from '@/modules/audit/alert.routes.js';
 import { auditRoutes } from '@/modules/audit/audit.routes.js';
-import { authMiddleware, isAdmittedSetupPurposeRequest, requireActiveUser } from '@/modules/auth/auth.middleware.js';
+import {
+  authMiddleware,
+  isAdmittedSetupPurposeRequest,
+  optionalAuthMiddleware,
+  requireActiveUser,
+} from '@/modules/auth/auth.middleware.js';
 import { authRoutes } from '@/modules/auth/auth.routes.js';
 import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
@@ -621,9 +626,13 @@ export function createApp(): GatewayAppRuntime {
   app.onError(errorHandler);
 
   // Health check
+  app.use('/health', optionalAuthMiddleware);
   app.get('/health', async (c) => {
     const redis = await getRedisHealth();
     const healthy = redis === 'ok';
+    if (!c.get('user')) {
+      return c.json({ status: healthy ? 'ok' : 'unavailable' }, healthy ? 200 : 503);
+    }
     return c.json(
       {
         status: healthy ? 'ok' : 'unavailable',

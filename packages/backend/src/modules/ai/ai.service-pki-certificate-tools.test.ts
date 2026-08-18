@@ -40,7 +40,7 @@ const BASE_USER = {
 };
 
 function createService(caService: Record<string, unknown>, certService: Record<string, unknown>) {
-  return new AIService(
+  const service = new AIService(
     {} as never,
     caService as never,
     certService as never,
@@ -58,6 +58,8 @@ function createService(caService: Record<string, unknown>, certService: Record<s
     {} as never,
     {} as never
   );
+  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  return service;
 }
 
 describe('AIService PKI certificate tool routing', () => {
@@ -150,6 +152,7 @@ describe('AIService PKI certificate tool routing', () => {
 
   it('allows the explicit system audit only with both PKI view and system-details permission', async () => {
     const service = createService({}, {});
+    const policy = (service as any).licensePolicyService;
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:cert:view'] }, 'audit_system_pki_leaves', {})
@@ -162,6 +165,7 @@ describe('AIService PKI certificate tool routing', () => {
       )
     ).resolves.toEqual({ result: { summary: { total: 0 } }, invalidateStores: [] });
     expect(mocks.systemCertificateLifecycle.auditSystemLeaves).toHaveBeenCalledWith(CA_ID);
+    expect(policy.requireFeature).not.toHaveBeenCalled();
   });
 
   it('routes managed certificate CSR, chain, and export operations with operation-specific scopes', async () => {

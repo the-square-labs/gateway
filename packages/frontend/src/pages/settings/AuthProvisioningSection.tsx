@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
   DEFAULT_GATEWAY_FEATURES,
   useSystemConfigStore,
@@ -502,7 +503,9 @@ export function AuthProvisioningSection({
           : "Structured logging updated"
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update structured logging");
+      if (!handleLicenseApiError(err, "Structured logging")) {
+        toast.error(err instanceof Error ? err.message : "Failed to update structured logging");
+      }
     } finally {
       setIsSavingLogging(false);
     }
@@ -564,7 +567,14 @@ export function AuthProvisioningSection({
       setPkiEnabled(previous.generalSettings.features.pkiEnabled);
       setSiemEnabled(previous.generalSettings.features.siemEnabled);
       setInferenceEnabled(previous.generalSettings.features.inferenceEnabled);
-      toast.error(err instanceof Error ? err.message : "Failed to update Gateway settings");
+      const capability = patch.features?.pkiEnabled
+        ? "Internal PKI"
+        : patch.features?.siemEnabled
+          ? "SIEM audit export"
+          : "Gateway settings";
+      if (!handleLicenseApiError(err, capability)) {
+        toast.error(err instanceof Error ? err.message : "Failed to update Gateway settings");
+      }
     } finally {
       setIsSavingGeneral(false);
     }
@@ -1156,7 +1166,10 @@ export function AuthProvisioningSection({
             <Switch
               checked={pkiEnabled}
               disabled={!canEdit || isSavingGeneral}
-              onChange={setPkiEnabled}
+              onChange={(enabled) => {
+                if (enabled && !requireLicenseFeature("internal-pki", "Internal PKI")) return;
+                setPkiEnabled(enabled);
+              }}
             />
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
@@ -1170,7 +1183,10 @@ export function AuthProvisioningSection({
               checked={siemEnabled}
               disabled={!canEdit || isSavingGeneral}
               ariaLabel="Enable SIEM audit export"
-              onChange={setSiemEnabled}
+              onChange={(enabled) => {
+                if (enabled && !requireLicenseFeature("siem-export", "SIEM audit export")) return;
+                setSiemEnabled(enabled);
+              }}
             />
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
@@ -1318,9 +1334,14 @@ export function AuthProvisioningSection({
             <Select
               value={loggingDraft.mode}
               disabled={!canEdit || isSavingLogging}
-              onValueChange={(mode: "disabled" | "local" | "external") =>
-                setLoggingDraft((current) => ({ ...current, mode }))
-              }
+              onValueChange={(mode: "disabled" | "local" | "external") => {
+                if (
+                  mode !== "disabled" &&
+                  !requireLicenseFeature("structured-logging", "Structured logging")
+                )
+                  return;
+                setLoggingDraft((current) => ({ ...current, mode }));
+              }}
             >
               <SelectTrigger>
                 <SelectValue />

@@ -26,6 +26,7 @@ import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type {
   CertificatePolicy,
   CertificateType,
@@ -216,7 +217,9 @@ export function PkiTemplatesTab({
       setDialogOpen(false);
       loadTemplates();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save template");
+      if (!handleLicenseApiError(err, "Internal PKI templates")) {
+        toast.error(err instanceof Error ? err.message : "Failed to save template");
+      }
     } finally {
       setIsSaving(false);
     }
@@ -234,7 +237,9 @@ export function PkiTemplatesTab({
       toast.success("Template deleted");
       loadTemplates();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete template");
+      if (!handleLicenseApiError(err, "Internal PKI templates")) {
+        toast.error(err instanceof Error ? err.message : "Failed to delete template");
+      }
     }
   };
 

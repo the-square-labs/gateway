@@ -7,6 +7,7 @@ import {
 } from "@/lib/docker-migration-navigation";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DockerMigration, DockerMigrationPreflight, Node } from "@/types";
 import { isNodeIncompatible, isNodeUpdating } from "@/types";
 import { DockerMigrationReviewDialog } from "./DockerMigrationReviewDialog";
@@ -169,7 +170,9 @@ export function DockerMigrationDialog({
       setPreflight(await api.preflightDockerMigration(request));
       transitionTo("review");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Migration preflight failed");
+      if (!handleLicenseApiError(error, "Cross-node migration")) {
+        toast.error(error instanceof Error ? error.message : "Migration preflight failed");
+      }
     } finally {
       setLoadingAction(false);
     }
@@ -191,7 +194,9 @@ export function DockerMigrationDialog({
         setPreflight(null);
         transitionTo("setup");
       }
-      toast.error(error instanceof Error ? error.message : "Failed to start migration");
+      if (!handleLicenseApiError(error, "Cross-node migration")) {
+        toast.error(error instanceof Error ? error.message : "Failed to start migration");
+      }
     } finally {
       setLoadingAction(false);
     }

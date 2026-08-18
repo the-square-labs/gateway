@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type {
   DatabaseConnection,
   DockerContainer,
@@ -203,7 +204,9 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       setSavedConfig(updated);
       toast.success("Status page settings updated");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status page");
+      if (!handleLicenseApiError(err, "Status Page")) {
+        toast.error(err instanceof Error ? err.message : "Failed to update status page");
+      }
       loadStatusPage();
     } finally {
       setSavingSettings(false);
@@ -234,7 +237,10 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
           <Switch
             checked={config.enabled}
             disabled={!canManage || savingSettings}
-            onChange={(enabled) => setConfig((prev) => ({ ...prev, enabled }))}
+            onChange={(enabled) => {
+              if (enabled && !requireLicenseFeature("status-pages", "Status Page")) return;
+              setConfig((prev) => ({ ...prev, enabled }));
+            }}
           />
         </SettingsRow>
         <SettingsRow label="Domain" description="Public hostname for the status page">

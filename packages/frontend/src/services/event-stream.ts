@@ -276,6 +276,8 @@ class EventStream {
             "settings:",
             "housekeeping:"
           );
+        } else if (msg.channel === "system.license.changed") {
+          invalidate("req:/api/ui/bootstrap", "req:/api/system/license", "settings:license-status");
         } else if (msg.channel === "system.update.changed") {
           invalidate("req:/api/system/version", "system:version");
         } else if (msg.channel === INFERENCE_CATALOG_CHANGED_CHANNEL) {

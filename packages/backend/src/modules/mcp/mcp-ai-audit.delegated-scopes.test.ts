@@ -199,6 +199,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
       {} as never,
       {} as never
     );
+    (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
 
     const result = await service.executeTool({ ...USER, scopes: ['pki:ca:view:intermediate'] }, 'list_cas', {});
 

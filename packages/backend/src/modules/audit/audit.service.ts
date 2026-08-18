@@ -28,6 +28,7 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { PaginatedResponse } from '@/types.js';
 import { getAuditRequestContext, markAuditEmitted } from './audit-request-context.js';
 import type { SiemAuditOutboxService } from './siem-outbox.service.js';
@@ -47,6 +48,22 @@ export interface AuditEntry {
 interface AuditLogOptions {
   markRequest?: boolean;
 }
+
+export interface AuditLogFilters {
+  action?: string;
+  actions?: string[];
+  resourceType?: string;
+  resourceTypes?: string[];
+  resourceId?: string;
+  userId?: string;
+  userIds?: string[];
+  excludedActions?: string[];
+  excludedResourceTypes?: string[];
+  from?: Date;
+  to?: Date;
+}
+
+const AUDIT_EXPORT_MAX_ENTRIES = 50_000;
 
 interface AuditLogRow {
   id: string;
@@ -184,21 +201,9 @@ export class AuditService {
     }
   }
 
-  async getAuditLog(params: {
-    action?: string;
-    actions?: string[];
-    resourceType?: string;
-    resourceTypes?: string[];
-    resourceId?: string;
-    userId?: string;
-    userIds?: string[];
-    excludedActions?: string[];
-    excludedResourceTypes?: string[];
-    from?: Date;
-    to?: Date;
-    page: number;
-    limit: number;
-  }): Promise<PaginatedResponse<AuditLogRow>> {
+  async getAuditLog(
+    params: AuditLogFilters & { page: number; limit: number }
+  ): Promise<PaginatedResponse<AuditLogRow>> {
     const conditions = [];
     const actions = uniqueDefined([...(params.actions ?? []), params.action]);
     const resourceTypes = uniqueDefined([...(params.resourceTypes ?? []), params.resourceType]);
@@ -269,6 +274,22 @@ export class AuditService {
         totalPages: Math.ceil(total / params.limit),
       },
     };
+  }
+
+  async getAuditExport(filters: AuditLogFilters): Promise<AuditLogRow[]> {
+    const result = await this.getAuditLog({
+      ...filters,
+      page: 1,
+      limit: AUDIT_EXPORT_MAX_ENTRIES + 1,
+    });
+    if (result.pagination.total > AUDIT_EXPORT_MAX_ENTRIES) {
+      throw new AppError(
+        413,
+        'AUDIT_EXPORT_TOO_LARGE',
+        `Audit export exceeds ${AUDIT_EXPORT_MAX_ENTRIES} entries; narrow the filters or date range`
+      );
+    }
+    return result.data;
   }
 
   async getAuditUsers(): Promise<Array<{ userId: string | null; userName: string | null; userEmail: string | null }>> {

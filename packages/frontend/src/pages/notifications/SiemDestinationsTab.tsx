@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { SiemAuthType, SiemDeliveryStatus, SiemDestination } from "@/types";
 import { SiemDestinationDialog } from "./SiemDestinationDialog";
 
@@ -97,6 +98,7 @@ export function SiemDestinationsTab({
   });
 
   const openCreate = useCallback(() => {
+    if (!requireLicenseFeature("siem-export", "SIEM destinations")) return;
     setEditingDestination(null);
     setDialogOpen(true);
   }, []);
@@ -109,11 +111,13 @@ export function SiemDestinationsTab({
   }, [canManage, openCreate, openCreateToken]);
 
   const openEdit = (destination: SiemDestination) => {
+    if (!requireLicenseFeature("siem-export", "SIEM destinations")) return;
     setEditingDestination(destination);
     setDialogOpen(true);
   };
 
   const toggle = async (destination: SiemDestination) => {
+    if (!requireLicenseFeature("siem-export", "SIEM delivery")) return;
     const enabled = !destination.enabled;
     setDestinations((current) =>
       current.map((candidate) =>
@@ -138,11 +142,14 @@ export function SiemDestinationsTab({
             : candidate
         )
       );
-      toast.error(error instanceof Error ? error.message : "Failed to update SIEM destination");
+      if (!handleLicenseApiError(error, "SIEM delivery")) {
+        toast.error(error instanceof Error ? error.message : "Failed to update SIEM destination");
+      }
     }
   };
 
   const test = async (destination: SiemDestination) => {
+    if (!requireLicenseFeature("siem-export", "SIEM destination test")) return;
     try {
       const result = await api.testSiemDestination(destination.id);
       if (result.success) {
@@ -158,11 +165,14 @@ export function SiemDestinationsTab({
         );
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "SIEM test failed");
+      if (!handleLicenseApiError(error, "SIEM destination test")) {
+        toast.error(error instanceof Error ? error.message : "SIEM test failed");
+      }
     }
   };
 
   const remove = async (destination: SiemDestination) => {
+    if (!requireLicenseFeature("siem-export", "SIEM destinations")) return;
     const description = destination.pendingDeliveries
       ? `Delete "${destination.name}" and discard ${destination.pendingDeliveries} pending delivery ${destination.pendingDeliveries === 1 ? "record" : "records"}? Historical terminal records remain until audit retention cleanup.`
       : `Delete "${destination.name}"? Historical terminal records remain until audit retention cleanup.`;
@@ -177,7 +187,9 @@ export function SiemDestinationsTab({
       );
       await load({ showLoading: false });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to delete SIEM destination");
+      if (!handleLicenseApiError(error, "SIEM destinations")) {
+        toast.error(error instanceof Error ? error.message : "Failed to delete SIEM destination");
+      }
     }
   };
 

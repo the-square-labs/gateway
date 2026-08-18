@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
+import { handleLicenseApiError } from "@/stores/license-paywall";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import type { Node, NodeStatus } from "@/types";
@@ -222,7 +223,9 @@ export function AdminNodes() {
       setEnrollDisplayName("");
       fetchNodes();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create node");
+      if (!handleLicenseApiError(err, "Managed nodes")) {
+        toast.error(err instanceof Error ? err.message : "Failed to create node");
+      }
     } finally {
       setEnrolling(false);
     }

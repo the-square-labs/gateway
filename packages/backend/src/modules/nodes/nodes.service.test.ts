@@ -29,6 +29,7 @@ describe('NodesService enrollment token creation', () => {
     } as any;
     const nodeDispatch = {} as any;
     const service = new NodesService(db, auditService, registry, grpcIdentityService, nodeDispatch);
+    service.setLicenseQuotaService({ run: vi.fn((_resource, _count, write) => write(db)) } as never);
     if (options) {
       service.setGeneralSettingsService(
         {

@@ -56,6 +56,7 @@ describe('DockerDeploymentService service creation lock', () => {
       {} as never,
       { getNode: vi.fn().mockReturnValue({ id: 'node-1' }) } as never
     );
+    service.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
 
     await expect(
       service.create(

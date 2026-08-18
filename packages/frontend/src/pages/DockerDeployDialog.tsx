@@ -30,6 +30,7 @@ import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-rout
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type ContainerCreateConfig,
   type DockerRegistry,
@@ -255,6 +256,16 @@ export function DockerDeployDialog({
       return;
     }
     if (deployMode === "deployment" && !deployName.trim()) return;
+    if (
+      deployMode === "deployment" &&
+      !requireLicenseFeature("blue-green", "Blue/green deployments")
+    )
+      return;
+    if (
+      deployRuntimeProfile === "secure" &&
+      !requireLicenseFeature("secure-runtime", "Secure Runtime")
+    )
+      return;
     setDeploying(true);
     try {
       let imageRef = deployImage.trim();
@@ -331,7 +342,9 @@ export function DockerDeployDialog({
         }
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to deploy");
+      if (!handleLicenseApiError(err, "Container deployment")) {
+        toast.error(err instanceof Error ? err.message : "Failed to deploy");
+      }
     } finally {
       setDeploying(false);
     }
@@ -348,7 +361,14 @@ export function DockerDeployDialog({
         <div className="space-y-4">
           <Tabs
             value={deployMode}
-            onValueChange={(value) => setDeployMode(value as "container" | "deployment")}
+            onValueChange={(value) => {
+              if (
+                value === "deployment" &&
+                !requireLicenseFeature("blue-green", "Blue/green deployments")
+              )
+                return;
+              setDeployMode(value as "container" | "deployment");
+            }}
           >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="container">Container</TabsTrigger>
@@ -380,7 +400,14 @@ export function DockerDeployDialog({
             <label className="text-sm font-medium">Runtime</label>
             <Select
               value={deployRuntimeProfile}
-              onValueChange={(value) => setDeployRuntimeProfile(value as DockerRuntimeProfile)}
+              onValueChange={(value) => {
+                if (
+                  value === "secure" &&
+                  !requireLicenseFeature("secure-runtime", "Secure Runtime")
+                )
+                  return;
+                setDeployRuntimeProfile(value as DockerRuntimeProfile);
+              }}
               disabled={!deployNodeId}
             >
               <SelectTrigger aria-label="Runtime">

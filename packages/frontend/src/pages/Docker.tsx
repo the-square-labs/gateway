@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type DockerViewNodeScope, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { Node as GatewayNode } from "@/types";
 import { DockerContainers } from "./DockerContainers";
 import { DockerImages } from "./DockerImages";
@@ -187,6 +188,7 @@ export function Docker() {
   };
 
   const openImport = () => {
+    if (!requireLicenseFeature("container-export", "Container archive import")) return;
     setImportDevPreview(false);
     setImportOpen(true);
   };

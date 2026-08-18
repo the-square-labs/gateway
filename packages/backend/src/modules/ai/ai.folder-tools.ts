@@ -16,6 +16,7 @@ import {
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LoggingEnvironmentFolderService } from '@/modules/logging/logging-environment-folders.service.js';
 import { LoggingSchemaFolderService } from '@/modules/logging/logging-schema-folders.service.js';
 import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
@@ -181,6 +182,10 @@ async function executeGenericFolderTool(
   resourceType: Exclude<ResourceType, 'proxy_hosts' | 'docker'>,
   args: Record<string, unknown>
 ) {
+  if (resourceType === 'logging_environments' || resourceType === 'logging_schemas') {
+    // LICENSE ENFORCEMENT: Generic AI folder tools must not bypass the structured logging paywall.
+    await container.resolve(LicensePolicyService).requireFeature('structured-logging');
+  }
   const config = genericConfig(resourceType);
   const operation = operationArg(args.operation);
   if (operation === 'list') return config.service.getFolderTree(genericListOptions(user, resourceType, config));

@@ -40,6 +40,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
+import { nodeBadgeClassName } from "@/lib/node-appearance";
+import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
 import { proxyHostRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -89,6 +91,9 @@ export function ProxyHosts({
 } = {}) {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess } = useAuthStore();
+  const gatewayPublicUrl = useUIBootstrapStore(
+    (state) => state.snapshot?.systemConfig.publicUrl ?? null
+  );
   const {
     folders,
     ungroupedHosts,
@@ -125,11 +130,8 @@ export function ProxyHosts({
   const canShowHostActions =
     canManageFolders || hasScopedAccess("proxy:edit") || hasScopedAccess("proxy:delete");
   const ingressNodes = useUIBootstrapStore((state) => state.snapshot?.navigation.nodes.data);
-  const ingressNodeNames = useMemo(
-    () =>
-      new Map(
-        (ingressNodes ?? []).map((node) => [node.id, node.displayName || node.hostname] as const)
-      ),
+  const ingressNodeById = useMemo(
+    () => new Map((ingressNodes ?? []).map((node) => [node.id, node] as const)),
     [ingressNodes]
   );
 
@@ -447,9 +449,14 @@ export function ProxyHosts({
       id: "ingress-node",
       label: "Ingress Node",
       width: "13%",
-      cellContentClassName: "text-sm text-muted-foreground",
-      renderCell: (host) =>
-        host.nodeId ? ingressNodeNames.get(host.nodeId) || "Unknown node" : "Unassigned",
+      renderCell: (host) => {
+        const node = host.nodeId ? ingressNodeById.get(host.nodeId) : undefined;
+        return (
+          <Badge variant="secondary" className={nodeBadgeClassName(node?.appearanceColor)}>
+            {node ? node.displayName || node.hostname : host.nodeId ? "Unknown node" : "Unassigned"}
+          </Badge>
+        );
+      },
     },
     {
       id: "type",
@@ -510,25 +517,33 @@ export function ProxyHosts({
       id: "enabled",
       label: "Enabled",
       width: "5.5rem",
-      renderCell: (host) => (
-        <div onClick={(e) => e.stopPropagation()}>
-          {host.isSystem ? (
-            <span className="inline-flex h-5 w-9 cursor-not-allowed items-center border border-border bg-primary opacity-50">
-              <span className="inline-block h-4 w-4 translate-x-4 bg-background" />
-            </span>
-          ) : (
-            <div
-              className={togglingIds.has(host.id) ? "pointer-events-none opacity-50" : undefined}
-            >
-              <Switch
-                checked={host.enabled}
-                onChange={(v) => handleToggle(host.id, !v)}
-                disabled={!canEditHost(host)}
-              />
-            </div>
-          )}
-        </div>
-      ),
+      renderCell: (host) => {
+        const publicRouteLocked = isGatewayPublicRoute(host, gatewayPublicUrl) && host.enabled;
+        return (
+          <div onClick={(e) => e.stopPropagation()}>
+            {host.isSystem || publicRouteLocked ? (
+              <span
+                className="inline-flex h-5 w-9 cursor-not-allowed items-center border border-border bg-primary opacity-50"
+                title={
+                  publicRouteLocked ? "The Gateway public route must remain enabled" : undefined
+                }
+              >
+                <span className="inline-block h-4 w-4 translate-x-4 bg-background" />
+              </span>
+            ) : (
+              <div
+                className={togglingIds.has(host.id) ? "pointer-events-none opacity-50" : undefined}
+              >
+                <Switch
+                  checked={host.enabled}
+                  onChange={(v) => handleToggle(host.id, !v)}
+                  disabled={!canEditHost(host)}
+                />
+              </div>
+            )}
+          </div>
+        );
+      },
     },
     ...(canShowHostActions
       ? [
@@ -553,6 +568,8 @@ export function ProxyHosts({
                       <DropdownMenuItem
                         disabled={
                           togglingIds.has(host.id) ||
+                          (isGatewayPublicRoute(host, gatewayPublicUrl) &&
+                            !host.maintenanceEnabled) ||
                           (!host.maintenanceEnabled &&
                             (!host.enabled || host.type !== "proxy" || host.rawConfigEnabled))
                         }

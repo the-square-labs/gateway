@@ -7,6 +7,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { CAService } from './ca.service.js';
 import {
@@ -34,6 +35,7 @@ export const certRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidati
 
 certRoutes.use('*', authMiddleware);
 certRoutes.use('*', requireGatewayFeature('pkiEnabled', 'PKI'));
+certRoutes.use('*', requireLicenseFeature('internal-pki'));
 
 // List certificates (paginated, filterable)
 certRoutes.openapi({ ...listCertificatesRoute, middleware: requireScopeBase('pki:cert:view') }, async (c) => {

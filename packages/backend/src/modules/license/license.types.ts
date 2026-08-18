@@ -1,4 +1,5 @@
 export const LICENSE_SERVER_URL = 'https://license.wiolett.cloud';
+export const LICENSE_ENTITLEMENTS_VERSION = 2;
 export const LICENSE_OFFLINE_GRACE_DAYS = 30;
 export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -10,6 +11,7 @@ export type LicenseRegistrationStatus = 'registered' | 'pending';
 export type LicenseStatus =
   | 'community'
   | 'valid'
+  | 'expired_grace'
   | 'valid_with_warning'
   | 'unreachable_grace_expired'
   | 'invalid'
@@ -35,10 +37,12 @@ export interface CachedLicenseState {
   registrationStatus: LicenseRegistrationStatus;
   status: LicenseStatus;
   plan: LicensePlan;
+  paidPlan: Exclude<LicensePlan, 'community'> | null;
   paidLicenseStatus: string;
   licenseName: string | null;
   licenseMetadata: Record<string, unknown>;
   expiresAt: string | null;
+  graceUntil: string | null;
   entitlementsVersion: number;
   entitlements: LicenseEntitlements;
   lastCheckedAt: string | null;
@@ -66,6 +70,7 @@ export interface LicenseStatusView {
   lastCheckedAt: string | null;
   lastValidAt: string | null;
   graceUntil: string | null;
+  offlineGraceUntil: string | null;
   activeInstallationId: string | null;
   activeInstallationName: string | null;
   errorMessage: string | null;
@@ -87,6 +92,7 @@ export interface LicenseServerState {
   effectivePlan: LicensePlan;
   paidLicenseStatus: string;
   paidLicense?: LicenseServerPaidLicense;
+  graceUntil: string | null;
   entitlementsVersion: number;
   entitlements: LicenseEntitlements;
   activation?: {
@@ -115,10 +121,103 @@ export interface LicenseServerErrorEnvelope {
   };
 }
 
+const SHARED_FEATURES = [
+  'infrastructure',
+  'nginx',
+  'docker',
+  'tls',
+  'domains',
+  'monitoring',
+  'auth',
+  'rbac',
+  'audit',
+  'api',
+  'oauth',
+  'mcp',
+  'gitlab',
+  'ai-workspace',
+  'gateway-inference',
+  'signed-updates',
+] as const;
+
+const PERSONAL_FEATURES = [
+  ...SHARED_FEATURES,
+  'container-export',
+  'blue-green',
+  'cross-node-migration',
+  'managed-databases',
+  'status-pages',
+  'registry-discovery',
+] as const;
+
+const BUSINESS_FEATURES = [
+  ...PERSONAL_FEATURES,
+  'secure-runtime',
+  'structured-logging',
+  'audit-export',
+  'security-scanning',
+  'guided-onboarding',
+] as const;
+
 export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
   managedNodes: 100,
   users: 10,
   customPermissionGroups: 5,
   supportLevel: 'community',
-  features: [],
+  features: [...SHARED_FEATURES],
 };
+
+export const LICENSE_PLAN_ENTITLEMENTS: Record<LicensePlan, LicenseEntitlements> = {
+  community: COMMUNITY_ENTITLEMENTS,
+  personal: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'standard',
+    features: [...PERSONAL_FEATURES],
+  },
+  business: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority',
+    features: [...BUSINESS_FEATURES],
+  },
+  enterprise: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority-dedicated',
+    features: [
+      ...BUSINESS_FEATURES,
+      'internal-pki',
+      'siem-export',
+      'oidc-group-mapping',
+      'scim',
+      'dedicated-contact',
+      'assisted-migration',
+    ],
+  },
+};
+
+export function isCanonicalEntitlements(plan: LicensePlan, value: unknown): value is LicenseEntitlements {
+  const expected = LICENSE_PLAN_ENTITLEMENTS[plan];
+  if (
+    !expected ||
+    !value ||
+    typeof value !== 'object' ||
+    !Array.isArray((value as Partial<LicenseEntitlements>).features)
+  ) {
+    return false;
+  }
+  const entitlements = value as LicenseEntitlements;
+  return (
+    entitlements.managedNodes === expected.managedNodes &&
+    entitlements.users === expected.users &&
+    entitlements.customPermissionGroups === expected.customPermissionGroups &&
+    entitlements.supportLevel === expected.supportLevel &&
+    entitlements.features.length === expected.features.length &&
+    new Set(entitlements.features).size === entitlements.features.length &&
+    entitlements.features.every((feature) => expected.features.includes(feature))
+  );
+}

@@ -37,6 +37,7 @@ import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { DockerHealthCheck, DockerRuntimeProfile } from "@/types";
 import type { InspectData } from "./helpers";
 import { LabelsSection } from "./LabelsSection";
@@ -770,6 +771,12 @@ export function SettingsTab({
 
   // ── Recreate handler ──
   const handleRecreate = useCallback(async () => {
+    if (
+      savedRuntimeProfile !== "secure" &&
+      runtimeProfile === "secure" &&
+      !requireLicenseFeature("secure-runtime", "Secure Runtime")
+    )
+      return;
     if (hasConfigRecreateChanges) {
       const ok = await confirm({
         title: saveRequiresRecreate ? "Save & Recreate" : "Save",
@@ -855,7 +862,9 @@ export function SettingsTab({
       setRecreateLoading(false);
     } catch (err) {
       onMutationEnd?.();
-      toast.error(err instanceof Error ? err.message : "Failed to recreate container");
+      if (!handleLicenseApiError(err, "Secure Runtime")) {
+        toast.error(err instanceof Error ? err.message : "Failed to recreate container");
+      }
       setRecreateLoading(false);
     }
   }, [
@@ -892,6 +901,7 @@ export function SettingsTab({
     recreatesRunningContainer,
     runtimeValidationError,
     saveRequiresRecreate,
+    savedRuntimeProfile,
     stopTimeout,
     user,
     workingDir,
@@ -980,7 +990,15 @@ export function SettingsTab({
             <SettingsInlineControl label="Profile">
               <Select
                 value={runtimeProfile}
-                onValueChange={(value) => setRuntimeProfile(value as DockerRuntimeProfile)}
+                onValueChange={(value) => {
+                  if (
+                    value === "secure" &&
+                    savedRuntimeProfile !== "secure" &&
+                    !requireLicenseFeature("secure-runtime", "Secure Runtime")
+                  )
+                    return;
+                  setRuntimeProfile(value as DockerRuntimeProfile);
+                }}
                 disabled={!canEdit}
               >
                 <SelectTrigger aria-label="Runtime">

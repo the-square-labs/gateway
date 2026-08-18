@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import { appRoute, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
+import { appRoute, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
 
 const AuditQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -11,6 +11,16 @@ const AuditQuerySchema = z.object({
   to: z.string().datetime().optional(),
   excludeAction: z.union([z.string(), z.array(z.string())]).optional(),
   excludeResourceType: z.union([z.string(), z.array(z.string())]).optional(),
+});
+
+export const AuditExportSchema = z.object({
+  actions: z.array(z.string()).max(100).optional(),
+  resourceTypes: z.array(z.string()).max(100).optional(),
+  userIds: z.array(z.string()).max(100).optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  excludedActions: z.array(z.string()).max(100).optional(),
+  excludedResourceTypes: z.array(z.string()).max(100).optional(),
 });
 
 export const listAuditLogRoute = appRoute({
@@ -27,5 +37,14 @@ export const listAuditUsersRoute = appRoute({
   path: '/users',
   tags: ['Audit'],
   summary: 'List users present in audit log entries',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const exportAuditLogRoute = appRoute({
+  method: 'post',
+  path: '/export',
+  tags: ['Audit'],
+  summary: 'Prepare a filtered audit log export',
+  request: jsonBody(AuditExportSchema),
   responses: okJson(UnknownDataResponseSchema),
 });

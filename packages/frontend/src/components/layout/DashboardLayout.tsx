@@ -13,6 +13,7 @@ import { InterfaceChoiceDialog } from "@/components/ai/InterfaceChoiceDialog";
 import { CommandPalette } from "@/components/common/CommandPalette";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
+import { LicenseUpgradeDialog } from "@/components/license/LicenseUpgradeDialog";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
@@ -616,6 +617,7 @@ export function DashboardLayout() {
           setInterfaceSetupOrigin("cta");
         }}
       />
+      <LicenseUpgradeDialog />
     </>
   );
 

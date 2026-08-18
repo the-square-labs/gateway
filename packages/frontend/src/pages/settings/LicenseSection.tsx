@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { api } from "@/services/api";
 import type { LicensePlan, LicenseStatus, LicenseStatusView } from "@/types";
 import { resolveLicensePlan } from "./license-plan";
@@ -45,6 +46,8 @@ function statusLabel(status: LicenseStatus): string {
       return "Community";
     case "valid":
       return "Licensed";
+    case "expired_grace":
+      return "Expired — grace period";
     case "valid_with_warning":
       return "Licensed with warning";
     case "unreachable_grace_expired":
@@ -138,6 +141,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [licenseKey, setLicenseKey] = useState("");
   const [saving, setSaving] = useState(false);
+  useScrollToNavigationTarget("gateway-license", !loading);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -212,6 +216,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   if (loading) {
     return (
       <PanelShell
+        id="gateway-license"
         title="License"
         description="Loading license status"
         actions={<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
@@ -226,6 +231,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   return (
     <>
       <PanelShell
+        id="gateway-license"
         title="License"
         description="Current Gateway license and activation state"
         actions={

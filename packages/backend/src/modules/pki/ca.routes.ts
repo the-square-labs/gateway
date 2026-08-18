@@ -13,6 +13,7 @@ import {
   requireScope,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -40,6 +41,7 @@ export const caRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidation
 
 caRoutes.use('*', authMiddleware);
 caRoutes.use('*', requireGatewayFeature('pkiEnabled', 'PKI'));
+caRoutes.use('*', requireLicenseFeature('internal-pki'));
 
 function caTypeScope(prefix: 'pki:ca:view' | 'pki:ca:revoke', type: string) {
   return type === 'root' ? `${prefix}:root` : `${prefix}:intermediate`;

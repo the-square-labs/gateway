@@ -41,7 +41,6 @@ describe("SiemDestinationDialog", () => {
         enabled: true,
       });
     });
-
   });
 
   it("keeps space between the animated authentication fields and delivery control", () => {
@@ -53,6 +52,5 @@ describe("SiemDestinationDialog", () => {
     if (!deliveryRow?.parentElement) throw new Error("Delivery control container is missing");
 
     expect(deliveryRow.parentElement).toHaveClass("pt-4");
-
   });
 });

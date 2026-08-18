@@ -102,6 +102,9 @@ import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
 import { LICENSE_SCHEDULER_INTERVAL_MS } from '@/modules/license/license.types.js';
+import { LicenseEntitlementReconcilerService } from '@/modules/license/license-entitlement-reconciler.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
 import { LocalClickHouseService } from '@/modules/logging/local-clickhouse.service.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingEnvironmentService } from '@/modules/logging/logging-environment.service.js';
@@ -264,9 +267,15 @@ export async function initializeContainer(): Promise<void> {
 
   // SIEM reuses the existing installation identifier only as a non-secret
   // source label. It does not participate in licensing or tier checks.
-  const licenseService = new LicenseService(db, cryptoService, env, fetch, generalSettingsService);
+  const licenseService = new LicenseService(db, cryptoService, env, fetch, generalSettingsService, eventBus);
   container.registerInstance(LicenseService, licenseService);
+  const licensePolicyService = new LicensePolicyService(licenseService);
+  container.registerInstance(LicensePolicyService, licensePolicyService);
+  generalSettingsService.setLicensePolicyService(licensePolicyService);
+  const licenseQuotaService = new LicenseQuotaService(db, licensePolicyService);
+  container.registerInstance(LicenseQuotaService, licenseQuotaService);
   const siemOutboxService = new SiemAuditOutboxService(licenseService, generalSettingsService);
+  siemOutboxService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(SiemAuditOutboxService, siemOutboxService);
 
   const webTransportSettingsService = new WebTransportSettingsService(db, env.WEB_TLS_BOOTSTRAP_MODE);
@@ -292,6 +301,7 @@ export async function initializeContainer(): Promise<void> {
     oidcSettingsService,
     generalSettingsService
   );
+  authService.setLicenseQuotaService(licenseQuotaService);
   container.registerInstance(AuthService, authService);
   container.registerInstance(
     LocalAuthService,
@@ -456,6 +466,7 @@ export async function initializeContainer(): Promise<void> {
   const gitLabProvider = new GitLabProvider();
   const integrationsService = new IntegrationsService(db, auditService, cryptoService, [gitLabProvider]);
   integrationsService.setEventBus(eventBus);
+  integrationsService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(IntegrationsService, integrationsService);
   const externalSshService = new ExternalSshService(db, cryptoService);
   externalSshService.setEventBus(eventBus);
@@ -607,6 +618,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(NginxCertificateDistributionService, nginxCertificateDistribution);
 
   const nodesService = new NodesService(db, auditService, nodeRegistry, grpcIdentityService, nodeDispatch);
+  nodesService.setLicenseQuotaService(licenseQuotaService);
   nodesService.setGeneralSettingsService(generalSettingsService, env.GRPC_PORT);
   nodesService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(NodesService, nodesService);
@@ -618,6 +630,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(NodeMonitoringService, nodeMonitoringService);
 
   const dockerManagementService = new DockerManagementService(db, auditService, nodeDispatch, nodeRegistry);
+  dockerManagementService.setLicensePolicyService(licensePolicyService);
   const dockerAccessResourceService = new DockerAccessResourceService(db);
   container.registerInstance(DockerAccessResourceService, dockerAccessResourceService);
   dockerManagementService.setAccessResourceService(dockerAccessResourceService);
@@ -667,6 +680,7 @@ export async function initializeContainer(): Promise<void> {
     dockerSecretService
   );
   container.registerInstance(DockerDeploymentService, dockerDeploymentService);
+  dockerDeploymentService.setLicensePolicyService(licensePolicyService);
   dockerDeploymentService.setMigrationGuard(dockerMigrationGuard);
   dockerDeploymentService.setAccessResourceService(dockerAccessResourceService);
   const dockerHealthCheckService = new DockerHealthCheckService(db, nodeDispatch);
@@ -735,6 +749,7 @@ export async function initializeContainer(): Promise<void> {
     databaseConnectionService
   );
   managedDatabaseService.setEventBus(eventBus);
+  managedDatabaseService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedDatabaseService, managedDatabaseService);
   void (async () => {
     try {
@@ -765,6 +780,7 @@ export async function initializeContainer(): Promise<void> {
     relayPolicyService
   );
   managedDatabaseBindingService.setEventBus(eventBus);
+  managedDatabaseBindingService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
 
   const databaseFolderService = new DatabaseFolderService(db, auditService);
@@ -833,6 +849,7 @@ export async function initializeContainer(): Promise<void> {
     dockerMigrationDispatch
   );
   container.registerInstance(DockerMigrationPreflightService, dockerMigrationPreflight);
+  dockerMigrationPreflight.setLicensePolicyService(licensePolicyService);
   const dockerMigrationCoordinator = new DockerMigrationCoordinator(
     db,
     proxyService,
@@ -864,6 +881,7 @@ export async function initializeContainer(): Promise<void> {
 
   const statusPageService = new StatusPageService(db, proxyService, auditService, generalSettingsService);
   statusPageService.setEventBus(eventBus);
+  statusPageService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(StatusPageService, statusPageService);
 
   const acmeService = new ACMEService(env.ACME_EMAIL, env.ACME_STAGING);
@@ -1158,7 +1176,8 @@ export async function initializeContainer(): Promise<void> {
     updateService,
     aiProviderRuntimeService,
     aiSettingsService,
-    finalizeSetupService
+    finalizeSetupService,
+    licensePolicyService
   );
   container.registerInstance(UIBootstrapService, uiBootstrapService);
   const localClickHouseService = new LocalClickHouseService(dockerService);
@@ -1169,7 +1188,15 @@ export async function initializeContainer(): Promise<void> {
     loggingClickHouseService,
     loggingFeatureService
   );
+  loggingRuntimeService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingRuntimeService, loggingRuntimeService);
+  const licenseEntitlementReconciler = new LicenseEntitlementReconcilerService(
+    licensePolicyService,
+    generalSettingsService,
+    loggingRuntimeService,
+    eventBus
+  );
+  container.registerInstance(LicenseEntitlementReconcilerService, licenseEntitlementReconciler);
   const loggingMaintenanceService = new LoggingMaintenanceService(loggingClickHouseService, loggingFeatureService);
   loggingMaintenanceService.setEventBus(eventBus);
   container.registerInstance(LoggingMaintenanceService, loggingMaintenanceService);
@@ -1189,14 +1216,17 @@ export async function initializeContainer(): Promise<void> {
     loggingClickHouseService
   );
   loggingEnvironmentService.setEventBus(eventBus);
+  loggingEnvironmentService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingEnvironmentService, loggingEnvironmentService);
   const loggingEnvironmentFolderService = new LoggingEnvironmentFolderService(db, auditService);
   loggingEnvironmentFolderService.setEventBus(eventBus);
   container.registerInstance(LoggingEnvironmentFolderService, loggingEnvironmentFolderService);
   const loggingTokenService = new LoggingTokenService(db, auditService);
+  loggingTokenService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingTokenService, loggingTokenService);
   const loggingSchemaService = new LoggingSchemaService(db, auditService);
   loggingSchemaService.setEventBus(eventBus);
+  loggingSchemaService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingSchemaService, loggingSchemaService);
   const loggingSchemaFolderService = new LoggingSchemaFolderService(db, auditService);
   loggingSchemaFolderService.setEventBus(eventBus);
@@ -1237,6 +1267,7 @@ export async function initializeContainer(): Promise<void> {
   const groupService = container.resolve(GroupService);
   groupService.setEventBus(eventBus);
   groupService.setSandboxService(aiSandboxService);
+  groupService.setLicenseQuotaService(licenseQuotaService);
   const permissionGroupFolderService = new PermissionGroupFolderService(db, auditService);
   permissionGroupFolderService.setEventBus(eventBus);
   container.registerInstance(PermissionGroupFolderService, permissionGroupFolderService);
@@ -1271,9 +1302,11 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(SiemTransportService, siemTransportService);
   const siemDeliveryService = new SiemDeliveryService(db, siemTransportService, generalSettingsService);
   siemDeliveryService.setEventBus(eventBus);
+  siemDeliveryService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(SiemDeliveryService, siemDeliveryService);
   const siemDestinationService = new SiemDestinationService(db, auditService, cryptoService, siemTransportService);
   siemDestinationService.setEventBus(eventBus);
+  siemDestinationService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(SiemDestinationService, siemDestinationService);
 
   // AI Service (depends on many services above)
@@ -1306,7 +1339,8 @@ export async function initializeContainer(): Promise<void> {
     siemDeliveryService,
     generalSettingsService,
     aiPlanService,
-    dockerSnapshotService
+    dockerSnapshotService,
+    licensePolicyService
   );
   container.registerInstance(AIService, aiService);
   if (!container.isRegistered(AIService)) {
@@ -1339,6 +1373,7 @@ export async function initializeContainer(): Promise<void> {
   proxyService.setEvaluator(notifEvaluatorService);
   notifEvaluatorService.start();
   container.registerInstance(NotificationEvaluatorService, notifEvaluatorService);
+  await licenseEntitlementReconciler.start();
 
   housekeepingService.setNotifDeliveryService(notifDeliveryService);
   housekeepingService.setSiemDeliveryService(siemDeliveryService);

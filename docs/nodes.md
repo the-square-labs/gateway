@@ -70,6 +70,8 @@ Gateway offers two workload isolation profiles:
 | **Default** | `runc` | Standard Docker compatibility and GPU/device support. |
 | **Secure** | gVisor `runsc` | A stronger host-isolation boundary for compatible CPU-only workloads. |
 
+The Default profile is available in every plan. The Secure profile is available in Business and Enterprise; see [Plans and licensing](licensing.md).
+
 Secure Runtime is an additional defense layer, not a virtual machine and not a replacement for permissions, audit logging, network controls, or application security. Because gVisor implements a userspace kernel boundary, applications that depend on uncommon Linux syscalls or direct device access may require the Default profile.
 
 ### Setup and compatibility

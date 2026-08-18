@@ -65,17 +65,6 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Run the project locally or contribute | [Development guide](docs/development.md) |
 | Review permission scopes | [SCOPES.md](SCOPES.md) |
 
-## Configure AI Harnesses
-
-The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** under **Settings > General > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference** and run one of:
-
-```bash
-npx -y @wiolett/gateway-inference@latest setup codex
-npx -y @wiolett/gateway-inference@latest setup claude-code
-```
-
-The CLI asks for the Gateway URL and completes OAuth when no active connection exists. Codex Desktop must also be signed in through Codex's normal OpenAI account flow and fully restarted after setup. Claude Code setup requires Claude Code 2.1.129 or newer and configures the CLI only, not Claude Desktop or the VS Code extension. See the [package README](packages/gateway-inference/README.md) and [inference guide](docs/inference.md) for the complete lifecycle and manual API setup.
-
 ## Product Tour
 
 <table>
@@ -102,7 +91,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Area | Summary |
 |------|---------|
 | Ingress | Domains select a public nginx ingress node; routes forward traffic to addresses, Docker containers, or deployments; SSL certificates are deployed to the nginx nodes where enabled TLS routes use them. Includes maintenance mode, redirects, WebSockets, access lists, health checks, route folders, templates, logs, and stats. The REST API keeps `proxy-host` identifiers for compatibility. |
-| Docker | Container lifecycle, Default (`runc`) and Secure (`runsc`/gVisor) runtime profiles, Gateway-managed volumes, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, and cleanup. Secure workloads cannot use GPU, migration, or export; GPU-attached workloads cannot migrate or export in v1. |
+| Docker | Container lifecycle, the Default (`runc`) runtime profile in every plan and the Secure (`runsc`/gVisor) profile in Business and Enterprise, Gateway-managed volumes, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, and cleanup. Secure workloads cannot use GPU, migration, or export; GPU-attached workloads cannot migrate or export in v1. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and route binding. |
 | Domains | Central hostname registry, nginx ingress placement, external or Cloudflare-managed DNS, validation, usage tracking, and explicit ingress migration. |
 | Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
@@ -237,16 +226,20 @@ No. AI Workspace is optional. The Operations Console, REST API, OAuth, and MCP r
 
 Gateway has four product plans. Paid plans apply to one self-hosted installation and do not add per-node, per-user, or per-permission-group charges.
 
+Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Personal, Business, or Enterprise key issued by Wiolett Industries automatically grants the named licensee limited commercial-use rights for one official, unmodified installation under the [Commercial Key License](COMMERCIAL-LICENSE.md), including 30 calendar days after the key expires. Neither license permits modification or redistribution.
+
 > [!NOTE]
 > Pricing is preliminary, does not constitute an offer, and is subject to change. Confirm current pricing and terms before purchase.
 
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited scale, container lifecycle features, managed databases with Secure Links, and public status pages. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus structured logging, security scanning, audit export, and guided onboarding. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, and registry discovery. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus Docker Secure Runtime, structured logging, audit export, guided onboarding, and security scanning when released. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.
+
+After a paid key expires, technical entitlements remain active for 24 hours on Personal, 3 days on Business, or 7 days on Enterprise. This product grace is separate from both offline validation and the 30-day commercial-use grant described above.
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

@@ -79,7 +79,8 @@ function makeHost(overrides: Record<string, unknown> = {}) {
 function setup(
   applyResult: { success: boolean; error?: string },
   existingOverrides: Record<string, unknown> = {},
-  updatedOverrides: Record<string, unknown> = {}
+  updatedOverrides: Record<string, unknown> = {},
+  publicUrl: string | null = null
 ) {
   const existing = makeHost(existingOverrides);
   const updated = makeHost({
@@ -135,13 +136,24 @@ function setup(
       }
     ),
   } as any;
+  const generalSettings = publicUrl
+    ? ({
+        getPublicUrl: vi.fn().mockResolvedValue(publicUrl),
+        getConfig: vi.fn().mockResolvedValue({ hideExternalBranding: false }),
+      } as any)
+    : undefined;
   const service = new ProxyService(
     db,
     nginxTemplateService,
     auditService,
     configGenerator,
     nodeDispatch,
-    certificateDistribution
+    certificateDistribution,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    generalSettings
   );
   return {
     service,
@@ -157,6 +169,50 @@ function setup(
 }
 
 describe('ProxyService maintenance lifecycle', () => {
+  it('rejects maintenance mode for the route serving the Gateway public URL', async () => {
+    const { service, writes } = setup(
+      { success: true },
+      { domainNames: ['gateway.example.com'] },
+      {},
+      'https://gateway.example.com/settings'
+    );
+
+    await expect(
+      service.toggleMaintenance('11111111-1111-4111-8111-111111111111', true, 'user-1')
+    ).rejects.toMatchObject({ code: 'GATEWAY_PUBLIC_ROUTE_PROTECTED' });
+    expect(writes).toHaveLength(0);
+  });
+
+  it('still allows leaving maintenance on the Gateway public route', async () => {
+    const { service } = setup(
+      { success: true },
+      {
+        domainNames: ['gateway.example.com'],
+        maintenanceEnabled: true,
+        maintenanceStartedAt: new Date(),
+      },
+      { maintenanceEnabled: false, maintenanceStartedAt: null },
+      'https://gateway.example.com'
+    );
+
+    const result = await service.toggleMaintenance('11111111-1111-4111-8111-111111111111', false, 'user-1');
+    expect(result.maintenanceEnabled).toBe(false);
+  });
+
+  it('rejects disabling the route serving the Gateway public URL', async () => {
+    const { service, writes } = setup(
+      { success: true },
+      { domainNames: ['gateway.example.com'] },
+      {},
+      'https://gateway.example.com'
+    );
+
+    await expect(
+      service.toggleProxyHost('11111111-1111-4111-8111-111111111111', false, 'user-1')
+    ).rejects.toMatchObject({ code: 'GATEWAY_PUBLIC_ROUTE_PROTECTED' });
+    expect(writes).toHaveLength(0);
+  });
+
   it('persists and applies the dedicated maintenance config before emitting the transition', async () => {
     const { service, nginxTemplateService, nodeDispatch, auditService } = setup({ success: true });
     const result = await service.toggleMaintenance(

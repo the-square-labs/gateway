@@ -1601,6 +1601,34 @@ describe('IntegrationsService', () => {
     expect(auditService.log).not.toHaveBeenCalled();
   });
 
+  it('keeps project sync available without Personal and leaves existing discovered registries untouched', async () => {
+    const db = createGetUpdateDb(connectorRow({ encryptedToken: JSON.stringify('encrypted-token') }));
+    const service = new IntegrationsService(
+      db as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn(() => 'gitlab-token') } as never
+    );
+    const provider = {
+      provider: 'gitlab',
+      testConnection: vi.fn().mockResolvedValue({ projectsView: true }),
+      listProjects: vi.fn().mockResolvedValue([]),
+      listRegistries: vi.fn(),
+    };
+    service.registerProvider(provider as never);
+    service.setLicensePolicyService({ hasFeature: vi.fn().mockResolvedValue(false) } as never);
+    vi.spyOn(service as any, 'listAllowlistRows').mockResolvedValue([]);
+    const persistProjects = vi.spyOn(service as any, 'persistProjects').mockResolvedValue(undefined);
+    const persistRegistries = vi.spyOn(service as any, 'persistRegistries').mockResolvedValue(undefined);
+
+    await expect(
+      service.syncGitLabConnector('11111111-1111-4111-8111-111111111111', null, { scheduled: true })
+    ).resolves.toMatchObject({ status: 'success', projectCount: 0, registryCount: 0 });
+
+    expect(persistProjects).toHaveBeenCalledOnce();
+    expect(provider.listRegistries).not.toHaveBeenCalled();
+    expect(persistRegistries).not.toHaveBeenCalled();
+  });
+
   it('does not audit successful scheduled Cloudflare connector syncs', async () => {
     const db = createGetUpdateDb(
       connectorRow({ provider: 'cloudflare', name: 'Cloudflare', encryptedToken: JSON.stringify('encrypted-token') })
