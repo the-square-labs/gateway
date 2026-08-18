@@ -55,6 +55,12 @@ Pages workflows:
 - Integrate Pages with scopes, folders, EventBus/WebSocket, notifications, audit/SIEM, retention, navigation, search, cache, and resource context.
 - Operate Projects, Deployments, Tags, runtime configuration, placement migration, and profile settings through the scoped AI Workspace and remote MCP Pages toolset; upload artifact bytes through the resumable deploy API.
 
+## Route Extensions
+
+Managed Routes can contain Additional Routes for literal path prefixes such as `/api` or `/assets`. Each location can target a manual address, Docker container, Docker deployment, or ready Pages Tag and can carry its own buffering, timeout, WebSocket, prefix-stripping, and advanced location directives. Docker targets own the Secure Link binding created for that location, so retry, edit, and delete follow the Additional Route lifecycle.
+
+Additional Secure Link Bindings are separate user-managed Docker bindings intended for upstreams referenced from advanced nginx config. Route-owned bindings remain visible in the binding list but cannot be deleted independently. Both lifecycles are available through the scoped Operations Console, AI Workspace, REST/OAuth, and remote MCP Ingress toolset.
+
 ## Docker
 
 Gateway manages Docker through the `docker-daemon` installed on container hosts.

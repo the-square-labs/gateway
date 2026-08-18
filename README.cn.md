@@ -90,15 +90,15 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 
 | 领域 | 摘要 |
 |------|------|
-| Ingress | Domain 选择 public nginx ingress node；route 将流量转发到 address、Docker container 或 deployment；SSL certificate 只部署到实际运行 enabled TLS routes 的 nginx nodes。还包括 maintenance mode、redirects、WebSockets、access lists、health checks、route folders、templates、logs 和 stats。REST API 为兼容性保留 `proxy-host` identifiers。 |
-| Pages | 基于项目的静态站点托管，支持不可变 Deployments、可变 Tags（包括系统管理的 `latest`）、指向 Tags 的自定义 Routes、可选 wildcard previews 以及 no-store runtime configuration。Personal 及以上计划可用。 |
+| Ingress | Domain 选择 public nginx ingress node；route 将流量转发到 address、Docker container、deployment 或 Pages Tag。Managed Additional Routes 可在同一 route 内添加 path-prefix targets，Additional Secure Link Bindings 则让 advanced nginx config 使用 Docker upstreams。还包括 maintenance mode、redirects、WebSockets、access lists、health checks、route folders、templates、logs 和 stats。REST API 为兼容性保留 `proxy-host` identifiers。 |
+| Pages | 基于项目的静态站点托管，支持不可变 Deployments、可变 Tags（包括系统管理的 `latest`）、指向 Tags 的自定义 Routes、可选 wildcard previews、no-store runtime configuration、per-project node placement 和 migration。Personal 及以上计划可用；metadata 与 publication 可通过 AI Workspace 和 MCP 管理，artifact bytes 使用 resumable deploy API 上传。 |
 | Docker | Container lifecycle、所有计划均可使用的 Default (`runc`) runtime profile，以及 Business 和 Enterprise 可使用的 Secure (`runsc`/gVisor) profile、Gateway-managed volumes、deployments、rollout/rollback、shared physical NVIDIA/AMD/Intel GPU attachment、eligible cross-node container 和 volume migrations、offline inventory snapshots、registries、images、networks、tasks、webhooks、logs、console、file browser、secrets、env vars、ports 和 cleanup。Secure workloads 不支持 GPU、migration 或 export；GPU-attached workloads 在 v1 中也不能迁移或导出。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 route binding。 |
 | Domains | Central hostname registry、nginx ingress placement、external 或 Cloudflare-managed DNS、validation、usage tracking 和 explicit ingress migration。 |
-| Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
+| Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可通过 Console、AI Workspace 或 MCP 安全绑定到 Docker workloads。 |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
-| Automation | API tokens、OAuth 2.0 PKCE、remote MCP endpoint、CI/CD webhooks、webhook notifications 和 status pages。 |
+| Automation | API tokens、OAuth 2.0 PKCE、带有 Ingress、Pages、Databases、Docker 等 discoverable scoped toolsets 的 remote MCP endpoint、CI/CD webhooks、webhook notifications 和 status pages。 |
 | AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
