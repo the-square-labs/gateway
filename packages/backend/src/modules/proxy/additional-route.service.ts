@@ -485,8 +485,12 @@ export class AdditionalRouteService {
         .where(and(eq(proxyAdditionalRoutes.id, routeId), eq(proxyAdditionalRoutes.proxyHostId, hostId)))
         .returning();
       if (!staged) throw new AppError(409, 'ADDITIONAL_ROUTE_CHANGED', 'Additional Route changed concurrently');
+      let ready: AdditionalRouteRow | null = null;
       try {
-        const ready = enabled ? await this.provision(staged, host, target) : staged;
+        ready = enabled ? await this.provision(staged, host, target) : staged;
+        if (enabled && ready.status !== 'ready') {
+          throw new Error(ready.lastError ?? 'Additional Route target did not become ready');
+        }
         if (!enabled || target.targetKind !== 'pages') await this.hostRuntime?.reconcileAdditionalRouteHost(host.id);
         try {
           if (
@@ -494,7 +498,19 @@ export class AdditionalRouteService {
             this.secureLinks &&
             isDockerKind(existing.targetKind)
           ) {
-            await this.secureLinks.deleteManagedRoute(host, routeId);
+            if (existing.secureLinkId) {
+              await this.secureLinks.deleteManagedRouteBinding(host, existing.secureLinkId);
+            } else {
+              await this.secureLinks.deleteManagedRoute(host, routeId);
+            }
+          } else if (
+            targetChanged &&
+            isDockerKind(target.targetKind) &&
+            isDockerKind(existing.targetKind) &&
+            existing.secureLinkId &&
+            ready.secureLinkId !== existing.secureLinkId
+          ) {
+            await this.secureLinks?.deleteManagedRouteBinding(host, existing.secureLinkId);
           }
           if ((!enabled || (targetChanged && target.targetKind !== 'pages')) && existing.targetKind === 'pages') {
             await this.cleanupPages(existing, host.nodeId);
@@ -515,6 +531,46 @@ export class AdditionalRouteService {
         this.emit(ready, 'updated');
         return ready;
       } catch (error) {
+        if (targetChanged) {
+          try {
+            if (existing.targetKind === 'pages' && existing.activeDeploymentId) {
+              await this.restorePagesMaterialization(
+                host.nodeId!,
+                existing.id,
+                existing.activeDeploymentId,
+                existing.runtimeConfigGeneration
+              );
+            }
+            await this.restoreRetarget(existing, userId);
+            await this.hostRuntime?.reconcileAdditionalRouteHost(host.id);
+            if (
+              ready?.secureLinkId &&
+              ready.secureLinkId !== existing.secureLinkId &&
+              isDockerKind(target.targetKind)
+            ) {
+              await this.secureLinks?.deleteManagedRouteBinding(host, ready.secureLinkId).catch(() => undefined);
+            }
+            if (target.targetKind === 'pages' && existing.targetKind !== 'pages' && ready) {
+              await this.cleanupPages(ready, host.nodeId).catch(() => undefined);
+            }
+            logger.warn('Additional Route retarget rolled back to the previous ready target', { routeId, error });
+          } catch (rollbackError) {
+            logger.error('Additional Route retarget rollback failed', { routeId, error, rollbackError });
+            // Fall through to the retryable failed state when the previous
+            // materialization could not be restored safely.
+            const [failed] = await this.db
+              .update(proxyAdditionalRoutes)
+              .set({
+                status: 'failed',
+                lastError: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+                updatedAt: new Date(),
+              })
+              .where(eq(proxyAdditionalRoutes.id, routeId))
+              .returning();
+            return failed ?? (await this.get(hostId, routeId));
+          }
+          throw error;
+        }
         // Restore the persisted intent. Runtime cleanup is best effort and the
         // failed generation remains visible for an explicit retry.
         await this.db
@@ -530,6 +586,56 @@ export class AdditionalRouteService {
         return current;
       }
     });
+  }
+
+  private async restoreRetarget(previous: AdditionalRouteRow, userId: string): Promise<AdditionalRouteRow> {
+    const current = await this.get(previous.proxyHostId, previous.id);
+    const [restored] = await this.db
+      .update(proxyAdditionalRoutes)
+      .set({
+        path: previous.path,
+        enabled: previous.enabled,
+        targetKind: previous.targetKind,
+        forwardHost: previous.forwardHost,
+        forwardPort: previous.forwardPort,
+        forwardScheme: previous.forwardScheme,
+        dockerNodeId: previous.dockerNodeId,
+        dockerContainerName: previous.dockerContainerName,
+        dockerDeploymentId: previous.dockerDeploymentId,
+        dockerContainerPort: previous.dockerContainerPort,
+        dockerHostPort: previous.dockerHostPort,
+        dockerProtocol: previous.dockerProtocol,
+        pageProjectId: previous.pageProjectId,
+        pageTagId: previous.pageTagId,
+        secureLinkId: previous.secureLinkId,
+        activeDeploymentId: previous.activeDeploymentId,
+        includePath: previous.includePath,
+        runtimeConfigPath: previous.runtimeConfigPath,
+        runtimeConfigGeneration: previous.runtimeConfigGeneration,
+        advancedConfig: previous.advancedConfig,
+        stripPrefix: previous.stripPrefix,
+        websocketSupport: previous.websocketSupport,
+        requestBuffering: previous.requestBuffering,
+        responseBuffering: previous.responseBuffering,
+        connectTimeoutSeconds: previous.connectTimeoutSeconds,
+        readTimeoutSeconds: previous.readTimeoutSeconds,
+        sendTimeoutSeconds: previous.sendTimeoutSeconds,
+        status: previous.status,
+        generation: current.generation + 1,
+        lastError: null,
+        updatedById: userId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(proxyAdditionalRoutes.id, previous.id),
+          eq(proxyAdditionalRoutes.proxyHostId, previous.proxyHostId),
+          eq(proxyAdditionalRoutes.generation, current.generation)
+        )
+      )
+      .returning();
+    if (!restored) throw new AppError(409, 'ADDITIONAL_ROUTE_CHANGED', 'Additional Route changed during rollback');
+    return restored;
   }
 
   async retry(hostId: string, routeId: string, userId: string, actorScopes: string[]): Promise<AdditionalRouteRow> {

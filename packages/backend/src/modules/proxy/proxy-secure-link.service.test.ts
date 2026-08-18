@@ -2,6 +2,75 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it('stages a replacement route binding without deprovisioning the active binding', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      rawConfigEnabled: false,
+      nodeId: 'nginx-node',
+    } as any;
+    const current = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      purpose: 'additional_route',
+      referenceId: 'route-1',
+      status: 'active',
+      generation: 3,
+      sourceNodeId: host.nodeId,
+      upstreamKind: 'docker_container',
+      forwardScheme: 'http',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'old-app',
+      dockerDeploymentId: null,
+      dockerContainerPort: 8080,
+      dockerHostPort: 8080,
+      targetNetwork: 'app-net',
+      targetContainer: 'old-app',
+      createdAt: new Date('2026-08-18T00:00:00Z'),
+    } as any;
+    const staged = {
+      ...current,
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'route_route1_r4',
+      status: 'provisioning',
+      generation: 4,
+      dockerContainerName: 'new-app',
+      targetContainer: 'new-app',
+      createdAt: new Date('2026-08-18T00:01:00Z'),
+    } as any;
+    const ready = { ...staged, status: 'active' };
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([current]) } },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([staged]) })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveAdditionalTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: 'app-net',
+      container: 'new-app',
+      targetPort: 8080,
+    });
+    const provision = vi.spyOn(service as any, 'createAdditionalFromExisting').mockResolvedValue(ready);
+    const deprovision = vi.spyOn(service as any, 'deprovisionAdditionalRuntime').mockResolvedValue(undefined);
+
+    await expect(
+      service.createManagedRoute(host, 'route-1', {
+        name: 'route-1',
+        upstreamKind: 'docker_container',
+        forwardScheme: 'http',
+        dockerNodeId: 'docker-node',
+        dockerContainerName: 'new-app',
+        dockerContainerPort: 8080,
+      })
+    ).resolves.toBe(ready);
+
+    expect(provision).toHaveBeenCalledWith(host, staged.id);
+    expect(deprovision).not.toHaveBeenCalled();
+  });
+
   it('reconciles active Docker targets with a connector image supplied by a Relay update', async () => {
     const db = {
       query: {

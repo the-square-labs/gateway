@@ -99,4 +99,87 @@ describe('AdditionalRouteService retargeting', () => {
       cleanupPages.mock.invocationCallOrder[0]!
     );
   });
+
+  it('restores the previous ready target when replacement provisioning fails', async () => {
+    const existing = {
+      id: 'route-1',
+      proxyHostId: 'host-1',
+      path: '/app',
+      enabled: true,
+      targetKind: 'docker_container',
+      forwardHost: null,
+      forwardPort: null,
+      forwardScheme: 'http',
+      dockerNodeId: 'docker-1',
+      dockerContainerName: 'old-app',
+      dockerDeploymentId: null,
+      dockerContainerPort: 8080,
+      dockerHostPort: 8080,
+      dockerProtocol: 'tcp',
+      pageProjectId: null,
+      pageTagId: null,
+      secureLinkId: 'binding-old',
+      activeDeploymentId: null,
+      includePath: null,
+      runtimeConfigPath: null,
+      runtimeConfigGeneration: 0,
+      status: 'ready',
+      generation: 4,
+      advancedConfig: null,
+      stripPrefix: true,
+      websocketSupport: false,
+      requestBuffering: false,
+      responseBuffering: false,
+      connectTimeoutSeconds: 60,
+      readTimeoutSeconds: 60,
+      sendTimeoutSeconds: 60,
+    };
+    const target = { ...existing, dockerContainerName: 'new-app' };
+    const staged = { ...target, generation: 5, status: 'staging' };
+    const failed = { ...staged, generation: 6, status: 'failed', lastError: 'connector failed' };
+    const db = updateDb(staged);
+    const audit = { log: vi.fn(async () => undefined) };
+    const secureLinks = {
+      deleteManagedRoute: vi.fn(async () => undefined),
+      deleteManagedRouteBinding: vi.fn(async () => undefined),
+    };
+    const service = new AdditionalRouteService(db as never, audit as never, undefined, secureLinks as never);
+    const host = { id: 'host-1', type: 'proxy', rawConfigEnabled: false, nginxTemplateId: null, nodeId: 'node-1' };
+    const reconcileAdditionalRouteHost = vi.fn(async () => undefined);
+    service.setHostRuntime({ reconcileAdditionalRouteHost } as never);
+
+    vi.spyOn(service, 'requireHost').mockResolvedValue(host as never);
+    vi.spyOn(service, 'assertHostCanUse').mockResolvedValue(undefined);
+    vi.spyOn(service, 'get').mockResolvedValue(existing as never);
+    vi.spyOn(service as any, 'normalizeTarget').mockReturnValue(target);
+    vi.spyOn(service as any, 'validateTarget').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'routeOptions').mockReturnValue({
+      stripPrefix: true,
+      websocketSupport: false,
+      requestBuffering: false,
+      responseBuffering: false,
+      connectTimeoutSeconds: 60,
+      readTimeoutSeconds: 60,
+      sendTimeoutSeconds: 60,
+    });
+    vi.spyOn(service as any, 'targetChanged').mockReturnValue(true);
+    vi.spyOn(service as any, 'provision').mockResolvedValue(failed);
+    const restoreRetarget = vi.spyOn(service as any, 'restoreRetarget').mockResolvedValue(existing);
+
+    await expect(
+      service.update(
+        'host-1',
+        'route-1',
+        { targetKind: 'docker_container', dockerNodeId: 'docker-1', dockerContainerName: 'new-app' },
+        'user-1',
+        []
+      )
+    ).rejects.toThrow('connector failed');
+
+    expect(restoreRetarget).toHaveBeenCalledWith(existing, 'user-1');
+    expect(reconcileAdditionalRouteHost).toHaveBeenCalledOnce();
+    expect(secureLinks.deleteManagedRoute).not.toHaveBeenCalled();
+    expect(secureLinks.deleteManagedRouteBinding).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
 });
