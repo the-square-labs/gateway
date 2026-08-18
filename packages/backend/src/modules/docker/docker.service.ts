@@ -427,6 +427,10 @@ export class DockerManagementService {
     return this.containerTransitions.get(nodeId, name);
   }
 
+  getContainerTransition(nodeId: string, name: string): ContainerTransition | undefined {
+    return this.getTransition(nodeId, name);
+  }
+
   private async resolveContainerName(nodeId: string, containerId: string): Promise<string> {
     try {
       const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
@@ -1018,8 +1022,8 @@ export class DockerManagementService {
   }
 
   async killContainer(nodeId: string, containerId: string, signal: string, userId: string) {
-    await this.assertContainerMigrationAllowed(nodeId, containerId);
-    return killDockerContainer(this.containerMutationContext(), nodeId, containerId, signal, userId);
+    const stableName = this.getTransition(nodeId, containerId) ? containerId : undefined;
+    return killDockerContainer(this.containerMutationContext(), nodeId, containerId, signal, userId, stableName);
   }
 
   async removeContainer(nodeId: string, containerId: string, force: boolean, userId: string) {

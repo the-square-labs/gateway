@@ -256,7 +256,6 @@ export async function kill(
 ) {
   await ctx.validateDockerNode(nodeId);
   const deployment = await ctx.loadDeployment(nodeId, deploymentId);
-  ctx.requireDeploymentIdle(deployment);
   ctx.setTransition(deployment, 'killing');
   try {
     const result = await ctx.dispatch.sendDockerDeploymentCommand(nodeId, 'kill', {

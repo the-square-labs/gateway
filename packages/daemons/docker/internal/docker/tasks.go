@@ -36,6 +36,8 @@ type TaskManager struct {
 	mu       sync.Mutex
 	tasks    map[string]*Task
 	inFlight map[string]bool // keyed by container identifier
+	cancels  map[string]context.CancelFunc
+	done     map[string]chan struct{}
 }
 
 // NewTaskManager creates a TaskManager and starts its background cleanup goroutine.
@@ -43,6 +45,8 @@ func NewTaskManager() *TaskManager {
 	m := &TaskManager{
 		tasks:    make(map[string]*Task),
 		inFlight: make(map[string]bool),
+		cancels:  make(map[string]context.CancelFunc),
+		done:     make(map[string]chan struct{}),
 	}
 	go m.cleanup()
 	return m
@@ -67,6 +71,10 @@ func (m *TaskManager) Submit(containerID, taskType string, timeout time.Duration
 	}
 	m.tasks[id] = t
 	m.inFlight[containerID] = true
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	done := make(chan struct{})
+	m.cancels[containerID] = cancel
+	m.done[containerID] = done
 	m.mu.Unlock()
 
 	go func() {
@@ -76,7 +84,6 @@ func (m *TaskManager) Submit(containerID, taskType string, timeout time.Duration
 		t.StartedAt = &now
 		m.mu.Unlock()
 
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		err := fn(ctx)
@@ -91,10 +98,35 @@ func (m *TaskManager) Submit(containerID, taskType string, timeout time.Duration
 			t.Status = TaskSucceeded
 		}
 		delete(m.inFlight, containerID)
+		delete(m.cancels, containerID)
+		delete(m.done, containerID)
+		close(done)
 		m.mu.Unlock()
 	}()
 
 	return t, nil
+}
+
+// CancelAndWait interrupts an in-flight operation and fences on its completion.
+// Emergency kill must not send its final SIGKILL until an update/recreate can no
+// longer issue a late Docker create/start call.
+func (m *TaskManager) CancelAndWait(containerID string, timeout time.Duration) bool {
+	m.mu.Lock()
+	cancel, ok := m.cancels[containerID]
+	done := m.done[containerID]
+	m.mu.Unlock()
+	if !ok {
+		return true
+	}
+	cancel()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // Get returns a snapshot of the task with the given ID.

@@ -35,7 +35,16 @@ export interface ResponsiveHeaderAction {
 export const HEADER_ACTION_PRIORITY = {
   default: 0,
   primary: 100,
+  emergency: 1_000,
 } as const;
+
+export function shouldForceHeaderActionOverflow(action: ResponsiveHeaderAction): boolean {
+  if (action.alwaysOverflow) return true;
+  return Boolean(
+    action.destructive &&
+      (action.priority ?? HEADER_ACTION_PRIORITY.default) < HEADER_ACTION_PRIORITY.emergency
+  );
+}
 
 const MIN_HEADER_CONTENT_WIDTH_PX = 320;
 const HEADER_ACTION_GAP_PX = 8;
@@ -193,7 +202,7 @@ export function ResponsiveHeaderActions({
     priority,
   }));
   const forcedOverflowIndices = actions.flatMap((action, index) =>
-    action.destructive || action.alwaysOverflow ? [index] : []
+    shouldForceHeaderActionOverflow(action) ? [index] : []
   );
   const renderedActionCount = Math.min(actions.length, actionChildren.length);
   const effectiveOverflowIndices = new Set(

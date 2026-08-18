@@ -34,6 +34,9 @@ type DockerPlugin struct {
 	allowlist       *AllowlistChecker
 	envStore        *EnvStore
 	taskMgr         *TaskManager
+	deploymentOpMu  sync.Mutex
+	deploymentOps   map[string]deploymentOperation
+	deploymentOpSeq uint64
 	registryMu      sync.RWMutex
 	registryCreds   map[string]string // registry URL -> base64-encoded auth
 	statsCollector  *StatsCollector
@@ -60,6 +63,7 @@ type DockerPlugin struct {
 var _ lifecycle.ProxySecureLinkPlugin = (*DockerPlugin)(nil)
 
 const dockerLogsCommandTimeout = 15 * time.Second
+const emergencyKillCancellationTimeout = 30 * time.Second
 
 // This tag exists solely for the local development workflow. Production
 // connector provisioning uses the separate `ensure` action and digest refs.
@@ -125,6 +129,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 
 	// Initialize task manager
 	p.taskMgr = NewTaskManager()
+	p.deploymentOps = make(map[string]deploymentOperation)
 	p.migrationStore, err = newMigrationArtifactStore(p.cfg.StateDir)
 	if err != nil {
 		return err
@@ -457,11 +462,30 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		}()
 
 	case "kill":
+		var params struct {
+			ContainerName string `json:"containerName"`
+		}
+		if cmd.ConfigJson != "" {
+			if err := json.Unmarshal([]byte(cmd.ConfigJson), &params); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("parse emergency kill params: %v", err)
+				return
+			}
+		}
 		signal := cmd.Signal
 		if signal == "" {
 			signal = "SIGKILL"
 		}
-		if err := p.client.KillContainer(ctx, cmd.ContainerId, signal); err != nil {
+		target := cmd.ContainerId
+		if params.ContainerName != "" {
+			target = params.ContainerName
+		}
+		if !p.taskMgr.CancelAndWait(target, emergencyKillCancellationTimeout) {
+			result.Success = false
+			result.Error = "timed out cancelling the active container operation"
+			return
+		}
+		if err := p.client.KillContainer(ctx, target, signal); err != nil && !isNotFoundErr(err) {
 			result.Success = false
 			result.Error = err.Error()
 			return
@@ -546,7 +570,11 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		// Resolve container name for envstore
 		containerName, _ := p.client.ContainerName(ctx, containerID)
 
-		task, err := p.taskMgr.Submit(containerID, "update", 10*time.Minute, func(taskCtx context.Context) error {
+		taskKey := containerID
+		if containerName != "" {
+			taskKey = containerName
+		}
+		task, err := p.taskMgr.Submit(taskKey, "update", 10*time.Minute, func(taskCtx context.Context) error {
 			// Compute env changes via envstore
 			var envOverrides map[string]string
 			var envRemovals []string
@@ -678,7 +706,12 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 			return
 		}
 		containerID := cmd.ContainerId
-		task, err := p.taskMgr.Submit(containerID, "recreate", 10*time.Minute, func(taskCtx context.Context) error {
+		containerName, _ := p.client.ContainerName(ctx, containerID)
+		taskKey := containerID
+		if containerName != "" {
+			taskKey = containerName
+		}
+		task, err := p.taskMgr.Submit(taskKey, "recreate", 10*time.Minute, func(taskCtx context.Context) error {
 			return p.client.RecreateWithConfig(taskCtx, containerID, cmd.ConfigJson)
 		})
 		if err != nil {

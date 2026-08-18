@@ -127,6 +127,18 @@ describe("DockerContainerDetail lifecycle actions", () => {
       canKill: false,
     });
   });
+
+  it("keeps emergency kill available during transitional and unhealthy live states", () => {
+    for (const state of ["updating", "recreating", "killing", "paused", "dead", "stopped"]) {
+      expect(containerLifecycleActions(state).canKill).toBe(true);
+    }
+  });
+
+  it("disables emergency kill only for created, exited, and offline states", () => {
+    for (const state of ["created", "exited", "offline"]) {
+      expect(containerLifecycleActions(state).canKill).toBe(false);
+    }
+  });
 });
 
 describe("DockerContainerDetail archive permissions", () => {

@@ -363,7 +363,12 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Kill container
   router.openapi(
-    { ...killContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
+    {
+      ...killContainerRoute,
+      middleware: requireDockerContainerScope('docker:containers:manage', 'containerId', {
+        allowTransitionIdentityFallback: true,
+      }),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
