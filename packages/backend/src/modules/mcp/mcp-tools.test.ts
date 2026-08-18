@@ -50,6 +50,7 @@ describe('MCP tool scope filtering', () => {
     expect(toolNames(['databases:credentials:reveal:db-1'])).toContain('manage_database_connection');
     expect(toolNames(['logs:read:env-1'])).toContain('manage_logging');
     expect(toolNames(['status-page:incidents:resolve'])).toContain('manage_status_page');
+    expect(toolNames(['pages:tokens:manage:project-1'])).toContain('manage_pages');
   });
 
   it('never exposes AI sandbox runner tools through MCP', () => {

@@ -4,7 +4,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_pages',
     description:
-      'Inspect and manage Pages profiles, Projects, Deployments, Tags, and runtime configuration. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes are uploaded through the resumable deploy API, not this metadata tool.',
+      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, and runtime configuration. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes are uploaded through the resumable deploy API, not this metadata tool.',
     parameters: {
       type: 'object',
       properties: {
@@ -28,6 +28,9 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
             'tag_list',
             'tag_move',
             'tag_delete',
+            'token_list',
+            'token_create',
+            'token_revoke',
             'config_list',
             'config_save_default',
             'config_save_tag',
@@ -37,6 +40,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         projectId: { type: 'string', description: 'Page Project UUID.' },
         deploymentId: { type: 'string', description: 'Page Deployment UUID.' },
         tagId: { type: 'string', description: 'Page Tag UUID for runtime config overrides.' },
+        tokenId: { type: 'string', description: 'Page deploy token UUID.' },
         tag: { type: 'string', description: 'Mutable Tag name for move/delete.' },
         page: { type: 'number' },
         limit: { type: 'number' },
@@ -50,6 +54,9 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         maxDeployments: { type: 'number' },
         storageQuotaBytes: { type: 'number' },
         pinned: { type: 'boolean' },
+        allowedTagPatterns: { type: 'array', items: { type: 'string' } },
+        allowUserTag: { type: 'boolean' },
+        expiresAt: { type: 'string', description: 'Optional ISO 8601 expiration timestamp.' },
         source: { type: 'string', description: 'Valid JSON object source assigned to window.runtime.config.' },
         expectedGeneration: { type: 'number' },
         enabled: { type: 'boolean' },
@@ -134,7 +141,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_managed_database',
     description:
-      'Provision and manage Gateway-managed Postgres, Redis, or ClickHouse instances and their workload bindings. Read the catalog before create, poll get until ready, and create a binding only after the database is ready. This tool never reveals credentials.',
+      'Provision and manage Gateway-managed Postgres, Redis, or ClickHouse instances and their workload bindings. Read the catalog before create, poll get until ready, and create a binding only after the database is ready. Supports safe lifecycle operations but never reveals or rotates credentials.',
     parameters: {
       type: 'object',
       properties: {
@@ -145,7 +152,12 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
             'list',
             'get',
             'create',
+            'update',
             'retry',
+            'restart',
+            'pause',
+            'unpause',
+            'rotate_certificate',
             'delete',
             'list_bindings',
             'create_binding',
@@ -171,6 +183,8 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         publishedPort: { type: 'number' },
         publishedNativePort: { type: 'number' },
         tlsEnabled: { type: 'boolean' },
+        clickhouseConfigXml: { type: 'string' },
+        redisConfig: { type: 'object' },
         databaseName: { type: 'string' },
         ownerUsername: { type: 'string' },
         targetNodeId: { type: 'string' },

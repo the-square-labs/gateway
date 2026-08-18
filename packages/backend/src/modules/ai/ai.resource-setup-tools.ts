@@ -6,6 +6,7 @@ import {
   CreateManagedDatabaseSchema,
   DeleteManagedDatabaseBindingSchema,
   ManagedDatabaseListQuerySchema,
+  UpdateManagedDatabaseSchema,
 } from '@/modules/databases/databases.schemas.js';
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
@@ -38,6 +39,8 @@ import { PageRuntimeConfigService } from '@/modules/pages/runtime-config/page-ru
 import { PagePublicationService } from '@/modules/pages/tags/page-publication.service.js';
 import { MovePageTagSchema, PageTagParamSchema } from '@/modules/pages/tags/page-tag.schemas.js';
 import { PageTagService } from '@/modules/pages/tags/page-tag.service.js';
+import { CreatePageDeployTokenSchema } from '@/modules/pages/tokens/page-deploy-token.schemas.js';
+import { PageDeployTokenService } from '@/modules/pages/tokens/page-deploy-token.service.js';
 import { AdditionalRouteService } from '@/modules/proxy/additional-route.service.js';
 import {
   CreateAdditionalRouteSchema,
@@ -154,6 +157,21 @@ async function managePages(user: User, args: Record<string, unknown>) {
     ensureResourceScope(user, 'pages:tags:manage', projectId);
     const parsed = PageTagParamSchema.parse({ projectId, tag: requiredValue(tag) });
     await container.resolve(PageTagService).delete(projectId, parsed.tag, user.id);
+    return { success: true };
+  }
+
+  const tokens = container.resolve(PageDeployTokenService);
+  if (operation === 'token_list') {
+    ensureResourceScope(user, 'pages:tokens:manage', projectId);
+    return tokens.list(projectId);
+  }
+  if (operation === 'token_create') {
+    ensureResourceScope(user, 'pages:tokens:manage', projectId);
+    return tokens.create(projectId, CreatePageDeployTokenSchema.parse(args), user.id);
+  }
+  if (operation === 'token_revoke') {
+    ensureResourceScope(user, 'pages:tokens:manage', projectId);
+    await tokens.revoke(projectId, requiredString(args.tokenId), user.id);
     return { success: true };
   }
 
@@ -285,9 +303,29 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
     ensureResourceScope(user, 'databases:view', databaseId);
     return service.get(databaseId);
   }
+  if (operation === 'update') {
+    ensureResourceScope(user, 'databases:edit', databaseId);
+    return service.update(databaseId, UpdateManagedDatabaseSchema.parse(args), user.id);
+  }
   if (operation === 'retry') {
     ensureResourceScope(user, 'databases:edit', databaseId);
     return service.retryProvisioning(databaseId, user.id);
+  }
+  if (operation === 'restart') {
+    ensureResourceScope(user, 'databases:edit', databaseId);
+    return service.restart(databaseId, user.id);
+  }
+  if (operation === 'pause') {
+    ensureResourceScope(user, 'databases:edit', databaseId);
+    return service.pause(databaseId, user.id);
+  }
+  if (operation === 'unpause') {
+    ensureResourceScope(user, 'databases:edit', databaseId);
+    return service.unpause(databaseId, user.id);
+  }
+  if (operation === 'rotate_certificate') {
+    ensureResourceScope(user, 'databases:edit', databaseId);
+    return service.rotateCertificate(databaseId, user.id);
   }
   if (operation === 'delete') {
     ensureResourceScope(user, 'databases:delete', databaseId);

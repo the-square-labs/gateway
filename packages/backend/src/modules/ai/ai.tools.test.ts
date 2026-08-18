@@ -125,6 +125,23 @@ describe('AI tool scope filtering', () => {
         JSON.stringify({ operation: 'create', type: 'postgres', name: 'app-db' })
       )
     ).toMatchObject({ ok: true });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_managed_database',
+        JSON.stringify({ operation: 'update', databaseId: 'database-1', memoryMb: 1024 })
+      )
+    ).toMatchObject({ ok: true });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_pages',
+        JSON.stringify({
+          operation: 'token_create',
+          projectId: 'project-1',
+          name: 'GitLab Pages',
+          allowedTagPatterns: ['mr-*'],
+        })
+      )
+    ).toMatchObject({ ok: true });
     expect(parseAndValidateAIToolArguments('manage_docker_migration', '{"operation":"invent"}')).toEqual({
       ok: false,
       error: 'Invalid tool arguments at /operation',

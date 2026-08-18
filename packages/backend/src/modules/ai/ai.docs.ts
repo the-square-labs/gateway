@@ -665,7 +665,7 @@ Managed database instances are not generic Docker workloads. The database node o
 - The tunnel terminates in Gateway's separate long-lived relay container. Ordinary app-only updates keep established binding traffic running; a red relay warning is a critical operator state after bounded automatic recovery fails, not a reason to publish a replacement port.
 - A TCP endpoint is an independent, explicit publication option for infrastructure outside Gateway. It requires engine authentication and may not be tunnel-encrypted unless the database engine is configured with TLS. Gateway does not change host firewalls automatically.
 - Each application binding gets a separate engine identity. Its URI and optional host/port/database/user/password environment values are injected into the selected application; do not reveal, log, or copy those values unless an explicit secret-reveal flow permits it.
-- Assistant and MCP flows use \`manage_managed_database\` for catalog/list/get/create/retry/delete and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, then create a container or deployment binding; never reveal owner or binding credentials.
+- Assistant and MCP flows use \`manage_managed_database\` for catalog/list/get/create/update/retry/delete, restart/pause/unpause, certificate rotation, and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, then create a container or deployment binding. Credential reveal and credential rotation remain outside this tool; never reveal owner or binding credentials.
 
 ## Providers
 - **Postgres**: schema/table explorer, paginated row browser, row insert/update/delete for PK-backed tables, SQL console, monitoring.
@@ -693,11 +693,12 @@ Managed database instances are not generic Docker workloads. The database node o
 
   pages: `# Pages
 
-Pages serves immutable static Deployments owned by a Page Project. Use \`find_resource({ types: ["page_project"] })\` and \`manage_pages\` for profile, project, deployment, Tag, migration, pinning, retention, and runtime-config operations.
+Pages serves immutable static Deployments owned by a Page Project. Use \`find_resource({ types: ["page_project"] })\` and \`manage_pages\` for profile, project, deployment, Tag, deploy-token, migration, pinning, retention, and runtime-config operations.
 
 ## Workflow
 - The Pages profile must be licensed and enabled. A Project is placed on one Pages-capable node and can be migrated with \`project_migrate\`.
 - Artifact bytes are uploaded through the resumable Pages deploy API; \`manage_pages\` operates deployment metadata and publication, not local archive bytes.
+- Deploy tokens can be listed, created, and revoked with \`manage_pages\`. A newly created raw token is returned once; do not repeat it in later chat messages, notifications, or logs.
 - Deployments are immutable. Mutable Tags point at ready Deployments. Ingress Routes and Additional Routes target a Tag, never an immutable Deployment.
 - Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override.
 - Disabling Pages stops immutable preview publication but existing Tag routes and stored content continue to work.

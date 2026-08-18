@@ -202,6 +202,38 @@ describe('AI resource references', () => {
     expect(extractAIResourceReferences('list_docker_containers', { nodeId: 'node-1' }, [{ id: 'c1' }])).toEqual([]);
   });
 
+  it('extracts Page Projects returned by resource search', () => {
+    const references = extractAIResourceReferences(
+      'find_resource',
+      { types: ['page_project'] },
+      { results: [{ type: 'page_project', id: 'project-1', name: 'Docs', summary: { slug: 'docs' } }] }
+    );
+
+    expect(references).toEqual([
+      expect.objectContaining({
+        type: 'page_project',
+        resourceId: 'project-1',
+        label: 'Docs',
+        slug: 'docs',
+        uiHref: '/pages/docs',
+      }),
+    ]);
+  });
+
+  it('keeps the managed database id when a binding operation returns a binding id', () => {
+    const references = extractAIResourceReferences(
+      'manage_managed_database',
+      { operation: 'create_binding', databaseId: 'database-1' },
+      { id: 'binding-1', name: 'api binding' }
+    );
+
+    expect(references[0]).toMatchObject({
+      type: 'database',
+      resourceId: 'database-1',
+      uiHref: '/databases/database-1',
+    });
+  });
+
   it('does not misclassify external GitLab project webhooks as Gateway resources', () => {
     expect(
       extractAIResourceReferences(

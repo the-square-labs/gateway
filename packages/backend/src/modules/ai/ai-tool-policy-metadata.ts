@@ -107,7 +107,8 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   manage_managed_database: operationPolicies({
     read: ['catalog', 'list', 'get', 'list_bindings'],
     create: ['create', 'create_binding'],
-    update: ['retry'],
+    update: ['update', 'retry', 'rotate_certificate'],
+    execute: ['restart', 'pause', 'unpause'],
     delete: ['delete', 'delete_binding'],
   }),
   manage_pages: operationPolicies({
@@ -119,9 +120,10 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
       'deployment_list',
       'deployment_get',
       'tag_list',
+      'token_list',
       'config_list',
     ],
-    create: ['project_create'],
+    create: ['project_create', 'token_create'],
     update: [
       'profile_configure',
       'profile_disable',
@@ -133,7 +135,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
       'config_reset_tag',
     ],
     execute: ['project_migrate'],
-    delete: ['project_delete', 'deployment_delete', 'tag_delete'],
+    delete: ['project_delete', 'deployment_delete', 'tag_delete', 'token_revoke'],
   }),
   manage_additional_route: operationPolicies({
     read: ['list', 'get'],
