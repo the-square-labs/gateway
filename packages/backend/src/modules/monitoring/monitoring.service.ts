@@ -40,6 +40,7 @@ export interface DashboardStats {
 
 export interface HealthOverviewEntry {
   id: string;
+  slug: string;
   domainNames: string[];
   type: string;
   enabled: boolean;
@@ -282,6 +283,7 @@ export class MonitoringService {
     const hosts = await this.db
       .select({
         id: proxyHosts.id,
+        slug: proxyHosts.slug,
         domainNames: proxyHosts.domainNames,
         type: proxyHosts.type,
         enabled: proxyHosts.enabled,
