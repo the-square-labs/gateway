@@ -117,12 +117,12 @@ function inspectTarEntrypoint(tar: Uint8Array): number {
     if (header.every((byte) => byte === 0)) break;
     const name = readTarString(header, 0, 100);
     const prefix = readTarString(header, 345, 155);
-    const path = normalizePath(prefix ? `${prefix}/${name}` : name);
     const rawSize = readTarString(header, 124, 12).trim();
     const size = rawSize ? Number.parseInt(rawSize, 8) : 0;
     if (!Number.isSafeInteger(size) || size < 0) throw new Error("The tar.gz archive is invalid");
     const type = String.fromCharCode(header[156] || 48);
     if (type === "0") {
+      const path = normalizePath(prefix ? `${prefix}/${name}` : name);
       fileCount += 1;
       if (ROOT_ENTRYPOINTS.has(path)) found = true;
     }
@@ -240,6 +240,95 @@ export async function preparePageFolder(files: File[]): Promise<PreparedPageBuil
 }
 
 export async function sha256Hex(file: Blob): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", ownedArrayBuffer(await readBlobBytes(file)));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const bytes = await readBlobBytes(file);
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", ownedArrayBuffer(bytes));
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  return sha256Fallback(bytes);
+}
+
+function sha256Fallback(bytes: Uint8Array): string {
+  const rotations = [7, 18, 3, 17, 19, 10, 6, 11, 25, 2, 13, 22];
+  const constants = new Uint32Array(64);
+  const state = new Uint32Array(8);
+  let prime = 2;
+  let constantsIndex = 0;
+  while (constantsIndex < 64) {
+    let isPrime = true;
+    for (let factor = 2; factor * factor <= prime; factor += 1) {
+      if (prime % factor === 0) {
+        isPrime = false;
+        break;
+      }
+    }
+    if (isPrime) {
+      if (constantsIndex < 8) state[constantsIndex] = (Math.sqrt(prime) * 2 ** 32) >>> 0;
+      constants[constantsIndex] = (Math.cbrt(prime) * 2 ** 32) >>> 0;
+      constantsIndex += 1;
+    }
+    prime += 1;
+  }
+
+  const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
+  const padded = new Uint8Array(paddedLength);
+  padded.set(bytes);
+  padded[bytes.length] = 0x80;
+  const bitLength = BigInt(bytes.length) * 8n;
+  const view = new DataView(padded.buffer);
+  view.setUint32(paddedLength - 8, Number(bitLength >> 32n), false);
+  view.setUint32(paddedLength - 4, Number(bitLength & 0xffff_ffffn), false);
+
+  const words = new Uint32Array(64);
+  for (let block = 0; block < paddedLength; block += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      words[index] = view.getUint32(block + index * 4, false);
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const first = words[index - 15];
+      const second = words[index - 2];
+      const sigma0 =
+        ((first >>> rotations[0]) | (first << (32 - rotations[0]))) ^
+        ((first >>> rotations[1]) | (first << (32 - rotations[1]))) ^
+        (first >>> rotations[2]);
+      const sigma1 =
+        ((second >>> rotations[3]) | (second << (32 - rotations[3]))) ^
+        ((second >>> rotations[4]) | (second << (32 - rotations[4]))) ^
+        (second >>> rotations[5]);
+      words[index] = (words[index - 16] + sigma0 + words[index - 7] + sigma1) >>> 0;
+    }
+
+    let [a, b, c, d, e, f, g, h] = state;
+    for (let index = 0; index < 64; index += 1) {
+      const sum1 =
+        ((e >>> rotations[6]) | (e << (32 - rotations[6]))) ^
+        ((e >>> rotations[7]) | (e << (32 - rotations[7]))) ^
+        ((e >>> rotations[8]) | (e << (32 - rotations[8])));
+      const choice = (e & f) ^ (~e & g);
+      const temporary1 = (h + sum1 + choice + constants[index] + words[index]) >>> 0;
+      const sum0 =
+        ((a >>> rotations[9]) | (a << (32 - rotations[9]))) ^
+        ((a >>> rotations[10]) | (a << (32 - rotations[10]))) ^
+        ((a >>> rotations[11]) | (a << (32 - rotations[11])));
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temporary2 = (sum0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temporary1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temporary1 + temporary2) >>> 0;
+    }
+    state[0] = (state[0] + a) >>> 0;
+    state[1] = (state[1] + b) >>> 0;
+    state[2] = (state[2] + c) >>> 0;
+    state[3] = (state[3] + d) >>> 0;
+    state[4] = (state[4] + e) >>> 0;
+    state[5] = (state[5] + f) >>> 0;
+    state[6] = (state[6] + g) >>> 0;
+    state[7] = (state[7] + h) >>> 0;
+  }
+  return [...state].map((word) => word.toString(16).padStart(8, "0")).join("");
 }

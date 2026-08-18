@@ -75,6 +75,15 @@ describe('validatePageArchive', () => {
     await expect(validatePageArchive(path, limits)).resolves.toEqual({ fileCount: 1, expandedSizeBytes: 14 });
   });
 
+  it('accepts the conventional dot root directory entry', async () => {
+    const path = await writeArchive([
+      { name: './', type: '5' },
+      { name: './index.html', data: '<h1>Hello</h1>' },
+    ]);
+
+    await expect(validatePageArchive(path, limits)).resolves.toEqual({ fileCount: 1, expandedSizeBytes: 14 });
+  });
+
   it('requires the entrypoint at the archive root', async () => {
     const missing = await writeArchive([{ name: 'assets/app.js', data: 'console.log(1)' }]);
     const nested = await writeArchive([{ name: 'site/index.html', data: '<h1>Hello</h1>' }]);

@@ -34,7 +34,12 @@ func (f *fakeNginx) Reload() error              { f.reloadCalls++; return f.relo
 
 func TestFinalizeUploadConfinementAndImmutableOwnership(t *testing.T) {
 	runtime, nginx := newRuntime(t)
-	archive := archiveBytes(t, []tarEntry{{name: "index.html", body: "hello"}, {name: "assets/app.js", body: "console.log(1)"}})
+	archive := archiveBytes(t, []tarEntry{
+		{name: "./", typeflag: tar.TypeDir},
+		{name: "./index.html", body: "hello"},
+		{name: "./assets/", typeflag: tar.TypeDir},
+		{name: "./assets/app.js", body: "console.log(1)"},
+	})
 	digest := digestOf(archive)
 	if err := runtime.InitUpload(uploadID, deploymentID, int64(len(archive)), digest); err != nil {
 		t.Fatal(err)

@@ -101,6 +101,10 @@ function parsePaxPath(data: Buffer): string | null {
   return path;
 }
 
+function isArchiveRootDirectory(raw: string): boolean {
+  return raw === '.' || /^\.\/+$/u.test(raw);
+}
+
 export async function validatePageArchive(
   archivePath: string,
   limits: PageArchiveLimits
@@ -199,36 +203,43 @@ export async function validatePageArchive(
             throw archiveError('PAGES_ARCHIVE_METADATA_TOO_LARGE', 'Archive metadata is too large');
           }
         } else {
-          const path = normalizeArchivePath(nextPath ?? headerPath, limits.maxPathBytes);
+          const rawPath = nextPath ?? headerPath;
           nextPath = null;
-          if (paths.has(path)) throw archiveError('PAGES_ARCHIVE_DUPLICATE_PATH', 'Archive contains duplicate paths');
-          const parts = path.split('/');
-          for (let index = 1; index < parts.length; index += 1) {
-            if (regularFiles.has(parts.slice(0, index).join('/'))) {
-              throw archiveError('PAGES_ARCHIVE_PATH_CONFLICT', 'Archive path has a file as its parent');
+          if (type === '5' && isArchiveRootDirectory(rawPath)) {
+            if (size !== 0) {
+              throw archiveError('PAGES_ARCHIVE_DIRECTORY_INVALID', 'Archive directory has a payload');
             }
-          }
-          if (type === '0' && [...paths].some((existing) => existing.startsWith(`${path}/`))) {
-            throw archiveError('PAGES_ARCHIVE_PATH_CONFLICT', 'Archive file conflicts with an existing child path');
-          }
-          paths.add(path);
-          entryCount += 1;
-          if (entryCount > limits.maxFiles) {
-            throw archiveError('PAGES_ARCHIVE_TOO_MANY_FILES', 'Archive contains too many files');
-          }
-          if (type === '5' && size !== 0) {
-            throw archiveError('PAGES_ARCHIVE_DIRECTORY_INVALID', 'Archive directory has a payload');
-          }
-          if (type === '0') {
-            regularFiles.add(path);
-            if (path === 'index.html' || path === 'index.htm') hasRootEntrypoint = true;
-            fileCount += 1;
-            if (size > limits.maxFileBytes) {
-              throw archiveError('PAGES_ARCHIVE_FILE_TOO_LARGE', 'Archive contains a file that is too large');
+          } else {
+            const path = normalizeArchivePath(rawPath, limits.maxPathBytes);
+            if (paths.has(path)) throw archiveError('PAGES_ARCHIVE_DUPLICATE_PATH', 'Archive contains duplicate paths');
+            const parts = path.split('/');
+            for (let index = 1; index < parts.length; index += 1) {
+              if (regularFiles.has(parts.slice(0, index).join('/'))) {
+                throw archiveError('PAGES_ARCHIVE_PATH_CONFLICT', 'Archive path has a file as its parent');
+              }
             }
-            expandedSizeBytes += size;
-            if (expandedSizeBytes > limits.maxExpandedBytes) {
-              throw archiveError('PAGES_ARCHIVE_EXPANDED_TOO_LARGE', 'Expanded archive exceeds the configured limit');
+            if (type === '0' && [...paths].some((existing) => existing.startsWith(`${path}/`))) {
+              throw archiveError('PAGES_ARCHIVE_PATH_CONFLICT', 'Archive file conflicts with an existing child path');
+            }
+            paths.add(path);
+            entryCount += 1;
+            if (entryCount > limits.maxFiles) {
+              throw archiveError('PAGES_ARCHIVE_TOO_MANY_FILES', 'Archive contains too many files');
+            }
+            if (type === '5' && size !== 0) {
+              throw archiveError('PAGES_ARCHIVE_DIRECTORY_INVALID', 'Archive directory has a payload');
+            }
+            if (type === '0') {
+              regularFiles.add(path);
+              if (path === 'index.html' || path === 'index.htm') hasRootEntrypoint = true;
+              fileCount += 1;
+              if (size > limits.maxFileBytes) {
+                throw archiveError('PAGES_ARCHIVE_FILE_TOO_LARGE', 'Archive contains a file that is too large');
+              }
+              expandedSizeBytes += size;
+              if (expandedSizeBytes > limits.maxExpandedBytes) {
+                throw archiveError('PAGES_ARCHIVE_EXPANDED_TOO_LARGE', 'Expanded archive exceeds the configured limit');
+              }
             }
           }
         }

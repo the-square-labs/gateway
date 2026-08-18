@@ -119,7 +119,10 @@ export function PageManualDeployDialog({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to deploy Page Project");
     } finally {
-      if (!succeeded) setUploading(false);
+      if (!succeeded) {
+        setUploading(false);
+        setPhase("");
+      }
     }
   };
 
@@ -189,13 +192,18 @@ export function PageManualDeployDialog({
               )}
             >
               <div className="flex min-w-0 flex-1 items-center px-3">
-                <p className={cn("truncate text-sm", sourceError && "text-destructive")}>
-                  {sourceError ||
-                    phase ||
-                    (prepared
-                      ? `${prepared.sourceLabel} · ${prepared.fileCount} files · ${formatBytes(prepared.archive.size)}`
-                      : "No build selected")}
-                </p>
+                {prepared && !sourceError && !phase ? (
+                  <p className="flex min-w-0 items-center text-sm">
+                    <span className="truncate">{prepared.sourceLabel}</span>
+                    <span className="shrink-0">
+                      {` · ${prepared.fileCount} files · ${formatBytes(prepared.archive.size)}`}
+                    </span>
+                  </p>
+                ) : (
+                  <p className={cn("truncate text-sm", sourceError && "text-destructive")}>
+                    {sourceError || phase || "No build selected"}
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 items-stretch border-l border-input max-sm:flex-col">
                 <Button

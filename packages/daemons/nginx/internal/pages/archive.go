@@ -38,7 +38,9 @@ func extractArchive(archivePath, destination, deploymentID, digest string, size 
 	}
 	tr := tar.NewReader(gz)
 	seen := map[string]bool{}
+	regularFiles := map[string]bool{}
 	files := 0
+	entries := 0
 	var expanded int64
 	for {
 		header, err := tr.Next()
@@ -47,6 +49,12 @@ func extractArchive(archivePath, destination, deploymentID, digest string, size 
 		}
 		if err != nil {
 			return releaseManifest{}, fmt.Errorf("read archive: %w", err)
+		}
+		if header.Typeflag == tar.TypeDir && isArchiveRootDirectory(header.Name) {
+			if header.Size != 0 {
+				return releaseManifest{}, errors.New("archive directory has payload")
+			}
+			continue
 		}
 		name, err := archiveName(header.Name)
 		if err != nil {
@@ -57,7 +65,7 @@ func extractArchive(archivePath, destination, deploymentID, digest string, size 
 		}
 		seen[name] = true
 		for ancestor := path.Dir(name); ancestor != "."; ancestor = path.Dir(ancestor) {
-			if seen[ancestor] {
+			if regularFiles[ancestor] {
 				return releaseManifest{}, errors.New("archive path conflicts with file")
 			}
 		}
@@ -67,9 +75,18 @@ func extractArchive(archivePath, destination, deploymentID, digest string, size 
 		if header.Size < 0 || header.Size > maxFileBytes {
 			return releaseManifest{}, errors.New("archive file exceeds limit")
 		}
-		files++
+		if header.Typeflag != tar.TypeDir {
+			for existing := range seen {
+				if existing != name && strings.HasPrefix(existing, name+"/") {
+					return releaseManifest{}, errors.New("archive path conflicts with file")
+				}
+			}
+			regularFiles[name] = true
+			files++
+		}
+		entries++
 		expanded += header.Size
-		if files > maxFileCount || expanded > maxExpandedBytes {
+		if entries > maxFileCount || expanded > maxExpandedBytes {
 			return releaseManifest{}, errors.New("archive exceeds expanded limits")
 		}
 		target := filepath.Join(destination, filepath.FromSlash(name))
@@ -101,6 +118,13 @@ func extractArchive(archivePath, destination, deploymentID, digest string, size 
 		return releaseManifest{}, err
 	}
 	return releaseManifest{DeploymentID: deploymentID, SHA256: digest, Size: size, FileCount: files}, nil
+}
+
+func isArchiveRootDirectory(raw string) bool {
+	if raw == "." {
+		return true
+	}
+	return strings.HasPrefix(raw, "./") && strings.Trim(raw[2:], "/") == ""
 }
 
 func archiveName(raw string) (string, error) {
