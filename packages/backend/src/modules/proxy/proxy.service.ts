@@ -1221,7 +1221,7 @@ export class ProxyService {
       ...binding,
       managedRoutePath:
         binding.purpose === 'additional_route' && binding.referenceId
-          ? routePaths.get(binding.referenceId) ?? null
+          ? (routePaths.get(binding.referenceId) ?? null)
           : null,
     }));
   }
@@ -2064,6 +2064,7 @@ export class ProxyService {
       )
       .returning();
     for (const host of updated) this.emitHost(host.id, 'updated', host.domainNames?.[0]);
+    await this.additionalRoutes?.updateRenamedContainerReferences(nodeId, oldName, newName);
     this.queueDockerReconciliation();
   }
 
@@ -2100,6 +2101,7 @@ export class ProxyService {
   private async reconcileDockerUpstreams(force = false): Promise<void> {
     let retryNeeded = false;
     if (await this.secureLinks?.reconcileAdditionalLifecycle?.()) retryNeeded = true;
+    if (await this.additionalRoutes?.reconcileDockerTargets(force)) retryNeeded = true;
     const pendingCleanups = await this.db.query.proxyHosts.findMany({
       where: eq(proxyHosts.secureLinkStatus, 'cleanup_pending'),
     });

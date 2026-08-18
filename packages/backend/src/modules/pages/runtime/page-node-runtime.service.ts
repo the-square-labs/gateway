@@ -15,12 +15,21 @@ import type { NginxCertificateDistributionService } from '@/services/nginx-certi
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { PageArtifactStore } from '../artifacts/page-artifact-store.js';
 import type { PageProfileRuntimeAdapter } from '../profile/page-profile.service.js';
-import { renderPageHostname } from '../profile/page-profile.service.js';
+import { renderPageHostname, withPageProfileLock } from '../profile/page-profile.service.js';
 import { withPageDefaultRuntimeConfigLock } from '../runtime-config/page-runtime-config.service.js';
 
 const PROFILE_ID = 'default';
 
 type ReplicaPurpose = 'preview' | 'route' | 'migration';
+const PREVIEW_CLEANUP_STATUSES = [
+  'pending',
+  'uploading',
+  'materializing',
+  'ready',
+  'failed',
+  'capability_missing',
+  'cleanup_pending',
+] as const;
 export type PageRuntimeConfigBindingKind = 'route' | 'preview';
 export interface PagePreviewRuntimeConfigProgress {
   replicaId: string;
@@ -158,18 +167,71 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
       .where(
         and(
           eq(pageDeploymentReplicas.purpose, 'preview'),
-          eq(pageDeploymentReplicas.status, 'ready'),
-          eq(pageDeployments.status, 'ready')
+          inArray(pageDeploymentReplicas.status, PREVIEW_CLEANUP_STATUSES),
+          inArray(pageDeployments.status, ['stored', 'staging', 'ready', 'cleaning'])
         )
       );
+    const failures: unknown[] = [];
     for (const row of rows) {
       if (!row.hostname?.endsWith(`.${profile.domain}`)) continue;
-      await this.dispatch.sendPagesCommand(row.nodeId, { pagesRemovePreview: { hostname: row.hostname } });
-      await this.removeRuntimeConfig(row.nodeId, 'preview', row.hostname);
-      await this.db
-        .update(pageDeploymentReplicas)
-        .set({ status: 'cleanup_pending', cleanupAfter: new Date(), updatedAt: new Date() })
-        .where(eq(pageDeploymentReplicas.id, row.replicaId));
+
+      // Invalidate the DB row before touching the daemon. A preview that is
+      // already uploading/materializing must not win a later ready CAS after
+      // the profile has been disabled.
+      try {
+        await this.db
+          .update(pageDeploymentReplicas)
+          .set({
+            status: 'cleanup_pending',
+            cleanupAfter: new Date(),
+            lastErrorCode: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(pageDeploymentReplicas.id, row.replicaId),
+              inArray(pageDeploymentReplicas.status, PREVIEW_CLEANUP_STATUSES)
+            )
+          );
+      } catch (error) {
+        failures.push(error);
+        continue;
+      }
+
+      let cleanupError: unknown;
+      try {
+        await this.dispatch.sendPagesCommand(row.nodeId, { pagesRemovePreview: { hostname: row.hostname } });
+      } catch (error) {
+        cleanupError = error;
+      }
+      try {
+        await this.removeRuntimeConfig(row.nodeId, 'preview', row.hostname);
+      } catch (error) {
+        cleanupError = cleanupError ? new AggregateError([cleanupError, error]) : error;
+      }
+
+      if (cleanupError) {
+        failures.push(cleanupError);
+        try {
+          await this.db
+            .update(pageDeploymentReplicas)
+            .set({
+              status: 'cleanup_pending',
+              cleanupAfter: new Date(),
+              lastErrorCode: failureCode(cleanupError),
+              updatedAt: new Date(),
+            })
+            .where(eq(pageDeploymentReplicas.id, row.replicaId));
+        } catch (persistError) {
+          failures.push(persistError);
+        }
+        continue;
+      }
+
+      await this.db.delete(pageDeploymentReplicas).where(eq(pageDeploymentReplicas.id, row.replicaId));
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Pages preview cleanup is pending');
     }
   }
 
@@ -521,60 +583,78 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
     hostname: string,
     certificate: { certificateId: string; certificateVersion: string }
   ): Promise<void> {
-    await this.ensureRelease(nodeId, deploymentId, 'preview', hostname);
     try {
-      const projectId = await this.previewProjectId(deploymentId);
-      // Take the project lock before the deployment lock. Default publication
-      // takes the same order when it updates existing preview replicas.
-      await withPageDefaultRuntimeConfigLock(this.db, projectId, () =>
-        this.withDeploymentLock(`${nodeId}:${deploymentId}`, async () => {
-          for (let attempt = 0; attempt < 8; attempt += 1) {
-            const { sourceGeneration } = await this.ensurePreviewRuntimeConfig(nodeId, deploymentId, hostname);
-            await this.dispatch.sendPagesCommand(nodeId, {
-              pagesMaterializePreview: {
-                profileId: PROFILE_ID,
-                deploymentId,
-                hostname,
-                certificateId: certificate.certificateId,
-                certificateVersion: certificate.certificateVersion,
-              },
-            });
+      await withPageProfileLock(this.db, async () => {
+        await this.assertProfileEnabled();
+        await this.ensureRelease(nodeId, deploymentId, 'preview', hostname);
+        const projectId = await this.previewProjectId(deploymentId);
+        // Take the project lock before the deployment lock. Default publication
+        // takes the same order when it updates existing preview replicas.
+        await withPageDefaultRuntimeConfigLock(this.db, projectId, () =>
+          this.withDeploymentLock(`${nodeId}:${deploymentId}`, async () => {
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              // The profile lock serializes the complete materialization and
+              // ready transition with disable().
+              const { sourceGeneration } = await this.ensurePreviewRuntimeConfig(nodeId, deploymentId, hostname);
+              await this.dispatch.sendPagesCommand(nodeId, {
+                pagesMaterializePreview: {
+                  profileId: PROFILE_ID,
+                  deploymentId,
+                  hostname,
+                  certificateId: certificate.certificateId,
+                  certificateVersion: certificate.certificateVersion,
+                },
+              });
 
-            const [latest] = await this.db
-              .select({ generation: pageRuntimeConfigs.generation })
-              .from(pageDeploymentReplicas)
-              .innerJoin(pageDeployments, eq(pageDeploymentReplicas.deploymentId, pageDeployments.id))
-              .innerJoin(
-                pageRuntimeConfigs,
-                and(eq(pageRuntimeConfigs.projectId, pageDeployments.projectId), isNull(pageRuntimeConfigs.tagId))
-              )
-              .where(
-                and(
-                  eq(pageDeploymentReplicas.deploymentId, deploymentId),
-                  eq(pageDeploymentReplicas.nodeId, nodeId),
-                  eq(pageDeploymentReplicas.purpose, 'preview'),
-                  eq(pageDeploymentReplicas.referenceId, hostname)
+              const [latest] = await this.db
+                .select({ generation: pageRuntimeConfigs.generation })
+                .from(pageDeploymentReplicas)
+                .innerJoin(pageDeployments, eq(pageDeploymentReplicas.deploymentId, pageDeployments.id))
+                .innerJoin(
+                  pageRuntimeConfigs,
+                  and(eq(pageRuntimeConfigs.projectId, pageDeployments.projectId), isNull(pageRuntimeConfigs.tagId))
                 )
-              )
-              .limit(1);
-            if (latest?.generation !== sourceGeneration) continue;
-            // This UPDATE has a PostgreSQL statement snapshot. Holding the
-            // shared lock makes that snapshot mutually exclusive with Default
-            // mutation and publication, so it cannot claim stale readiness.
-            const ready = await this.markPreviewReplicaReady(nodeId, deploymentId, hostname, sourceGeneration);
-            if (!ready) continue;
-            return;
-          }
-          throw new AppError(
-            409,
-            'PAGE_RUNTIME_CONFIG_CHANGED_CONCURRENTLY',
-            'Default runtime configuration changed while materializing the preview'
-          );
-        })
-      );
+                .where(
+                  and(
+                    eq(pageDeploymentReplicas.deploymentId, deploymentId),
+                    eq(pageDeploymentReplicas.nodeId, nodeId),
+                    eq(pageDeploymentReplicas.purpose, 'preview'),
+                    eq(pageDeploymentReplicas.referenceId, hostname)
+                  )
+                )
+                .limit(1);
+              if (latest?.generation !== sourceGeneration) continue;
+              // This UPDATE has a PostgreSQL statement snapshot. Holding the
+              // shared lock makes that snapshot mutually exclusive with Default
+              // mutation and publication, so it cannot claim stale readiness.
+              const ready = await this.markPreviewReplicaReady(nodeId, deploymentId, hostname, sourceGeneration);
+              if (!ready) continue;
+              return;
+            }
+            throw new AppError(
+              409,
+              'PAGE_RUNTIME_CONFIG_CHANGED_CONCURRENTLY',
+              'Default runtime configuration changed while materializing the preview'
+            );
+          })
+        );
+      });
     } catch (error) {
-      await this.markReplica(nodeId, deploymentId, 'preview', hostname, 'failed', failureCode(error));
+      if (failureCode(error) !== 'PAGES_PROFILE_DISABLED') {
+        await this.markReplica(nodeId, deploymentId, 'preview', hostname, 'failed', failureCode(error));
+      }
       throw error;
+    }
+  }
+
+  private async assertProfileEnabled(): Promise<void> {
+    const [profile] = await this.db
+      .select({ enabled: pageWildcardProfiles.enabled })
+      .from(pageWildcardProfiles)
+      .where(and(eq(pageWildcardProfiles.id, PROFILE_ID), eq(pageWildcardProfiles.enabled, true)))
+      .limit(1);
+    if (!profile) {
+      throw new AppError(409, 'PAGES_PROFILE_DISABLED', 'Pages immutable previews are disabled');
     }
   }
 

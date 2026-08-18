@@ -252,7 +252,21 @@ export class ProxySecureLinkService {
     }
     const existing = await this.getManagedRoute(routeId);
     if (existing) {
-      if (existing.status === 'active') return existing;
+      const targetUnchanged =
+        existing.sourceNodeId === host.nodeId &&
+        existing.upstreamKind === input.upstreamKind &&
+        existing.forwardScheme === input.forwardScheme &&
+        existing.dockerNodeId === target.nodeId &&
+        existing.dockerContainerName ===
+          (input.upstreamKind === 'docker_container' ? input.dockerContainerName : null) &&
+        existing.dockerDeploymentId ===
+          (input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null) &&
+        existing.dockerContainerPort === input.dockerContainerPort &&
+        existing.dockerHostPort === target.targetPort &&
+        existing.targetNetwork === target.network &&
+        existing.targetContainer === target.container;
+      if (existing.status === 'active' && targetUnchanged) return existing;
+      if (existing.status === 'active') await this.deprovisionAdditionalRuntime(existing);
       if (existing.status === 'cleanup_pending') {
         await this.deprovisionAdditionalRuntime(existing).catch(() => undefined);
       }

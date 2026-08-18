@@ -1,5 +1,5 @@
 import { Settings } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,13 +16,6 @@ export function PagesFeatureDisabledDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const navigate = useNavigate();
-
-  const openSettings = () => {
-    onOpenChange(false);
-    navigate("/settings/features", { state: { scrollTarget: "pages" } });
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="sm:max-w-md">
@@ -38,9 +31,15 @@ export function PagesFeatureDisabledDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button onClick={openSettings}>
-            <Settings className="h-4 w-4" />
-            Open Pages settings
+          <Button asChild>
+            <Link
+              to="/settings/features"
+              state={{ scrollTarget: "pages" }}
+              onClick={() => onOpenChange(false)}
+            >
+              <Settings className="h-4 w-4" />
+              Open Pages settings
+            </Link>
           </Button>
         </DialogFooter>
       </DialogContent>

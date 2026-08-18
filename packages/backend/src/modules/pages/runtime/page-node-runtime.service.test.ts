@@ -12,9 +12,8 @@ const PREVIEW_CONFIG_PATH = '/var/lib/nginx/pages/runtime-configs/previews/previ
 function runtimeConfigCommandResponse(_nodeId: string, command: Record<string, unknown>) {
   const activate = command.pagesActivateRuntimeConfig as { bindingKind?: string } | undefined;
   return Promise.resolve({
-    configPath: activate?.bindingKind === 'PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE'
-      ? ROUTE_CONFIG_PATH
-      : PREVIEW_CONFIG_PATH,
+    configPath:
+      activate?.bindingKind === 'PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE' ? ROUTE_CONFIG_PATH : PREVIEW_CONFIG_PATH,
   });
 }
 
@@ -129,6 +128,7 @@ describe('Pages runtime config daemon commands', () => {
 
   it('re-reads Default after a concurrent save before marking a preview ready', async () => {
     const states = [
+      { enabled: true },
       { projectId: 'project-1' },
       { replicaId: 'replica-1', runtimeConfigGeneration: 0, defaultGeneration: 1, value: { api: 'A' } },
       { generation: 2 },
@@ -178,6 +178,7 @@ describe('Pages runtime config daemon commands', () => {
 
   it('retries when Default commits after the final read but before the ready CAS', async () => {
     const states = [
+      { enabled: true },
       { projectId: 'project-1' },
       { replicaId: 'replica-1', runtimeConfigGeneration: 0, defaultGeneration: 1, value: { api: 'A' } },
       { generation: 1 },
@@ -224,7 +225,7 @@ describe('Pages runtime config daemon commands', () => {
     });
 
     expect(defaultCommitted).toBe(true);
-    expect(selectCount).toBe(5);
+    expect(selectCount).toBe(6);
     expect(updateReturning).toHaveBeenCalledTimes(4);
     expect(dispatch.sendPagesCommand).toHaveBeenCalledTimes(2);
     expect(dispatch.sendPagesRuntimeConfigCommand).toHaveBeenNthCalledWith(3, 'node-1', {

@@ -21,7 +21,9 @@ function queryChain(result: unknown) {
 
 function mockDb(selectResults: unknown[], returningResults: unknown[] = []) {
   const updateSets: unknown[] = [];
+  const client = { query: vi.fn().mockResolvedValue(undefined), release: vi.fn() };
   const db = {
+    $client: { connect: vi.fn().mockResolvedValue(client) },
     select: vi.fn(() => queryChain(selectResults.shift() ?? [])),
     insert: vi.fn(),
     update: vi.fn(() => {
@@ -98,6 +100,36 @@ describe('PageProfileService', () => {
       expect.objectContaining({
         action: 'page_profile.disable',
         details: { domainId: DOMAIN_ID, reason: 'license_entitlement_loss' },
+      })
+    );
+  });
+
+  it('persists Pages disabled and schedules cleanup before surfacing a daemon failure', async () => {
+    const profile = {
+      id: 'default',
+      enabled: true,
+      domainId: DOMAIN_ID,
+      updatedById: 'user-1',
+    };
+    const domain = { id: DOMAIN_ID, domain: '*.pages.example.net' };
+    const { db, updateSets } = mockDb([[profile], [domain]]);
+    const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');
+    service.setRuntimeAdapter({
+      apply: vi.fn(),
+      disable: vi.fn(async () => {
+        throw new Error('daemon offline');
+      }),
+    });
+
+    await expect(service.disable(null, 'license_entitlement_loss')).rejects.toThrow('daemon offline');
+
+    expect(updateSets[0]).toEqual(expect.objectContaining({ enabled: false, status: 'disabled' }));
+    expect(updateSets[1]).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        status: 'disabled',
+        lastErrorCode: 'PAGES_RUNTIME_CLEANUP_PENDING',
+        lastErrorMessage: 'daemon offline',
       })
     );
   });

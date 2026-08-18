@@ -183,6 +183,13 @@ export class AdditionalRouteService {
       .where(eq(proxyAdditionalRoutes.proxyHostId, host.id))
       .limit(1);
     if (count.length === 0) return;
+    if (host.type === 'proxy' && (input.type === 'redirect' || input.type === '404')) {
+      throw new AppError(
+        409,
+        'ADDITIONAL_ROUTES_HOST_MODE_BLOCKED',
+        'Remove Additional Routes before changing this host from Proxy to Redirect or 404'
+      );
+    }
     const entersRaw = input.type === 'raw' || input.rawConfigEnabled === true;
     const customTemplate = input.nginxTemplateId !== undefined && input.nginxTemplateId !== null;
     if (!entersRaw && !customTemplate) return;
@@ -1052,6 +1059,62 @@ export class AdditionalRouteService {
       } catch (error) {
         retry = true;
         await this.markFailed(route.id, error, null);
+      }
+    }
+    return retry;
+  }
+
+  async updateRenamedContainerReferences(nodeId: string, oldName: string, newName: string): Promise<void> {
+    await this.db
+      .update(proxyAdditionalRoutes)
+      .set({ dockerContainerName: newName, updatedAt: new Date() })
+      .where(
+        and(
+          eq(proxyAdditionalRoutes.targetKind, 'docker_container'),
+          eq(proxyAdditionalRoutes.dockerNodeId, nodeId),
+          eq(proxyAdditionalRoutes.dockerContainerName, oldName)
+        )
+      );
+  }
+
+  async reconcileDockerTargets(force = false): Promise<boolean> {
+    if (!this.secureLinks) return false;
+    const routes = await this.db.query.proxyAdditionalRoutes.findMany({
+      where: and(
+        eq(proxyAdditionalRoutes.enabled, true),
+        eq(proxyAdditionalRoutes.status, 'ready'),
+        inArray(proxyAdditionalRoutes.targetKind, ['docker_container', 'docker_deployment']),
+        isNull(proxyAdditionalRoutes.migrationTargetNodeId)
+      ),
+    });
+    let retry = false;
+    for (const route of routes) {
+      try {
+        await this.withHostLock(route.proxyHostId, async () => {
+          const current = await this.db.query.proxyAdditionalRoutes.findFirst({
+            where: and(
+              eq(proxyAdditionalRoutes.id, route.id),
+              eq(proxyAdditionalRoutes.enabled, true),
+              eq(proxyAdditionalRoutes.status, 'ready')
+            ),
+          });
+          if (!current || !isDockerKind(current.targetKind)) return;
+          const host = await this.requireHost(current.proxyHostId);
+          const binding = await this.secureLinks!.getManagedRoute(current.id);
+          if (!force && binding && binding.status !== 'active') return;
+          const ready = await this.secureLinks!.createManagedRoute(
+            host,
+            current.id,
+            this.asSecureLinkInput(this.normalizeTarget(current as unknown as Input, current))
+          );
+          if (ready.status !== 'active') throw new Error(ready.lastError ?? 'Secure Link reconciliation failed');
+        });
+      } catch (error) {
+        retry = true;
+        logger.debug('Keeping last Additional Route Docker target until reconciliation succeeds', {
+          routeId: route.id,
+          error,
+        });
       }
     }
     return retry;

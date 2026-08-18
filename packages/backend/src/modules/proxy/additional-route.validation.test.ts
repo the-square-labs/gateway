@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { AdditionalRouteService } from './additional-route.service.js';
 import { normalizeAdditionalRoutePath } from './additional-route.validation.js';
 
 describe('Additional Route path normalization', () => {
@@ -26,5 +27,25 @@ describe('Additional Route path normalization', () => {
     expect(() => normalizeAdditionalRoutePath('/_GATEWAY/health')).toThrow('reserved');
     expect(() => normalizeAdditionalRoutePath('/.WELL-KNOWN/acme-challenge/x')).toThrow('reserved');
     expect(normalizeAdditionalRoutePath('/_gateway-api')).toBe('/_gateway-api');
+  });
+});
+
+describe('Additional Route host mode guard', () => {
+  it.each(['redirect', '404'])('blocks Proxy -> %s when routes exist', async (type) => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ id: 'route-1' }]) })),
+        })),
+      })),
+    } as any;
+    const service = new AdditionalRouteService(db, {} as any);
+
+    await expect(
+      service.assertHostTemplateMutationAllowed(
+        { id: 'host-1', type: 'proxy', rawConfigEnabled: false } as any,
+        { type } as any
+      )
+    ).rejects.toMatchObject({ code: 'ADDITIONAL_ROUTES_HOST_MODE_BLOCKED', statusCode: 409 });
   });
 });

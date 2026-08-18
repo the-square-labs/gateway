@@ -18,6 +18,49 @@ import { hasRequiredNginxPagesCapabilities } from './page-node-capability.js';
 import type { UpdatePageProfileInput } from './page-profile.schemas.js';
 
 const PROFILE_ID = 'default';
+export const PAGE_PROFILE_CLEANUP_PENDING_CODE = 'PAGES_RUNTIME_CLEANUP_PENDING';
+const PAGE_PROFILE_LOCK_KEY = 'gateway-pages-profile:default';
+
+/**
+ * Serializes profile disable/re-enable state with preview materialization across
+ * every Gateway process sharing the PostgreSQL database. The operation spans
+ * committed database writes and daemon RPCs, so this deliberately uses a
+ * session advisory lock rather than a transaction-scoped lock.
+ */
+export async function withPageProfileLock<T>(db: DrizzleClient, operation: () => Promise<T>): Promise<T> {
+  const client = await db.$client.connect();
+  try {
+    await client.query('select pg_advisory_lock(hashtextextended($1, 0))', [PAGE_PROFILE_LOCK_KEY]);
+  } catch (lockError) {
+    client.release(lockError instanceof Error ? lockError : new Error('Pages profile lock acquisition failed'));
+    throw lockError;
+  }
+
+  let result: T | undefined;
+  let operationError: unknown;
+  try {
+    result = await operation();
+  } catch (error) {
+    operationError = error;
+  }
+
+  let unlockError: unknown;
+  try {
+    await client.query('select pg_advisory_unlock(hashtextextended($1, 0))', [PAGE_PROFILE_LOCK_KEY]);
+    client.release();
+  } catch (error) {
+    unlockError = error;
+    // Never return a connection with a potentially held session advisory lock
+    // to the pool.
+    client.release(error instanceof Error ? error : new Error('Pages profile lock release failed'));
+  }
+  if (operationError && unlockError) {
+    throw new AggregateError([operationError, unlockError], 'Pages profile lock release failed');
+  }
+  if (unlockError) throw unlockError;
+  if (operationError) throw operationError;
+  return result as T;
+}
 
 export interface PageProfileRuntimeAdapter {
   apply(profile: { domain: string; certificateId: string; labelTemplate: string }): Promise<void>;
@@ -353,29 +396,88 @@ export class PageProfileService {
   }
 
   async disable(userId: string | null, reason: 'user' | 'license_entitlement_loss' = 'user') {
-    const [existing] = await this.db
-      .select()
-      .from(pageWildcardProfiles)
-      .where(eq(pageWildcardProfiles.id, PROFILE_ID))
-      .limit(1);
-    if (!existing?.enabled) return this.get();
-    if (!existing.domainId) throw new AppError(409, 'PAGES_PROFILE_INVALID', 'Pages profile is incomplete');
-    const [domain] = await this.db.select().from(domains).where(eq(domains.id, existing.domainId)).limit(1);
-    if (!domain) throw new AppError(409, 'PAGES_PROFILE_INVALID', 'Pages profile is incomplete');
-    if (!this.runtimeAdapter) throw new AppError(503, 'PAGES_RUNTIME_UNAVAILABLE', 'Pages runtime is unavailable');
-    await this.runtimeAdapter.disable({ domain: normalizePagesHostname(domain.domain) });
-    await this.db
-      .update(pageWildcardProfiles)
-      .set({ enabled: false, status: 'disabled', updatedById: userId, updatedAt: new Date() })
-      .where(eq(pageWildcardProfiles.id, PROFILE_ID));
-    await this.auditService.log({
-      userId,
-      action: 'page_profile.disable',
-      resourceType: 'page_profile',
-      resourceId: PROFILE_ID,
-      details: { domainId: domain.id, reason },
+    return withPageProfileLock(this.db, async () => {
+      const [existing] = await this.db
+        .select()
+        .from(pageWildcardProfiles)
+        .where(eq(pageWildcardProfiles.id, PROFILE_ID))
+        .limit(1);
+      if (!existing) return this.get();
+
+      // A failed cleanup is intentionally retried even though the profile is
+      // already disabled. This keeps daemon cleanup durable across reconnects
+      // and process restarts instead of making a failed RPC a one-shot event.
+      const retryingCleanup = !existing.enabled && existing.lastErrorCode === PAGE_PROFILE_CLEANUP_PENDING_CODE;
+      if (!existing.enabled && !retryingCleanup) return this.get();
+
+      // Persist the effective disabled state before making any daemon call. A
+      // disconnected node must never leave the control plane DB advertising an
+      // enabled Pages profile while its immutable preview hosts remain stale.
+      if (existing.enabled) {
+        await this.db
+          .update(pageWildcardProfiles)
+          .set({
+            enabled: false,
+            status: 'disabled',
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            updatedById: userId,
+            updatedAt: new Date(),
+          })
+          .where(eq(pageWildcardProfiles.id, PROFILE_ID));
+      }
+
+      if (!existing.domainId) {
+        throw new AppError(409, 'PAGES_PROFILE_INVALID', 'Pages profile is incomplete');
+      }
+      const [domain] = await this.db.select().from(domains).where(eq(domains.id, existing.domainId)).limit(1);
+      if (!domain) throw new AppError(409, 'PAGES_PROFILE_INVALID', 'Pages profile is incomplete');
+
+      const persistCleanupFailure = async (error: unknown): Promise<void> => {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.db
+          .update(pageWildcardProfiles)
+          .set({
+            enabled: false,
+            status: 'disabled',
+            lastErrorCode: PAGE_PROFILE_CLEANUP_PENDING_CODE,
+            lastErrorMessage: message.slice(0, 2048),
+            updatedAt: new Date(),
+          })
+          .where(eq(pageWildcardProfiles.id, PROFILE_ID));
+      };
+
+      try {
+        if (!this.runtimeAdapter) {
+          throw new AppError(503, 'PAGES_RUNTIME_UNAVAILABLE', 'Pages runtime is unavailable');
+        }
+        await this.runtimeAdapter.disable({ domain: normalizePagesHostname(domain.domain) });
+      } catch (error) {
+        await persistCleanupFailure(error);
+        throw error;
+      }
+
+      await this.db
+        .update(pageWildcardProfiles)
+        .set({
+          enabled: false,
+          status: 'disabled',
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(pageWildcardProfiles.id, PROFILE_ID));
+      if (existing.enabled) {
+        await this.auditService.log({
+          userId,
+          action: 'page_profile.disable',
+          resourceType: 'page_profile',
+          resourceId: PROFILE_ID,
+          details: { domainId: domain.id, reason },
+        });
+      }
+      return this.get();
     });
-    return this.get();
   }
 
   async disableForEntitlementLoss(): Promise<void> {
@@ -390,8 +492,15 @@ export class PageProfileService {
     const [profile] = await this.db
       .select()
       .from(pageWildcardProfiles)
-      .where(and(eq(pageWildcardProfiles.id, PROFILE_ID), eq(pageWildcardProfiles.enabled, true)))
+      .where(eq(pageWildcardProfiles.id, PROFILE_ID))
       .limit(1);
+    if (!profile) return;
+    if (!profile.enabled) {
+      if (profile.lastErrorCode === PAGE_PROFILE_CLEANUP_PENDING_CODE) {
+        await this.disable(null);
+      }
+      return;
+    }
     if (!profile?.domainId || !profile.certificateId) return;
     if (!this.runtimeAdapter) {
       await this.setFailure('pending', 'PAGES_RUNTIME_UNAVAILABLE');
