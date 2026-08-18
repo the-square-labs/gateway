@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth";
 import { useLicensePaywallStore } from "@/stores/license-paywall";
 import { LicenseUpgradeDialog } from "./LicenseUpgradeDialog";
@@ -35,6 +35,7 @@ function renderDialog() {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   useLicensePaywallStore.setState({ request: null });
   useAuthStore.setState({ user: null, isAuthenticated: false });
 });
@@ -74,5 +75,40 @@ describe("LicenseUpgradeDialog", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Upgrade license key" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(2);
+  });
+
+  it("keeps the enforcement content mounted until the close animation finishes", () => {
+    const getComputedStyle = window.getComputedStyle;
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element) =>
+        new Proxy(getComputedStyle(element), {
+          get(target, property) {
+            if (property === "animationName") {
+              return element.getAttribute("data-state") === "closed"
+                ? "dialog-exit"
+                : "dialog-enter";
+            }
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        })
+    );
+    useAuthStore.setState({ user: USER as never, isAuthenticated: true });
+    useLicensePaywallStore.getState().open({
+      capability: "Pages",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+
+    renderDialog();
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[1]);
+
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+    expect(screen.getByText(/Pages requires the Personal plan/)).toBeInTheDocument();
+
+    const dialog = screen.getByRole("dialog");
+    fireEvent.animationEnd(dialog, { animationName: "dialog-exit" });
+
+    expect(screen.queryByText(/Pages requires the Personal plan/)).not.toBeInTheDocument();
   });
 });
