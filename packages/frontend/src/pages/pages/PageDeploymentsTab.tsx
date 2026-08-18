@@ -130,7 +130,9 @@ export function PageDeploymentsTab({
       id: "created",
       header: "Created",
       className: "w-[22%]",
-      render: (deployment) => <span className="whitespace-nowrap">{formatPageDate(deployment.createdAt)}</span>,
+      render: (deployment) => (
+        <span className="whitespace-nowrap">{formatPageDate(deployment.createdAt)}</span>
+      ),
     },
     {
       id: "preview",

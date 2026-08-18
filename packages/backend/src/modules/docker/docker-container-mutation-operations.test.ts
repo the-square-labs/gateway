@@ -47,8 +47,11 @@ describe('killContainer emergency path', () => {
 
 function unlockedDockerNodeDb() {
   const limit = vi.fn().mockResolvedValue([{ id: 'node-1', type: 'docker', serviceCreationLocked: false }]);
+  const routeLimit = vi.fn().mockResolvedValue([]);
+  const routeWhere = vi.fn(() => ({ limit: routeLimit }));
+  const innerJoin = vi.fn(() => ({ where: routeWhere }));
   const where = vi.fn(() => ({ limit }));
-  const from = vi.fn(() => ({ where }));
+  const from = vi.fn(() => ({ where, innerJoin }));
   return { select: vi.fn(() => ({ from })) };
 }
 

@@ -128,9 +128,7 @@ function renderAdditionalRouteLocation(
       ]
     : [];
   const common = [...access, ...(access.length > 0 ? [''] : []), ...limits, ...(limits.length > 0 ? [''] : [])];
-  const advanced = route.advancedConfig
-    ? route.advancedConfig.split(/\r?\n/).map((line) => `        ${line}`)
-    : [];
+  const advanced = route.advancedConfig ? route.advancedConfig.split(/\r?\n/).map((line) => `        ${line}`) : [];
   if (route.targetKind === 'pages') {
     const scopedConfigPath = `${path}/_gateway/pages/config.js`;
     const escaped = routeRegexPath(path);

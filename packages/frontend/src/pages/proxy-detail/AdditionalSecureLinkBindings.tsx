@@ -83,9 +83,7 @@ export function AdditionalSecureLinkBindings({
     (binding) => binding.purpose === "user_managed" && binding.status === "failed"
   )
     ? 2
-    : bindings?.some(
-          (binding) => binding.purpose === "user_managed" && binding.status === "active"
-        )
+    : bindings?.some((binding) => binding.purpose === "user_managed" && binding.status === "active")
       ? 1
       : 0;
   const bindingGridTemplate = `minmax(0,9rem) minmax(0,11rem) minmax(0,5rem) minmax(0,5rem) minmax(18rem,1fr) minmax(0,7rem)${
@@ -230,7 +228,7 @@ export function AdditionalSecureLinkBindings({
                 <div className="flex min-w-0 items-center px-3 py-2">
                   <p className="truncate text-sm font-medium">
                     {binding.purpose === "additional_route"
-                      ? binding.managedRoutePath ?? "Managed route"
+                      ? (binding.managedRoutePath ?? "Managed route")
                       : binding.name}
                   </p>
                 </div>
