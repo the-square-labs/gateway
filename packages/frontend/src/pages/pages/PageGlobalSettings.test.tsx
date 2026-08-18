@@ -128,6 +128,8 @@ describe("PagesSettingsSection", () => {
     const toggle = screen.getByRole("button", { name: "Enable Pages" });
     const panel = screen.getByText("Pages").closest("div.border") as HTMLElement;
 
+    expect(screen.queryByText("Personal+")).not.toBeInTheDocument();
+    expect(screen.getByText("BETA")).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(save).toBeDisabled();
 

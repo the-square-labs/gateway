@@ -27,6 +27,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   DatabaseConnection,
   DockerContainer,
@@ -86,6 +87,9 @@ export function getStatusPreviewUrl() {
 }
 
 export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
+  const statusPagesEntitled = useUIBootstrapStore(
+    (state) => state.snapshot?.license.entitlements.features.includes("status-pages") === true
+  );
   const { hasScope } = useAuthStore();
   const canManage = hasScope("status-page:manage");
   const [config, setConfig] = useState<StatusPageConfig>(
@@ -221,7 +225,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       title={
         <span className="inline-flex items-center gap-2">
           <span>Status Page</span>
-          <LicensePlanBadge plan="personal" label="Personal+" />
+          {!statusPagesEntitled && <LicensePlanBadge plan="personal" label="Personal+" />}
         </span>
       }
       description="Enable the public status page and configure its custom domain"
