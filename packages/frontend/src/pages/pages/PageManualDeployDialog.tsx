@@ -158,7 +158,7 @@ export function PageManualDeployDialog({
             Upload a static build archive or choose a folder containing index.html or index.htm.
           </DialogDescription>
         </DialogHeader>
-        <fieldset className="m-0 space-y-4 border-0 p-0" disabled={busy}>
+        <fieldset className="m-0 min-w-0 space-y-4 border-0 p-0" disabled={busy}>
           <div className="space-y-1.5">
             <span id="page-build-label" className="text-sm font-medium">
               Build
