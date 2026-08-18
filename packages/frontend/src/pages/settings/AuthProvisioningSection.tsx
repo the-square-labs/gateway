@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -1157,7 +1158,10 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">PKI</p>
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <span>PKI</span>
+                <LicensePlanBadge plan="enterprise" />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Show PKI navigation and allow user access to authorities, certificates, and PKI
                 templates
@@ -1174,7 +1178,10 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">SIEM audit export</p>
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <span>SIEM audit export</span>
+                <LicensePlanBadge plan="enterprise" />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Show SIEM screens and deliver privacy-reduced audit events to configured collectors
               </p>

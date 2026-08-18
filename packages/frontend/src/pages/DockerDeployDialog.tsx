@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { Settings } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -26,7 +27,7 @@ import {
   DEFAULT_DOCKER_RUNTIME_DESCRIPTION,
   getSecureDockerRuntimeDescription,
 } from "@/lib/docker-runtime-profile";
-import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-routes";
+import { dockerContainerRoute, dockerDeploymentRoute, nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -35,6 +36,7 @@ import {
   type ContainerCreateConfig,
   type DockerRegistry,
   type DockerRuntimeProfile,
+  type DockerRuntimeStatus,
   isNodeIncompatible,
   type Node,
 } from "@/types";
@@ -78,6 +80,7 @@ export function DockerDeployDialog({
   const [healthPath, setHealthPath] = useState("/");
   const [drainSeconds, setDrainSeconds] = useState("30");
   const [deployRuntimeProfile, setDeployRuntimeProfile] = useState<DockerRuntimeProfile>("default");
+  const [secureRuntimeSetupOpen, setSecureRuntimeSetupOpen] = useState(false);
   const storeDockerNodes = useDockerStore((state) => state.dockerNodes);
   const allNodes = useMemo(() => {
     return storeDockerNodes.length > 0 ? storeDockerNodes : dockerNodes;
@@ -95,9 +98,18 @@ export function DockerDeployDialog({
     () => allNodes.find((node) => node.id === deployNodeId),
     [allNodes, deployNodeId]
   );
-  const secureRuntimeAvailable =
-    (selectedDeployNode?.capabilities?.dockerRuntimeStatus as { state?: string } | undefined)
-      ?.state === "healthy";
+  const secureRuntimeStatus = selectedDeployNode?.capabilities?.dockerRuntimeStatus as
+    | DockerRuntimeStatus
+    | undefined;
+  const secureRuntimeAvailable = secureRuntimeStatus?.state === "healthy";
+  const secureRuntimeCanBeConfigured = Boolean(
+    selectedDeployNode &&
+      !secureRuntimeAvailable &&
+      (secureRuntimeStatus?.remoteInstallable ||
+        secureRuntimeStatus?.state === "installable" ||
+        secureRuntimeStatus?.state === "installing" ||
+        secureRuntimeStatus?.state === "failed")
+  );
   const initialNodeLocked = !!(
     nodeId && allNodes.find((candidate) => candidate.id === nodeId)?.serviceCreationLocked
   );
@@ -242,6 +254,7 @@ export function DockerDeployDialog({
 
   const closeDeploy = () => {
     onOpenChange(false);
+    setSecureRuntimeSetupOpen(false);
     setDeployImage("");
     setDeployName("");
     setDeployRestart("no");
@@ -401,11 +414,13 @@ export function DockerDeployDialog({
             <Select
               value={deployRuntimeProfile}
               onValueChange={(value) => {
-                if (
-                  value === "secure" &&
-                  !requireLicenseFeature("secure-runtime", "Secure Runtime")
-                )
-                  return;
+                if (value === "secure") {
+                  if (!secureRuntimeAvailable) {
+                    if (secureRuntimeCanBeConfigured) setSecureRuntimeSetupOpen(true);
+                    return;
+                  }
+                  if (!requireLicenseFeature("secure-runtime", "Secure Runtime")) return;
+                }
                 setDeployRuntimeProfile(value as DockerRuntimeProfile);
               }}
               disabled={!deployNodeId}
@@ -419,7 +434,7 @@ export function DockerDeployDialog({
                 </SelectItem>
                 <SelectItem
                   value="secure"
-                  disabled={!secureRuntimeAvailable}
+                  disabled={!secureRuntimeAvailable && !secureRuntimeCanBeConfigured}
                   description={getSecureDockerRuntimeDescription(secureRuntimeAvailable)}
                 >
                   Secure
@@ -591,6 +606,34 @@ export function DockerDeployDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <Dialog open={secureRuntimeSetupOpen} onOpenChange={setSecureRuntimeSetupOpen}>
+        <DialogContent aria-describedby={undefined} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Secure Runtime setup required</DialogTitle>
+          </DialogHeader>
+          <div>
+            <p className="text-sm text-muted-foreground">
+              Set up Secure Runtime on this node before using it for a container or deployment.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSecureRuntimeSetupOpen(false)}>
+              Close
+            </Button>
+            <Button
+              onClick={() => {
+                const nodeSlug = selectedDeployNode?.slug;
+                if (!nodeSlug) return;
+                closeDeploy();
+                navigate(nodeRoute(nodeSlug, "details"));
+              }}
+            >
+              <Settings className="h-4 w-4" />
+              Open node settings
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

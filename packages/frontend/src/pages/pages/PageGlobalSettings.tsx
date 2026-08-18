@@ -190,8 +190,11 @@ export function PagesSettingsSection() {
         <PanelShell
           title={
             <span className="inline-flex items-center gap-2">
-              Pages <LicensePlanBadge plan="personal" label="Personal+" />
-              <Badge variant="secondary">BETA</Badge>
+              <span>Pages</span>
+              <LicensePlanBadge plan="personal" label="Personal+" />
+              <Badge size="inline" variant="secondary">
+                BETA
+              </Badge>
             </span>
           }
           description="Loading wildcard deployment preview settings…"
@@ -201,8 +204,11 @@ export function PagesSettingsSection() {
           <PanelShell
             title={
               <span className="inline-flex items-center gap-2">
-                Pages <LicensePlanBadge plan="personal" label="Personal+" />
-                <Badge variant="secondary">BETA</Badge>
+                <span>Pages</span>
+                <LicensePlanBadge plan="personal" label="Personal+" />
+                <Badge size="inline" variant="secondary">
+                  BETA
+                </Badge>
               </span>
             }
             description="Each immutable Deployment gets one hostname label under this wildcard Domain."

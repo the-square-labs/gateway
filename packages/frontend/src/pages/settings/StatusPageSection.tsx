@@ -3,6 +3,7 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -217,7 +218,12 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
 
   return (
     <PanelShell
-      title="Status Page"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <span>Status Page</span>
+          <LicensePlanBadge plan="personal" />
+        </span>
+      }
       description="Enable the public status page and configure its custom domain"
       actions={
         <Button onClick={saveConfig} disabled={!canManage || savingSettings || !hasSettingsChanges}>
