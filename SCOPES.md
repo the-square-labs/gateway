@@ -51,6 +51,8 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - Create-only and destructive-only scopes do not imply view/discovery access. For example, `proxy:create`, `proxy:delete`, `databases:create`, and `notifications:webhooks:create` do not grant browse permissions by themselves.
 - `logs:schemas:view:<schemaId>` does not imply global `logs:schemas:view`. Resource-scoped schema view/edit access can list only the matching schema rows.
 - `proxy:folders:manage` and `docker:containers:folders:manage` grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit scope.
+- `pages:folders:manage` grants full Page Project folder-tree visibility and folder mutation rights, but moving or reordering Projects also requires `pages:edit:<projectId>` for every affected Project.
+- Every resource-qualified Pages scope uses the Page Project ID, including Deployment, Tag, and deploy-token operations.
 - Docker container scopes accept either `<nodeId>` for every container and deployment on a node or `<nodeId>/<stableResourceId>` for exactly one standalone container or blue/green deployment. Node grants cover their child resources; child grants do not cover siblings.
 - Recreate and in-place update workflows preserve a standalone container's stable resource ID. Cross-node migration rewrites child grants to the target node. Explicit container or deployment deletion removes child grants, so a later same-name resource does not inherit access.
 - When an API/OAuth token asks for a broad scope but the owning user has only resource-scoped access, Gateway narrows the effective token scope to the resource-scoped variant.
@@ -92,6 +94,17 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `proxy:advanced:bypass` | Yes |
 | `proxy:maintenance:bypass` | Yes |
 | `proxy:folders:manage` |  |
+| `pages:view` | Yes |
+| `pages:create` |  |
+| `pages:edit` | Yes |
+| `pages:delete` | Yes |
+| `pages:deploy` | Yes |
+| `pages:deployments:manage` | Yes |
+| `pages:tags:manage` | Yes |
+| `pages:tokens:manage` | Yes |
+| `pages:folders:manage` |  |
+| `pages:settings:view` |  |
+| `pages:settings:edit` |  |
 | `proxy:templates:view` | Yes |
 | `proxy:templates:create` |  |
 | `proxy:templates:edit` | Yes |
@@ -320,6 +333,9 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `ssl:cert:revoke` | Can revoke SSL certificates. |
 | `ssl:cert:export` | Reserved for SSL certificate export capability. |
 | `proxy:raw:bypass` | Can bypass dangerous directive validation for raw nginx config. |
+| `pages:delete` | Can delete Page Projects after their dependencies and retained Deployments are removed. |
+| `pages:tokens:manage` | Can create and revoke Project deploy credentials. |
+| `pages:settings:edit` | Can configure or migrate the public wildcard Pages profile. |
 | `nodes:console` | Can open an interactive shell on nodes. |
 | `nodes:files:read` | Can read files from managed node filesystems. |
 | `nodes:files:write` | Can create, modify, move, or delete files on managed nodes. |

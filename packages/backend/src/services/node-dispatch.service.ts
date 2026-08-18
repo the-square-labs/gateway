@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
-import type { CommandResult } from '@/grpc/generated/types.js';
+import type { CommandResult, GatewayCommand } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DaemonUpdateService } from './daemon-update.service.js';
@@ -473,6 +473,66 @@ export class NodeDispatchService {
     const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
     if (!Array.isArray(reported) || !reported.includes('generic_relay_tunnel_v1')) {
       throw new AppError(409, 'NODE_CAPABILITY_MISMATCH', 'Node daemon does not support generic relay grants');
+    }
+  }
+
+  private async assertPagesNode(nodeId: string, requiredCapability = 'nginx_pages_v1'): Promise<void> {
+    const [node] = await this.db
+      .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (
+      node.type !== 'nginx' ||
+      node.status !== 'online' ||
+      !Array.isArray(reported) ||
+      !reported.includes(requiredCapability)
+    ) {
+      throw new AppError(409, 'PAGES_DAEMON_UPDATE_REQUIRED', 'Update the selected Nginx daemon to use Pages');
+    }
+  }
+
+  async sendPagesCommand<T extends Record<string, unknown> = Record<string, unknown>>(
+    nodeId: string,
+    command: Partial<GatewayCommand>,
+    timeoutMs = 120_000
+  ): Promise<T> {
+    await this.assertNodeMutable(nodeId);
+    await this.assertPagesNode(nodeId);
+    const result = await this.registry.sendCommand(nodeId, command, timeoutMs);
+    if (!result.success) {
+      throw new AppError(502, 'PAGES_DAEMON_COMMAND_FAILED', 'Nginx daemon could not apply the Pages change');
+    }
+    if (!result.data?.length) return {} as T;
+    try {
+      return JSON.parse(result.data.toString('utf8')) as T;
+    } catch {
+      throw new AppError(502, 'PAGES_DAEMON_RESPONSE_INVALID', 'Nginx daemon returned an invalid Pages response');
+    }
+  }
+
+  async sendPagesRuntimeConfigCommand<T extends Record<string, unknown> = Record<string, unknown>>(
+    nodeId: string,
+    command: Partial<GatewayCommand>,
+    timeoutMs = 120_000
+  ): Promise<T> {
+    await this.assertNodeMutable(nodeId);
+    await this.assertPagesNode(nodeId, 'nginx_pages_config_v1');
+    const result = await this.registry.sendCommand(nodeId, command, timeoutMs);
+    if (!result.success) {
+      throw new AppError(
+        502,
+        'PAGES_RUNTIME_CONFIG_COMMAND_FAILED',
+        'Nginx daemon could not publish runtime configuration'
+      );
+    }
+    if (!result.data?.length) return {} as T;
+    try {
+      return JSON.parse(result.data.toString('utf8')) as T;
+    } catch {
+      throw new AppError(502, 'PAGES_DAEMON_RESPONSE_INVALID', 'Nginx daemon returned an invalid Pages response');
     }
   }
 

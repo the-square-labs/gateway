@@ -42,6 +42,10 @@ type NginxConfig struct {
 	StubStatusURL    string `yaml:"stub_status_url"`
 	HtpasswdDir      string `yaml:"htpasswd_dir"`
 	AcmeChallengeDir string `yaml:"acme_challenge_dir"`
+	// PagesRoot is owned exclusively by nginx-daemon. Gateway Pages commands
+	// carry opaque IDs, never filesystem paths, and all release data is derived
+	// below this directory.
+	PagesRoot string `yaml:"pages_root"`
 }
 
 func Load(path string) (*Config, error) {
@@ -63,6 +67,7 @@ func Load(path string) (*Config, error) {
 	cfg.Nginx.StubStatusURL = "http://127.0.0.1/nginx_status"
 	cfg.Nginx.HtpasswdDir = canonicalHtpasswdDir
 	cfg.Nginx.AcmeChallengeDir = "/var/www/acme-challenge"
+	cfg.Nginx.PagesRoot = "/var/lib/nginx-daemon/pages"
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)

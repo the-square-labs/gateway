@@ -22,6 +22,7 @@ describe('AI internal docs registry', () => {
       'permissions',
       'docker',
       'databases',
+      'pages',
       'postgres',
       'redis',
       'logging',
@@ -69,6 +70,7 @@ describe('AI internal docs registry', () => {
       clickhouse: 'databases:view',
       troubleshooting: 'feat:ai:use',
       proxy: 'proxy:view',
+      pages: 'pages:view',
       inference: expect.arrayContaining(['feat:ai:use', 'inference:providers:manage', 'inference:models:manage']),
     });
   });
@@ -102,6 +104,8 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('nodes', ['nodes:details']).content).toContain('serviceAddress');
     expect(getInternalDocumentation('proxy', ['proxy:view']).content).toContain('Maintenance Mode');
     expect(getInternalDocumentation('proxy', ['proxy:view']).content).toContain('Docker Upstreams');
+    expect(getInternalDocumentation('proxy', ['proxy:view']).content).toContain('manage_additional_route');
+    expect(getInternalDocumentation('pages', ['pages:view']).content).toContain('manage_pages');
     expect(getInternalDocumentation('users', ['admin:users']).content).toContain('additional per-user scopes');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Cross-Node Migrations');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');

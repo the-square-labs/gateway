@@ -27,6 +27,7 @@ export interface ResponsiveHeaderAction {
   disabled?: boolean;
   disabledReason?: string;
   destructive?: boolean;
+  alwaysOverflow?: boolean;
   priority?: number;
   separatorBefore?: boolean;
 }
@@ -34,7 +35,16 @@ export interface ResponsiveHeaderAction {
 export const HEADER_ACTION_PRIORITY = {
   default: 0,
   primary: 100,
+  emergency: 1_000,
 } as const;
+
+export function shouldForceHeaderActionOverflow(action: ResponsiveHeaderAction): boolean {
+  if (action.alwaysOverflow) return true;
+  return Boolean(
+    action.destructive &&
+      (action.priority ?? HEADER_ACTION_PRIORITY.default) < HEADER_ACTION_PRIORITY.emergency
+  );
+}
 
 const MIN_HEADER_CONTENT_WIDTH_PX = 320;
 const HEADER_ACTION_GAP_PX = 8;
@@ -174,24 +184,25 @@ export function ResponsiveHeaderActions({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
-  const actionMetadataRef = useRef<Array<Pick<ResponsiveHeaderAction, "destructive" | "priority">>>(
-    []
-  );
+  const actionMetadataRef = useRef<
+    Array<Pick<ResponsiveHeaderAction, "alwaysOverflow" | "destructive" | "priority">>
+  >([]);
   const overflowMeasureRef = useRef<HTMLDivElement>(null);
   const [responsiveOverflowIndices, setResponsiveOverflowIndices] = useState<number[]>([]);
   const actionChildren = useMemo(() => flattenActionChildren(children), [children]);
   const actionSignature = actions
     .map(
       (action) =>
-        `${action.id ?? ""}:${action.label}:${action.destructive ? 1 : 0}:${action.priority ?? 0}`
+        `${action.id ?? ""}:${action.label}:${action.destructive ? 1 : 0}:${action.alwaysOverflow ? 1 : 0}:${action.priority ?? 0}`
     )
     .join("|");
-  actionMetadataRef.current = actions.map(({ destructive, priority }) => ({
+  actionMetadataRef.current = actions.map(({ alwaysOverflow, destructive, priority }) => ({
+    alwaysOverflow,
     destructive,
     priority,
   }));
   const forcedOverflowIndices = actions.flatMap((action, index) =>
-    action.destructive ? [index] : []
+    shouldForceHeaderActionOverflow(action) ? [index] : []
   );
   const renderedActionCount = Math.min(actions.length, actionChildren.length);
   const effectiveOverflowIndices = new Set(
@@ -233,7 +244,9 @@ export function ResponsiveHeaderActions({
         actionWidths.map((width, index) => ({
           width,
           priority: actionMetadataRef.current[index]?.priority,
-          alwaysOverflow: actionMetadataRef.current[index]?.destructive,
+          alwaysOverflow:
+            actionMetadataRef.current[index]?.destructive ||
+            actionMetadataRef.current[index]?.alwaysOverflow,
         })),
         overflowWidth,
         reservedContentWidth,

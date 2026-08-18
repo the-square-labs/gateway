@@ -1,24 +1,47 @@
-import { inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeployments } from '@/db/schema/docker-deployments.js';
+import { pageProjects, pageRouteTargets, pageTags } from '@/db/schema/index.js';
 import { nodes } from '@/db/schema/nodes.js';
+
+export interface PageUpstreamDisplayTarget {
+  projectId: string;
+  projectName: string;
+  projectSlug: string;
+  projectAppearanceColor: string | null;
+  tagId: string;
+  tagName: string;
+  deploymentId: string | null;
+  status: string;
+  generation: number;
+  lastErrorCode: string | null;
+}
 
 export type WithDockerUpstreamDisplay<T> = T & {
   dockerDeploymentName: string | null;
   dockerNodeSlug: string | null;
   dockerNodeAppearanceColor: string | null;
   secureLinkActive: boolean;
+  pageTarget: PageUpstreamDisplayTarget | null;
 };
 
 export async function attachDockerUpstreamDisplay<
-  T extends { dockerDeploymentId: string | null; dockerNodeId: string | null },
+  T extends {
+    id?: string;
+    upstreamKind?: string;
+    dockerDeploymentId: string | null;
+    dockerNodeId: string | null;
+  },
 >(db: DrizzleClient, hosts: T[]): Promise<Array<WithDockerUpstreamDisplay<T>>> {
   const deploymentIds = [
     ...new Set(hosts.flatMap((host) => (host.dockerDeploymentId ? [host.dockerDeploymentId] : []))),
   ];
   const nodeIds = [...new Set(hosts.flatMap((host) => (host.dockerNodeId ? [host.dockerNodeId] : [])))];
+  const pageHostIds = [
+    ...new Set(hosts.flatMap((host) => (host.upstreamKind === 'pages' && host.id ? [host.id] : []))),
+  ];
 
-  const [deployments, dockerNodes] = await Promise.all([
+  const [deployments, dockerNodes, pagesTargets] = await Promise.all([
     deploymentIds.length > 0
       ? db
           .select({ id: dockerDeployments.id, name: dockerDeployments.name })
@@ -31,10 +54,31 @@ export async function attachDockerUpstreamDisplay<
           .from(nodes)
           .where(inArray(nodes.id, nodeIds))
       : [],
+    pageHostIds.length > 0
+      ? db
+          .select({
+            proxyHostId: pageRouteTargets.proxyHostId,
+            projectId: pageRouteTargets.projectId,
+            projectName: pageProjects.name,
+            projectSlug: pageProjects.slug,
+            projectAppearanceColor: pageProjects.appearanceColor,
+            tagId: pageRouteTargets.tagId,
+            tagName: pageTags.name,
+            deploymentId: pageRouteTargets.activeDeploymentId,
+            status: pageRouteTargets.status,
+            generation: pageRouteTargets.generation,
+            lastErrorCode: pageRouteTargets.lastErrorCode,
+          })
+          .from(pageRouteTargets)
+          .innerJoin(pageProjects, eq(pageProjects.id, pageRouteTargets.projectId))
+          .innerJoin(pageTags, eq(pageTags.id, pageRouteTargets.tagId))
+          .where(inArray(pageRouteTargets.proxyHostId, pageHostIds))
+      : [],
   ]);
   const names = new Map(deployments.map((deployment) => [deployment.id, deployment.name]));
   const slugs = new Map(dockerNodes.map((node) => [node.id, node.slug]));
   const colors = new Map(dockerNodes.map((node) => [node.id, node.appearanceColor]));
+  const pageTargets = new Map(pagesTargets.map(({ proxyHostId, ...target }) => [proxyHostId, target]));
   return hosts.map((host) => {
     const visible = { ...host } as Record<string, unknown>;
     const secureLinkActive = visible.secureLinkStatus === 'active';
@@ -62,6 +106,7 @@ export async function attachDockerUpstreamDisplay<
       dockerDeploymentName: host.dockerDeploymentId ? (names.get(host.dockerDeploymentId) ?? null) : null,
       dockerNodeSlug: host.dockerNodeId ? (slugs.get(host.dockerNodeId) ?? null) : null,
       dockerNodeAppearanceColor: host.dockerNodeId ? (colors.get(host.dockerNodeId) ?? null) : null,
+      pageTarget: host.id ? (pageTargets.get(host.id) ?? null) : null,
     } as WithDockerUpstreamDisplay<T>;
   });
 }

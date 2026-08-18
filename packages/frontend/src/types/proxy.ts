@@ -4,7 +4,7 @@ import type { CertificateDistributionState, SSLCertificate } from "./ssl";
 // Proxy Host Types
 export type ProxyHostType = "proxy" | "redirect" | "404" | "raw";
 export type ForwardScheme = "http" | "https";
-export type ProxyUpstreamKind = "manual" | "docker_container" | "docker_deployment";
+export type ProxyUpstreamKind = "manual" | "docker_container" | "docker_deployment" | "pages";
 export type HealthStatus = "online" | "offline" | "degraded" | "unknown" | "disabled";
 
 export interface CustomHeader {
@@ -53,6 +53,18 @@ export interface ProxyHost {
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;
   dockerProtocol?: "tcp" | null;
+  pageTarget?: {
+    projectId: string;
+    projectName: string;
+    projectSlug: string;
+    projectAppearanceColor: NodeAppearanceColor | null;
+    tagId: string;
+    tagName: string;
+    deploymentId: string | null;
+    status: string;
+    generation: number;
+    lastErrorCode: string | null;
+  } | null;
   secureLinkActive?: boolean;
   sslEnabled: boolean;
   sslForced: boolean;
@@ -181,6 +193,9 @@ export interface ProxyAdditionalSecureLink {
   id: string;
   proxyHostId: string;
   name: string;
+  purpose: "user_managed" | "additional_route";
+  referenceId: string | null;
+  managedRoutePath?: string | null;
   upstreamKind: "docker_container" | "docker_deployment";
   forwardScheme: ForwardScheme;
   sourceNodeId: string;
@@ -208,6 +223,90 @@ export interface CreateProxyAdditionalSecureLinkRequest {
   dockerDeploymentId?: string | null;
   dockerContainerPort: number;
 }
+
+export type ProxyAdditionalRouteTargetKind =
+  | "manual"
+  | "docker_container"
+  | "docker_deployment"
+  | "pages";
+
+export type ProxyAdditionalRouteStatus =
+  | "pending"
+  | "provisioning"
+  | "staging"
+  | "ready"
+  | "failed"
+  | "capability_missing"
+  | "disabled"
+  | "cleanup_pending";
+
+export interface ProxyAdditionalRoute {
+  id: string;
+  proxyHostId: string;
+  path: string;
+  enabled: boolean;
+  targetKind: ProxyAdditionalRouteTargetKind;
+  forwardHost: string | null;
+  forwardPort: number | null;
+  forwardScheme: ForwardScheme;
+  dockerNodeId: string | null;
+  dockerNodeName?: string | null;
+  dockerContainerName: string | null;
+  dockerDeploymentId: string | null;
+  dockerDeploymentName?: string | null;
+  dockerContainerPort: number | null;
+  dockerHostPort?: number | null;
+  dockerProtocol?: "tcp" | null;
+  secureLinkId?: string | null;
+  pageProjectId: string | null;
+  pageProjectName?: string | null;
+  pageProjectSlug?: string | null;
+  pageProjectAppearanceColor?: NodeAppearanceColor | null;
+  pageTagId: string | null;
+  pageTagName?: string | null;
+  activeDeploymentId?: string | null;
+  includePath?: string | null;
+  runtimeConfigPath?: string | null;
+  runtimeConfigGeneration?: number;
+  advancedConfig?: string | null;
+  stripPrefix: boolean;
+  websocketSupport: boolean;
+  requestBuffering: boolean;
+  responseBuffering: boolean;
+  connectTimeoutSeconds: number;
+  readTimeoutSeconds: number;
+  sendTimeoutSeconds: number;
+  status: ProxyAdditionalRouteStatus;
+  lastError: string | null;
+  generation: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProxyAdditionalRouteRequest {
+  path: string;
+  enabled?: boolean;
+  targetKind: ProxyAdditionalRouteTargetKind;
+  forwardHost?: string | null;
+  forwardPort?: number | null;
+  forwardScheme?: ForwardScheme;
+  dockerNodeId?: string | null;
+  dockerContainerName?: string | null;
+  dockerDeploymentId?: string | null;
+  dockerContainerPort?: number | null;
+  pageProjectId?: string | null;
+  pageTagId?: string | null;
+  advancedConfig?: string | null;
+  stripPrefix?: boolean;
+  websocketSupport?: boolean;
+  requestBuffering?: boolean;
+  responseBuffering?: boolean;
+  connectTimeoutSeconds?: number;
+  readTimeoutSeconds?: number;
+  sendTimeoutSeconds?: number;
+}
+
+export type UpdateProxyAdditionalRouteRequest = Partial<CreateProxyAdditionalRouteRequest>;
 
 // Access List Types
 export interface IPRule {
@@ -246,6 +345,8 @@ export interface CreateProxyHostRequest {
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;
   dockerProtocol?: "tcp" | null;
+  pageProjectId?: string | null;
+  pageTagId?: string | null;
   sslEnabled?: boolean;
   sslForced?: boolean;
   http2Support?: boolean;

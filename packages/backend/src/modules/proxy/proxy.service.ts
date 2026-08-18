@@ -11,6 +11,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
+import type { PageRouteNodeMigration, PageRouteService } from '@/modules/pages/routes/page-route.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -21,6 +22,7 @@ import type {
 import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { PaginatedResponse } from '@/types.js';
+import type { AdditionalRouteNodeMigration, AdditionalRouteService } from './additional-route.service.js';
 import type { NginxTemplateService } from './nginx-template.service.js';
 import type { CreateProxyHostInput, ProxyHostListQuery, UpdateProxyHostInput } from './proxy.schemas.js';
 import {
@@ -67,6 +69,10 @@ function sameDomainNames(left: string[], right: string[]): boolean {
   const normalizedLeft = left.map((domain) => domain.toLowerCase()).sort();
   const normalizedRight = right.map((domain) => domain.toLowerCase()).sort();
   return normalizedLeft.every((domain, index) => domain === normalizedRight[index]);
+}
+
+function isDockerUpstream(kind: string): boolean {
+  return kind === 'docker_container' || kind === 'docker_deployment';
 }
 
 function normalizedHostname(value: string): string {
@@ -137,6 +143,8 @@ export class ProxyService {
 
   private eventBus?: EventBusService;
   private notificationEvaluator?: NotificationEvaluatorService;
+  private pageRoutes?: PageRouteService;
+  private additionalRoutes?: AdditionalRouteService;
   private dockerReconcileRunning = false;
   private dockerReconcileDirty = false;
   private dockerReconcileForce = false;
@@ -177,6 +185,31 @@ export class ProxyService {
   }
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.notificationEvaluator = evaluator;
+  }
+  setPageRoutes(pageRoutes: PageRouteService) {
+    this.pageRoutes = pageRoutes;
+  }
+  setAdditionalRoutes(additionalRoutes: AdditionalRouteService) {
+    this.additionalRoutes = additionalRoutes;
+    additionalRoutes.setHostRuntime(this);
+  }
+
+  /** Re-render a host after an Additional Route lifecycle transition. */
+  async reconcileAdditionalRouteHost(hostId: string): Promise<void> {
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
+    if (!host) return;
+    if (!host.enabled) return;
+    const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
+    const accessList = await this.resolveAccessList(host.accessListId);
+    const config = await this.buildNginxConfig(host, certPaths, accessList);
+    await this.applyConfigToNode(
+      host.id,
+      config,
+      host.nodeId,
+      certPaths.preparedTls,
+      this.configOwnershipForHost(host),
+      host.accessListId
+    );
   }
   private reconcileMaintenanceAlerts(hostId?: string) {
     void this.notificationEvaluator?.reconcileProxyMaintenance(hostId).catch((error) => {
@@ -249,7 +282,10 @@ export class ProxyService {
     const committedSecureConfig =
       host.secureLinkMigratedAt != null &&
       (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
-    return host.type === 'proxy' && !host.rawConfigEnabled && host.upstreamKind !== 'manual' && committedSecureConfig
+    return host.type === 'proxy' &&
+      !host.rawConfigEnabled &&
+      isDockerUpstream(host.upstreamKind) &&
+      committedSecureConfig
       ? 'managed_secure_link'
       : 'user_owned';
   }
@@ -276,6 +312,18 @@ export class ProxyService {
     }
   }
 
+  private async disablePageHostForDeferredCleanup(hostId: string, cleanupError: unknown): Promise<void> {
+    try {
+      await this.db.update(proxyHosts).set({ enabled: false, updatedAt: new Date() }).where(eq(proxyHosts.id, hostId));
+    } catch (disableError) {
+      logger.warn('Failed to disable Pages Route host retained for deferred cleanup', {
+        hostId,
+        cleanupError,
+        disableError,
+      });
+    }
+  }
+
   private requireDockerUpstreams(): ProxyDockerUpstreamService {
     if (!this.dockerUpstreams) {
       throw new AppError(500, 'DOCKER_UPSTREAMS_UNAVAILABLE', 'Docker upstream resolution is unavailable');
@@ -290,6 +338,16 @@ export class ProxyService {
     }
     if (input.upstreamKind === 'manual') {
       return { upstreamKind: 'manual' as const, ...clearDockerUpstreamFields() };
+    }
+    if (input.upstreamKind === 'pages') {
+      if (!this.pageRoutes) throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
+      await this.pageRoutes.validateCreate(input);
+      return {
+        upstreamKind: 'pages' as const,
+        forwardHost: null,
+        forwardPort: null,
+        ...clearDockerUpstreamFields(),
+      };
     }
     return this.requireDockerUpstreams().resolve(input, {
       actorScopes: normalized.actorScopes,
@@ -312,6 +370,19 @@ export class ProxyService {
     }
 
     const effectiveKind = input.upstreamKind ?? existing.upstreamKind;
+    if (effectiveKind === 'pages' || existing.upstreamKind === 'pages') {
+      if (effectiveKind !== 'pages' || existing.upstreamKind !== 'pages') {
+        throw new AppError(
+          409,
+          'PAGES_ROUTE_KIND_CHANGE_UNSUPPORTED',
+          'Recreate the Route to change its Pages target type'
+        );
+      }
+      if (input.nodeId && input.nodeId !== existing.nodeId && !normalized.allowPagesNodeMove) {
+        throw new AppError(409, 'PAGES_ROUTE_MIGRATION_REQUIRED', 'Move this Pages Route through ingress migration');
+      }
+      return {};
+    }
     if (effectiveKind === 'manual') {
       if (
         existing.upstreamKind !== 'manual' &&
@@ -465,7 +536,12 @@ export class ProxyService {
 
     // 2. Resolve SSL cert paths and build nginx config
     try {
-      if (host.upstreamKind !== 'manual') {
+      if (host.upstreamKind === 'pages') {
+        if (!this.pageRoutes || !input.pageProjectId || !input.pageTagId) {
+          throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
+        }
+        await this.pageRoutes.activateNewHost(host.id, host.nodeId!, input.pageProjectId, input.pageTagId);
+      } else if (isDockerUpstream(host.upstreamKind)) {
         if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
         host = await this.secureLinks.prepare(host, true);
         host = (await this.secureLinks.commitCutover(host.id)) ?? host;
@@ -483,7 +559,7 @@ export class ProxyService {
         this.configOwnershipForHost(host),
         host.accessListId
       );
-      if (host.upstreamKind !== 'manual') {
+      if (isDockerUpstream(host.upstreamKind)) {
         await this.secureLinks?.activate(host.id);
         this.queueSecureLinkRuntimeSample(host);
       }
@@ -496,7 +572,33 @@ export class ProxyService {
       await this.secureLinks?.cleanup(host).catch((cleanupError) => {
         logger.warn('Failed to cleanup secure link after proxy create rollback', { hostId: host.id, cleanupError });
       });
-      await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
+      let preservePageRouteOwnership = false;
+      if (host.upstreamKind === 'pages') {
+        try {
+          // activateNewHost can return after its own best-effort marker write
+          // failed. Persist the failed-create claim before attempting another
+          // daemon cleanup so reconciliation never infers ownership from a
+          // generic staging row.
+          await this.pageRoutes?.claimFailedCreateCleanup(host.id);
+          await this.pageRoutes?.removeHost(host.id, host.nodeId);
+        } catch (cleanupError) {
+          preservePageRouteOwnership = true;
+          logger.warn('Preserving Pages Route ownership after proxy create rollback cleanup failure', {
+            hostId: host.id,
+            cleanupError,
+          });
+          await this.disablePageHostForDeferredCleanup(host.id, cleanupError);
+        }
+      }
+      if (!preservePageRouteOwnership) {
+        try {
+          await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
+        } catch (deleteError) {
+          if (host.upstreamKind !== 'pages') throw deleteError;
+          preservePageRouteOwnership = true;
+          await this.disablePageHostForDeferredCleanup(host.id, deleteError);
+        }
+      }
       if (error instanceof AppError) throw error;
       throw new AppError(
         500,
@@ -565,6 +667,27 @@ export class ProxyService {
       where: eq(proxyHosts.id, id),
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
+    await this.additionalRoutes?.assertHostTemplateMutationAllowed(
+      existing,
+      input as unknown as Record<string, unknown>
+    );
+    if (existing.upstreamKind === 'pages' && (input.type === 'redirect' || input.type === '404')) {
+      throw new AppError(
+        409,
+        'PAGES_ROUTE_TYPE_CHANGE_UNSUPPORTED',
+        'Recreate the Route to change its Pages target type'
+      );
+    }
+    if (
+      existing.upstreamKind === 'pages' &&
+      (input.type === 'raw' ||
+        input.rawConfigEnabled === true ||
+        input.nginxTemplateId != null ||
+        input.websocketSupport === true ||
+        input.healthCheckEnabled === true)
+    ) {
+      throw new AppError(400, 'PAGES_ROUTE_SETTINGS_INVALID', 'Pages Routes require the managed static-site template');
+    }
     if (existing.isSystem && !(options.allowSystemNodeMove && Object.keys(input).every((key) => key === 'nodeId'))) {
       throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');
     }
@@ -616,10 +739,13 @@ export class ProxyService {
     assertSslPrerequisitesForUpdate(existing, input);
 
     const upstreamData = await this.prepareUpdateUpstream(existing, input, options);
+    let pageNodeMigration: PageRouteNodeMigration | null = null;
+    let additionalRouteMigration: AdditionalRouteNodeMigration | null = null;
 
     // 2. Update DB
+    const { pageProjectId, pageTagId, ...proxyInput } = input;
     const updateData: Record<string, unknown> = {
-      ...input,
+      ...proxyInput,
       ...upstreamData,
       updatedAt: new Date(),
     };
@@ -672,8 +798,8 @@ export class ProxyService {
     const existingUsesRawMode = existing.type === 'raw' || existing.rawConfigEnabled;
     const updatedUsesRawMode = updated.type === 'raw' || updated.rawConfigEnabled;
     const formerDockerNodeId =
-      existing.upstreamKind !== 'manual' &&
-      updated.upstreamKind !== 'manual' &&
+      isDockerUpstream(existing.upstreamKind) &&
+      isDockerUpstream(updated.upstreamKind) &&
       existing.dockerNodeId &&
       updated.dockerNodeId !== existing.dockerNodeId
         ? existing.dockerNodeId
@@ -682,7 +808,20 @@ export class ProxyService {
 
     // 3. Regenerate nginx config
     try {
-      if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) {
+      if (existing.upstreamKind === 'pages' && updated.nodeId !== existing.nodeId && options.allowPagesNodeMove) {
+        if (!existing.nodeId || !updated.nodeId || !this.pageRoutes) {
+          throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route migration is unavailable');
+        }
+        pageNodeMigration = await this.pageRoutes.stageNodeMigration(existing.id, existing.nodeId, updated.nodeId);
+      }
+      if (nodeChanged && updated.enabled && existing.nodeId && updated.nodeId && this.additionalRoutes) {
+        additionalRouteMigration = await this.additionalRoutes.stageNodeMigration(
+          existing.id,
+          existing.nodeId,
+          updated.nodeId
+        );
+      }
+      if (isDockerUpstream(updated.upstreamKind) && !updatedUsesRawMode) {
         if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
         const requiresSecureLink =
           existing.upstreamKind === 'manual' ||
@@ -703,7 +842,12 @@ export class ProxyService {
           preserveLegacyOnUnsupported: existing.sslEnabled && !tlsReferenceChanged,
         });
         const accessList = await this.resolveAccessList(updated.accessListId);
-        const config = await this.buildNginxConfig(updated, certPaths, accessList);
+        const config = await this.buildNginxConfig(
+          updated,
+          certPaths,
+          accessList,
+          pageNodeMigration?.targetIncludePath
+        );
         // 4. Apply config with rollback on failure
         await this.applyConfigToNode(
           id,
@@ -713,7 +857,7 @@ export class ProxyService {
           this.configOwnershipForHost(updated),
           updated.accessListId
         );
-        if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) {
+        if (isDockerUpstream(updated.upstreamKind) && !updatedUsesRawMode) {
           await this.secureLinks?.activate(id);
           this.queueSecureLinkRuntimeSample(updated);
         }
@@ -731,8 +875,14 @@ export class ProxyService {
         await this.removeConfigFromNode(id, deployedNodeId);
         await this.certificateDistribution.deactivateHost(id, deployedNodeId);
       }
+      if (updated.upstreamKind === 'pages' && (pageProjectId || pageTagId)) {
+        if (!this.pageRoutes || !pageProjectId || !pageTagId) {
+          throw new AppError(400, 'PAGES_ROUTE_TARGET_REQUIRED', 'Select both a Page Project and Tag');
+        }
+        await this.pageRoutes.retarget(id, pageProjectId, pageTagId, userId);
+      }
       const leavesManagedDocker =
-        existing.upstreamKind !== 'manual' && (updated.upstreamKind === 'manual' || updatedUsesRawMode);
+        isDockerUpstream(existing.upstreamKind) && (updated.upstreamKind === 'manual' || updatedUsesRawMode);
       if (leavesManagedDocker && existing.secureLinkGeneration > 0) {
         try {
           await this.secureLinks?.cleanup(existing);
@@ -747,7 +897,38 @@ export class ProxyService {
         }
       }
       if (formerDockerNodeId) await this.secureLinks?.reconcileTargetNode(formerDockerNodeId);
+      if (pageNodeMigration) await this.pageRoutes?.commitNodeMigration(pageNodeMigration);
+      if (additionalRouteMigration) await this.additionalRoutes?.commitNodeMigration(additionalRouteMigration);
     } catch (error) {
+      let failure = error;
+      if (additionalRouteMigration) {
+        try {
+          await this.additionalRoutes?.rollbackNodeMigration(additionalRouteMigration);
+        } catch (rollbackError) {
+          logger.error('Failed to rollback Additional Route node migration', {
+            hostId: id,
+            migration: additionalRouteMigration,
+            rollbackError,
+          });
+          failure = new AppError(
+            500,
+            'ADDITIONAL_ROUTE_MIGRATION_ROLLBACK_FAILED',
+            'Additional Route migration rollback failed'
+          );
+        }
+      }
+      if (pageNodeMigration) {
+        try {
+          await this.pageRoutes?.rollbackNodeMigration(pageNodeMigration);
+        } catch (rollbackError) {
+          logger.error('Failed to rollback Pages Route node migration', {
+            hostId: id,
+            migration: pageNodeMigration,
+            rollbackError,
+          });
+          failure = new AppError(500, 'PAGES_ROUTE_MIGRATION_ROLLBACK_FAILED', 'Pages Route migration rollback failed');
+        }
+      }
       const currentSecureState = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
       const mustRollForwardSecureLink =
         currentSecureState?.secureLinkMigratedAt != null &&
@@ -755,13 +936,13 @@ export class ProxyService {
           currentSecureState.secureLinkStatus === 'updating' ||
           currentSecureState.secureLinkStatus === 'cutover_ready');
       if (mustRollForwardSecureLink) {
-        await this.secureLinks?.markCutoverError(id, error).catch(() => undefined);
+        await this.secureLinks?.markCutoverError(id, failure).catch(() => undefined);
         this.queueDockerReconciliation();
-        if (error instanceof AppError) throw error;
+        if (failure instanceof AppError) throw failure;
         throw new AppError(
           500,
           'NGINX_CONFIG_FAILED',
-          `Secure Link cutover will retry: ${error instanceof Error ? error.message : 'unknown error'}`
+          `Secure Link cutover will retry: ${failure instanceof Error ? failure.message : 'unknown error'}`
         );
       }
       if (nodeChanged && appliedOnTargetNode) {
@@ -790,14 +971,14 @@ export class ProxyService {
       // Roll back every field changed by the request or by upstream resolution.
       logger.error('Failed to apply nginx config during update, rolling back DB', {
         hostId: id,
-        error,
+        error: failure,
       });
       const rollbackData: Record<string, unknown> = {};
-      for (const key of new Set([...Object.keys(input), ...Object.keys(upstreamData)])) {
+      for (const key of new Set([...Object.keys(proxyInput), ...Object.keys(upstreamData)])) {
         rollbackData[key] = (existing as Record<string, unknown>)[key];
       }
       if (primaryDomainChanged) rollbackData.slug = existing.slug;
-      if (existing.upstreamKind !== 'manual' || updated.upstreamKind !== 'manual') {
+      if (isDockerUpstream(existing.upstreamKind) || isDockerUpstream(updated.upstreamKind)) {
         for (const key of [
           'forwardHost',
           'forwardPort',
@@ -840,11 +1021,11 @@ export class ProxyService {
           rollbackError,
         });
       }
-      if (error instanceof AppError) throw error;
+      if (failure instanceof AppError) throw failure;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
-        `Failed to apply Nginx config: ${error instanceof Error ? error.message : 'unknown error'}`
+        `Failed to apply Nginx config: ${failure instanceof Error ? failure.message : 'unknown error'}`
       );
     }
 
@@ -916,7 +1097,18 @@ export class ProxyService {
       await this.secureLinks?.cleanupAdditionalForHost(existing);
       await this.secureLinks?.cleanup(existing);
     }
-    await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
+    if (existing.upstreamKind === 'pages') {
+      await this.pageRoutes?.removeHost(id, existing.nodeId, abandoningOfflineNode);
+    }
+    await this.additionalRoutes?.cleanupForHost(existing, abandoningOfflineNode);
+    try {
+      await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
+    } catch (error) {
+      if (existing.upstreamKind === 'pages') {
+        await this.disablePageHostForDeferredCleanup(id, error);
+      }
+      throw error;
+    }
 
     // 5. Audit log
     await this.auditService.log({
@@ -966,7 +1158,6 @@ export class ProxyService {
         })
       : null;
     const tlsDistribution = await this.certificateDistribution.getStatusForHost(host);
-
     const [displayHost] = await attachDockerUpstreamDisplay(this.db, [host]);
     return {
       ...stripProxyHealthHistory(displayHost!),
@@ -995,6 +1186,7 @@ export class ProxyService {
           }
         : null,
       tlsDistribution,
+      pageTarget: displayHost?.pageTarget ?? null,
     };
   }
 
@@ -1020,7 +1212,18 @@ export class ProxyService {
   async listAdditionalSecureLinks(id: string) {
     await this.requireManagedProxyHost(id);
     if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
-    return this.secureLinks.listAdditional(id);
+    const [bindings, routes] = await Promise.all([
+      this.secureLinks.listAllAdditional(id),
+      this.additionalRoutes?.list(id) ?? Promise.resolve([]),
+    ]);
+    const routePaths = new Map(routes.map((route) => [route.id, route.path]));
+    return bindings.map((binding) => ({
+      ...binding,
+      managedRoutePath:
+        binding.purpose === 'additional_route' && binding.referenceId
+          ? (routePaths.get(binding.referenceId) ?? null)
+          : null,
+    }));
   }
 
   async createAdditionalSecureLink(id: string, input: CreateProxyAdditionalSecureLinkInput, userId: string) {
@@ -1099,7 +1302,7 @@ export class ProxyService {
       },
     });
     if (!host || host.isSystem) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
-    if (host.upstreamKind === 'manual') {
+    if (!isDockerUpstream(host.upstreamKind)) {
       throw new AppError(409, 'SECURE_LINK_NOT_APPLICABLE', 'Proxy host does not use a Docker Secure Link');
     }
 
@@ -1263,14 +1466,17 @@ export class ProxyService {
         where: and(
           eq(proxyHosts.isSystem, false),
           eq(proxyHosts.enabled, true),
-          ne(proxyHosts.upstreamKind, 'manual'),
+          inArray(proxyHosts.upstreamKind, ['docker_container', 'docker_deployment']),
           eq(proxyHosts.secureLinkStatus, 'active')
         ),
         columns: { id: true, nodeId: true },
       }),
       this.db.query.proxyAdditionalSecureLinks?.findMany
         ? this.db.query.proxyAdditionalSecureLinks.findMany({
-            where: eq(proxyAdditionalSecureLinks.status, 'active'),
+            where: and(
+              eq(proxyAdditionalSecureLinks.purpose, 'user_managed'),
+              eq(proxyAdditionalSecureLinks.status, 'active')
+            ),
           })
         : Promise.resolve([]),
     ]);
@@ -1858,11 +2064,12 @@ export class ProxyService {
       )
       .returning();
     for (const host of updated) this.emitHost(host.id, 'updated', host.domainNames?.[0]);
+    await this.additionalRoutes?.updateRenamedContainerReferences(nodeId, oldName, newName);
     this.queueDockerReconciliation();
   }
 
   private async resolveStoredDockerUpstream(host: ProxyHostRow, force = false): Promise<ProxyHostRow> {
-    if (host.upstreamKind === 'manual' || !this.dockerUpstreams) return host;
+    if (!isDockerUpstream(host.upstreamKind) || !this.dockerUpstreams) return host;
     if (host.type === 'raw' || host.rawConfigEnabled) return host;
     const resolved = await this.dockerUpstreams.resolve(host, { allowPortRebind: true });
     const changed =
@@ -1894,6 +2101,7 @@ export class ProxyService {
   private async reconcileDockerUpstreams(force = false): Promise<void> {
     let retryNeeded = false;
     if (await this.secureLinks?.reconcileAdditionalLifecycle?.()) retryNeeded = true;
+    if (await this.additionalRoutes?.reconcileDockerTargets(force)) retryNeeded = true;
     const pendingCleanups = await this.db.query.proxyHosts.findMany({
       where: eq(proxyHosts.secureLinkStatus, 'cleanup_pending'),
     });
@@ -1908,7 +2116,7 @@ export class ProxyService {
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
         eq(proxyHosts.type, 'proxy'),
-        ne(proxyHosts.upstreamKind, 'manual'),
+        inArray(proxyHosts.upstreamKind, ['docker_container', 'docker_deployment']),
         ne(proxyHosts.secureLinkStatus, 'cleanup_pending')
       ),
     });
@@ -2093,6 +2301,9 @@ export class ProxyService {
       await this.removeConfigFromNode(id, sourceNodeId);
     }
     await this.certificateDistribution.deactivateHost(id, sourceNodeId);
+    if (host.upstreamKind === 'pages') {
+      await this.pageRoutes?.cleanupMigratedSource(id, sourceNodeId, connected);
+    }
     await this.secureLinks?.reconcileSourceNode(sourceNodeId);
     return { orphanedConfigPossible: !connected };
   }
@@ -2369,13 +2580,14 @@ export class ProxyService {
   private async buildNginxConfig(
     host: ProxyHostRow,
     certPaths: CertPaths,
-    accessList: ProxyHostConfig['accessList']
+    accessList: ProxyHostConfig['accessList'],
+    pagesRouteIncludePathOverride?: string
   ): Promise<string> {
     // Raw mode is an explicit user-owned escape hatch and is never rewritten.
     if ((host.type === 'raw' || host.rawConfigEnabled) && host.rawConfig) return host.rawConfig;
 
     const usesSecureLink =
-      host.upstreamKind !== 'manual' &&
+      isDockerUpstream(host.upstreamKind) &&
       host.secureLinkGeneration > 0 &&
       host.secureLinkMigratedAt != null &&
       (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
@@ -2383,7 +2595,15 @@ export class ProxyService {
       throw new Error('Secure Link listener port is unavailable');
     }
     const additionalSecureLinks = this.secureLinks ? await this.secureLinks.getActiveAdditional(host.id) : [];
+    const additionalRoutes = this.additionalRoutes ? await this.additionalRoutes.getRenderConfig(host.id) : [];
     await this.secureLinks?.assertAdditionalReferences(host.id, host.advancedConfig);
+    if (host.upstreamKind === 'pages' && !this.pageRoutes) {
+      throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
+    }
+    const pagesRouteIncludePath =
+      host.upstreamKind === 'pages'
+        ? (pagesRouteIncludePathOverride ?? (await this.pageRoutes!.getIncludePath(host.id)))
+        : undefined;
     const config: ProxyHostConfig = {
       id: host.id,
       type: host.type,
@@ -2419,6 +2639,8 @@ export class ProxyService {
       sslKeyPath: certPaths.sslKeyPath,
       sslChainPath: certPaths.sslChainPath,
       templateVariables: (host.templateVariables ?? {}) as Record<string, string | number | boolean>,
+      pagesRouteIncludePath,
+      additionalRoutes,
     };
 
     const hideExternalBranding = (await this.generalSettings?.getConfig())?.hideExternalBranding ?? false;

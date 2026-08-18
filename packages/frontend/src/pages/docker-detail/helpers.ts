@@ -42,7 +42,9 @@ export function containerLifecycleActions(state: string) {
     canStart: ["created", "exited", "stopped"].includes(normalizedState),
     canStop: isRunning || isRestarting,
     canRestart: isRunning,
-    canKill: isRunning || isRestarting,
+    // Kill is the emergency escape hatch for every live or transitional state.
+    // In particular, it must remain available while update/recreate is stuck.
+    canKill: !["created", "exited", "offline"].includes(normalizedState),
   };
 }
 

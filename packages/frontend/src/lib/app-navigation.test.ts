@@ -123,6 +123,18 @@ describe("app navigation registry", () => {
     expect(ids).not.toContain("status-page");
   });
 
+  it("shows Pages only while the global Pages feature is enabled", () => {
+    const disabledIds = visibleNavigationGroups(
+      context({ scopes: ["pages:view"], pagesEnabled: false })
+    ).flatMap((group) => group.items.map((item) => item.id));
+    const enabledIds = visibleNavigationGroups(
+      context({ scopes: ["pages:view"], pagesEnabled: true })
+    ).flatMap((group) => group.items.map((item) => item.id));
+
+    expect(disabledIds).not.toContain("pages");
+    expect(enabledIds).toContain("pages");
+  });
+
   it("hides Notifications from SIEM-only users while SIEM is disabled", () => {
     const disabledIds = visibleNavigationGroups(
       context({ scopes: ["audit:siem:view"], siemEnabled: false })

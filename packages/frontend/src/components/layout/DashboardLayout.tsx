@@ -565,6 +565,7 @@ export function DashboardLayout() {
           loggingEnabled: features.loggingEnabled,
           inferenceEnabled: features.inferenceEnabled,
           hasLowInferenceUsage: dashboardHasLowInferenceUsage,
+          pagesEnabled: useUIBootstrapStore.getState().snapshot?.navigation.pagesEnabled ?? false,
           hasDockerNodes:
             useDockerStore.getState().dockerNodes.length > 0 ||
             [

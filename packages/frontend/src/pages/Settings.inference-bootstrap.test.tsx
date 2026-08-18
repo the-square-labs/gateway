@@ -334,6 +334,7 @@ function makeShell(inferenceEnabled: boolean): UIBootstrapShell {
       hasNginxNodes: true,
       hasCloudflareIntegration: false,
       statusPageEnabled: false,
+      pagesEnabled: false,
       dockerNodes: [],
       nodes: {
         data: [],
@@ -355,7 +356,7 @@ function makeShell(inferenceEnabled: boolean): UIBootstrapShell {
       expiresAt: null,
       graceUntil: null,
       offlineGraceUntil: null,
-      entitlementsVersion: 2,
+      entitlementsVersion: 3,
       entitlements: {
         managedNodes: 100,
         users: 10,

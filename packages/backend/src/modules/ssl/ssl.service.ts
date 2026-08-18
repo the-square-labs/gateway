@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { and, count, desc, eq, ilike, inArray, lte, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { certificates, proxyHosts, sslCertificates } from '@/db/schema/index.js';
+import { certificates, pageWildcardProfiles, proxyHosts, sslCertificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere, escapeLike, sleep } from '@/lib/utils.js';
 import { x509 } from '@/lib/x509.js';
@@ -1174,6 +1174,17 @@ export class SSLService {
     if (referencingHosts.length > 0) {
       throw new AppError(409, 'CERT_IN_USE', 'Certificate is in use by proxy hosts', {
         proxyHostIds: referencingHosts.map((h) => h.id),
+      });
+    }
+
+    const [pagesProfile] = await this.db
+      .select({ id: pageWildcardProfiles.id })
+      .from(pageWildcardProfiles)
+      .where(and(eq(pageWildcardProfiles.certificateId, certId), eq(pageWildcardProfiles.enabled, true)))
+      .limit(1);
+    if (pagesProfile) {
+      throw new AppError(409, 'CERT_IN_USE', 'Certificate is in use by the Pages wildcard profile', {
+        pagesProfileId: pagesProfile.id,
       });
     }
 

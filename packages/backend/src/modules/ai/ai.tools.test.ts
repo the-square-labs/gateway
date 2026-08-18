@@ -106,9 +106,18 @@ describe('AI tool scope filtering', () => {
       'docker:containers:migrate',
       'settings:gateway:view',
       'settings:gateway:edit',
+      'pages:view',
+      'proxy:view',
     ]);
     expect(names).toEqual(
-      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
+      expect.arrayContaining([
+        'manage_managed_database',
+        'manage_docker_migration',
+        'manage_logging_backend',
+        'manage_pages',
+        'manage_additional_route',
+        'manage_additional_secure_link',
+      ])
     );
     expect(
       parseAndValidateAIToolArguments(
@@ -116,10 +125,33 @@ describe('AI tool scope filtering', () => {
         JSON.stringify({ operation: 'create', type: 'postgres', name: 'app-db' })
       )
     ).toMatchObject({ ok: true });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_managed_database',
+        JSON.stringify({ operation: 'update', databaseId: 'database-1', memoryMb: 1024 })
+      )
+    ).toMatchObject({ ok: true });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_pages',
+        JSON.stringify({
+          operation: 'token_create',
+          projectId: 'project-1',
+          name: 'GitLab Pages',
+          allowedTagPatterns: ['mr-*'],
+        })
+      )
+    ).toMatchObject({ ok: true });
     expect(parseAndValidateAIToolArguments('manage_docker_migration', '{"operation":"invent"}')).toEqual({
       ok: false,
       error: 'Invalid tool arguments at /operation',
     });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_additional_route',
+        JSON.stringify({ operation: 'create', proxyHostId: 'host-1', path: '/api', targetKind: 'manual' })
+      )
+    ).toMatchObject({ ok: true });
   });
 
   it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {

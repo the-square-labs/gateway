@@ -1047,9 +1047,16 @@ describe('ProxyService offline Nginx abandonment', () => {
   function setup(connected: boolean, overrides: Record<string, unknown> = {}) {
     const existing = makeActiveSecureHost(overrides);
     const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    const updates: Array<Record<string, unknown>> = [];
     const db = {
       query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(existing) } },
       delete: vi.fn(() => ({ where: deleteWhere })),
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          updates.push(values);
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      })),
     } as any;
     const auditService = { log: vi.fn().mockResolvedValue(undefined) } as any;
     const nodeDispatch = { isNodeConnected: vi.fn(() => connected) } as any;
@@ -1069,7 +1076,16 @@ describe('ProxyService offline Nginx abandonment', () => {
       undefined,
       secureLinks
     );
-    return { service, existing, deleteWhere, auditService, nodeDispatch, certificateDistribution, secureLinks };
+    return {
+      service,
+      existing,
+      deleteWhere,
+      updates,
+      auditService,
+      nodeDispatch,
+      certificateDistribution,
+      secureLinks,
+    };
   }
 
   it('removes Gateway state without contacting an abandoned offline Nginx source', async () => {
@@ -1102,5 +1118,24 @@ describe('ProxyService offline Nginx abandonment', () => {
     expect(certificateDistribution.deactivateHost).not.toHaveBeenCalled();
     expect(secureLinks.abandonOfflineSource).not.toHaveBeenCalled();
     expect(deleteWhere).not.toHaveBeenCalled();
+  });
+
+  it('retains a disabled Pages host and its claimed target when host-row deletion fails', async () => {
+    const { service, existing, deleteWhere, updates, nodeDispatch, certificateDistribution } = setup(false, {
+      upstreamKind: 'pages',
+    });
+    const deleteError = new Error('proxy host delete failed');
+    deleteWhere.mockRejectedValueOnce(deleteError);
+    nodeDispatch.resolveNodeId = vi.fn().mockResolvedValue(existing.nodeId);
+    nodeDispatch.removeConfig = vi.fn().mockResolvedValue({ success: true });
+    certificateDistribution.deactivateHost = vi.fn().mockResolvedValue(undefined);
+    const pageRoutes = { removeHost: vi.fn().mockResolvedValue(undefined) };
+    service.setPageRoutes(pageRoutes as never);
+
+    await expect(service.deleteProxyHost(existing.id, 'user-1')).rejects.toBe(deleteError);
+
+    expect(pageRoutes.removeHost).toHaveBeenCalledWith(existing.id, existing.nodeId, false);
+    expect(deleteWhere).toHaveBeenCalledOnce();
+    expect(updates).toContainEqual(expect.objectContaining({ enabled: false }));
   });
 });

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,6 +32,7 @@ import {
   useSystemConfigStore,
   withDefaultSystemConfig,
 } from "@/stores/system-config";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { AuthProvisioningSettings } from "@/types";
 import { GracefulShutdownSettingsPanel } from "./GracefulShutdownSettingsPanel";
 import {
@@ -176,6 +178,11 @@ export function AuthProvisioningSection({
   canEdit,
   section = "all",
 }: AuthProvisioningSectionProps) {
+  const licenseFeatures = useUIBootstrapStore(
+    (state) => state.snapshot?.license.entitlements.features
+  );
+  const pkiEntitled = licenseFeatures?.includes("internal-pki") === true;
+  const siemEntitled = licenseFeatures?.includes("siem-export") === true;
   const [settings, setSettings] = useState<AuthProvisioningSettings | null>(() =>
     withDefaultGeneralSettings(
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning") ?? null
@@ -1157,7 +1164,10 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">PKI</p>
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <span>PKI</span>
+                {!pkiEntitled && <LicensePlanBadge plan="enterprise" />}
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Show PKI navigation and allow user access to authorities, certificates, and PKI
                 templates
@@ -1174,7 +1184,10 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">SIEM audit export</p>
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <span>SIEM audit export</span>
+                {!siemEntitled && <LicensePlanBadge plan="enterprise" />}
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Show SIEM screens and deliver privacy-reduced audit events to configured collectors
               </p>

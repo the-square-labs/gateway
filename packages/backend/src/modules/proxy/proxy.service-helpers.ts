@@ -12,6 +12,7 @@ export type ProxyValidationOptions = {
   skipDomainNodeValidation?: boolean;
   preserveFormerNodeConfig?: boolean;
   allowSystemNodeMove?: boolean;
+  allowPagesNodeMove?: boolean;
 };
 
 export type ProxyValidationInput = boolean | ProxyValidationOptions;

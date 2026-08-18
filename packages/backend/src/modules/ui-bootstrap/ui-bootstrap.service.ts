@@ -8,6 +8,7 @@ import type { LicensePolicyService, SafeLicenseSummary } from '@/modules/license
 import type { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
+import type { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import {
   DEFAULT_GENERAL_SETTINGS,
   type GeneralSettings,
@@ -64,6 +65,7 @@ export interface UIBootstrapShell {
     hasNginxNodes: boolean;
     hasCloudflareIntegration: boolean;
     statusPageEnabled: boolean;
+    pagesEnabled: boolean;
     dockerNodes: ShellNode[];
     nodes: ResourceSnapshotEnvelope<ShellNode[]>;
   };
@@ -90,7 +92,8 @@ export class UIBootstrapService {
     private readonly aiRuntime: AIProviderRuntimeService,
     private readonly aiSettings: AISettingsService,
     private readonly finalizeSetup: FinalizeSetupService,
-    private readonly licensePolicy: LicensePolicyService
+    private readonly licensePolicy: LicensePolicyService,
+    private readonly pageProfile?: PageProfileService
   ) {
     this.coordinator.register({
       id: 'ui-shell:nodes',
@@ -129,6 +132,7 @@ export class UIBootstrapService {
       aiWorkspaceConfigured,
       installationOwner,
       license,
+      pagesEnabled,
     ] = await Promise.all([
       this.getNodeSnapshot(),
       this.getConfigSnapshot(),
@@ -139,6 +143,9 @@ export class UIBootstrapService {
       this.aiSettings.isEnabled(),
       this.finalizeSetup.isOwner(user.id),
       this.licensePolicy.getSummary(),
+      hasScopeBase(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage')
+        ? (this.pageProfile?.isEnabled() ?? Promise.resolve(false))
+        : Promise.resolve(false),
     ]);
     const config = configSnapshot.data;
 
@@ -174,6 +181,7 @@ export class UIBootstrapService {
         hasNginxNodes: true,
         hasCloudflareIntegration: cloudflareSnapshot.data,
         statusPageEnabled: hasScope(scopes, 'status-page:view') && statusPageSnapshot.data.enabled,
+        pagesEnabled: pagesEnabled && license.entitlements.features.includes('pages'),
         dockerNodes,
         nodes: { ...nodeSnapshot, data: visibleNodes },
       },

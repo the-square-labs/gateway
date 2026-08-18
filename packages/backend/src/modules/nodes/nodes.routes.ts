@@ -169,6 +169,8 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
       ...(capabilities?.cpuCores !== undefined ? { cpuCores: capabilities.cpuCores } : {}),
       ...(capabilities?.dockerRuntimeStatus ? { dockerRuntimeStatus: capabilities.dockerRuntimeStatus } : {}),
       ...(advertisedCapabilities.includes('docker_port_bind_ip_v1') ? { dockerPortBindIpV1: true } : {}),
+      ...(advertisedCapabilities.includes('nginx_pages_v1') ? { nginx_pages_v1: true } : {}),
+      ...(advertisedCapabilities.includes('nginx_pages_config_v1') ? { nginx_pages_config_v1: true } : {}),
     },
     lastSeenAt: node.lastSeenAt,
     lastHealthReport: health

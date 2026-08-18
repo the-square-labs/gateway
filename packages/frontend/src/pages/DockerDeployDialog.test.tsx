@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Route } from "react-router-dom";
 import { vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -179,5 +180,48 @@ describe("DockerDeployDialog runtime section", () => {
       capability: "Blue/green deployments",
       requiredPlan: "personal",
     });
+  });
+
+  it("opens node setup before enforcing the plan when Secure Runtime is installable", async () => {
+    const user = userEvent.setup();
+    const installableNode = {
+      ...baseNode,
+      capabilities: {
+        dockerRuntimeStatus: {
+          state: "installable",
+          remoteInstallable: true,
+          checkedAt: new Date().toISOString(),
+        },
+      },
+    } satisfies Node;
+    useUIBootstrapStore.setState({
+      snapshot: {
+        license: { plan: "community", entitlements: { features: [] } },
+      } as never,
+    });
+
+    renderWithRouter(
+      <DockerDeployDialog
+        open
+        onOpenChange={vi.fn()}
+        nodeId={installableNode.id}
+        dockerNodes={[installableNode]}
+      />,
+      {
+        extraRoutes: (
+          <Route path="/nodes/:slug/details" element={<div>Node settings destination</div>} />
+        ),
+      }
+    );
+
+    const runtimeSelect = screen.getAllByRole("combobox")[1]!;
+    fireEvent.keyDown(runtimeSelect, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
+
+    expect(await screen.findByText("Secure Runtime setup required")).toBeInTheDocument();
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Open node settings" }));
+    expect(await screen.findByText("Node settings destination")).toBeInTheDocument();
   });
 });

@@ -1,0 +1,55 @@
+{
+  "file_name": "x2uskhdm_gateway_pages_verification",
+  "edges": [
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "2tjfa2g5",
+      "relation": "related_to",
+      "weight": 0.3977,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786986368616,
+      "updated_at": 1786986368616
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.3929,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786986368616,
+      "updated_at": 1786986368616
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "3ta908aa",
+      "relation": "related_to",
+      "weight": 0.3864,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786986368616,
+      "updated_at": 1786986368616
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "lvklfxgs",
+      "relation": "same_workflow",
+      "weight": 0.3779,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786986368616,
+      "updated_at": 1786986368616
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "8c9f2oec",
+      "relation": "related_to",
+      "weight": 0.3719,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786986368616,
+      "updated_at": 1786986368616
+    }
+  ]
+}

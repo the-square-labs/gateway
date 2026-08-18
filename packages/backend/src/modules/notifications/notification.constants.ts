@@ -35,6 +35,7 @@ export type AlertCategory =
   | 'node'
   | 'container'
   | 'proxy'
+  | 'pages'
   | 'gateway'
   | 'logging'
   | 'integration'
@@ -233,6 +234,57 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{health.status}}', description: 'Health status' },
       { name: '{{event.name}}', description: 'Event pattern/name' },
       { name: '{{state.current}}', description: 'Current state for stateful events' },
+    ],
+  },
+  {
+    id: 'pages',
+    label: 'Pages',
+    metrics: [],
+    events: [
+      { id: 'deployment.ready', label: 'Deployment Ready', defaultSeverity: 'info' },
+      { id: 'deployment.failed', label: 'Deployment Failed', defaultSeverity: 'critical' },
+      { id: 'publication.failed', label: 'Tag Publication Failed', defaultSeverity: 'critical' },
+      { id: 'config.publication_failed', label: 'Runtime Config Publication Failed', defaultSeverity: 'critical' },
+      { id: 'quota.blocked', label: 'Project Quota Blocked', defaultSeverity: 'warning', supportsThreshold: true },
+      {
+        id: 'profile.unavailable',
+        label: 'Wildcard Profile Unavailable',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'capability.missing',
+        label: 'Pages Daemon Capability Missing',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      { id: 'migration.failed', label: 'Ingress Migration Failed', defaultSeverity: 'critical' },
+      {
+        id: 'migration.needs_attention',
+        label: 'Ingress Migration Needs Attention',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'cleanup.needs_attention',
+        label: 'Cleanup Needs Attention',
+        defaultSeverity: 'warning',
+        supportsThreshold: true,
+      },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Page Project name' },
+      { name: '{{resource.id}}', description: 'Page Project ID' },
+      { name: '{{resource.key}}', description: 'Internal alert resource key' },
+      { name: '{{event.name}}', description: 'Pages event name' },
+      { name: '{{state.current}}', description: 'Current Pages condition' },
+      { name: '{{operation.kind}}', description: 'Deployment, publication, cleanup, or migration operation' },
+      { name: '{{operation.phase}}', description: 'Current operation phase' },
+      { name: '{{failure.code}}', description: 'Stable public failure code' },
+      { name: '{{details.public_slug}}', description: 'Immutable Deployment public hash' },
+      { name: '{{details.tag}}', description: 'Tag name' },
+      { name: '{{details.quota_used_bytes}}', description: 'Current canonical storage usage' },
+      { name: '{{details.quota_limit_bytes}}', description: 'Project canonical storage quota' },
     ],
   },
   {
@@ -533,6 +585,150 @@ export interface EventMapping {
 }
 
 export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
+  'pages.deployment.changed': [
+    {
+      category: 'pages',
+      eventId: 'deployment.ready',
+      match: (p) => p.action === 'ready' || p.status === 'ready',
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        public_slug: p.publicSlug ?? null,
+        operation_kind: 'deployment',
+        operation_phase: p.status ?? p.action,
+      }),
+    },
+    {
+      category: 'pages',
+      eventId: 'deployment.failed',
+      match: (p) => p.action === 'failed' || p.status === 'failed',
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        public_slug: p.publicSlug ?? null,
+        failure_code: p.failureCode ?? 'page_deployment_failed',
+        operation_kind: 'deployment',
+        operation_phase: p.status ?? p.action,
+      }),
+    },
+  ],
+  'pages.tag.changed': [
+    {
+      category: 'pages',
+      eventId: 'publication.failed',
+      match: (p) => p.action === 'publication.failed' || p.status === 'failed',
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        tag: p.tag ?? p.name ?? null,
+        public_slug: p.publicSlug ?? null,
+        failure_code: p.failureCode ?? 'page_publication_failed',
+        operation_kind: 'publication',
+        operation_phase: p.phase ?? p.status ?? p.action,
+      }),
+    },
+  ],
+  'pages.config.changed': [
+    {
+      category: 'pages',
+      eventId: 'config.publication_failed',
+      match: (p) => p.action === 'publication.failed',
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        tag_id: p.tagId ?? null,
+        generation: p.generation ?? null,
+        byte_size: p.byteSize ?? null,
+        failure_code: p.failureCode ?? 'pages_runtime_config_publication_failed',
+        operation_kind: 'runtime_config',
+        operation_phase: p.action,
+      }),
+    },
+  ],
+  'pages.project.changed': [
+    {
+      category: 'pages',
+      eventId: 'quota.blocked',
+      match: (p) => ['quota.blocked', 'quota.resolved'].includes(p.action),
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        quota_used_bytes: p.quotaUsedBytes ?? null,
+        quota_limit_bytes: p.quotaLimitBytes ?? null,
+        failure_code: p.failureCode ?? null,
+      }),
+      stateful: {
+        currentState: (p) => (p.action === 'quota.blocked' ? 'quota.blocked' : 'quota.healthy'),
+        observedPatterns: ['quota.blocked'],
+      },
+    },
+    {
+      category: 'pages',
+      eventId: 'cleanup.needs_attention',
+      match: (p) => ['cleanup.needs_attention', 'cleanup.healthy'].includes(p.action),
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({ failure_code: p.failureCode ?? null, operation_kind: 'cleanup' }),
+      stateful: {
+        currentState: (p) => p.action,
+        observedPatterns: ['cleanup.needs_attention'],
+      },
+    },
+  ],
+  'pages.profile.changed': [
+    {
+      category: 'pages',
+      eventId: 'profile.unavailable',
+      match: (p) => typeof p.projectId === 'string' && ['profile.unavailable', 'profile.healthy'].includes(p.action),
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({ failure_code: p.failureCode ?? null, operation_kind: 'profile' }),
+      stateful: {
+        currentState: (p) => p.action,
+        observedPatterns: ['profile.unavailable'],
+      },
+    },
+    {
+      category: 'pages',
+      eventId: 'capability.missing',
+      match: (p) => typeof p.projectId === 'string' && ['capability.missing', 'capability.restored'].includes(p.action),
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        failure_code: p.failureCode ?? null,
+        target_node_id: p.nodeId ?? null,
+        operation_kind: 'capability',
+      }),
+      stateful: {
+        currentState: (p) => p.action,
+        observedPatterns: ['capability.missing'],
+      },
+    },
+  ],
+  'pages.migration.changed': [
+    {
+      category: 'pages',
+      eventId: 'migration.failed',
+      match: (p) => typeof p.projectId === 'string' && (p.action === 'failed' || p.status === 'failed'),
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        failure_code: p.failureCode ?? 'page_migration_failed',
+        operation_kind: 'migration',
+        operation_phase: p.phase ?? p.status ?? p.action,
+        source_node_id: p.sourceNodeId ?? null,
+        target_node_id: p.targetNodeId ?? null,
+      }),
+    },
+    {
+      category: 'pages',
+      eventId: 'migration.needs_attention',
+      match: (p) =>
+        typeof p.projectId === 'string' && ['needs_attention', 'healthy', 'complete'].includes(p.status ?? p.action),
+      extractResource: (p) => ({ type: 'page_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        failure_code: p.failureCode ?? null,
+        operation_kind: 'migration',
+        operation_phase: p.phase ?? p.status ?? p.action,
+      }),
+      stateful: {
+        currentState: (p) =>
+          (p.status ?? p.action) === 'needs_attention' ? 'migration.needs_attention' : 'migration.healthy',
+        observedPatterns: ['migration.needs_attention'],
+      },
+    },
+  ],
   'system.license.changed': [
     {
       category: 'gateway',

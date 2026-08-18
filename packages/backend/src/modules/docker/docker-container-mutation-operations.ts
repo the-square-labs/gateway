@@ -454,17 +454,20 @@ export async function killContainer(
   nodeId: string,
   containerId: string,
   signal: string,
-  userId: string
+  userId: string,
+  trustedStableName?: string
 ) {
   await ctx.validateDockerNode(nodeId);
-  await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
-  const name = await ctx.resolveContainerName(nodeId, containerId);
-  ctx.requireNoTransition(nodeId, name);
+  const name = trustedStableName ?? (await ctx.resolveContainerName(nodeId, containerId));
   ctx.setTransition(nodeId, name, 'killing');
   ctx.emitTransition(nodeId, name, containerId, 'killing');
   const task = await ctx.createTask(nodeId, containerId, name, 'kill');
   try {
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'kill', { containerId, signal });
+    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'kill', {
+      containerId,
+      signal,
+      configJson: JSON.stringify({ containerName: name, emergency: true }),
+    });
     ctx.parseResult(result);
   } catch (err) {
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to kill container', nodeId, name);

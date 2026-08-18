@@ -15,6 +15,7 @@ export type ResourceSearchType =
   | "docker_network"
   | "docker_registry"
   | "database"
+  | "page_project"
   | "logging_environment"
   | "logging_schema"
   | "status_page_service"

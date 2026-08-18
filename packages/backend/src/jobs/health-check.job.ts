@@ -95,7 +95,9 @@ export class HealthCheckJob {
     logger.info(`Running health checks for ${hosts.length} host(s)`);
 
     const check = async (host: typeof proxyHosts.$inferSelect) => {
-      const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
+      const relayBacked =
+        (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
+        host.secureLinkMigratedAt != null;
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
         return { hostId: host.id, status: 'skipped' as const };
@@ -209,7 +211,9 @@ export class HealthCheckJob {
     const directHosts: typeof hosts = [];
     const secureHostsByNode = new Map<string, typeof hosts>();
     for (const host of hosts) {
-      const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
+      const relayBacked =
+        (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
+        host.secureLinkMigratedAt != null;
       if (!relayBacked) {
         directHosts.push(host);
         continue;
@@ -304,7 +308,10 @@ export class HealthCheckJob {
   private async checkHost(
     host: typeof proxyHosts.$inferSelect
   ): Promise<{ status: 'online' | 'offline' | 'skipped'; responseMs?: number }> {
-    if (host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null) {
+    if (
+      (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
+      host.secureLinkMigratedAt != null
+    ) {
       if (!host.nodeId || !this.nodeDispatch) return { status: 'offline' };
       try {
         const result = await this.nodeDispatch.probeProxySecureLink(host.nodeId, {

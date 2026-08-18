@@ -5,9 +5,11 @@ import { useCommandPalettePageActions } from "@/stores/command-palette-page-acti
 import {
   getHeaderActionOverflowCount,
   getHeaderActionOverflowIndices,
+  HEADER_ACTION_PRIORITY,
   HeaderOverflowMenu,
   ResponsiveHeaderActions,
   shouldCollapseHeaderActions,
+  shouldForceHeaderActionOverflow,
 } from "./ResponsiveHeaderActions";
 
 describe("ResponsiveHeaderActions command palette registration", () => {
@@ -225,6 +227,20 @@ describe("getHeaderActionOverflowCount", () => {
 });
 
 describe("getHeaderActionOverflowIndices", () => {
+  it("keeps emergency destructive actions eligible for direct header placement", () => {
+    expect(
+      shouldForceHeaderActionOverflow({
+        label: "Kill",
+        onClick: vi.fn(),
+        destructive: true,
+        priority: HEADER_ACTION_PRIORITY.emergency,
+      })
+    ).toBe(false);
+    expect(
+      shouldForceHeaderActionOverflow({ label: "Remove", onClick: vi.fn(), destructive: true })
+    ).toBe(true);
+  });
+
   it("always overflows destructive actions and collapses lower priorities first", () => {
     const actions = [
       { width: 120, priority: 100 },

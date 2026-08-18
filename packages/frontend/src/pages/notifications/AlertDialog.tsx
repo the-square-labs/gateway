@@ -207,6 +207,18 @@ export function AlertDialog({
         return;
       }
 
+      if (category === "pages") {
+        const response = await api.listPageProjects({ page: 1, limit: 100 });
+        if (resourceLoadTokenRef.current !== loadToken) return;
+        setAvailableResources(
+          response.data.map((project) => ({
+            id: project.id,
+            label: project.name,
+          }))
+        );
+        return;
+      }
+
       if (category === "certificate") {
         const response = await api.listSSLCertificates({ limit: 100 });
         if (resourceLoadTokenRef.current !== loadToken) return;

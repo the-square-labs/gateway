@@ -133,6 +133,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const statusPageEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.statusPageEnabled ?? false
   );
+  const pagesEnabled = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.pagesEnabled ?? false
+  );
   const hasCloudflareIntegration = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
   );
@@ -338,6 +341,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         inferenceEnabled,
         hasLowInferenceUsage: hasLowInferenceUsage(dashboardInferenceUsage ?? null),
         statusPageEnabled,
+        pagesEnabled,
         hasCloudflareIntegration,
       }),
     [
@@ -346,6 +350,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       inferenceEnabled,
       loggingEnabled,
       pkiEnabled,
+      pagesEnabled,
       siemEnabled,
       statusPageEnabled,
       user?.scopes,

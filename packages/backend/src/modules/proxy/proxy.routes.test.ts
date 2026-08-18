@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
@@ -19,11 +19,19 @@ const mocks = vi.hoisted(() => ({
     validateAdvancedConfig: vi.fn(),
     deleteProxyHost: vi.fn(),
   },
+  licensePolicy: {
+    requireFeature: vi.fn(),
+  },
+  pageProfile: { requireEnabled: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn(() => mocks.proxyService),
+    resolve: vi.fn((token) => {
+      if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
+      if (token?.name === 'PageProfileService') return mocks.pageProfile;
+      return mocks.proxyService;
+    }),
   },
 }));
 
@@ -88,6 +96,8 @@ describe('proxy routes programmatic raw config handling', () => {
     mocks.authType = 'api-token';
     mocks.scopes = ['proxy:view', 'proxy:create', 'proxy:view:host-1', 'proxy:edit:host-1', 'proxy:advanced:host-1'];
     vi.clearAllMocks();
+    mocks.licensePolicy.requireFeature.mockResolvedValue(undefined);
+    mocks.pageProfile.requireEnabled.mockResolvedValue(undefined);
     mocks.proxyService.listProxyHosts.mockResolvedValue({ data: [rawHost], total: 1 });
     mocks.proxyService.getProxyHost.mockResolvedValue(rawHost);
     mocks.proxyService.createProxyHost.mockResolvedValue(rawHost);
@@ -130,6 +140,24 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(response.status).toBe(200);
     expect(body.data.rawConfig).toBeNull();
     expect(body.data.rawConfigEnabled).toBe(true);
+  });
+
+  it('does not disclose a Pages target without visibility of its Project', async () => {
+    const projectId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId, tagId: 'tag-1', deploymentId: 'deployment-1', status: 'ready' },
+    });
+    mocks.scopes = ['proxy:view:host-1'];
+
+    const hidden = await createApp().request('/host-1');
+    expect(((await hidden.json()) as any).data.pageTarget).toBeNull();
+
+    mocks.scopes = ['proxy:view:host-1', `pages:view:${projectId}`];
+    const visible = await createApp().request('/host-1');
+    expect(((await visible.json()) as any).data.pageTarget).toEqual(expect.objectContaining({ projectId }));
   });
 
   it('returns raw config to browser detail response with raw read scope', async () => {
@@ -415,6 +443,126 @@ describe('proxy routes programmatic raw config handling', () => {
         bypassRawValidation: true,
       })
     );
+  });
+
+  it('requires visibility of the selected Page Project when creating a Pages Route', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    const body = {
+      nodeId: '11111111-1111-4111-8111-111111111111',
+      domainNames: ['docs.example.com'],
+      upstreamKind: 'pages',
+      pageProjectId,
+      pageTagId: '33333333-3333-4333-8333-333333333333',
+    };
+    mocks.scopes = ['proxy:create'];
+    const denied = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(denied.status).toBe(403);
+    expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:create', `pages:view:${pageProjectId}`];
+    const allowed = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(allowed.status).toBe(201);
+    expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+      expect.objectContaining({ upstreamKind: 'pages', pageProjectId }),
+      'user-1',
+      expect.any(Object)
+    );
+  });
+
+  it('returns the standard entitlement denial before creating a Pages Route', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    mocks.scopes = ['proxy:create', `pages:view:${pageProjectId}`];
+    mocks.licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
+        feature: 'pages',
+        requiredPlan: 'personal',
+      })
+    );
+
+    const response = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: '11111111-1111-4111-8111-111111111111',
+        domainNames: ['docs.example.com'],
+        upstreamKind: 'pages',
+        pageProjectId,
+        pageTagId: '33333333-3333-4333-8333-333333333333',
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      details: { feature: 'pages', requiredPlan: 'personal' },
+    });
+    expect(mocks.licensePolicy.requireFeature).toHaveBeenCalledWith('pages');
+    expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
+  });
+
+  it('requires visibility of the current Page Project when editing a Pages Route', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId: pageProjectId },
+    });
+    mocks.scopes = ['proxy:edit:host-1'];
+
+    const denied = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cacheEnabled: true }),
+    });
+    expect(denied.status).toBe(403);
+    expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:edit:host-1', `pages:view:${pageProjectId}`];
+    const allowed = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cacheEnabled: true }),
+    });
+    expect(allowed.status).toBe(200);
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
+  });
+
+  it('allows switching an existing Pages Route to another target after entitlement loss', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId: pageProjectId },
+    });
+    mocks.scopes = ['proxy:edit:host-1', `pages:view:${pageProjectId}`];
+    mocks.licensePolicy.requireFeature.mockRejectedValueOnce(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required')
+    );
+
+    const response = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        upstreamKind: 'manual',
+        forwardHost: 'backend.internal',
+        forwardPort: 8080,
+        forwardScheme: 'http',
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.licensePolicy.requireFeature).not.toHaveBeenCalled();
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
   });
 
   it('passes resource-scoped raw bypass to service when updating raw config', async () => {

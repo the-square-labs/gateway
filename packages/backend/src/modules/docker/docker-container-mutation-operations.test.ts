@@ -3,14 +3,55 @@ import {
   createContainer,
   daemonContainerCreateConfig,
   duplicateContainer,
+  killContainer,
   removeContainer,
   renameContainer,
 } from './docker-container-mutation-operations.js';
 
+describe('killContainer emergency path', () => {
+  it('bypasses lifecycle and managed-container locks and kills by stable name', async () => {
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const ctx = {
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockRejectedValue(new Error('must not run')),
+      resolveContainerName: vi.fn().mockRejectedValue(new Error('container temporarily absent')),
+      requireNoTransition: vi.fn(() => {
+        throw new Error('must not run');
+      }),
+      setTransition: vi.fn(),
+      emitTransition: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      nodeDispatch: { sendDockerContainerCommand },
+      parseResult: vi.fn(),
+      failTask: vi.fn(),
+      watchTransition: vi.fn(),
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+    };
+
+    await expect(killContainer(ctx as never, 'node-1', 'app', 'SIGKILL', 'user-1', 'app')).resolves.toEqual({
+      taskId: 'task-1',
+      containerId: 'app',
+      name: 'app',
+    });
+
+    expect(ctx.resolveContainerName).not.toHaveBeenCalled();
+    expect(ctx.assertNotManagedDeploymentInternal).not.toHaveBeenCalled();
+    expect(ctx.requireNoTransition).not.toHaveBeenCalled();
+    expect(sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'kill', {
+      containerId: 'app',
+      signal: 'SIGKILL',
+      configJson: JSON.stringify({ containerName: 'app', emergency: true }),
+    });
+  });
+});
+
 function unlockedDockerNodeDb() {
   const limit = vi.fn().mockResolvedValue([{ id: 'node-1', type: 'docker', serviceCreationLocked: false }]);
+  const routeLimit = vi.fn().mockResolvedValue([]);
+  const routeWhere = vi.fn(() => ({ limit: routeLimit }));
+  const innerJoin = vi.fn(() => ({ where: routeWhere }));
   const where = vi.fn(() => ({ limit }));
-  const from = vi.fn(() => ({ where }));
+  const from = vi.fn(() => ({ where, innerJoin }));
   return { select: vi.fn(() => ({ from })) };
 }
 

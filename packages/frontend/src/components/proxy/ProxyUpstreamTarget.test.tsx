@@ -23,6 +23,8 @@ describe("ProxyUpstreamTarget", () => {
     const name = screen.getByText("proxy-link-smoke");
     const badge = name.closest("div");
     expect(badge).toHaveClass("bg-muted");
+    expect(name).toHaveClass("min-w-0", "truncate");
+    expect(badge?.querySelector("svg")).toHaveClass("h-3.5", "w-3.5", "shrink-0");
     expect(badge?.querySelector("svg")).toBeInTheDocument();
     expect(screen.queryByText(/gateway-dind/)).not.toBeInTheDocument();
   });
@@ -41,6 +43,34 @@ describe("ProxyUpstreamTarget", () => {
     );
 
     expect(screen.getByText("http://backend.internal:8080").tagName).toBe("SPAN");
+  });
+
+  it("renders a Pages target with the Project appearance color", () => {
+    render(
+      <MemoryRouter>
+        <ProxyUpstreamTarget
+          linkToResource
+          host={{
+            type: "proxy",
+            upstreamKind: "pages",
+            forwardHost: null,
+            forwardPort: null,
+            forwardScheme: "http",
+            pageTarget: {
+              projectName: "Docs",
+              projectSlug: "docs",
+              projectAppearanceColor: "purple",
+              tagName: "production",
+            },
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole("link", { name: "Docs / production" });
+    expect(link).toHaveAttribute("href", "/pages/docs/tags");
+    expect(link.firstElementChild).toHaveClass("bg-violet-500/15");
+    expect(link.querySelector("svg")).toBeInTheDocument();
   });
 
   it("links a Secure Link target badge to the Docker resource when requested", () => {

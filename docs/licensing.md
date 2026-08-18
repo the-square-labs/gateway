@@ -10,6 +10,8 @@ Community is available only for noncommercial purposes permitted by the [PolyFor
 
 The commercial grant begins when the key is issued, continues through its expiration date, and remains in effect for 30 calendar days afterwards. A key without an expiration date grants commercial use while it remains active. Revocation for breach, fraud, chargeback, or refund ends the grant immediately without grace. Neither license permits modification, derivative works, or redistribution.
 
+Entitlements schema version 3 adds the `pages` feature to Personal, Business, and Enterprise grants. Community grants do not include Pages.
+
 ## Plan Positioning
 
 | Plan | Best fit | Scale | Support |
@@ -51,6 +53,7 @@ The commercial grant begins when the key is issued, continues through its expira
 | Cross-Node Container and Deployment Migration | Ready | — | ✅ | ✅ | ✅ |
 | Managed Databases with Secure Links | Ready | — | ✅ | ✅ | ✅ |
 | Public Status Pages | Ready, opt-in | — | ✅ | ✅ | ✅ |
+| Pages | Ready | — | ✅ | ✅ | ✅ |
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
 | Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
 | Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |

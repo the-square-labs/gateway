@@ -75,6 +75,18 @@ export interface AppEnv {
       rawToken: string;
     };
     inferenceAdapter?: 'anthropic' | 'codex' | 'openai';
+    pageDeployAuth?:
+      | { kind: 'user'; userId: string; scopes: string[]; tokenPrefix?: string }
+      | {
+          kind: 'deploy-token';
+          token: {
+            tokenId: string;
+            tokenPrefix: string;
+            projectId: string;
+            allowedTagPatterns: string[];
+            allowUserTag: boolean;
+          };
+        };
     mcpAuth?: {
       tokenId: string;
       tokenPrefix: string;

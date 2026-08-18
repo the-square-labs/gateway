@@ -16,6 +16,7 @@ import type {
   ReorderHostsInput,
   UpdateFolderInput,
 } from './folder.schemas.js';
+import type { PageUpstreamDisplayTarget } from './proxy-upstream-display.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 const logger = createChildLogger('FolderService');
@@ -35,6 +36,7 @@ function toPlainHost(
     dockerDeploymentName?: string | null;
     dockerNodeSlug?: string | null;
     dockerNodeAppearanceColor?: string | null;
+    pageTarget?: PageUpstreamDisplayTarget | null;
   }
 ): Record<string, unknown> {
   const plain: Record<string, unknown> = {};
@@ -46,6 +48,7 @@ function toPlainHost(
   plain.dockerDeploymentName = host.dockerDeploymentName;
   plain.dockerNodeSlug = host.dockerNodeSlug;
   plain.dockerNodeAppearanceColor = host.dockerNodeAppearanceColor;
+  plain.pageTarget = host.pageTarget ?? null;
   let effectiveStatus = host.rawConfigEnabled ? 'disabled' : (host.healthStatus as string);
   if (
     !host.rawConfigEnabled &&

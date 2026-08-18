@@ -248,7 +248,149 @@ message GatewayCommand {
     // the loopback Secure Link listener.
     ProbeProxySecureLinkCommand probe_proxy_secure_link = 40;
     DockerRuntimeCommand docker_runtime = 41;
+    // Gateway Pages v1. Nginx daemon accepts these only as its bounded Pages
+    // runtime, which owns all paths below nginx.pages_root.
+    PagesUploadInitCommand pages_upload_init = 42;
+    PagesUploadChunkCommand pages_upload_chunk = 43;
+    PagesUploadFinalizeCommand pages_upload_finalize = 44;
+    PagesVerifyReleaseCommand pages_verify_release = 45;
+    PagesMaterializePreviewCommand pages_materialize_preview = 46;
+    PagesRemovePreviewCommand pages_remove_preview = 47;
+    PagesActivateTagRouteCommand pages_activate_tag_route = 48;
+    PagesDeactivateTagRouteCommand pages_deactivate_tag_route = 49;
+    PagesCleanupDeploymentCommand pages_cleanup_deployment = 50;
+    PagesInventoryCommand pages_inventory = 51;
+    PagesStoragePreflightCommand pages_storage_preflight = 52;
+    PagesDeployCertificateCommand pages_deploy_certificate = 53;
+    // Gateway Pages runtime configuration v1. These commands only accept
+    // opaque route IDs or validated preview hostnames; the daemon derives all
+    // runtime-config paths below nginx.pages_root.
+    PagesStageRuntimeConfigCommand pages_stage_runtime_config = 54;
+    PagesActivateRuntimeConfigCommand pages_activate_runtime_config = 55;
+    PagesRemoveRuntimeConfigCommand pages_remove_runtime_config = 56;
   }
+}
+
+// Gateway Pages v1 commands intentionally expose no operator-controlled
+// filesystem paths or nginx snippets. IDs are opaque UUIDs and hostnames are
+// DNS names validated by the daemon. The daemon derives all locations from its
+// configured Pages root and its nginx config directory.
+message PagesUploadInitCommand {
+  string upload_id = 1;
+  string deployment_id = 2;
+  int64 expected_size = 3;
+  string sha256 = 4;
+}
+
+message PagesUploadChunkCommand {
+  string upload_id = 1;
+  int64 offset = 2;
+  bytes content = 3;
+}
+
+message PagesUploadFinalizeCommand {
+  string upload_id = 1;
+  string deployment_id = 2;
+}
+
+message PagesVerifyReleaseCommand {
+  string deployment_id = 1;
+  string sha256 = 2;
+}
+
+// Creates or atomically updates the fixed immutable preview server for one
+// stored deployment. profile_id is exactly the v1 singleton `default`.
+// certificate_id and certificate_version are both empty for HTTP-only; when
+// supplied, the config references that immutable certificate version directly.
+message PagesMaterializePreviewCommand {
+  string profile_id = 1;
+  string deployment_id = 2;
+  string hostname = 3;
+  string certificate_id = 4;
+  // Required together with certificate_id. Pages previews deliberately point
+  // at an immutable version, so a failed config switch keeps serving the old
+  // certificate instead of observing a changed current pointer on a later
+  // unrelated reload.
+  string certificate_version = 5;
+}
+
+// Stages and atomically activates a versioned certificate for a Pages-only
+// preview. Gateway obtains version and replica_generation from its existing
+// certificate distribution state. This must be used instead of deploy_cert,
+// whose legacy layout has no current/versions tree.
+message PagesDeployCertificateCommand {
+  string cert_id = 1;
+  bytes cert_pem = 2;
+  bytes key_pem = 3;
+  bytes chain_pem = 4;
+  string version = 5;
+  string replica_generation = 6;
+}
+
+message PagesRemovePreviewCommand {
+  string hostname = 1;
+}
+
+// Writes an atomically switched root fragment that a normal Gateway Route
+// includes from <nginx.config_dir>/pages/routes/<route_id>.inc. The fragment
+// permits the Route to retain its existing TLS, ACL, headers, rewrites and
+// other host-level settings while a Tag moves between immutable deployments.
+// On success CommandResult.data is JSON with the daemon-derived includePath;
+// Gateway validates its fixed /pages/routes/<route UUID>.inc suffix before
+// placing it in a generated host config.
+message PagesActivateTagRouteCommand {
+  string route_id = 1;
+  string deployment_id = 2;
+}
+
+message PagesDeactivateTagRouteCommand {
+  string route_id = 1;
+}
+
+// Deletes a materialized release only after its daemon-owned preview and tag
+// route fragments no longer reference it.
+message PagesCleanupDeploymentCommand {
+  string deployment_id = 1;
+}
+
+message PagesInventoryCommand {}
+
+message PagesStoragePreflightCommand {
+  int64 required_bytes = 1;
+}
+
+enum PagesRuntimeConfigBindingKind {
+  PAGES_RUNTIME_CONFIG_BINDING_KIND_UNSPECIFIED = 0;
+  PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE = 1;
+  PAGES_RUNTIME_CONFIG_BINDING_KIND_PREVIEW = 2;
+}
+
+// Stages one canonical JSON object as an immutable generation for a Route or
+// Preview binding. The daemon validates the object and emits JavaScript itself;
+// callers must never send JavaScript, paths, or nginx syntax.
+message PagesStageRuntimeConfigCommand {
+  PagesRuntimeConfigBindingKind binding_kind = 1;
+  string binding_id = 2;
+  uint64 generation = 3;
+  bytes json = 4;
+}
+
+// Atomically switches a binding's stable current.js to an already staged
+// generation. Activating an older generation is the rollback operation.
+// CommandResult.data contains the daemon-derived stable configPath.
+message PagesActivateRuntimeConfigCommand {
+  PagesRuntimeConfigBindingKind binding_kind = 1;
+  string binding_id = 2;
+  uint64 generation = 3;
+}
+
+// Removes all staged generations and the stable current.js for the binding
+// when generation is zero. A positive generation discards only that staged
+// generation and refuses to remove it when current.js points at it.
+message PagesRemoveRuntimeConfigCommand {
+  PagesRuntimeConfigBindingKind binding_kind = 1;
+  string binding_id = 2;
+  uint64 generation = 3;
 }
 
 message SyncRelayGrantsCommand {

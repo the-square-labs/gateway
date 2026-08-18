@@ -1,10 +1,10 @@
 import { KeyRound } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -29,6 +29,11 @@ export function LicenseUpgradeDialog() {
   const request = useLicensePaywallStore((state) => state.request);
   const close = useLicensePaywallStore((state) => state.close);
   const canManageLicense = useAuthStore((state) => state.hasScope("license:manage"));
+  const [renderedRequest, setRenderedRequest] = useState(request);
+
+  useEffect(() => {
+    if (request) setRenderedRequest(request);
+  }, [request]);
 
   const goToLicense = () => {
     close();
@@ -37,29 +42,39 @@ export function LicenseUpgradeDialog() {
 
   return (
     <Dialog open={request !== null} onOpenChange={(open) => !open && close()}>
-      <DialogContent className="sm:max-w-md">
-        {request ? (
+      <DialogContent
+        aria-describedby={undefined}
+        className="sm:max-w-md"
+        onAnimationEnd={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            event.currentTarget.dataset.state === "closed"
+          ) {
+            setRenderedRequest(null);
+          }
+        }}
+      >
+        {renderedRequest ? (
           <>
             <DialogHeader>
-              <DialogTitle>{planLabel(request.requiredPlan)} plan required</DialogTitle>
-              <DialogDescription>
-                {request.capability} requires the {planLabel(request.requiredPlan)} plan. This
-                Gateway is currently on the {PLAN_LABELS[request.currentPlan]} plan.
-              </DialogDescription>
+              <DialogTitle>{planLabel(renderedRequest.requiredPlan)} plan required</DialogTitle>
             </DialogHeader>
-
-            {request.quota?.limit !== undefined ? (
+            <div className="space-y-3 py-4">
               <p className="text-sm text-muted-foreground">
-                The current plan limit is {request.quota.limit}
-                {request.quota.resource ? ` for ${request.quota.resource}` : ""}.
+                {`${renderedRequest.capability} requires the ${planLabel(renderedRequest.requiredPlan)} plan. This Gateway is currently on the ${PLAN_LABELS[renderedRequest.currentPlan]} plan.`}
               </p>
-            ) : null}
-
-            {!canManageLicense ? (
-              <p className="text-sm text-muted-foreground">
-                Contact your administrator to upgrade the Gateway license.
-              </p>
-            ) : null}
+              {renderedRequest.quota?.limit !== undefined ? (
+                <p className="text-sm text-muted-foreground">
+                  The current plan limit is {renderedRequest.quota.limit}
+                  {renderedRequest.quota.resource ? ` for ${renderedRequest.quota.resource}` : ""}.
+                </p>
+              ) : null}
+              {!canManageLicense ? (
+                <p className="text-sm text-muted-foreground">
+                  Contact your administrator to upgrade the Gateway license.
+                </p>
+              ) : null}
+            </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={close}>

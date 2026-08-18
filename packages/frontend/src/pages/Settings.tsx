@@ -9,6 +9,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { Node } from "@/types";
+import { PagesSettingsSection } from "./pages/PageGlobalSettings";
 import { AIConfigSection } from "./settings/AIConfigSection";
 import { AuthProvisioningSection } from "./settings/AuthProvisioningSection";
 import { DockerRegistriesSection } from "./settings/DockerRegistriesSection";
@@ -61,6 +62,7 @@ export function Settings() {
   const canViewLicense = hasScope("license:view");
   const canManageLicense = hasScope("license:manage");
   const canViewStatusPage = hasScope("status-page:view");
+  const canViewPagesSettings = hasScope("pages:settings:view") || hasScope("pages:settings:edit");
   const canViewIntegrations =
     hasScope("integrations:gitlab:view") ||
     hasScope("integrations:gitlab:manage") ||
@@ -71,7 +73,8 @@ export function Settings() {
     hasScope("integrations:cloudflare:dns:delete");
   const canAccessGeneralTab = canViewGatewaySettings || canUpdate || canViewLicense;
   const canAccessAdvancedTab = canViewGatewaySettings || canManageRegistries;
-  const canAccessFeaturesTab = canViewGatewaySettings || canViewStatusPage || canViewHousekeeping;
+  const canAccessFeaturesTab =
+    canViewGatewaySettings || canViewStatusPage || canViewHousekeeping || canViewPagesSettings;
   const availableTabs = useMemo<SettingsTab[]>(() => {
     const tabs: SettingsTab[] = [];
     if (canAccessGeneralTab) tabs.push("general");
@@ -221,6 +224,7 @@ export function Settings() {
                 {canViewGatewaySettings && (
                   <AuthProvisioningSection canEdit={canEditGatewaySettings} section="features" />
                 )}
+                {canViewPagesSettings && <PagesSettingsSection />}
                 {canViewStatusPage && <StatusPageSection nodesList={nodesList} />}
 
                 {canViewHousekeeping && (

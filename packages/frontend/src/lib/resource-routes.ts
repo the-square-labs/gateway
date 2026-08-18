@@ -6,6 +6,8 @@ export const databaseRoute = (slug: string, tab?: string) =>
   withTab(`/databases/${segment(slug)}`, tab);
 export const proxyHostRoute = (slug: string, tab?: string) =>
   withTab(`/proxy-hosts/${segment(slug)}`, tab);
+export const pageProjectRoute = (slug: string, tab?: string) =>
+  withTab(`/pages/${segment(slug)}`, tab);
 export const loggingEnvironmentRoute = (slug: string, tab?: string) =>
   withTab(`/logging/environments/${segment(slug)}`, tab);
 export const loggingSchemaRoute = (slug: string, tab?: string) =>

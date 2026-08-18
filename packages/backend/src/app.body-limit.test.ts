@@ -126,6 +126,22 @@ describe('request body limits', () => {
     );
   });
 
+  it('uses the Pages chunk limit instead of the global API body limit', async () => {
+    await expectNotPayloadTooLarge(
+      '/api/pages-deploy/uploads/11111111-1111-4111-8111-111111111111/chunks',
+      'PUT',
+      'x'.repeat(1_600_000)
+    );
+  });
+
+  it('rejects Pages upload chunks above 8 MiB before route handling', async () => {
+    await expectPayloadTooLarge(
+      '/api/pages-deploy/uploads/11111111-1111-4111-8111-111111111111/chunks',
+      'PUT',
+      'x'.repeat(8 * 1024 * 1024 + 1)
+    );
+  });
+
   it('uses the larger inference-specific limit instead of the global API limit', async () => {
     await expectNotPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(3_000_000));
   });

@@ -101,8 +101,50 @@ type deploymentCommandPayload struct {
 	Force            bool                               `json:"force"`
 }
 
+type deploymentOperation struct {
+	generation uint64
+	cancel     context.CancelFunc
+	done       chan struct{}
+}
+
+func (p *DockerPlugin) beginDeploymentOperation(deploymentID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.deploymentOpMu.Lock()
+	p.deploymentOpSeq++
+	generation := p.deploymentOpSeq
+	done := make(chan struct{})
+	p.deploymentOps[deploymentID] = deploymentOperation{generation: generation, cancel: cancel, done: done}
+	p.deploymentOpMu.Unlock()
+	return ctx, func() {
+		cancel()
+		p.deploymentOpMu.Lock()
+		if current, ok := p.deploymentOps[deploymentID]; ok && current.generation == generation {
+			delete(p.deploymentOps, deploymentID)
+		}
+		close(done)
+		p.deploymentOpMu.Unlock()
+	}
+}
+
+func (p *DockerPlugin) cancelDeploymentOperationAndWait(deploymentID string, timeout time.Duration) bool {
+	p.deploymentOpMu.Lock()
+	operation, ok := p.deploymentOps[deploymentID]
+	p.deploymentOpMu.Unlock()
+	if !ok {
+		return true
+	}
+	operation.cancel()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-operation.done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, result *pb.CommandResult) {
-	ctx := context.Background()
 	if cmd.ConfigJson == "" && cmd.Action != "inspect" {
 		result.Success = false
 		result.Error = "config_json is required"
@@ -126,6 +168,19 @@ func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, 
 	if cmd.Force {
 		payload.Force = true
 	}
+
+	ctx := context.Background()
+	finishOperation := func() {}
+	if cmd.Action == "kill" {
+		if !p.cancelDeploymentOperationAndWait(payload.DeploymentID, emergencyKillCancellationTimeout) {
+			result.Success = false
+			result.Error = "timed out cancelling the active deployment operation"
+			return
+		}
+	} else if cmd.Action != "inspect" {
+		ctx, finishOperation = p.beginDeploymentOperation(payload.DeploymentID)
+	}
+	defer finishOperation()
 
 	var detail any
 	var err error

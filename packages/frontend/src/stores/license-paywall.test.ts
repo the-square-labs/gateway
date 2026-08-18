@@ -44,6 +44,22 @@ describe("license paywall store", () => {
     expect(useLicensePaywallStore.getState().request).toBeNull();
   });
 
+  it("opens the shared dialog when Pages requires Personal+", () => {
+    setLicense("community", []);
+
+    expect(requireLicenseFeature("pages", "Pages")).toBe(false);
+    expect(useLicensePaywallStore.getState().request).toEqual({
+      capability: "Pages",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+
+    setLicense("business", ["pages"]);
+    useLicensePaywallStore.setState({ request: null });
+    expect(requireLicenseFeature("pages", "Pages")).toBe(true);
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+  });
+
   it("translates a structured quota denial into the same dialog state", () => {
     setLicense("community", []);
     const error = new ApiRequestError("quota reached", {

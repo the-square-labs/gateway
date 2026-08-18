@@ -1,5 +1,5 @@
 export const LICENSE_SERVER_URL = 'https://license.wiolett.cloud';
-export const LICENSE_ENTITLEMENTS_VERSION = 2;
+export const LICENSE_ENTITLEMENTS_VERSION = 3;
 export const LICENSE_OFFLINE_GRACE_DAYS = 30;
 export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -148,6 +148,7 @@ const PERSONAL_FEATURES = [
   'managed-databases',
   'status-pages',
   'registry-discovery',
+  'pages',
 ] as const;
 
 const BUSINESS_FEATURES = [

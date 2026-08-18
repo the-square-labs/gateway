@@ -4,6 +4,7 @@ import { container } from '@/container.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
 import {
+  DockerAccessResourceService,
   dockerChildScopeResourceId,
   dockerScopedNodeIds,
   hasDockerResourceScope,
@@ -31,9 +32,26 @@ export function assertDockerNodeScope(scopes: string[], baseScope: string, nodeI
   }
 }
 
+export async function resolveDockerContainerScopeResourceId(
+  inspect: () => Promise<{ scopeResourceId?: unknown }>,
+  transitionFallback?: {
+    active: () => boolean;
+    resolvePersisted: () => Promise<string | null>;
+  }
+): Promise<string> {
+  try {
+    const data = await inspect();
+    return String(data?.scopeResourceId ?? '');
+  } catch (error) {
+    if (!transitionFallback?.active()) throw error;
+    return (await transitionFallback.resolvePersisted()) ?? '';
+  }
+}
+
 export function requireDockerContainerScope(
   baseScope: string,
-  identifierParam = 'containerId'
+  identifierParam = 'containerId',
+  options: { allowTransitionIdentityFallback?: boolean } = {}
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const scopes = c.get('effectiveScopes') ?? [];
@@ -45,8 +63,17 @@ export function requireDockerContainerScope(
       return;
     }
 
-    const data = await container.resolve(DockerManagementService).inspectContainer(nodeId, identifier);
-    const resourceId = String(data?.scopeResourceId ?? '');
+    const service = container.resolve(DockerManagementService);
+    const resourceId = await resolveDockerContainerScopeResourceId(
+      () => service.inspectContainer(nodeId, identifier),
+      options.allowTransitionIdentityFallback
+        ? {
+            active: () => Boolean(service.getContainerTransition(nodeId, identifier)),
+            resolvePersisted: () =>
+              container.resolve(DockerAccessResourceService).resolveContainer(nodeId, { name: identifier }),
+          }
+        : undefined
+    );
     if (!resourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope);
     await next();
   };

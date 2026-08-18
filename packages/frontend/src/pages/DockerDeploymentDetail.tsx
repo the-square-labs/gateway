@@ -419,6 +419,9 @@ export function DockerDeploymentDetail({
         ? "running"
         : activeState
       : (deployment?.status ?? activeState));
+  const canEmergencyKill = !["created", "exited", "offline"].includes(
+    String(serviceState).toLowerCase()
+  );
   const isRunning = activeState === "running";
   const isStopped = deployment?.status === "stopped" || !isRunning;
   const isTerminalTab = activeTab === "logs" || activeTab === "console";
@@ -621,7 +624,7 @@ export function DockerDeploymentDetail({
           },
         ]
       : []),
-    ...(!isStopped && canManage
+    ...(canManage
       ? [
           {
             label: "Kill",
@@ -631,9 +634,10 @@ export function DockerDeploymentDetail({
                 await api.killDockerDeployment(nodeId, deployment.id);
                 toast.success("Deployment killed");
               }),
-            disabled: actionDisabled,
+            disabled: unavailable || !canEmergencyKill,
             destructive: true,
             separatorBefore: !drainingSlot?.containerId,
+            priority: HEADER_ACTION_PRIORITY.emergency,
           },
         ]
       : []),

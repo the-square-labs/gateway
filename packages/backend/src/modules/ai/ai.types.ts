@@ -162,6 +162,7 @@ export const AI_RESOURCE_REFERENCE_TYPES = [
   'docker_network',
   'docker_registry',
   'database',
+  'page_project',
   'logging_environment',
   'logging_schema',
   'status_page_service',

@@ -24,6 +24,7 @@ import type {
   RewriteRule,
   SSLCertificate,
 } from "@/types";
+import { AdditionalRoutesPanel } from "./AdditionalRoutes";
 import { AdditionalSecureLinkBindings } from "./AdditionalSecureLinkBindings";
 
 const tableInputClass =
@@ -372,6 +373,14 @@ export function SettingsTab({
 
       {host.type === "proxy" && (
         <ProxyUpstreamPanel host={host} canManage={canManage} onUpdated={onHostUpdated} />
+      )}
+
+      {host.type === "proxy" && (
+        <AdditionalRoutesPanel
+          host={host}
+          canManage={canManage}
+          selectedTemplate={selectedTemplate}
+        />
       )}
 
       {host.type === "proxy" && !host.rawConfigEnabled ? (

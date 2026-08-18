@@ -47,8 +47,8 @@ const configSnapshot = { ...nodeSnapshot, data: configData };
 const statusPageSnapshot = { ...nodeSnapshot, data: { enabled: true } };
 const cloudflareSnapshot = { ...nodeSnapshot, data: true };
 const license = {
-  status: 'community' as const,
-  plan: 'community' as const,
+  status: 'active' as const,
+  plan: 'personal' as const,
   licensed: true,
   expiresAt: null,
   graceUntil: null,
@@ -58,8 +58,8 @@ const license = {
     managedNodes: 100,
     users: 10,
     customPermissionGroups: 5,
-    supportLevel: 'community',
-    features: ['infrastructure'],
+    supportLevel: 'personal',
+    features: ['infrastructure', 'pages'],
   },
 };
 
@@ -85,6 +85,7 @@ function makeService() {
   const aiSettings = { isEnabled: vi.fn(async () => true) };
   const finalizeSetup = { isOwner: vi.fn(async () => false) };
   const licensePolicy = { getSummary: vi.fn(async () => license) };
+  const pageProfile = { isEnabled: vi.fn(async () => true) };
   return {
     service: new UIBootstrapService(
       snapshots as never,
@@ -98,13 +99,15 @@ function makeService() {
       aiRuntime as never,
       aiSettings as never,
       finalizeSetup as never,
-      licensePolicy as never
+      licensePolicy as never,
+      pageProfile as never
     ),
     coordinator,
     updates,
     aiRuntime,
     statusPage,
     integrations,
+    licensePolicy,
   };
 }
 
@@ -116,6 +119,7 @@ describe('UIBootstrapService', () => {
       'docker:containers:view:node-docker',
       'feat:ai:use',
       'status-page:view',
+      'pages:view',
     ];
 
     const shell = await service.getShell({ id: 'user-1', scopes } as never, scopes);
@@ -126,6 +130,7 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.hasNginxNodes).toBe(true);
     expect(shell.navigation.hasCloudflareIntegration).toBe(true);
     expect(shell.navigation.statusPageEnabled).toBe(true);
+    expect(shell.navigation.pagesEnabled).toBe(true);
     expect(shell.navigation.nodes.data.map((node) => node.id)).toEqual(['node-nginx']);
     expect(shell.navigation.dockerNodes.map((node) => node.id)).toEqual(['node-docker']);
     expect(shell.systemConfig.publicUrl).toBe('https://gateway.example.com');
@@ -150,9 +155,28 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.hasNginxNodes).toBe(true);
     expect(shell.navigation.hasCloudflareIntegration).toBe(true);
     expect(shell.navigation.statusPageEnabled).toBe(false);
+    expect(shell.navigation.pagesEnabled).toBe(false);
     expect(shell.navigation.dockerNodes).toEqual([]);
     expect(updates.getCachedStatus).not.toHaveBeenCalled();
     expect(aiRuntime.statusForUser).not.toHaveBeenCalled();
+  });
+
+  it('hides Pages navigation when the persisted profile is enabled without the entitlement', async () => {
+    const { service, licensePolicy } = makeService();
+    licensePolicy.getSummary.mockResolvedValue({
+      ...license,
+      status: 'community',
+      plan: 'community',
+      entitlements: {
+        ...license.entitlements,
+        supportLevel: 'community',
+        features: ['infrastructure'],
+      },
+    } as never);
+
+    const shell = await service.getShell({ id: 'user-1', scopes: ['pages:view'] } as never, ['pages:view']);
+
+    expect(shell.navigation.pagesEnabled).toBe(false);
   });
 
   it('rebuilds a cold shell from safe persisted sources without waiting for managed resources', async () => {

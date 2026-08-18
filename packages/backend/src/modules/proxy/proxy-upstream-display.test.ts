@@ -62,4 +62,50 @@ describe('attachDockerUpstreamDisplay', () => {
 
     expect(result?.secureLinkActive).toBe(false);
   });
+
+  it('attaches the Page Project, Tag, and appearance color to a Pages Route', async () => {
+    const pageTarget = {
+      proxyHostId: 'host-1',
+      projectId: 'project-1',
+      projectName: 'Docs',
+      projectSlug: 'docs',
+      projectAppearanceColor: 'purple',
+      tagId: 'tag-1',
+      tagName: 'production',
+      deploymentId: 'deployment-1',
+      status: 'ready',
+      generation: 2,
+      lastErrorCode: null,
+    };
+    const where = vi.fn().mockResolvedValue([pageTarget]);
+    const secondJoin = vi.fn(() => ({ where }));
+    const firstJoin = vi.fn(() => ({ innerJoin: secondJoin }));
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ innerJoin: firstJoin })) })),
+    } as any;
+
+    const [result] = await attachDockerUpstreamDisplay(db, [
+      {
+        id: 'host-1',
+        upstreamKind: 'pages',
+        dockerNodeId: null,
+        dockerDeploymentId: null,
+        forwardHost: null,
+        forwardPort: null,
+      },
+    ]);
+
+    expect(result?.pageTarget).toEqual({
+      projectId: 'project-1',
+      projectName: 'Docs',
+      projectSlug: 'docs',
+      projectAppearanceColor: 'purple',
+      tagId: 'tag-1',
+      tagName: 'production',
+      deploymentId: 'deployment-1',
+      status: 'ready',
+      generation: 2,
+      lastErrorCode: null,
+    });
+  });
 });

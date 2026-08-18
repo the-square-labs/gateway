@@ -42,6 +42,68 @@ describe("api client contract", () => {
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "POST", credentials: "include" });
   });
 
+  it("uses the Pages project runtime-config routes", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: { default: {}, overrides: [], tags: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse({ data: {} }))
+      .mockResolvedValueOnce(jsonResponse({ data: {} }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const update = { source: "project", expectedGeneration: 1 };
+
+    await api.getPageRuntimeConfigs("project-1");
+    await api.updatePageRuntimeConfigDefault("project-1", update);
+    await api.updatePageRuntimeConfigTag("project-1", "tag-1", update);
+    await api.deletePageRuntimeConfigTag("project-1", "tag-1", 1);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages/project-1/runtime-configs");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/pages/project-1/runtime-configs/default");
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/pages/project-1/runtime-configs/tags/tag-1");
+    expect(fetchMock.mock.calls[4]?.[0]).toBe("/api/pages/project-1/runtime-configs/tags/tag-1");
+  });
+
+  it("uploads a manual Pages build through the resumable deployment API", async () => {
+    const deployment = { id: "deployment-1", projectId: "project-1", status: "ready" };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            deployment: { ...deployment, status: "uploading" },
+            upload: { id: "upload-1", offset: 0, expiresAt: "2026-08-19T00:00:00.000Z" },
+          },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: { offset: 7, complete: true } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { deployment } }));
+    const progress = vi.fn();
+
+    await expect(
+      api.uploadPageBuild(
+        "project-1",
+        new File(["archive"], "site.tar.gz", { type: "application/gzip" }),
+        "a".repeat(64),
+        "staging",
+        progress
+      )
+    ).resolves.toEqual(deployment);
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages-deploy/deployments");
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      projectId: "project-1",
+      declaredSizeBytes: 7,
+      sha256: "a".repeat(64),
+      tag: "staging",
+      source: { provider: "manual" },
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/pages-deploy/uploads/upload-1/chunks");
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit).body).toBeInstanceOf(Blob);
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/pages-deploy/uploads/upload-1/finalize");
+    expect(progress).toHaveBeenLastCalledWith(100, "finalizing");
+  });
+
   it("marks only focused node monitoring streams as focused", () => {
     const eventSource = vi.fn(function EventSourceMock() {
       return { close: vi.fn() };

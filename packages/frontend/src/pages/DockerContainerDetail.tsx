@@ -690,7 +690,7 @@ export function DockerContainerDetail({
   const name = containerDisplayName(container?.Name ?? "");
   const baseState = container?.State?.Status ?? (container?.State?.Running ? "running" : "stopped");
   const state = effectiveTransition ?? baseState;
-  const lifecycleActions = containerLifecycleActions(baseState);
+  const lifecycleActions = containerLifecycleActions(state);
   const image = container ? resolveContainerImageReference(container) : "";
   const unavailable = container?.availability === "unavailable";
   const actionDisabled = actionLoading || !!effectiveTransition || unavailable;
@@ -857,16 +857,17 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(lifecycleActions.canKill && canManage
+    ...(canManage
       ? [
           {
             label: "Kill",
             icon: <Skull className="h-4 w-4" />,
             onClick: () =>
-              doAction(() => api.killContainer(nodeId!, containerId!), "Container killed"),
-            disabled: actionDisabled,
+              doAction(() => api.killContainer(nodeId!, containerName), "Container killed"),
+            disabled: unavailable || !lifecycleActions.canKill,
             destructive: true,
             separatorBefore: true,
+            priority: HEADER_ACTION_PRIORITY.emergency,
           },
         ]
       : []),
@@ -878,7 +879,7 @@ export function DockerContainerDetail({
             onClick: handleRemove,
             disabled: actionDisabled,
             destructive: true,
-            separatorBefore: !lifecycleActions.canKill || !canManage,
+            separatorBefore: !canManage,
           },
         ]
       : []),

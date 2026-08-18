@@ -1,0 +1,1 @@
+ALTER TABLE "page_projects" ADD COLUMN "appearance_color" varchar(32);

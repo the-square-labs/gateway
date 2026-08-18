@@ -1,0 +1,1 @@
+ALTER TABLE "proxy_additional_routes" ADD COLUMN "runtime_config_path" text;

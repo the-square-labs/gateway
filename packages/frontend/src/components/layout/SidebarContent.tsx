@@ -100,6 +100,9 @@ export function SidebarContent({
   const statusPageEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.statusPageEnabled ?? false
   );
+  const pagesEnabled = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.pagesEnabled ?? false
+  );
   const hasCloudflareIntegration = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
   );
@@ -253,6 +256,7 @@ export function SidebarContent({
     inferenceEnabled,
     hasLowInferenceUsage: hasLowInferenceUsage(dashboardBootstrap?.inferenceUsage ?? null),
     statusPageEnabled,
+    pagesEnabled,
     hasCloudflareIntegration,
     hasNginxNodes,
     hasDockerNodes:

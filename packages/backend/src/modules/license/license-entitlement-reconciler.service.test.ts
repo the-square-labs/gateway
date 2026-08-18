@@ -24,33 +24,51 @@ function makeServices(features: string[]) {
     snapshot: vi.fn(async () => ({ mode: 'external' })),
     update: vi.fn(async () => undefined),
   };
+  const pages = {
+    disableForEntitlementLoss: vi.fn(async () => undefined),
+  };
   const eventBus = new EventBusService();
+  const reconciler = new LicenseEntitlementReconcilerService(
+    policy as never,
+    settings as never,
+    logging as never,
+    eventBus
+  );
+  reconciler.setPageProfileService(pages as never);
   return {
-    reconciler: new LicenseEntitlementReconcilerService(policy as never, settings as never, logging as never, eventBus),
+    reconciler,
     policy,
     settings,
     logging,
+    pages,
     eventBus,
   };
 }
 
 describe('LicenseEntitlementReconcilerService', () => {
   it('disables PKI, SIEM, and structured logging without clearing their stored configuration', async () => {
-    const { reconciler, settings, logging } = makeServices([]);
+    const { reconciler, settings, logging, pages } = makeServices([]);
 
     await reconciler.reconcile();
 
     expect(settings.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false, siemEnabled: false } });
     expect(logging.update).toHaveBeenCalledWith({ mode: 'disabled' });
+    expect(pages.disableForEntitlementLoss).toHaveBeenCalledOnce();
   });
 
   it('never auto-enables switchable features when entitlements return', async () => {
-    const { reconciler, settings, logging } = makeServices(['internal-pki', 'siem-export', 'structured-logging']);
+    const { reconciler, settings, logging, pages } = makeServices([
+      'internal-pki',
+      'siem-export',
+      'structured-logging',
+      'pages',
+    ]);
 
     await reconciler.reconcile();
 
     expect(settings.updateConfig).not.toHaveBeenCalled();
     expect(logging.update).not.toHaveBeenCalled();
+    expect(pages.disableForEntitlementLoss).not.toHaveBeenCalled();
   });
 
   it('reconciles changes published through the existing notification event bus', async () => {

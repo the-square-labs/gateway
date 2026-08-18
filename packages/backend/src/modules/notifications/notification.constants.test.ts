@@ -181,6 +181,65 @@ describe('evaluateWindowRatio', () => {
     expect(mapping.extractData).toBeUndefined();
   });
 
+  it('maps Pages failures to Project resources and redacts unsafe payload fields', () => {
+    const category = ALERT_CATEGORIES.find((candidate) => candidate.id === 'pages');
+    const mapping = EVENT_BUS_MAPPINGS['pages.deployment.changed'].find(
+      (candidate) => candidate.eventId === 'deployment.failed'
+    );
+    const payload = {
+      projectId: 'project-1',
+      projectName: 'Docs',
+      publicSlug: 'abc234def567ghij',
+      status: 'failed',
+      failureCode: 'archive_invalid',
+      rawError: 'token=secret',
+      archivePath: '/var/lib/gateway/pages/private.tar.gz',
+      deployToken: 'pages-secret',
+    };
+
+    expect(category?.events.map((event) => event.id)).toEqual(
+      expect.arrayContaining([
+        'deployment.ready',
+        'deployment.failed',
+        'publication.failed',
+        'quota.blocked',
+        'profile.unavailable',
+        'capability.missing',
+        'migration.failed',
+        'migration.needs_attention',
+        'cleanup.needs_attention',
+      ])
+    );
+    expect(mapping?.match(payload)).toBe(true);
+    expect(mapping?.extractResource(payload)).toEqual({ type: 'page_project', id: 'project-1', name: 'Docs' });
+    expect(mapping?.extractData?.(payload)).toEqual({
+      public_slug: 'abc234def567ghij',
+      failure_code: 'archive_invalid',
+      operation_kind: 'deployment',
+      operation_phase: 'failed',
+    });
+    expect(JSON.stringify(mapping?.extractData?.(payload))).not.toMatch(/secret|archivePath|rawError|deployToken/);
+  });
+
+  it('requires a Project identity before Pages profile and migration events enter notification rules', () => {
+    const profile = EVENT_BUS_MAPPINGS['pages.profile.changed'].find(
+      (candidate) => candidate.eventId === 'profile.unavailable'
+    );
+    const migration = EVENT_BUS_MAPPINGS['pages.migration.changed'].find(
+      (candidate) => candidate.eventId === 'migration.failed'
+    );
+
+    expect(profile?.match({ action: 'profile.unavailable' })).toBe(false);
+    expect(profile?.match({ action: 'profile.unavailable', projectId: 'project-1' })).toBe(true);
+    expect(profile?.extractResource({ projectId: 'project-1', projectName: 'Docs' })).toEqual({
+      type: 'page_project',
+      id: 'project-1',
+      name: 'Docs',
+    });
+    expect(migration?.match({ status: 'failed' })).toBe(false);
+    expect(migration?.match({ status: 'failed', projectId: 'project-1' })).toBe(true);
+  });
+
   it('projects license grace and downgrade transitions onto the notification bus', () => {
     const mapping = EVENT_BUS_MAPPINGS['system.license.changed'][0];
     const payload = {

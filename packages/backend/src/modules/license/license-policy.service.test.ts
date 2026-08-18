@@ -16,7 +16,7 @@ const baseStatus = (): LicenseStatusView => ({
   installationId: 'installation-id',
   installationName: 'gateway.example.com',
   expiresAt: null,
-  entitlementsVersion: 2,
+  entitlementsVersion: 3,
   entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
   lastCheckedAt: null,
   lastValidAt: null,
@@ -52,6 +52,19 @@ describe('LicensePolicyService', () => {
     const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
 
     await expect(policy.requireFeature('secure-runtime')).resolves.toBeUndefined();
+  });
+
+  it('includes Pages in the canonical Personal entitlement set', async () => {
+    const personal = baseStatus();
+    personal.plan = 'personal';
+    personal.status = 'valid';
+    personal.entitlements = LICENSE_PLAN_ENTITLEMENTS.personal;
+    const personalPolicy = new LicensePolicyService({ getStatus: vi.fn(async () => personal) } as never);
+    await expect(personalPolicy.requireFeature('pages')).resolves.toBeUndefined();
+    expect(LICENSE_PLAN_ENTITLEMENTS.community.features).not.toContain('pages');
+    expect(LICENSE_PLAN_ENTITLEMENTS.personal.features).toContain('pages');
+    expect(LICENSE_PLAN_ENTITLEMENTS.business.features).toContain('pages');
+    expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('pages');
   });
 
   it('returns the structured quota error at the effective limit', async () => {
@@ -104,6 +117,6 @@ describe('LicensePolicyService', () => {
     expect(summary).not.toHaveProperty('licenseMetadata');
     expect(summary).not.toHaveProperty('keyLast4');
     expect(summary).not.toHaveProperty('installationId');
-    expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 2 });
+    expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 3 });
   });
 });

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
-import { __testOnly } from './nginx-certificate-distribution.service.js';
+import { describe, expect, it, vi } from 'vitest';
+import { __testOnly, NginxCertificateDistributionService } from './nginx-certificate-distribution.service.js';
 
 describe('NginxCertificateDistributionService helpers', () => {
   it('uses deterministic nodeId ordering for legacy canonical-source selection', () => {
@@ -61,5 +61,48 @@ describe('NginxCertificateDistributionService helpers', () => {
     const failedCleanup = { nodeId: 'node-stale', status: 'failed' as const, cleanupAfter: new Date() };
 
     expect(__testOnly.deployedReplicasOnly([active, cleanup, failedCleanup])).toEqual([active]);
+  });
+
+  it('deploys a Pages-only certificate as an immutable versioned replica', async () => {
+    const sendPagesCommand = vi.fn().mockResolvedValue({});
+    const service = new NginxCertificateDistributionService(
+      {} as never,
+      {} as never,
+      {} as never,
+      { sendPagesCommand } as never
+    );
+    vi.spyOn(service, 'prepareForHost').mockResolvedValue({
+      assetId: 'asset-1',
+      nodeId: 'node-1',
+      daemonCertId: '11111111-1111-4111-8111-111111111111',
+      version: 'a'.repeat(64),
+      replicaGeneration: '7',
+      fingerprint: 'b'.repeat(64),
+      certificatePem: Buffer.from('cert'),
+      keyPem: Buffer.from('key'),
+      chainPem: Buffer.from('chain'),
+      sslCertPath: null,
+      sslKeyPath: null,
+      sslChainPath: null,
+    });
+    const markReplica = vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(undefined);
+
+    await expect(service.deployForPages('node-1', '11111111-1111-4111-8111-111111111111')).resolves.toEqual({
+      certificateId: '11111111-1111-4111-8111-111111111111',
+      certificateVersion: 'a'.repeat(64),
+    });
+    expect(sendPagesCommand).toHaveBeenCalledWith('node-1', {
+      pagesDeployCertificate: expect.objectContaining({
+        version: 'a'.repeat(64),
+        replicaGeneration: '7',
+        certPem: Buffer.from('cert'),
+        keyPem: Buffer.from('key'),
+      }),
+    });
+    expect(markReplica).toHaveBeenCalledWith(
+      'asset-1',
+      'node-1',
+      expect.objectContaining({ status: 'ready', appliedVersion: 'a'.repeat(64) })
+    );
   });
 });

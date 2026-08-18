@@ -1017,4 +1017,78 @@ describe('events websocket authentication', () => {
 
     handlers.onClose(new Event('close'), ws as any);
   });
+
+  it('filters Pages lifecycle events by Page Project ID', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['pages:view:project-visible'] },
+      effectiveScopes: ['pages:view:project-visible'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['pages.deployment.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['pages.deployment.changed'], rejected: [] })
+    );
+    eventBus.publish('pages.deployment.changed', {
+      id: 'hidden-deployment',
+      scopeResourceId: 'project-hidden',
+      action: 'ready',
+    });
+    eventBus.publish('pages.deployment.changed', {
+      id: 'visible-deployment',
+      scopeResourceId: 'project-visible',
+      action: 'ready',
+    });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('hidden-deployment'));
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('visible-deployment'));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('keeps global Pages profile and folder events on their dedicated scopes', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['pages:folders:manage'] },
+      effectiveScopes: ['pages:folders:manage'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'subscribe',
+          channels: ['pages.folder.changed', 'pages.profile.changed', 'pages.project.changed'],
+        }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'subscribed',
+        channels: ['pages.folder.changed'],
+        rejected: ['pages.profile.changed', 'pages.project.changed'],
+      })
+    );
+    eventBus.publish('pages.folder.changed', { action: 'folders_reordered' });
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'event', channel: 'pages.folder.changed', payload: { action: 'folders_reordered' } })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
 });

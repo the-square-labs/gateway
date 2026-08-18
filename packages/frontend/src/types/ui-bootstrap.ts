@@ -31,6 +31,7 @@ export interface UIBootstrapShell {
     hasNginxNodes: boolean;
     hasCloudflareIntegration: boolean;
     statusPageEnabled: boolean;
+    pagesEnabled: boolean;
     dockerNodes: Node[];
     nodes: ReadModelSnapshot<Node[]>;
   };

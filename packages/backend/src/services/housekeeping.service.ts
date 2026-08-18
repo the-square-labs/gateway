@@ -143,6 +143,9 @@ type DeepPartial<T> = {
 
 export class HousekeepingService {
   private running = false;
+  private pagesMaintenanceService?: {
+    run(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }>;
+  };
 
   constructor(
     private readonly db: DrizzleClient,
@@ -150,6 +153,10 @@ export class HousekeepingService {
     readonly _nodeDispatch: NodeDispatchService,
     readonly _env: Env
   ) {}
+
+  setPagesMaintenanceService(service: { run(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> }): void {
+    this.pagesMaintenanceService = service;
+  }
 
   // ── Config ──────────────────────────────────────────────────────
 
@@ -337,6 +344,10 @@ export class HousekeepingService {
 
     try {
       const config = await this.getConfig();
+
+      if (this.pagesMaintenanceService) {
+        categories.push(await this.runCategory('Pages', () => this.pagesMaintenanceService!.run()));
+      }
 
       if (config.nginxLogs.enabled) {
         categories.push(

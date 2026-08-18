@@ -19,6 +19,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
+	"github.com/wiolett-industries/gateway/nginx-daemon/internal/pages"
 )
 
 // acmeTokenRegex validates ACME challenge tokens (alphanumeric + dash + underscore).
@@ -41,15 +42,17 @@ func isValidCertificateID(s string) bool {
 }
 
 type Handler struct {
-	cfg             *config.Config
-	mgr             *nginx.Manager
-	state           *sharedstate.State
-	logger          *slog.Logger
-	secureLinkState *securelink.StateStore
+	cfg                         *config.Config
+	mgr                         *nginx.Manager
+	state                       *sharedstate.State
+	logger                      *slog.Logger
+	secureLinkState             *securelink.StateStore
+	pagesRuntime                *pages.Runtime
+	pagesRuntimeConfigAvailable bool
 }
 
-func NewHandler(cfg *config.Config, mgr *nginx.Manager, st *sharedstate.State, logger *slog.Logger, secureLinkState *securelink.StateStore) *Handler {
-	return &Handler{cfg: cfg, mgr: mgr, state: st, logger: logger, secureLinkState: secureLinkState}
+func NewHandler(cfg *config.Config, mgr *nginx.Manager, st *sharedstate.State, logger *slog.Logger, secureLinkState *securelink.StateStore, pagesRuntime *pages.Runtime, pagesRuntimeConfigAvailable bool) *Handler {
+	return &Handler{cfg: cfg, mgr: mgr, state: st, logger: logger, secureLinkState: secureLinkState, pagesRuntime: pagesRuntime, pagesRuntimeConfigAvailable: pagesRuntimeConfigAvailable}
 }
 
 const (
@@ -115,6 +118,36 @@ func (h *Handler) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 		h.handleReadGlobalConfig(result)
 	case *pb.GatewayCommand_RequestTrafficStats:
 		h.handleRequestTrafficStats(payload.RequestTrafficStats, result)
+	case *pb.GatewayCommand_PagesUploadInit:
+		h.handlePagesUploadInit(payload.PagesUploadInit, result)
+	case *pb.GatewayCommand_PagesUploadChunk:
+		h.handlePagesUploadChunk(payload.PagesUploadChunk, result)
+	case *pb.GatewayCommand_PagesUploadFinalize:
+		h.handlePagesUploadFinalize(payload.PagesUploadFinalize, result)
+	case *pb.GatewayCommand_PagesVerifyRelease:
+		h.handlePagesVerifyRelease(payload.PagesVerifyRelease, result)
+	case *pb.GatewayCommand_PagesMaterializePreview:
+		h.handlePagesMaterializePreview(payload.PagesMaterializePreview, result)
+	case *pb.GatewayCommand_PagesRemovePreview:
+		h.handlePagesRemovePreview(payload.PagesRemovePreview, result)
+	case *pb.GatewayCommand_PagesActivateTagRoute:
+		h.handlePagesActivateTagRoute(payload.PagesActivateTagRoute, result)
+	case *pb.GatewayCommand_PagesDeactivateTagRoute:
+		h.handlePagesDeactivateTagRoute(payload.PagesDeactivateTagRoute, result)
+	case *pb.GatewayCommand_PagesCleanupDeployment:
+		h.handlePagesCleanupDeployment(payload.PagesCleanupDeployment, result)
+	case *pb.GatewayCommand_PagesInventory:
+		h.handlePagesInventory(result)
+	case *pb.GatewayCommand_PagesStoragePreflight:
+		h.handlePagesStoragePreflight(payload.PagesStoragePreflight, result)
+	case *pb.GatewayCommand_PagesDeployCertificate:
+		h.handlePagesDeployCertificate(payload.PagesDeployCertificate, result)
+	case *pb.GatewayCommand_PagesStageRuntimeConfig:
+		h.handlePagesStageRuntimeConfig(payload.PagesStageRuntimeConfig, result)
+	case *pb.GatewayCommand_PagesActivateRuntimeConfig:
+		h.handlePagesActivateRuntimeConfig(payload.PagesActivateRuntimeConfig, result)
+	case *pb.GatewayCommand_PagesRemoveRuntimeConfig:
+		h.handlePagesRemoveRuntimeConfig(payload.PagesRemoveRuntimeConfig, result)
 	default:
 		result.Success = false
 		result.Error = "unknown command type"

@@ -65,7 +65,8 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
   {
     id: 'system:infrastructure-operations',
     name: 'Infrastructure operations',
-    description: 'Inspect and operate Gateway resources, Docker, databases, logging, domains, certificates, and nodes.',
+    description:
+      'Inspect and operate Gateway resources, Docker, managed databases, Pages, ingress, logging, domains, certificates, and nodes.',
     source: 'system',
     enabled: true,
     createdAt: null,
@@ -87,7 +88,9 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 - Public Docker Hub images need no saved registry. On the selected Docker node, inspect image availability and pull the image before creation when absent; do not use a failed create as an image-existence probe.
 - For new or changed Docker mounts, use only existing Gateway-managed volumes and never propose a host bind path. An unchanged legacy mount may be preserved, but it cannot be reintroduced after removal; legacy-volume adoption is an explicit UI action.
 - Choose the Secure Docker profile only when the node reports a healthy Secure Runtime capability. Never pair Secure with GPU or device attachments; explain its migration and archive-export limits and direct administrators to Node Details when setup is required.
-- Managed databases remain private by default. Connect applications through a managed binding/connector tunnel, verify readiness and binding health, and never expose generated credentials or connection URIs in chat, notifications, or logs.
+- Managed databases remain private by default. Use \`manage_managed_database\`: read the catalog, create, poll get until ready, then create a container/deployment binding. It also supports update, restart, pause/unpause, and certificate rotation. Verify binding health and never expose generated credentials or connection URIs in chat, notifications, or logs.
+- Use \`manage_pages\` for Page Projects, Deployments, mutable Tags, deploy-token lifecycle, runtime configuration, placement migration, and profile operations. Artifact bytes still use the resumable deploy API. Routes target ready Tags, never immutable Deployments. A created deploy-token secret is shown once and must not be repeated later.
+- Use \`manage_additional_route\` for managed path-prefix locations. Docker targets own an automatically provisioned Secure Link binding; update or delete it through the route. Use \`manage_additional_secure_link\` only for independent bindings referenced by advanced nginx config, and never independently delete a route-owned binding.
 - PKI Certificates and SSL Certificates are separate stores. Issue or locate the PKI certificate, link it into the SSL store, and use the returned SSL certificate ID for a proxy host. SAN values are plain DNS names or IPs without DNS:/IP: prefixes.
 - For nodes, distinguish enrollment, daemon connectivity, capability, and workload health. An enrolled but offline node is not a valid placement target; resolve enrollment or relay state before continuing.
 - For proxy, domain, or certificate work, verify the complete public path that is in scope: DNS target, proxy/node assignment, certificate attachment, configuration validity/reload, and an appropriate reachability or TLS check.`,

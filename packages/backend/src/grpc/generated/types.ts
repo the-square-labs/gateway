@@ -225,6 +225,107 @@ export interface GatewayCommand {
   syncRelayGrants?: SyncRelayGrantsCommand;
   syncProxySecureLinks?: SyncProxySecureLinksCommand;
   probeProxySecureLink?: ProbeProxySecureLinkCommand;
+  pagesUploadInit?: PagesUploadInitCommand;
+  pagesUploadChunk?: PagesUploadChunkCommand;
+  pagesUploadFinalize?: PagesUploadFinalizeCommand;
+  pagesVerifyRelease?: PagesVerifyReleaseCommand;
+  pagesMaterializePreview?: PagesMaterializePreviewCommand;
+  pagesRemovePreview?: PagesRemovePreviewCommand;
+  pagesActivateTagRoute?: PagesActivateTagRouteCommand;
+  pagesDeactivateTagRoute?: PagesDeactivateTagRouteCommand;
+  pagesCleanupDeployment?: PagesCleanupDeploymentCommand;
+  pagesInventory?: PagesInventoryCommand;
+  pagesStoragePreflight?: PagesStoragePreflightCommand;
+  pagesDeployCertificate?: PagesDeployCertificateCommand;
+  pagesStageRuntimeConfig?: PagesStageRuntimeConfigCommand;
+  pagesActivateRuntimeConfig?: PagesActivateRuntimeConfigCommand;
+  pagesRemoveRuntimeConfig?: PagesRemoveRuntimeConfigCommand;
+}
+
+export interface PagesUploadInitCommand {
+  uploadId: string;
+  deploymentId: string;
+  expectedSize: string;
+  sha256: string;
+}
+
+export interface PagesUploadChunkCommand {
+  uploadId: string;
+  offset: string;
+  content: Buffer;
+}
+
+export interface PagesUploadFinalizeCommand {
+  uploadId: string;
+  deploymentId: string;
+}
+
+export interface PagesVerifyReleaseCommand {
+  deploymentId: string;
+  sha256: string;
+}
+
+export interface PagesMaterializePreviewCommand {
+  profileId: string;
+  deploymentId: string;
+  hostname: string;
+  certificateId: string;
+  certificateVersion: string;
+}
+
+export interface PagesDeployCertificateCommand {
+  certId: string;
+  certPem: Buffer;
+  keyPem: Buffer;
+  chainPem: Buffer;
+  version: string;
+  replicaGeneration: string;
+}
+
+export interface PagesRemovePreviewCommand {
+  hostname: string;
+}
+
+export interface PagesActivateTagRouteCommand {
+  routeId: string;
+  deploymentId: string;
+}
+
+export interface PagesDeactivateTagRouteCommand {
+  routeId: string;
+}
+
+export interface PagesCleanupDeploymentCommand {
+  deploymentId: string;
+}
+
+export type PagesInventoryCommand = Record<string, never>;
+
+export interface PagesStoragePreflightCommand {
+  requiredBytes: string;
+}
+
+export type PagesRuntimeConfigBindingKind =
+  | 'PAGES_RUNTIME_CONFIG_BINDING_KIND_ROUTE'
+  | 'PAGES_RUNTIME_CONFIG_BINDING_KIND_PREVIEW';
+
+export interface PagesStageRuntimeConfigCommand {
+  bindingKind: PagesRuntimeConfigBindingKind;
+  bindingId: string;
+  generation: string;
+  json: Buffer;
+}
+
+export interface PagesActivateRuntimeConfigCommand {
+  bindingKind: PagesRuntimeConfigBindingKind;
+  bindingId: string;
+  generation: string;
+}
+
+export interface PagesRemoveRuntimeConfigCommand {
+  bindingKind: PagesRuntimeConfigBindingKind;
+  bindingId: string;
+  generation?: string;
 }
 
 export interface ApplyConfigCommand {

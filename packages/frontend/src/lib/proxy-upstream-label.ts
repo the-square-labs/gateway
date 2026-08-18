@@ -14,6 +14,12 @@ export interface ProxyUpstreamLabelInput {
   dockerNodeAppearanceColor?: NodeAppearanceColor | null;
   dockerContainerPort?: number | null;
   dockerProtocol?: "tcp" | null;
+  pageTarget?: {
+    projectName: string;
+    projectSlug: string;
+    projectAppearanceColor: NodeAppearanceColor | null;
+    tagName: string;
+  } | null;
 }
 
 export function proxyUpstreamResourceName(host: ProxyUpstreamLabelInput): string | null {

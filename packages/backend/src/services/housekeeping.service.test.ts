@@ -45,4 +45,34 @@ describe('HousekeepingService system certificate cleanup', () => {
       }),
     ]);
   });
+
+  it('runs Pages maintenance as a first-class housekeeping category', async () => {
+    const service = new HousekeepingService({} as any, {} as any, {} as any, {} as any);
+    const run = vi.fn().mockResolvedValue({ itemsCleaned: 2, spaceFreedBytes: 4096 });
+    service.setPagesMaintenanceService({ run });
+    vi.spyOn(service, 'getConfig').mockResolvedValue({
+      enabled: true,
+      cronExpression: '0 2 * * *',
+      nginxLogs: { enabled: false, retentionDays: 30 },
+      auditLog: { enabled: false, retentionDays: 90 },
+      dismissedAlerts: { enabled: false, retentionDays: 30 },
+      deliveryLog: { enabled: false, retentionDays: 7 },
+      structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
+      clickHouseInternals: { enabled: false },
+      orphanedAIArtifacts: { enabled: false },
+      gatewayLogs: { enabled: false },
+      orphanedVolumes: { enabled: false, retentionDays: 30 },
+      dockerPrune: { enabled: false },
+      orphanedCerts: { enabled: false },
+      acmeCleanup: { enabled: false },
+    });
+    vi.spyOn(service as any, 'saveRunResult').mockResolvedValue(undefined);
+
+    const result = await service.runAll('manual');
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.categories).toEqual([
+      expect.objectContaining({ category: 'Pages', itemsCleaned: 2, spaceFreedBytes: 4096 }),
+    ]);
+  });
 });
