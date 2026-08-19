@@ -70,6 +70,7 @@ WORKDIR /app/packages/backend
 COPY --from=backend-builder /app/packages/backend/dist ./dist
 COPY --from=backend-builder /app/packages/backend/src/db/migrations ./src/db/migrations
 COPY config/update-trust/update-signing-public-key.pem ./dist/lib/update-signing-public-key.pem
+COPY config/update-trust/opencodex-signing-public-key.pem ./dist/lib/opencodex-signing-public-key.pem
 
 # Copy proto file (loaded at runtime by @grpc/proto-loader)
 COPY proto/ /app/proto/

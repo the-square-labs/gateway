@@ -203,7 +203,7 @@ export function formWithProviderModel(
     publicId:
       !replaceIdentity && current.publicId
         ? current.publicId
-        : option.remoteModelId.toLowerCase().replaceAll(" ", "-"),
+        : option.displayName.toLowerCase().replaceAll(" ", "-"),
     displayName: !replaceIdentity && current.displayName ? current.displayName : option.displayName,
     contextWindow: technicalValue(option.contextWindow, current.contextWindow, replaceIdentity),
     maxInputTokens: technicalValue(option.maxInputTokens, current.maxInputTokens, replaceIdentity),
@@ -364,8 +364,8 @@ function commonPricing(
 }
 
 function technicalValue(detected: number | null, current: string, replace: boolean) {
-  if (detected != null) return String(detected);
-  return replace ? "" : current;
+  if (!replace && current.trim()) return current;
+  return detected != null ? String(detected) : "";
 }
 
 function optionalTechnicalValue(value: string) {

@@ -281,7 +281,7 @@ Inference features:
 - Issue dedicated `gwi_` runtime tokens that are accepted only by inference data-plane routes.
 - Configure Codex CLI/Desktop and Claude Code through the interactive [`@wiolett/gateway-inference`](../packages/gateway-inference) companion.
 
-Inference and its harness-specific endpoints are disabled by default. See the [inference guide](inference.md) for provider, model, limit, token, and client setup.
+Inference is disabled by default. See the [inference guide](inference.md) for provider, model, limit, token, and client setup.
 
 ## Programmatic Access
 

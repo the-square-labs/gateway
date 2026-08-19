@@ -920,6 +920,33 @@ describe('AIRunService stopRun', () => {
     expect(executor.abortRun).toHaveBeenCalledWith('run-1');
   });
 
+  it('treats stopping an already completed run as an idempotent success', async () => {
+    const completed = {
+      id: 'run-1',
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      status: 'completed',
+      assistantDraftContent: null,
+    };
+    const harness = createTransitionDb([], [[{ id: 'conversation-1' }], [completed]]);
+    const service = new AIRunService(harness.db as never);
+    const executor = {
+      abortRun: vi.fn(),
+      flushAssistantDraftToMessage: vi.fn(),
+    };
+    (service as unknown as { executor: typeof executor }).executor = executor;
+
+    await expect(
+      service.stopRun({
+        conversationId: 'conversation-1',
+        runId: 'run-1',
+        userId: 'user-1',
+      })
+    ).resolves.toEqual({ run: completed, duplicate: true });
+    expect(executor.abortRun).not.toHaveBeenCalled();
+    expect(executor.flushAssistantDraftToMessage).not.toHaveBeenCalled();
+  });
+
   it('stops the current active run before rollback without trusting a client run id', async () => {
     const activeRun = {
       id: 'run-1',

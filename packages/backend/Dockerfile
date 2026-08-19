@@ -36,6 +36,7 @@ WORKDIR /app/packages/backend
 COPY --from=builder /app/packages/backend/dist ./dist
 COPY --from=builder /app/packages/backend/src/db/migrations ./src/db/migrations
 COPY config/update-trust/update-signing-public-key.pem ./dist/lib/update-signing-public-key.pem
+COPY config/update-trust/opencodex-signing-public-key.pem ./dist/lib/opencodex-signing-public-key.pem
 COPY proto/ /app/proto/
 
 USER nodejs

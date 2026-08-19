@@ -2,7 +2,9 @@
 
 `@wiolett/gateway-inference` is the interactive inference companion for Wiolett Gateway. It configures supported AI harnesses while keeping dedicated `gwi_` runtime tokens out of their configuration files.
 
-Node.js 22 or newer is required. Run the package through npm exec; a global installation and `PATH` changes are not required. Before setup, an administrator must enable **Inference** under **Settings > General > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference**.
+Node.js 22 or newer is required. Run the package through npm exec; a global installation and `PATH` changes are not required. Before setup, an administrator must enable **Inference** under **Settings > General > General settings**. All harness traffic uses the Gateway's single stable `/api/inference/v1` prefix.
+
+Version 0.3 accepts both the previous discovery schema v1 and the current v2 document. It normalizes both to the standard OpenAI and Anthropic adapters and never selects a legacy harness-specific endpoint.
 
 ## Interactive manager
 
@@ -31,7 +33,7 @@ npx -y @wiolett/gateway-inference@latest setup
 npx -y @wiolett/gateway-inference@latest setup codex
 ```
 
-`setup` asks which Gateway-advertised harness to configure when the harness is omitted in an interactive terminal. Outside a terminal, the harness is required. The current release supports Codex and Claude Code.
+`setup` asks which supported harness to configure when the harness is omitted in an interactive terminal. Outside a terminal, the harness is required. The current release supports Codex and Claude Code.
 
 Codex setup performs Gateway login when needed, issues a dedicated `gwi_` runtime token, installs a stable helper in the private Gateway user-data directory, and downloads the authoritative Gateway model catalog. It keeps Codex on the built-in `openai` provider, selects the first available Gateway model, and points `openai_base_url` at a private `127.0.0.1` endpoint. Setup starts and verifies a detached local proxy before it reports success; the MCP process can reuse that listener. The proxy discards Codex's incoming authorization, reads the `gwi_` token from the Gateway credential store, and forwards both HTTP and WebSocket inference traffic to Gateway. This keeps the full catalog available to Codex CLI and Desktop without modifying Codex authentication. Existing Codex settings and comments are restored when the integration is removed.
 

@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 export const UPDATE_SIGNING_KEY_ID = 'wiolett-update-v1';
 
-export const UPDATE_SIGNING_PUBLIC_KEY_PEM = loadUpdateSigningPublicKey();
+export const UPDATE_SIGNING_PUBLIC_KEY_PEM = loadSigningPublicKey('update-signing-public-key.pem');
+export const OPENCODEX_SIGNING_PUBLIC_KEY_PEM = loadSigningPublicKey('opencodex-signing-public-key.pem');
 
 const UPDATE_SCHEMA_VERSION = 1;
 const SHA256_RE = /^[a-f0-9]{64}$/;
@@ -69,6 +70,25 @@ export interface RelayImageManifestPayload {
   gitPipelineId?: string;
 }
 
+export interface OpenCodexImageManifestPayload {
+  kind: 'opencodex-image';
+  version: string;
+  tag: string;
+  image: string;
+  digest: string;
+  imageRef: string;
+  sizeBytes: number;
+  coreProtocolMajor: number;
+  stateSchemaVersion: number;
+  minGatewayVersion?: string;
+  maxGatewayVersion?: string;
+  releaseNotesUrl?: string;
+  buildRevision: string;
+  createdAt: string;
+  gitCommitSha?: string;
+  gitPipelineId?: string;
+}
+
 export interface TrustedDaemonUpdateArtifact {
   payload: DaemonUpdateManifestPayload;
   signedManifest: string;
@@ -97,6 +117,20 @@ export interface TrustedRelayUpdateArtifact {
   secureLinkConnectorImage: string;
 }
 
+export interface TrustedOpenCodexImageArtifact {
+  payload: OpenCodexImageManifestPayload;
+  signedManifest: string;
+  imageRef: string;
+  digest: string;
+  version: string;
+  sizeBytes: number;
+  coreProtocolMajor: number;
+  stateSchemaVersion: number;
+  minGatewayVersion?: string;
+  maxGatewayVersion?: string;
+  releaseNotesUrl?: string;
+}
+
 export interface DaemonUpdateManifestExpectation {
   daemonType: DaemonUpdateManifestPayload['daemonType'];
   version: string;
@@ -118,6 +152,13 @@ export interface RelayImageManifestExpectation {
   tag: string;
   image: string;
   protocolMajor: number;
+}
+
+export interface OpenCodexImageManifestExpectation {
+  image: string;
+  coreProtocolMajor: number;
+  version?: string;
+  tag?: string;
 }
 
 export function verifyDaemonUpdateManifest(
@@ -237,11 +278,72 @@ export function verifyRelayImageManifest(
   };
 }
 
+export function verifyOpenCodexImageManifest(
+  signedManifest: string,
+  expected: OpenCodexImageManifestExpectation,
+  publicKey: string | Buffer = OPENCODEX_SIGNING_PUBLIC_KEY_PEM
+): TrustedOpenCodexImageArtifact {
+  const payload = verifySignedPayload<OpenCodexImageManifestPayload>(signedManifest, publicKey);
+  if (payload.kind !== 'opencodex-image')
+    throw new UpdateArtifactTrustError('Update manifest kind is not opencodex-image');
+  if (expected.version !== undefined && payload.version !== expected.version) {
+    throw new UpdateArtifactTrustError('OpenCodex update version mismatch');
+  }
+  if (expected.tag !== undefined && payload.tag !== expected.tag) {
+    throw new UpdateArtifactTrustError('OpenCodex update tag mismatch');
+  }
+  if (payload.image !== expected.image) throw new UpdateArtifactTrustError('OpenCodex update image mismatch');
+  if (!/^\d+\.\d+\.\d+-wiolett\.\d+$/.test(payload.version)) {
+    throw new UpdateArtifactTrustError('OpenCodex update version is not a Wiolett release');
+  }
+  if (!DIGEST_RE.test(payload.digest)) throw new UpdateArtifactTrustError('OpenCodex update digest is invalid');
+  if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
+    throw new UpdateArtifactTrustError('OpenCodex update image reference is not digest pinned');
+  }
+  if (!Number.isInteger(payload.sizeBytes) || payload.sizeBytes <= 0) {
+    throw new UpdateArtifactTrustError('OpenCodex update size is invalid');
+  }
+  if (!Number.isInteger(payload.coreProtocolMajor) || payload.coreProtocolMajor !== expected.coreProtocolMajor) {
+    throw new UpdateArtifactTrustError('OpenCodex core protocol major is incompatible');
+  }
+  if (!Number.isInteger(payload.stateSchemaVersion) || payload.stateSchemaVersion <= 0) {
+    throw new UpdateArtifactTrustError('OpenCodex state schema version is invalid');
+  }
+  if (payload.minGatewayVersion !== undefined && !/^v?\d+\.\d+\.\d+$/.test(payload.minGatewayVersion)) {
+    throw new UpdateArtifactTrustError('OpenCodex minimum Gateway version is invalid');
+  }
+  if (payload.maxGatewayVersion !== undefined && !/^v?\d+\.\d+\.\d+$/.test(payload.maxGatewayVersion)) {
+    throw new UpdateArtifactTrustError('OpenCodex maximum Gateway version is invalid');
+  }
+  if (
+    payload.releaseNotesUrl !== undefined &&
+    (typeof payload.releaseNotesUrl !== 'string' || !payload.releaseNotesUrl.startsWith('https://'))
+  ) {
+    throw new UpdateArtifactTrustError('OpenCodex release notes URL is not trusted');
+  }
+  if (typeof payload.buildRevision !== 'string' || payload.buildRevision.length === 0) {
+    throw new UpdateArtifactTrustError('OpenCodex build revision is missing');
+  }
+
+  return {
+    payload,
+    signedManifest,
+    imageRef: payload.imageRef,
+    digest: payload.digest,
+    version: payload.version,
+    sizeBytes: payload.sizeBytes,
+    coreProtocolMajor: payload.coreProtocolMajor,
+    stateSchemaVersion: payload.stateSchemaVersion,
+    ...(payload.minGatewayVersion ? { minGatewayVersion: payload.minGatewayVersion } : {}),
+    ...(payload.maxGatewayVersion ? { maxGatewayVersion: payload.maxGatewayVersion } : {}),
+    ...(payload.releaseNotesUrl ? { releaseNotesUrl: payload.releaseNotesUrl } : {}),
+  };
+}
+
 export function isDigestPinnedImageRef(imageRef: string, repository: string): boolean {
   const digest = imageRef.startsWith(`${repository}@`) ? imageRef.slice(repository.length + 1) : '';
   return DIGEST_RE.test(digest);
 }
-
 export function trustedGitLabPackagePrefix(gitlabApiUrl: string, projectPath: string): string {
   const base = normalizeGitLabApiUrl(gitlabApiUrl);
   const encodedPath = encodeURIComponent(projectPath);
@@ -300,18 +402,18 @@ function isTrustedHttpsUrl(value: string, trustedPrefix: string): boolean {
   }
 }
 
-function loadUpdateSigningPublicKey(): string {
+function loadSigningPublicKey(fileName: string): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  // Repo-wide update trust anchor. Docker copies the canonical PEM next to this module.
+  // Docker copies canonical update trust anchors next to this module.
   const candidates = [
-    join(moduleDir, 'update-signing-public-key.pem'),
-    join(process.cwd(), 'config/update-trust/update-signing-public-key.pem'),
-    join(process.cwd(), '../../config/update-trust/update-signing-public-key.pem'),
+    join(moduleDir, fileName),
+    join(process.cwd(), 'config/update-trust', fileName),
+    join(process.cwd(), '../../config/update-trust', fileName),
   ];
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) return readFileSync(candidate, 'utf8');
   }
 
-  throw new Error(`Could not locate update signing public key. Tried: ${candidates.join(', ')}`);
+  throw new Error(`Could not locate signing public key ${fileName}. Tried: ${candidates.join(', ')}`);
 }

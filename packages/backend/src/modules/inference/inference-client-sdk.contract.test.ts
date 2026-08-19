@@ -1,66 +1,158 @@
 import 'reflect-metadata';
-import Anthropic from '@anthropic-ai/sdk';
+
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'http://localhost/db';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.PKI_MASTER_KEY = '0'.repeat(64);
+
 import { Hono } from 'hono';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai7';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
-import type { AppEnv, User } from '@/types.js';
-import { anthropicInferenceDataPlaneRoutes, openAiInferenceDataPlaneRoutes } from './inference-data-plane.routes.js';
-import { InferenceProtocolService } from './inference-protocol.service.js';
+import type { AppEnv } from '@/types.js';
+import { InferenceCoreProxyService } from './core/inference-core-proxy.service.js';
+import { inferenceDataPlaneRoutes } from './inference-data-plane.routes.js';
 import { InferenceTokenService } from './inference-token.service.js';
 import { InferenceModelService } from './models/inference-model.service.js';
 
-const USER: User = {
+const USER = {
   id: '11111111-1111-4111-8111-111111111111',
-  oidcSubject: 'oidc-user',
-  email: 'user@example.com',
-  name: 'User',
-  avatarUrl: null,
-  groupId: 'group-1',
-  groupName: 'inference-users',
-  scopes: ['feat:ai:use'],
   isBlocked: false,
 };
 
-const MODEL = {
+const PUBLIC_MODEL = {
+  id: 'model-1',
+  publicId: 'gateway-model',
+  enabled: true,
+  subscriptionMultiplier: '1',
+  reasoningEfforts: [],
+  defaultReasoningEffort: null,
+};
+
+const MODEL_LIST_ROW = {
   id: 'gateway-model',
   object: 'model',
   created: 1,
   owned_by: 'gateway',
   display_name: 'Gateway Model',
-  context_window: 128_000,
-  max_input_tokens: 120_000,
-  max_output_tokens: 8_000,
-  auto_compact_token_limit: 100_000,
+  context_window: 100_000,
+  max_input_tokens: 80_000,
+  max_output_tokens: 20_000,
+  auto_compact_token_limit: 90_000,
   input_modalities: ['text'],
-  capabilities: { tools: true, reasoning: true },
-  supported_reasoning_efforts: ['medium', 'high'],
-  default_reasoning_effort: 'medium',
+  capabilities: {},
+  supported_reasoning_efforts: [],
+  default_reasoning_effort: null,
+  supported_service_tiers: [],
 };
-const CLAUDE_MODEL_ALIAS = 'claude-gateway-Z2F0ZXdheS1tb2RlbA';
 
-beforeAll(() => {
-  process.env.NODE_ENV = 'test';
-  process.env.DATABASE_URL ||= 'http://localhost/db';
-  process.env.REDIS_URL ||= 'redis://localhost:6379';
-  process.env.OIDC_ISSUER ||= 'http://localhost/oidc';
-  process.env.OIDC_CLIENT_ID ||= 'test';
-  process.env.OIDC_CLIENT_SECRET ||= 'test';
-  process.env.OIDC_REDIRECT_URI ||= 'http://localhost/auth/callback';
-  process.env.PKI_MASTER_KEY ||= '00'.repeat(32);
+const SOURCE = {
+  id: 'source-1',
+  connectionId: 'conn-1',
+  enabled: true,
+  sourceType: 'api',
+  subscriptionMultiplierOverride: null,
+  coreAccountId: 'core-conn-1',
+  coreModelId: 'core-conn-1/gpt-5.5',
+  upstreamModelId: 'gpt-5.5',
+  reasoningEffortMap: {},
+  priority: 0,
+};
+
+const CONNECTION = {
+  id: 'conn-1',
+  providerId: 'openai-apikey',
+  enabled: true,
+  deletedAt: null,
+  routingOrder: 0,
+  apiMonthlyLimitMicrodollars: null,
+};
+
+function selectChain(rows: unknown[]) {
+  const chain: Record<string, unknown> = {
+    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve(rows).then(resolve, reject),
+  };
+  for (const method of ['from', 'where', 'orderBy', 'innerJoin', 'leftJoin', 'limit', 'groupBy']) {
+    chain[method] = vi.fn().mockReturnValue(chain);
+  }
+  return chain;
+}
+
+const RESPONSES_SSE = [
+  'data: {"type":"response.created","response":{"id":"resp_1","model":"core-conn-1/gpt-5.5","status":"in_progress"}}',
+  'data: {"type":"response.output_text.delta","item_id":"item_1","delta":"Hello"}',
+  'data: {"type":"response.completed","response":{"id":"resp_1","model":"core-conn-1/gpt-5.5","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}',
+  '',
+].join('\n\n');
+
+const CHAT_JSON = JSON.stringify({
+  id: 'chatcmpl-1',
+  object: 'chat.completion',
+  created: 1,
+  model: 'core-conn-1/gpt-5.5',
+  choices: [{ index: 0, message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
 });
 
-afterEach(() => container.reset());
+const MESSAGES_SSE = [
+  'event: message_start',
+  'data: {"type":"message_start","message":{"id":"msg_1","type":"message","model":"core-conn-1/claude","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":9,"output_tokens":1}}}',
+  '',
+  'event: content_block_start',
+  'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+  '',
+  'event: content_block_delta',
+  'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+  '',
+  'event: message_delta',
+  'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}',
+  '',
+  'event: message_stop',
+  'data: {"type":"message_stop"}',
+  '',
+].join('\n');
 
-function createSdkApp() {
+const COUNT_TOKENS_JSON = JSON.stringify({ input_tokens: 42 });
+
+function coreResponseFor(path: string): Response {
+  if (path.endsWith('/chat/completions')) {
+    return new Response(CHAT_JSON, { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (path.endsWith('/messages/count_tokens')) {
+    return new Response(COUNT_TOKENS_JSON, { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (path.endsWith('/messages')) {
+    if (path.includes('stream')) {
+      return new Response(MESSAGES_SSE, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
+    return new Response(
+      JSON.stringify({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        model: 'core-conn-1/claude',
+        content: [{ type: 'text', text: 'Hi' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 9, output_tokens: 4 },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  }
+  return new Response(RESPONSES_SSE, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+function buildApp() {
   container.registerInstance(InferenceTokenService, {
-    validateToken: vi.fn().mockResolvedValue({ user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_contract' }),
+    validateToken: vi.fn().mockResolvedValue({ user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_a' }),
   } as unknown as InferenceTokenService);
   const pipeline = {
-    zremrangebyscore: vi.fn(),
-    zcard: vi.fn(),
-    zadd: vi.fn(),
-    expire: vi.fn(),
+    zremrangebyscore: vi.fn().mockReturnThis(),
+    zcard: vi.fn().mockReturnThis(),
+    zadd: vi.fn().mockReturnThis(),
+    expire: vi.fn().mockReturnThis(),
     exec: vi.fn().mockResolvedValue([
       [null, 0],
       [null, 0],
@@ -71,196 +163,110 @@ function createSdkApp() {
   container.registerInstance(TOKENS.RedisClient, {
     pipeline: vi.fn().mockReturnValue(pipeline),
     eval: vi.fn().mockResolvedValue(1),
-    incr: vi.fn().mockResolvedValue(1),
-    expire: vi.fn().mockResolvedValue(1),
-    decr: vi.fn().mockResolvedValue(0),
-    del: vi.fn().mockResolvedValue(1),
   } as never);
   container.registerInstance(InferenceModelService, {
-    listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [MODEL] }),
+    listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [MODEL_LIST_ROW] }),
+    resolveForUser: vi.fn().mockResolvedValue({ model: PUBLIC_MODEL, sources: [SOURCE] }),
   } as unknown as InferenceModelService);
-  container.registerInstance(InferenceProtocolService, {
-    responses: async (c: any) => {
-      const input = await c.req.json();
-      const response = openAiResponse();
-      if (!input.stream) return c.json(response);
-      return sse(c, [
-        ['response.created', { type: 'response.created', response: { ...response, status: 'in_progress' } }],
-        [
-          'response.output_text.delta',
-          { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
-        ],
-        ['response.completed', { type: 'response.completed', response }],
-      ]);
-    },
-    chatCompletions: (c: any) =>
-      c.json({
-        id: 'chatcmpl_1',
-        object: 'chat.completion',
-        created: 1,
-        model: MODEL.id,
-        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-    messages: async (c: any) => {
-      const input = await c.req.json();
-      const message = anthropicMessage();
-      if (!input.stream) return c.json(message);
-      return sse(c, [
-        [
-          'message_start',
-          {
-            type: 'message_start',
-            message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } },
-          },
-        ],
-        ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
-        ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } }],
-        ['content_block_stop', { type: 'content_block_stop', index: 0 }],
-        [
-          'message_delta',
-          {
-            type: 'message_delta',
-            delta: { stop_reason: 'end_turn', stop_sequence: null },
-            usage: { output_tokens: 1 },
-          },
-        ],
-        ['message_stop', { type: 'message_stop' }],
-      ]);
-    },
-    countMessageTokens: (c: any) => c.json({ input_tokens: 3 }),
-  } as unknown as InferenceProtocolService);
-
+  const db = {
+    select: vi.fn().mockReturnValue(selectChain([{ source: SOURCE, connection: CONNECTION }])),
+    query: { inferencePricingSnapshots: { findFirst: vi.fn().mockResolvedValue(null) } },
+  };
+  const routing = { select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }) };
+  const bridge = {
+    dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data' }),
+  };
+  const coreAccounting = {
+    createCoreRequest: vi.fn().mockResolvedValue({ requestId: '3fa85f64-5717-4562-b3fc-2c963f66afa6' }),
+    finalizeCoreRequest: vi.fn().mockResolvedValue(undefined),
+  };
+  const proxy = new InferenceCoreProxyService(
+    db as never,
+    bridge as never,
+    container.resolve(InferenceModelService),
+    routing as never,
+    coreAccounting as never,
+    {} as never
+  );
+  container.registerInstance(InferenceCoreProxyService, proxy);
   const app = new Hono<AppEnv>();
-  app.route('/api/inference/v1', openAiInferenceDataPlaneRoutes);
-  app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
-  const fetch = (input: string | URL | Request, init?: RequestInit) => app.fetch(new Request(input, init));
-  return { app, fetch: fetch as typeof globalThis.fetch };
+  app.route('/api/inference/v1', inferenceDataPlaneRoutes);
+  return app;
 }
 
-describe('official client adapter contracts', () => {
-  it('deserializes models, Chat Completions, and streamed Responses with OpenAI 7', async () => {
-    const { fetch } = createSdkApp();
-    const rawModels = await fetch('http://gateway.test/api/inference/v1/models', {
-      headers: { Authorization: 'Bearer gwi_contract-test' },
-    });
-    expect(await rawModels.json()).toMatchObject({ data: [{ id: MODEL.id }] });
-    const client = new OpenAI({
-      apiKey: 'gwi_contract-test',
-      baseURL: 'http://gateway.test/api/inference/v1',
-      fetch,
-    });
+/** Route SDK HTTP calls into the Hono app without opening a socket. */
+function appFetch(app: Hono<AppEnv>): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(String(input), init);
+    return app.fetch(request);
+  }) as typeof fetch;
+}
 
-    const models = await client.models.list();
-    const chat = await client.chat.completions.create({
-      model: MODEL.id,
-      messages: [{ role: 'user', content: 'hello' }],
-    });
-    const stream = await client.responses.create({ model: MODEL.id, input: 'hello', stream: true });
-    const events: string[] = [];
-    for await (const event of stream) events.push(event.type);
-
-    expect(models.data.map((model) => model.id)).toEqual([MODEL.id]);
-    expect(chat.choices[0]?.message.content).toBe('ok');
-    expect(events).toContain('response.output_text.delta');
-    expect(events.at(-1)).toBe('response.completed');
-  });
-
-  it('deserializes models, Messages, Count Tokens, and streaming with the Anthropic SDK', async () => {
-    const { fetch } = createSdkApp();
-    const rawModels = await fetch('http://gateway.test/api/inference/anthropic/v1/models', {
-      headers: { 'x-api-key': 'gwi_contract-test' },
-    });
-    expect(await rawModels.json()).toMatchObject({ data: [{ id: CLAUDE_MODEL_ALIAS }] });
-    const client = new Anthropic({
-      apiKey: 'gwi_contract-test',
-      baseURL: 'http://gateway.test/api/inference/anthropic',
-      fetch,
-    });
-
-    const models = await client.models.list();
-    const message = await client.messages.create({
-      model: CLAUDE_MODEL_ALIAS,
-      max_tokens: 16,
-      messages: [{ role: 'user', content: 'hello' }],
-    });
-    const count = await client.messages.countTokens({
-      model: CLAUDE_MODEL_ALIAS,
-      messages: [{ role: 'user', content: 'hello' }],
-    });
-    const stream = await client.messages.create({
-      model: CLAUDE_MODEL_ALIAS,
-      max_tokens: 16,
-      messages: [{ role: 'user', content: 'hello' }],
-      stream: true,
-    });
-    const events: string[] = [];
-    for await (const event of stream) events.push(event.type);
-
-    expect(models.data.map((model) => model.id)).toEqual([CLAUDE_MODEL_ALIAS]);
-    expect(message.content).toEqual([{ type: 'text', text: 'ok' }]);
-    expect(count.input_tokens).toBe(3);
-    expect(events).toContain('content_block_delta');
-    expect(events.at(-1)).toBe('message_stop');
-  });
+afterEach(() => {
+  container.reset();
+  vi.unstubAllGlobals();
 });
 
-function openAiResponse() {
-  return {
-    id: 'resp_1',
-    object: 'response',
-    created_at: 1,
-    status: 'completed',
-    error: null,
-    incomplete_details: null,
-    instructions: null,
-    max_output_tokens: null,
-    model: MODEL.id,
-    output: [
-      {
-        id: 'msg_1',
-        type: 'message',
-        status: 'completed',
-        role: 'assistant',
-        content: [{ type: 'output_text', text: 'ok', annotations: [] }],
-      },
-    ],
-    parallel_tool_calls: true,
-    previous_response_id: null,
-    reasoning: { effort: 'medium', summary: null },
-    store: false,
-    temperature: null,
-    text: { format: { type: 'text' } },
-    tool_choice: 'auto',
-    tools: [],
-    top_p: null,
-    truncation: 'disabled',
-    usage: {
-      input_tokens: 1,
-      output_tokens: 1,
-      total_tokens: 2,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens_details: { reasoning_tokens: 0 },
-    },
-    user: null,
-    metadata: {},
-  };
-}
+describe('official client adapters against the core proxy data plane', () => {
+  it('serves models, chat completions, and streamed responses to the OpenAI SDK', async () => {
+    const app = buildApp();
+    const coreFetch = vi.fn().mockImplementation((input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return Promise.resolve(coreResponseFor(url));
+    });
+    vi.stubGlobal('fetch', coreFetch);
+    const client = new OpenAI({
+      apiKey: 'gwi_a.token',
+      baseURL: 'http://gateway.test/api/inference/v1',
+      fetch: appFetch(app),
+    });
 
-function anthropicMessage() {
-  return {
-    id: 'msg_1',
-    type: 'message',
-    role: 'assistant',
-    content: [{ type: 'text', text: 'ok' }],
-    model: MODEL.id,
-    stop_reason: 'end_turn',
-    stop_sequence: null,
-    usage: { input_tokens: 1, output_tokens: 1 },
-  };
-}
+    const models = await client.models.list();
+    expect(models.data.map((model) => model.id)).toEqual(['gateway-model']);
 
-function sse(c: any, events: Array<[string, unknown]>) {
-  c.header('Content-Type', 'text/event-stream');
-  return c.body(events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(''));
-}
+    const completion = await client.chat.completions.create({
+      model: 'gateway-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(completion.choices[0]?.message.content).toBe('Hi');
+    const chatCoreBody = JSON.parse((coreFetch.mock.calls[0]?.[1] as RequestInit)?.body as string ?? '{}');
+    void chatCoreBody;
+
+    const stream = await client.responses.create({ model: 'gateway-model', input: 'hi', stream: true });
+    let text = '';
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') text += event.delta;
+    }
+    expect(text).toBe('Hello');
+  });
+
+  it('serves messages, streaming, and count_tokens to the Anthropic SDK', async () => {
+    const app = buildApp();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: string | URL | Request) => {
+        const url = input instanceof Request ? input.url : String(input);
+        return Promise.resolve(coreResponseFor(url));
+      })
+    );
+    // The Anthropic SDK appends its own /v1 segment.
+    const client = new Anthropic({
+      apiKey: 'gwi_a.token',
+      baseURL: 'http://gateway.test/api/inference',
+      fetch: appFetch(app),
+    });
+
+    const counted = await client.messages.countTokens({
+      model: 'gateway-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(counted.input_tokens).toBe(42);
+
+    const message = await client.messages.create({
+      model: 'gateway-model',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(message.content[0]).toMatchObject({ type: 'text', text: 'Hi' });
+  });
+});

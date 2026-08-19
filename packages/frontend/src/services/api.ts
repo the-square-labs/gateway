@@ -88,6 +88,7 @@ import { API_BASE, ApiClientBase } from "./api-base";
 import { withDatabaseApi } from "./api-databases";
 import { withDockerApi } from "./api-docker";
 import { withInferenceApi } from "./api-inference";
+import { withInferenceCoreApi } from "./api-inference-core";
 import { withIntegrationsApi } from "./api-integrations";
 import { withLoggingApi } from "./api-logging";
 import { withNotificationApi } from "./api-notifications";
@@ -96,12 +97,14 @@ import { withProxyApi } from "./api-proxy";
 import { withSystemApi } from "./api-system";
 import { type BackgroundPrewarmTask, runBackgroundPrewarm } from "./background-prewarm";
 
-class ApiClient extends withInferenceApi(
-  withIntegrationsApi(
-    withLoggingApi(
-      withNotificationApi(
-        withAuthApi(
-          withSystemApi(withDockerApi(withDatabaseApi(withPkiApi(withProxyApi(ApiClientBase)))))
+class ApiClient extends withInferenceCoreApi(
+  withInferenceApi(
+    withIntegrationsApi(
+      withLoggingApi(
+        withNotificationApi(
+          withAuthApi(
+            withSystemApi(withDockerApi(withDatabaseApi(withPkiApi(withProxyApi(ApiClientBase)))))
+          )
         )
       )
     )
@@ -317,15 +320,6 @@ class ApiClient extends withInferenceApi(
       auth.hasScope("feat:ai:configure"),
       "ai-settings",
       cache("settings:ai-config", () => this.getAIConfig())
-    );
-    add(
-      auth.hasAnyScope(
-        "inference:providers:view",
-        "inference:models:manage",
-        "inference:limits:manage"
-      ),
-      "inference-settings",
-      () => this.getInferenceSettings()
     );
     add(auth.hasScope("inference:providers:view"), "inference-provider-catalog", () =>
       this.listInferenceProviderCatalog()

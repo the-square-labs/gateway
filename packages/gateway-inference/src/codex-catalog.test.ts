@@ -3,7 +3,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncCodexCatalog, withFileLock } from './codex-catalog.js';
 
-const CATALOG = {
+const MODELS = {
+  object: 'list',
+  data: [
+    {
+      id: 'gateway-model',
+      object: 'model',
+      created: 1,
+      owned_by: 'gateway',
+      display_name: 'Gateway Model',
+      context_window: 128_000,
+      max_input_tokens: 120_000,
+      max_output_tokens: 8_000,
+      auto_compact_token_limit: 100_000,
+      input_modalities: ['text'],
+      capabilities: { tools: true, reasoning: true },
+      supported_reasoning_efforts: ['medium', 'high'],
+      default_reasoning_effort: 'medium',
+      supported_service_tiers: [],
+    },
+  ],
+};
+
+// The local catalog file keeps the Codex `model_catalog_json` shape; only the
+// downloaded payload changed to the standard model list.
+const EXISTING_CATALOG = {
   models: [
     {
       slug: 'gateway-model',
@@ -31,20 +55,19 @@ async function fixture() {
 }
 
 describe('Codex catalog synchronization', () => {
-  it('writes a validated catalog atomically and then uses If-None-Match', async () => {
+  it('downloads the standard model list, converts it, and then uses If-None-Match', async () => {
     const files = await fixture();
     const calls: Request[] = [];
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       calls.push(new Request(input, init));
       if (calls.length === 2) return new Response(null, { status: 304 });
-      return new Response(JSON.stringify(CATALOG), {
+      return new Response(JSON.stringify(MODELS), {
         headers: { 'Content-Type': 'application/json', ETag: '"catalog-v1"' },
       });
     }) as typeof fetch;
     const input = {
-      catalogUrl: 'https://gateway.example/api/inference/codex/v1/models',
+      modelsUrl: 'https://gateway.example/api/inference/v1/models',
       token: 'gwi_secret',
-      codexVersion: '0.145.0',
       ...files,
       fetch: fetcher,
       now: () => new Date('2026-07-28T00:00:00Z'),
@@ -56,47 +79,60 @@ describe('Codex catalog synchronization', () => {
       modelCount: 1,
     });
     await expect(syncCodexCatalog(input)).resolves.toMatchObject({ status: 'unchanged', modelCount: 1 });
-    expect(calls[0].url).toContain('client_version=0.145.0');
+    expect(calls[0].url).toBe('https://gateway.example/api/inference/v1/models');
     expect(calls[0].headers.get('authorization')).toBe('Bearer gwi_secret');
     expect(calls[1].headers.get('if-none-match')).toBe('"catalog-v1"');
-    expect(JSON.parse(await readFile(files.catalogFile, 'utf8'))).toEqual(CATALOG);
+    const written = JSON.parse(await readFile(files.catalogFile, 'utf8'));
+    expect(written.models).toHaveLength(1);
+    expect(written.models[0]).toMatchObject({
+      slug: 'gateway-model',
+      display_name: 'Gateway Model',
+      visibility: 'list',
+      supported_in_api: true,
+      priority: 0,
+      context_window: 128_000,
+      auto_compact_token_limit: 100_000,
+      input_modalities: ['text'],
+      default_reasoning_level: 'medium',
+      supported_reasoning_levels: [
+        { effort: 'medium', description: expect.any(String) },
+        { effort: 'high', description: expect.any(String) },
+      ],
+    });
   });
 
   it('retains the last-good catalog when Gateway is offline or returns 5xx', async () => {
     const files = await fixture();
-    await writeFile(files.catalogFile, JSON.stringify(CATALOG));
+    await writeFile(files.catalogFile, JSON.stringify(EXISTING_CATALOG));
     await writeFile(
       files.metadataFile,
       JSON.stringify({ etag: '"old"', catalogVersion: 'old', lastSyncedAt: '2026-07-27T00:00:00Z' })
     );
 
     const offline = await syncCodexCatalog({
-      catalogUrl: 'https://gateway.example/models',
+      modelsUrl: 'https://gateway.example/api/inference/v1/models',
       token: 'gwi_secret',
-      codexVersion: '0.145.0',
       ...files,
       fetch: vi.fn().mockRejectedValue(new Error('offline')) as typeof fetch,
     });
     const upstreamFailure = await syncCodexCatalog({
-      catalogUrl: 'https://gateway.example/models',
+      modelsUrl: 'https://gateway.example/api/inference/v1/models',
       token: 'gwi_secret',
-      codexVersion: '0.145.0',
       ...files,
       fetch: vi.fn().mockResolvedValue(new Response(null, { status: 503 })) as typeof fetch,
     });
 
     expect(offline.status).toBe('stale');
     expect(upstreamFailure.status).toBe('stale');
-    expect(JSON.parse(await readFile(files.catalogFile, 'utf8'))).toEqual(CATALOG);
+    expect(JSON.parse(await readFile(files.catalogFile, 'utf8'))).toEqual(EXISTING_CATALOG);
   });
 
   it('never recreates a revoked runtime token and preserves a good catalog on invalid replacement', async () => {
     const files = await fixture();
-    await writeFile(files.catalogFile, JSON.stringify(CATALOG));
+    await writeFile(files.catalogFile, JSON.stringify(EXISTING_CATALOG));
     const base = {
-      catalogUrl: 'https://gateway.example/models',
+      modelsUrl: 'https://gateway.example/api/inference/v1/models',
       token: 'gwi_revoked',
-      codexVersion: '0.145.0',
       ...files,
     };
 
@@ -109,22 +145,20 @@ describe('Codex catalog synchronization', () => {
     await expect(
       syncCodexCatalog({
         ...base,
-        fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ models: [] }))) as typeof fetch,
+        fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ object: 'list', data: [] }))) as typeof fetch,
       })
     ).rejects.toMatchObject({ code: 'CATALOG_EMPTY' });
     await expect(
       syncCodexCatalog({
         ...base,
-        fetch: vi.fn().mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              models: [{ ...CATALOG.models[0], web_search_tool_type: null, supports_search_tool: false }],
-            })
-          )
-        ) as typeof fetch,
+        fetch: vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ object: 'list', data: [{ id: 'gateway-model' }] }))
+          ) as typeof fetch,
       })
     ).rejects.toMatchObject({ code: 'CATALOG_INVALID' });
-    expect(JSON.parse(await readFile(files.catalogFile, 'utf8'))).toEqual(CATALOG);
+    expect(JSON.parse(await readFile(files.catalogFile, 'utf8'))).toEqual(EXISTING_CATALOG);
   });
 
   it('serializes concurrent refresh operations with one profile lock', async () => {

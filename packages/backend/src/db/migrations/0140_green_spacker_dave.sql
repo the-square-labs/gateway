@@ -1,0 +1,1 @@
+ALTER TABLE "inference_request_attempts" ADD COLUMN "admitted_max_output_tokens" integer;

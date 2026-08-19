@@ -56,7 +56,7 @@ export function InferenceProviderDialog({
 }: Props) {
   const [enabled, setEnabled] = useState(true);
   const [name, setName] = useState("");
-  const [routingStrategy, setRoutingStrategy] = useState<"balanced" | "sequential">("balanced");
+  const [routingStrategy, setRoutingStrategy] = useState<"even" | "balanced" | "sequential">("balanced");
   const [minimumRemainingPercent, setMinimumRemainingPercent] = useState(0);
   const [apiMonthlyLimitUsd, setApiMonthlyLimitUsd] = useState("");
   const [saving, setSaving] = useState(false);
@@ -208,12 +208,16 @@ export function InferenceProviderDialog({
           >
             <Select
               value={routingStrategy}
-              onValueChange={(value) => setRoutingStrategy(value as "balanced" | "sequential")}
+              onValueChange={(value) => setRoutingStrategy(value as "even" | "balanced" | "sequential")}
               disabled={!canManage}
             >
               <SelectTrigger aria-label="Routing strategy">
                 <SelectValue>
-                  {routingStrategy === "balanced" ? "Balanced" : "Sequential"}
+                  {routingStrategy === "even"
+                    ? "Even"
+                    : routingStrategy === "balanced"
+                      ? "Balanced"
+                      : "Sequential"}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]">
@@ -221,7 +225,15 @@ export function InferenceProviderDialog({
                   <span className="flex w-full min-w-0 flex-col gap-0.5 pr-4">
                     <span>Balanced</span>
                     <span className="whitespace-normal text-xs font-normal leading-relaxed text-muted-foreground">
-                      Distributes new threads evenly across available connections.
+                      Sends more new threads to connections with more remaining quota.
+                    </span>
+                  </span>
+                </SelectItem>
+                <SelectItem value="even" textValue="Even" className="items-start py-2">
+                  <span className="flex w-full min-w-0 flex-col gap-0.5 pr-4">
+                    <span>Even</span>
+                    <span className="whitespace-normal text-xs font-normal leading-relaxed text-muted-foreground">
+                      Distributes new threads equally across available connections.
                     </span>
                   </span>
                 </SelectItem>

@@ -1,5 +1,5 @@
 import { Check, Cpu, Info, Loader2, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -13,9 +13,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInferenceCoreStatus } from "@/hooks/use-inference-core-status";
+import {
+  InferenceCoreLifecyclePanel,
+  InferenceCoreSetupFooterAction,
+  isInferenceCoreReady,
+} from "@/pages/settings/inference/InferenceCoreLifecyclePanel";
 import { InferenceProviderConnectDialog } from "@/pages/settings/inference/InferenceProviderConnectDialog";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
+import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type {
   InferenceLimitInput,
@@ -67,16 +74,25 @@ export function InferenceSetupWizard({
   onConfigured,
   onSkipped,
   completionActionLabel = "Back to checklist",
+  canManageCoreOverride,
 }: {
   open: boolean;
   onBack: () => void;
   onConfigured: () => Promise<void>;
   onSkipped: () => Promise<void>;
   completionActionLabel?: string;
+  canManageCoreOverride?: boolean;
 }) {
   const systemConfig = useSystemConfigStore((state) => state.config);
   const setSystemConfig = useSystemConfigStore((state) => state.setConfig);
   const inferenceEnabled = systemConfig.features.inferenceEnabled;
+  const scopedCanManageCore = useAuthStore((state) => state.hasScope("inference:providers:manage"));
+  const canManageCore = canManageCoreOverride ?? scopedCanManageCore;
+  const core = useInferenceCoreStatus(open && inferenceEnabled);
+  const releaseDiscoveryStarted = useRef(false);
+  const [releaseDiscoveryComplete, setReleaseDiscoveryComplete] = useState(false);
+  const [coreBlockedSeen, setCoreBlockedSeen] = useState(false);
+  const [coreAcknowledged, setCoreAcknowledged] = useState(false);
   const [catalog, setCatalog] = useState<InferenceProviderCatalogItem[]>([]);
   const [connections, setConnections] = useState<InferenceProviderConnection[]>([]);
   const [models, setModels] = useState<InferenceModel[]>([]);
@@ -120,8 +136,74 @@ export function InferenceSetupWizard({
     setProviderOpen(false);
     setSelectedSource("");
     setCompleted(false);
+    setCoreBlockedSeen(false);
+    setCoreAcknowledged(false);
+    setReleaseDiscoveryComplete(false);
     void load();
   }, [load, open]);
+
+  useEffect(() => {
+    if (!open) releaseDiscoveryStarted.current = false;
+  }, [open]);
+
+  useEffect(() => {
+    if (
+      !open ||
+      !inferenceEnabled ||
+      !canManageCore ||
+      releaseDiscoveryStarted.current ||
+      releaseDiscoveryComplete ||
+      core.status?.state !== "not_installed" ||
+      core.status.latest !== null
+    ) {
+      return;
+    }
+    releaseDiscoveryStarted.current = true;
+    void api
+      .checkInferenceCoreUpdates()
+      .then(() => core.refresh())
+      .catch((cause) => {
+        toast.error(
+          cause instanceof Error ? cause.message : "Failed to discover inference core releases"
+        );
+      })
+      .finally(() => {
+        setReleaseDiscoveryComplete(true);
+      });
+  }, [
+    canManageCore,
+    core.refresh,
+    core.status?.latest,
+    core.status?.state,
+    inferenceEnabled,
+    open,
+    releaseDiscoveryComplete,
+  ]);
+
+  const coreReady = isInferenceCoreReady(core.status);
+
+  useEffect(() => {
+    if (core.status && !isInferenceCoreReady(core.status)) setCoreBlockedSeen(true);
+  }, [core.status]);
+
+  // The shared core step precedes provider/model configuration. When the core
+  // was already ready on entry the step is skipped; once the administrator had
+  // to wait for install/update, the ready state is confirmed with an explicit
+  // Continue so the transition to provider setup is deliberate.
+  const coreStepActive =
+    inferenceEnabled &&
+    !completed &&
+    (coreReady
+      ? coreBlockedSeen && !coreAcknowledged
+      : core.status !== null || core.error !== null);
+  const coreLoading =
+    inferenceEnabled &&
+    !completed &&
+    ((core.loading && core.status === null && core.error === null) ||
+      (canManageCore &&
+        core.status?.state === "not_installed" &&
+        core.status.latest === null &&
+        !releaseDiscoveryComplete));
 
   const sources = useMemo<SourceOption[]>(
     () =>
@@ -199,6 +281,10 @@ export function InferenceSetupWizard({
       const contextWindow = source.model.contextWindow ?? 128_000;
       const maxInputTokens = source.model.maxInputTokens ?? contextWindow;
       const maxOutputTokens = source.model.maxOutputTokens ?? 8_192;
+      const autoCompactTokenLimit = Math.min(
+        source.model.autoCompactTokenLimit ?? Math.floor(maxInputTokens * 0.8),
+        maxInputTokens
+      );
       await api.saveInferenceModelConfiguration(null, {
         model: {
           publicId: publicId(source.model.remoteModelId),
@@ -206,8 +292,7 @@ export function InferenceSetupWizard({
           contextWindow,
           maxInputTokens,
           maxOutputTokens,
-          autoCompactTokenLimit:
-            source.model.autoCompactTokenLimit ?? Math.floor(maxInputTokens * 0.8),
+          autoCompactTokenLimit,
           modalities: source.model.modalities,
           capabilities: source.model.capabilities,
           reasoningEfforts: source.model.reasoningEfforts,
@@ -288,22 +373,34 @@ export function InferenceSetupWizard({
         stepKey={
           completed
             ? "complete"
-            : ready
-              ? "ready"
-              : !inferenceEnabled
-                ? "enable"
-                : sources.length
-                  ? "model"
-                  : "provider"
+            : coreStepActive
+              ? "core"
+              : ready
+                ? "ready"
+                : !inferenceEnabled
+                  ? "enable"
+                  : sources.length
+                    ? "model"
+                    : "provider"
         }
         onBack={completed ? undefined : onBack}
-        onSkip={inferenceEnabled && !completed ? onSkipped : undefined}
+        onSkip={
+          inferenceEnabled && !completed && !(coreStepActive && coreReady) ? onSkipped : undefined
+        }
         skipDisabled={saving}
         footer={
           completed ? (
             <Button onClick={() => void onConfigured()} disabled={saving}>
               <Check /> {completionActionLabel}
             </Button>
+          ) : coreStepActive ? (
+            <InferenceCoreSetupFooterAction
+              status={core.status}
+              loading={coreLoading || core.loading}
+              canManage={canManageCore}
+              onRefresh={core.refresh}
+              onContinue={coreReady ? () => setCoreAcknowledged(true) : undefined}
+            />
           ) : !inferenceEnabled ? (
             <Button onClick={() => void enable()} disabled={saving}>
               {saving ? <Loader2 className="animate-spin" /> : <Cpu />} Enable Inference
@@ -333,7 +430,7 @@ export function InferenceSetupWizard({
           >
             Gateway Inference is configured, and AI Workspace will use the selected managed model.
           </FinalizeSetupCompletion>
-        ) : loading ? (
+        ) : loading || coreLoading ? (
           <div className="space-y-4" aria-busy="true" aria-label="Loading Gateway Inference">
             <Skeleton className="h-5 w-48" />
             <Skeleton className="h-4 w-full" />
@@ -343,6 +440,15 @@ export function InferenceSetupWizard({
               <Skeleton className="h-10 w-full" />
             </div>
           </div>
+        ) : coreStepActive ? (
+          <InferenceCoreLifecyclePanel
+            mode="setup"
+            status={core.status}
+            loading={core.loading}
+            error={core.error}
+            canManage={canManageCore}
+            onRefresh={core.refresh}
+          />
         ) : !inferenceEnabled ? (
           <div
             className="flex items-center gap-3 border p-4"
@@ -400,7 +506,6 @@ export function InferenceSetupWizard({
                 <SelectContent>
                   {sources.map((source) => (
                     <SelectItem key={source.key} value={source.key}>
-                      {source.connection.name} ·{" "}
                       {source.model.displayName ?? source.model.remoteModelId}
                     </SelectItem>
                   ))}

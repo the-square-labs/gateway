@@ -130,6 +130,17 @@ describe("inference model form helpers", () => {
     expect(hasCompleteTechnicalLimits(form)).toBe(true);
   });
 
+  it("does not leak an internal core provider namespace into a generated public id", () => {
+    const namespaced = model("core-connection-1/glm-5.3", 200_000);
+    namespaced.displayName = "glm-5.3";
+    const [option] = buildProviderModelOptions(
+      [connection("alibaba-token-plan-intl", "qwen", [namespaced])],
+      [provider("alibaba-token-plan-intl", "Alibaba Token Plan", true)]
+    );
+
+    expect(formWithProviderModel(EMPTY_MODEL_FORM, option!, true).publicId).toBe("glm-5.3");
+  });
+
   it("inherits discovered technical limits until an admin changes a field", () => {
     const [option] = buildProviderModelOptions(
       [connection("openai", "team", [model("gpt", 1_050_000, 922_000, 829_800)])],
@@ -144,6 +155,32 @@ describe("inference model form helpers", () => {
         option!
       )
     ).toEqual({ contextWindow: 384_000, autoCompactTokenLimit: 356_000 });
+  });
+
+  it("preserves configured technical limits when provider metadata is merged for editing", () => {
+    const [option] = buildProviderModelOptions(
+      [connection("openai", "team", [model("gpt", 400_000, 272_000, 244_800)])],
+      [provider("openai", "Codex", true)]
+    );
+    const configured = {
+      ...EMPTY_MODEL_FORM,
+      publicId: "gpt-custom",
+      displayName: "GPT custom",
+      contextWindow: "500000",
+      maxInputTokens: "450000",
+      maxOutputTokens: "128000",
+      autoCompactTokenLimit: "420000",
+    };
+
+    const merged = formWithProviderModel(configured, option!, false);
+
+    expect(merged).toEqual(configured);
+    expect(manualMetadataForProviderModel(merged, option!)).toEqual({
+      contextWindow: 500_000,
+      maxInputTokens: 450_000,
+      maxOutputTokens: 128_000,
+      autoCompactTokenLimit: 420_000,
+    });
   });
 
   it("requires manual technical limits when discovery does not report them", () => {

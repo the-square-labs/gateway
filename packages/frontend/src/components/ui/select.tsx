@@ -60,7 +60,7 @@ const SelectContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & {
     overlayScrollControls?: boolean;
   }
->(({ className, children, position = "popper", overlayScrollControls = false, ...props }, ref) => (
+>(({ className, children, position = "popper", overlayScrollControls = true, ...props }, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}

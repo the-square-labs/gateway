@@ -60,15 +60,12 @@ import { dockerWebhookTriggerRoutes } from '@/modules/docker/docker-webhook.rout
 import { domainRoutes } from '@/modules/domains/domain.routes.js';
 import { groupRoutes } from '@/modules/groups/group.routes.js';
 import { housekeepingRoutes } from '@/modules/housekeeping/housekeeping.routes.js';
+import { inferenceCoreLifecycleRoutes } from '@/modules/inference/core/inference-core.routes.js';
 import { inferenceManagementRoutes } from '@/modules/inference/inference.routes.js';
 import { inferenceAuthMiddleware } from '@/modules/inference/inference-auth.middleware.js';
-import {
-  anthropicInferenceDataPlaneRoutes,
-  codexInferenceDataPlaneRoutes,
-  openAiInferenceDataPlaneRoutes,
-} from '@/modules/inference/inference-data-plane.routes.js';
+import { inferenceDataPlaneRoutes } from '@/modules/inference/inference-data-plane.routes.js';
 import { inferenceDiscoveryRoutes } from '@/modules/inference/inference-discovery.routes.js';
-import { createInferenceResponsesWSHandlers } from '@/modules/inference/inference-responses.ws.js';
+import { createCoreResponsesWSHandlers } from '@/modules/inference/core/inference-core-proxy.ws.js';
 import { inferenceSetupRoutes } from '@/modules/inference/inference-setup.routes.js';
 import { integrationsRoutes } from '@/modules/integrations/integrations.routes.js';
 import { licenseRoutes } from '@/modules/license/license.routes.js';
@@ -120,6 +117,10 @@ const PAGES_UPLOAD_CHUNK_PATH = /^\/api\/pages-deploy\/uploads\/[^/]+\/chunks$/;
 const DOCKER_ARCHIVE_IMPORT_PATH = /^\/api\/docker\/nodes\/[^/]+\/containers\/archive$/;
 const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
+// Core lifecycle stays reachable while the inference feature is disabled:
+// installing the core is what a fresh administrator does before enabling it.
+const INFERENCE_CORE_LIFECYCLE_PREFIX = /^\/api\/inference\/core(?:\/|$)/;
+
 function isInferenceDataPlanePath(path: string): boolean {
   return INFERENCE_DATA_PLANE_PREFIX.test(path);
 }
@@ -145,25 +146,13 @@ function requestBodyLimit(maxSize: number): MiddlewareHandler<AppEnv> {
 
 export function inferenceFeatureGuard(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
+    if (INFERENCE_CORE_LIFECYCLE_PREFIX.test(c.req.path)) {
+      await next();
+      return;
+    }
     const settings = container.resolve(GeneralSettingsService);
     if (!(await settings.isFeatureEnabled('inferenceEnabled'))) {
       return c.json({ code: 'INFERENCE_DISABLED', message: 'Inference proxy is disabled' }, 404);
-    }
-    await next();
-  };
-}
-
-export function inferenceHarnessEndpointsGuard(): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    const settings = await container.resolve(GeneralSettingsService).getInferenceSettings();
-    if (!settings.harnessSpecificEndpointsEnabled) {
-      return c.json(
-        {
-          code: 'INFERENCE_HARNESS_ENDPOINTS_DISABLED',
-          message: 'Harness-specific inference endpoints are disabled',
-        },
-        404
-      );
     }
     await next();
   };
@@ -521,13 +510,8 @@ export function createApp(): GatewayAppRuntime {
   app.use('/api/oauth/token', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
   app.use('/api/oauth/revoke', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
   app.use('/api/inference/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
-  app.use('/api/inference/codex/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
-  app.use('/api/inference/anthropic/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
   app.use('/api/inference', inferenceFeatureGuard());
   app.use('/api/inference/*', inferenceFeatureGuard());
-  app.use('/api/inference/codex/*', inferenceHarnessEndpointsGuard());
-  app.use('/api/inference/anthropic/*', inferenceHarnessEndpointsGuard());
-  app.use('/api/inference/setup/*', inferenceHarnessEndpointsGuard());
   app.use('/api/logging/ingest', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
   app.use('/api/logging/ingest/batch', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
   app.use(
@@ -686,27 +670,24 @@ export function createApp(): GatewayAppRuntime {
 
   // Protected API routes
   app.route('/api/oauth', oauthRoutes);
-  for (const path of ['/api/inference/codex/v1/responses', '/api/inference/v1/responses']) {
-    app.use(path, async (c, next) => {
-      if (c.req.method === 'GET') return inferenceAuthMiddleware(c, next);
-      await next();
-    });
-    app.get(
-      path,
-      upgradeWebSocket((c) => {
-        const user = c.get('user');
-        const auth = c.get('inferenceAuth');
-        return createInferenceResponsesWSHandlers(
-          user && auth ? { user, tokenId: auth.tokenId, tokenPrefix: auth.tokenPrefix, rawToken: auth.rawToken } : null,
-          env.INFERENCE_BODY_MAX_BYTES
-        );
-      })
-    );
-  }
-  app.route('/api/inference/v1', openAiInferenceDataPlaneRoutes);
-  app.route('/api/inference/codex/v1', codexInferenceDataPlaneRoutes);
-  app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
+  app.use('/api/inference/v1/responses', async (c, next) => {
+    if (c.req.method === 'GET') return inferenceAuthMiddleware(c, next);
+    await next();
+  });
+  app.get(
+    '/api/inference/v1/responses',
+    upgradeWebSocket((c) => {
+      const user = c.get('user');
+      const auth = c.get('inferenceAuth');
+      return createCoreResponsesWSHandlers(
+        user && auth ? { user, tokenId: auth.tokenId, tokenPrefix: auth.tokenPrefix, rawToken: auth.rawToken } : null,
+        env.INFERENCE_BODY_MAX_BYTES
+      );
+    })
+  );
+  app.route('/api/inference/v1', inferenceDataPlaneRoutes);
   app.route('/api/inference/setup', inferenceSetupRoutes);
+  app.route('/api/inference/core', inferenceCoreLifecycleRoutes);
   app.route('/api/inference', inferenceManagementRoutes);
   app.route('/api/mcp/.well-known', oauthMetadataRoutes);
   app.route('/api/cas', caRoutes);

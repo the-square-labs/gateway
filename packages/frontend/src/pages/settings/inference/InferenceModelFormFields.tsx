@@ -182,13 +182,15 @@ export function ModelGeneralFields({
                   key={field.key}
                   title={field.label}
                   description={
-                    field.detected == null
-                      ? field.optional
-                        ? "Optional; not reported by the provider"
-                        : "Not reported by the provider; enter a value to continue"
-                      : field.editableWhenDetected
-                        ? "Detected from provider metadata; may be overridden"
-                        : "Detected from provider metadata"
+                    exceedsDetectedLimit(form[field.key], field.detected)
+                      ? `Override exceeds provider metadata (${field.detected?.toLocaleString()}); upstream requests may still be rejected at the provider limit`
+                      : field.detected == null
+                        ? field.optional
+                          ? "Optional; not reported by the provider"
+                          : "Not reported by the provider; enter a value to continue"
+                        : field.editableWhenDetected
+                          ? "Detected from provider metadata; may be overridden"
+                          : "Detected from provider metadata"
                   }
                 >
                   <Input
@@ -218,6 +220,12 @@ export function ModelGeneralFields({
       </AnimatePresence>
     </div>
   );
+}
+
+function exceedsDetectedLimit(value: string, detected: number | null) {
+  if (detected == null) return false;
+  const configured = Number(value);
+  return Number.isSafeInteger(configured) && configured > detected;
 }
 
 export function ModelAccessFields({

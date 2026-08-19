@@ -1687,7 +1687,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'get_gateway_settings',
     description:
-      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement and compatibility, and general settings including inferenceEnabled and harnessSpecificEndpointsEnabled, plus network security and outbound webhook policy.',
+      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement and compatibility, and general settings including inferenceEnabled, plus network security and outbound webhook policy.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Maintenance',

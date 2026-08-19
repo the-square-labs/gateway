@@ -1,0 +1,5 @@
+DROP INDEX "inference_usage_ledger_settlement_unique";--> statement-breakpoint
+ALTER TABLE "inference_usage_ledger" ADD COLUMN "attempt_id" uuid;--> statement-breakpoint
+ALTER TABLE "inference_usage_ledger" ADD CONSTRAINT "inference_usage_ledger_attempt_id_inference_request_attempts_id_fk" FOREIGN KEY ("attempt_id") REFERENCES "public"."inference_request_attempts"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "inference_usage_ledger_settlement_attempt_unique" ON "inference_usage_ledger" USING btree ("attempt_id") WHERE "inference_usage_ledger"."entry_type" = 'settlement' AND "inference_usage_ledger"."attempt_id" IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "inference_usage_ledger_settlement_legacy_unique" ON "inference_usage_ledger" USING btree ("request_id") WHERE "inference_usage_ledger"."entry_type" = 'settlement' AND "inference_usage_ledger"."attempt_id" IS NULL;

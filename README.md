@@ -156,7 +156,7 @@ Completed foundations:
 - [x] SIEM audit export, enabled in Gateway settings, with encrypted bearer, HMAC-SHA256, or custom-header authentication.
 - [x] Optional ClickHouse-backed structured logging and optional AI Workspace.
 - [x] AI Workspace Scenarios and Plan Mode with validated plans, explicit execution confirmation, progress controls, and final verification.
-- [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.
+- [x] Optional multi-provider inference gateway with OpenAI- and Anthropic-compatible APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.

@@ -1,0 +1,1 @@
+ALTER TABLE "inference_core_state" DROP COLUMN "cutover_activated_at";

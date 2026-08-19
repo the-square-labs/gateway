@@ -701,6 +701,7 @@ export function SetupWizardPage() {
       </AnimatedHeight>
       <ConfigureAIWorkspaceWizard
         open={aiWorkspaceWizardOpen}
+        canManageInferenceCore
         completionActionLabel="Continue to sign in"
         onBack={() => setAIWorkspaceWizardOpen(false)}
         onConfigured={(configuredVia) =>

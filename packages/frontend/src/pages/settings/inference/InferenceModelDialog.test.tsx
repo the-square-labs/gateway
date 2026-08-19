@@ -221,7 +221,8 @@ describe("InferenceModelDialog", () => {
     expect(screen.getByRole("button", { name: "Add model" })).toBeDisabled();
     await user.type(multiplier, "1");
     await user.clear(screen.getByRole("spinbutton", { name: "Context window" }));
-    await user.type(screen.getByRole("spinbutton", { name: "Context window" }), "350000");
+    await user.type(screen.getByRole("spinbutton", { name: "Context window" }), "450000");
+    expect(screen.getByText(/Override exceeds provider metadata \(400,000\)/)).toBeInTheDocument();
     expect(screen.queryByText(/Managed provider pricing/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Pricing" }));
@@ -231,6 +232,13 @@ describe("InferenceModelDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Add model" }));
     await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0]?.[1]).toMatchObject({
+      sources: [
+        expect.objectContaining({
+          manualMetadata: { contextWindow: 450_000 },
+        }),
+      ],
+    });
     expect(save.mock.calls[0]?.[1]).toMatchObject({
       sources: [expect.not.objectContaining({ pricing: expect.anything() })],
     });

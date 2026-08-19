@@ -41,7 +41,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'gateway-model',
-      baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
+      baseUrl: 'https://gateway.example.com/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -61,7 +61,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'gateway-model',
-      baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
+      baseUrl: 'https://gateway.example.com/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -86,7 +86,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'work-model',
-      baseUrl: 'https://work.example/api/inference/codex/v1',
+      baseUrl: 'https://work.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:51001/v1',
       runtimeFile: paths.runtimeFile,
       now: () => new Date('2026-07-28T00:00:00Z'),
@@ -96,7 +96,7 @@ fast_mode = true
       paths: personal,
       profile: 'personal',
       model: 'personal-model',
-      baseUrl: 'https://personal.example/api/inference/codex/v1',
+      baseUrl: 'https://personal.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:51002/v1',
       runtimeFile: paths.runtimeFile,
       now: () => new Date('2026-07-28T01:00:00Z'),
@@ -116,7 +116,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'gateway-model',
-      baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      baseUrl: 'https://gateway.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -138,7 +138,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'gateway-model',
-      baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      baseUrl: 'https://gateway.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     };
@@ -163,7 +163,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'gateway-model',
-      baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      baseUrl: 'https://gateway.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -185,7 +185,7 @@ fast_mode = true
         paths: nextHome,
         profile: 'work',
         model: 'gateway-model',
-        baseUrl: 'https://gateway.example/api/inference/codex/v1',
+        baseUrl: 'https://gateway.example/api/inference/v1',
         proxyBaseUrl: 'http://127.0.0.1:55555/v1',
         runtimeFile: paths.runtimeFile,
       })
@@ -223,7 +223,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'gateway-model',
-      baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      baseUrl: 'https://gateway.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -242,7 +242,7 @@ fast_mode = true
       codex.configFile,
       harmlesslyEdited.replace(
         'openai_base_url = "http://127.0.0.1:55555/v1"',
-        'openai_base_url = "https://other.example/api/inference/codex/v1"'
+        'openai_base_url = "https://other.example/api/inference/v1"'
       )
     );
     expect(await inspectCodexConfiguration({ paths: codex, profile: 'work' })).toMatchObject({
@@ -261,7 +261,7 @@ fast_mode = true
       paths: dotted,
       profile: 'a.b',
       model: 'dotted-model',
-      baseUrl: 'https://dotted.example/api/inference/codex/v1',
+      baseUrl: 'https://dotted.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:51003/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -269,7 +269,7 @@ fast_mode = true
       paths: dashed,
       profile: 'a-b',
       model: 'dashed-model',
-      baseUrl: 'https://dashed.example/api/inference/codex/v1',
+      baseUrl: 'https://dashed.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:51004/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -290,7 +290,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'work-model',
-      baseUrl: 'https://work.example/api/inference/codex/v1',
+      baseUrl: 'https://work.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:51001/v1',
       runtimeFile: paths.runtimeFile,
     });
@@ -305,7 +305,7 @@ fast_mode = true
         paths: personal,
         profile: 'personal',
         model: 'personal-model',
-        baseUrl: 'https://personal.example/api/inference/codex/v1',
+        baseUrl: 'https://personal.example/api/inference/v1',
         proxyBaseUrl: 'http://127.0.0.1:51002/v1',
         runtimeFile: paths.runtimeFile,
         afterConfigWrite: async () => {
@@ -335,7 +335,7 @@ fast_mode = true
       paths: codex,
       profile: 'work',
       model: 'work-model',
-      baseUrl: 'https://work.example/api/inference/codex/v1',
+      baseUrl: 'https://work.example/api/inference/v1',
       proxyBaseUrl: 'http://127.0.0.1:51001/v1',
       runtimeFile: paths.runtimeFile,
     });

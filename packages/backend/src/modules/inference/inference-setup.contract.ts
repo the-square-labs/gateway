@@ -1,9 +1,16 @@
 import type { OAuthService } from '@/modules/oauth/oauth.service.js';
 
-export const INFERENCE_SETUP_SCHEMA_VERSION = 1;
-export const INFERENCE_SETUP_MINIMUM_CLI_VERSION = '0.1.0';
+export const INFERENCE_SETUP_SCHEMA_VERSION = 2;
+export const INFERENCE_SETUP_MINIMUM_CLI_VERSION = '0.3.0';
 
-export function inferenceAdapterDiscovery(oauth: OAuthService, harnessSpecificEndpointsEnabled: boolean) {
+/**
+ * Public discovery document for the @wiolett/gateway-inference CLI. Schema v2
+ * (plan T5): one stable data-plane prefix /api/inference/v1 for every client;
+ * harness-specific bases, per-harness catalogs, and the harness toggle are
+ * removed. The Anthropic SDK appends its own /v1 segment, so its base stops
+ * one level higher.
+ */
+export function inferenceAdapterDiscovery(oauth: OAuthService) {
   const baseUrl = oauth.getIssuerUrl();
   return {
     schemaVersion: INFERENCE_SETUP_SCHEMA_VERSION,
@@ -12,19 +19,9 @@ export function inferenceAdapterDiscovery(oauth: OAuthService, harnessSpecificEn
       resource: oauth.getInferenceSetupResourceUrl(),
       authorizationServer: oauth.getIssuerUrl(),
     },
-    harnessSpecificEndpointsEnabled,
     adapters: {
       openai: { baseUrl: new URL('/api/inference/v1', baseUrl).href },
-      codex: {
-        baseUrl: new URL('/api/inference/codex/v1', baseUrl).href,
-        catalogUrl: new URL('/api/inference/codex/v1/models', baseUrl).href,
-      },
-      // Anthropic SDK resources include their own leading /v1 segment.
-      anthropic: { baseUrl: new URL('/api/inference/anthropic', baseUrl).href },
-    },
-    harnesses: {
-      codex: { supported: harnessSpecificEndpointsEnabled },
-      'claude-code': { supported: harnessSpecificEndpointsEnabled },
+      anthropic: { baseUrl: new URL('/api/inference', baseUrl).href },
     },
   };
 }

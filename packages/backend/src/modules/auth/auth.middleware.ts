@@ -73,7 +73,7 @@ const SETUP_PURPOSE_PATHS = [
   '/auth/csrf',
   '/api/ai/config',
   '/api/ai/status',
-  '/api/inference/settings',
+  '/api/inference/core',
   '/api/inference/providers',
   '/api/inference/models',
   '/api/inference/limits',

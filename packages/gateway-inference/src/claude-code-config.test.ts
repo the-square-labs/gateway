@@ -24,7 +24,7 @@ describe('Claude Code configuration', () => {
     await configureClaudeCode({
       paths: resolved,
       profile: 'default',
-      baseUrl: 'https://gateway.example.com/api/inference/anthropic/',
+      baseUrl: 'https://gateway.example.com/api/inference/',
       model: 'claude-gateway-model',
       runtimeFile: paths.runtimeFile,
     });
@@ -35,7 +35,7 @@ describe('Claude Code configuration', () => {
       apiKeyHelper: claudeCodeApiKeyHelper(paths.runtimeFile),
       env: {
         KEEP_ME: 'yes',
-        ANTHROPIC_BASE_URL: 'https://gateway.example.com/api/inference/anthropic',
+        ANTHROPIC_BASE_URL: 'https://gateway.example.com/api/inference',
         CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-gateway-model',
       },
@@ -66,7 +66,7 @@ describe('Claude Code configuration', () => {
       configureClaudeCode({
         paths: resolved,
         profile: 'default',
-        baseUrl: 'https://gateway.example.com/api/inference/anthropic',
+        baseUrl: 'https://gateway.example.com/api/inference',
         model: 'claude-gateway-model',
         runtimeFile: paths.runtimeFile,
       })
@@ -76,7 +76,7 @@ describe('Claude Code configuration', () => {
     await configureClaudeCode({
       paths: resolved,
       profile: 'default',
-      baseUrl: 'https://gateway.example.com/api/inference/anthropic',
+      baseUrl: 'https://gateway.example.com/api/inference',
       model: 'claude-gateway-model',
       runtimeFile: paths.runtimeFile,
     });

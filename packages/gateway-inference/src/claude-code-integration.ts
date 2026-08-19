@@ -41,12 +41,6 @@ export class ClaudeCodeIntegrationService {
     discovery: InferenceDiscovery;
     client: InferenceSetupClient;
   }) {
-    if (!input.discovery.harnesses['claude-code']?.supported) {
-      throw new CliError(
-        'CLAUDE_CODE_UNSUPPORTED',
-        'Claude Code endpoints are not enabled on this Gateway. Enable harness-specific endpoints first.'
-      );
-    }
     const claude = await this.requireClaudeCode();
     const runtime = await this.ensureRuntimeToken(input.profileName, input.profile, input.client);
     await this.installRuntime();

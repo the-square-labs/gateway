@@ -53,7 +53,6 @@ export interface GeneralSettings {
   shutdown: GeneralShutdownSettings;
   relayGrantTtlHours: number;
   features: GeneralFeatureSettings;
-  inference: GeneralInferenceSettings;
 }
 
 export interface GeneralRelaySettings {
@@ -76,10 +75,6 @@ export interface GeneralFeatureSettings {
   domainsEnabled: boolean;
   siemEnabled: boolean;
   inferenceEnabled: boolean;
-}
-
-export interface GeneralInferenceSettings {
-  harnessSpecificEndpointsEnabled: boolean;
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -110,14 +105,10 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
     siemEnabled: true,
     inferenceEnabled: false,
   },
-  inference: {
-    harnessSpecificEndpointsEnabled: false,
-  },
 };
 
-export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'inference' | 'shutdown' | 'relay'> & {
+export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'shutdown' | 'relay'> & {
   features?: Partial<GeneralFeatureSettings>;
-  inference?: Partial<GeneralInferenceSettings>;
   shutdown?: GeneralShutdownSettings;
   relay?: Partial<GeneralRelaySettings>;
 };
@@ -281,10 +272,6 @@ export class GeneralSettingsService {
         ...current.features,
         ...updates.features,
       },
-      inference: {
-        ...current.inference,
-        ...updates.inference,
-      },
       shutdown: updates.shutdown ?? current.shutdown,
       relay: {
         ...current.relay,
@@ -306,10 +293,7 @@ export class GeneralSettingsService {
       relayChanged: JSON.stringify(current.relay) !== JSON.stringify(next.relay),
       externalBrandingChanged: current.hideExternalBranding !== next.hideExternalBranding,
     });
-    if (
-      current.features.inferenceEnabled !== next.features.inferenceEnabled ||
-      current.inference.harnessSpecificEndpointsEnabled !== next.inference.harnessSpecificEndpointsEnabled
-    ) {
+    if (current.features.inferenceEnabled !== next.features.inferenceEnabled) {
       this.inferenceSetupEvents?.publishCatalogChanged();
     }
     if (current.features.inferenceEnabled && !next.features.inferenceEnabled) {
@@ -362,16 +346,8 @@ export class GeneralSettingsService {
     return config.features[feature];
   }
 
-  async getInferenceSettings(): Promise<GeneralInferenceSettings> {
-    return (await this.getConfig()).inference;
-  }
-
   getCachedShutdownSettings(): GeneralShutdownSettings {
     return { ...(this.cached?.shutdown ?? DEFAULT_GENERAL_SETTINGS.shutdown) };
-  }
-
-  async updateInferenceSettings(updates: Partial<GeneralInferenceSettings>): Promise<GeneralInferenceSettings> {
-    return (await this.updateConfig({ inference: updates })).inference;
   }
 
   private normalize(value: unknown): GeneralSettings {
@@ -464,10 +440,6 @@ export class GeneralSettingsService {
       typeof record.features === 'object' && record.features !== null
         ? (record.features as Record<string, unknown>)
         : {};
-    const inference =
-      typeof record.inference === 'object' && record.inference !== null
-        ? (record.inference as Record<string, unknown>)
-        : {};
     const shutdown = normalizeShutdownSettings(record.shutdown);
 
     return {
@@ -509,12 +481,6 @@ export class GeneralSettingsService {
           typeof features.inferenceEnabled === 'boolean'
             ? features.inferenceEnabled
             : DEFAULT_GENERAL_SETTINGS.features.inferenceEnabled,
-      },
-      inference: {
-        harnessSpecificEndpointsEnabled:
-          typeof inference.harnessSpecificEndpointsEnabled === 'boolean'
-            ? inference.harnessSpecificEndpointsEnabled
-            : DEFAULT_GENERAL_SETTINGS.inference.harnessSpecificEndpointsEnabled,
       },
     };
   }

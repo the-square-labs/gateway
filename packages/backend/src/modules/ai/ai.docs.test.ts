@@ -184,7 +184,7 @@ describe('AI internal docs registry', () => {
       'npx -y @wiolett/gateway-inference@latest setup claude-code'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
-      'generalSettings.inference.harnessSpecificEndpointsEnabled'
+      'generalSettings.features.inferenceEnabled'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('Claude Code 2.1.129 or newer');
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
@@ -192,7 +192,7 @@ describe('AI internal docs registry', () => {
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('/api/inference/v1');
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
-      '/api/inference/anthropic/v1/messages'
+      '/api/inference/v1/messages'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'Profile > Authorizations > Inference API tokens'

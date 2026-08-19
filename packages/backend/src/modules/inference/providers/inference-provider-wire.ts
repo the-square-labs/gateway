@@ -187,18 +187,19 @@ export function providerRequestBody(
     'client_metadata',
   ]);
   const codexSubscription = definition.id === 'openai';
+  const instructionsField = codexSubscription || definition.id === 'wiolett-core';
   const instructions = request.messages
     .filter((message) => message.role === 'system' || message.role === 'developer')
     .flatMap((message) => message.content)
     .map(partText)
     .join('\n\n');
-  const inputMessages = codexSubscription
+  const inputMessages = instructionsField
     ? request.messages.filter((message) => message.role === 'user' || message.role === 'assistant')
     : request.messages;
   return {
     model: upstreamModel,
     stream: true,
-    ...(codexSubscription && instructions ? { instructions } : {}),
+    ...(instructionsField && instructions ? { instructions } : {}),
     input: openAiInputItems(inputMessages),
     ...(request.tools.length ? { tools: request.tools.map(openAiTool) } : {}),
     ...(request.toolChoice !== undefined ? { tool_choice: openAiToolChoice(request.toolChoice) } : {}),

@@ -177,6 +177,27 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('UPDATE "sandbox_jobs"');
   });
 
+  it('adds the inference core runtime tables without touching existing inference rows', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0139_inference_core_runtime.sql'), 'utf8');
+
+    expect(migration).toContain('CREATE TABLE "inference_core_state"');
+    expect(migration).toContain('CREATE TABLE "inference_core_operations"');
+    expect(migration).toContain('CONSTRAINT "inference_core_state_singleton" CHECK');
+    expect(migration).toContain('"inference_core_operations_running_unique"');
+    expect(migration).toContain('ADD COLUMN "core_account_id" text');
+    expect(migration).toContain('ADD COLUMN "core_model_id" text');
+    expect(migration).toContain('ADD COLUMN "core_attempt_id" text');
+    expect(migration).toContain('ADD COLUMN "parent_core_attempt_id" text');
+    expect(migration).toContain('"inference_attempts_core_attempt_unique"');
+
+    // Purely additive: no destructive or rewriting operation against the
+    // existing inference tables or the immutable usage ledger.
+    expect(migration).not.toMatch(/DROP TABLE/i);
+    expect(migration).not.toMatch(/ALTER TABLE "inference_(requests|usage_ledger|quota_snapshots)"/i);
+    expect(migration).not.toMatch(/ALTER COLUMN .* (DROP|SET) NOT NULL/i);
+    expect(migration).not.toMatch(/DELETE FROM|UPDATE "inference_/i);
+  });
+
   it('preserves a custom guest group before reserving the built-in name', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0115_reserve_guest_builtin_group.sql'),

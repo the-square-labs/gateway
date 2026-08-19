@@ -1576,6 +1576,27 @@ describe("AI backend runtime store", () => {
         isStreaming: false,
       }),
     ]);
+
+    socket.emit({
+      type: "assistant.delta",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      content: "?",
+      version: 4,
+    });
+    await flushAssistantDeltaBatch();
+
+    expect(useAIStore.getState()).toMatchObject({
+      activeRunId: null,
+      isStreaming: false,
+    });
+    expect(useAIStore.getState().messages).toEqual([
+      expect.objectContaining({
+        id: "assistant-final",
+        content: "Hello after approval",
+        isStreaming: false,
+      }),
+    ]);
     expect(listConversations).not.toHaveBeenCalled();
     expect(getConversation).not.toHaveBeenCalled();
   });

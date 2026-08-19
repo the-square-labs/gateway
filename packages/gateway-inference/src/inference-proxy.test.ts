@@ -48,7 +48,7 @@ describe('local inference proxy', () => {
     const proxy = await startInferenceProxy({
       paths: await fixturePaths(),
       profileName: 'default',
-      remoteBaseUrl: `http://127.0.0.1:${upstreamPort}/api/inference/codex/v1`,
+      remoteBaseUrl: `http://127.0.0.1:${upstreamPort}/api/inference/v1`,
       getToken: async () => 'gwi_local-secret',
     });
 
@@ -65,7 +65,7 @@ describe('local inference proxy', () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toBe('data: first\n\ndata: second\n\n');
       expect(received).toEqual({
-        url: '/api/inference/codex/v1/responses?stream=true',
+        url: '/api/inference/v1/responses?stream=true',
         authorization: 'Bearer gwi_local-secret',
         body: JSON.stringify({ model: 'test' }),
       });
@@ -87,7 +87,7 @@ describe('local inference proxy', () => {
     const proxy = await startInferenceProxy({
       paths: await fixturePaths(),
       profileName: 'default',
-      remoteBaseUrl: `http://127.0.0.1:${upstreamPort}/api/inference/codex/v1`,
+      remoteBaseUrl: `http://127.0.0.1:${upstreamPort}/api/inference/v1`,
       getToken: async () => 'gwi_websocket-secret',
     });
     const client = new WebSocket(`${proxy.baseUrl.replace('http:', 'ws:')}/responses?transport=websocket`, {
@@ -98,7 +98,7 @@ describe('local inference proxy', () => {
       await onceOpen(client);
       client.send('hello');
       expect(await onceMessage(client)).toBe('gateway:hello');
-      expect(upgrade?.url).toBe('/api/inference/codex/v1/responses?transport=websocket');
+      expect(upgrade?.url).toBe('/api/inference/v1/responses?transport=websocket');
       expect(upgrade?.headers.authorization).toBe('Bearer gwi_websocket-secret');
     } finally {
       client.terminate();
@@ -127,7 +127,7 @@ describe('local inference proxy', () => {
     const proxy = await startInferenceProxy({
       paths: await fixturePaths(),
       profileName: 'default',
-      remoteBaseUrl: `http://127.0.0.1:${upstreamPort}/api/inference/codex/v1`,
+      remoteBaseUrl: `http://127.0.0.1:${upstreamPort}/api/inference/v1`,
       getToken: async () => 'gwi_local-secret',
     });
     const request = httpRequest(`${proxy.baseUrl}/responses`, {

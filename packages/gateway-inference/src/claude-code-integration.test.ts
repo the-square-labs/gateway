@@ -92,7 +92,7 @@ describe('Claude Code integration', () => {
     );
     const settings = JSON.parse(await readFile(join(root, '.claude', 'settings.json'), 'utf8'));
     expect(settings.env).toMatchObject({
-      ANTHROPIC_BASE_URL: 'https://gateway.example.com/api/inference/anthropic',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.com/api/inference',
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-gateway-a2ltaS1rMw',
     });
@@ -103,25 +103,16 @@ describe('Claude Code integration', () => {
 
 function discovery(): InferenceDiscovery {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     enabled: true,
-    harnessSpecificEndpointsEnabled: true,
-    minimumCliVersion: '0.1.0',
+    minimumCliVersion: '0.3.0',
     oauth: {
       resource: 'https://gateway.example.com/api/inference/setup',
       authorizationServer: 'https://gateway.example.com',
     },
     adapters: {
       openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
-      codex: {
-        baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
-        catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models',
-      },
-      anthropic: { baseUrl: 'https://gateway.example.com/api/inference/anthropic' },
-    },
-    harnesses: {
-      codex: { supported: true },
-      'claude-code': { supported: true },
+      anthropic: { baseUrl: 'https://gateway.example.com/api/inference' },
     },
   };
 }

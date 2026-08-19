@@ -12,6 +12,11 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import {
+  CORE_MANAGED_METADATA_KEY,
+  CORE_MODEL_METADATA_KEY,
+  coreProviderRef,
+} from '../core/inference-core-provider-map.js';
 import type { InferenceSetupEventsService } from '../inference-setup-events.service.js';
 import type { InferenceProviderRegistry } from '../providers/inference-provider.registry.js';
 import { knownProviderModel, pricingFromDiscoveredMetadata } from '../providers/inference-provider-model-catalog.js';
@@ -36,6 +41,8 @@ interface PreparedSource {
   connectionId: string;
   discoveredModelId: string | null;
   upstreamModelId: string;
+  coreAccountId: string | null;
+  coreModelId: string | null;
   providerId: string;
   sourceType: 'subscription' | 'api';
   enabled: boolean;
@@ -109,6 +116,8 @@ export class InferenceModelConfigurationService {
             connectionId: source.connectionId,
             discoveredModelId: source.discoveredModelId,
             upstreamModelId: source.upstreamModelId,
+            coreAccountId: source.coreAccountId,
+            coreModelId: source.coreModelId,
             sourceType: source.sourceType,
             enabled: source.enabled,
             priority: 0,
@@ -196,7 +205,8 @@ export class InferenceModelConfigurationService {
       const enabled = input.enabled !== false;
       assertEnabledSourceAvailable(enabled, connection.enabled, discoveredModel?.available);
       if (enabled) validateReasoningMap(model.reasoningEfforts, input.reasoningEffortMap);
-      const sourceType = provider.subscription && connection.authType === 'oauth' ? 'subscription' : 'api';
+      const coreReferences = coreSourceReferences(connection, upstreamModelId, discoveredModel?.metadata);
+      const sourceType = provider.subscription ? 'subscription' : 'api';
       const pricing =
         sourceType === 'api'
           ? (pricingFromDiscoveredMetadata(discoveredModel?.metadata) ??
@@ -209,6 +219,7 @@ export class InferenceModelConfigurationService {
         connectionId: connection.id,
         discoveredModelId: discoveredModel?.id ?? null,
         upstreamModelId,
+        ...coreReferences,
         providerId: connection.providerId,
         sourceType,
         enabled,
@@ -323,4 +334,25 @@ function assertEnabledSourceAvailable(
   }
 }
 
-export const __testOnly = { assertEnabledSourceAvailable };
+function coreSourceReferences(
+  connection: Pick<typeof inferenceProviderConnections.$inferSelect, 'id' | 'providerId' | 'authType' | 'metadata'>,
+  upstreamModelId: string,
+  discoveredMetadata?: Record<string, unknown>
+): { coreAccountId: string | null; coreModelId: string | null } {
+  if (connection.metadata[CORE_MANAGED_METADATA_KEY] !== true) {
+    return { coreAccountId: null, coreModelId: null };
+  }
+  const providerRef = coreProviderRef(connection);
+  const discoveredCoreModelId = discoveredMetadata?.[CORE_MODEL_METADATA_KEY];
+  return {
+    coreAccountId: providerRef,
+    coreModelId:
+      typeof discoveredCoreModelId === 'string' && discoveredCoreModelId.trim()
+        ? discoveredCoreModelId.trim()
+        : connection.authType === 'oauth' || upstreamModelId.startsWith(`${providerRef}/`)
+          ? upstreamModelId
+          : `${providerRef}/${upstreamModelId}`,
+  };
+}
+
+export const __testOnly = { assertEnabledSourceAvailable, coreSourceReferences };

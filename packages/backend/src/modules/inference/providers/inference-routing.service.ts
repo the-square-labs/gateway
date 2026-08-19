@@ -6,6 +6,7 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { inferenceProviderConnections, inferenceProviderSettings, inferenceQuotaSnapshots } from '@/db/schema/index.js';
 import type { InferenceConnectionStatus } from '@/db/schema/inference-providers.js';
+import type { InferenceRoutingStrategy } from '@/db/schema/inference-providers.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 
 const AFFINITY_TTL_SECONDS = 24 * 60 * 60;
@@ -94,11 +95,13 @@ export class InferenceRoutingService {
     const settings = await this.db.query.inferenceProviderSettings.findFirst({
       where: eq(inferenceProviderSettings.providerId, providerId),
     });
-    if (settings?.routingStrategy === 'sequential') {
+    const strategy: InferenceRoutingStrategy = settings?.routingStrategy ?? 'balanced';
+    if (strategy === 'sequential') {
       return firstSequentialCandidate(candidates);
     }
     const seed = affinityKey ?? crypto.randomUUID();
-    return [...candidates].sort((a, b) => weightedScore(seed, b) - weightedScore(seed, a))[0]!;
+    if (strategy === 'even') return highestScore(seed, candidates, () => 1);
+    return quotaWeightedCandidate(seed, candidates);
   }
 
   private async loadCandidates(input: InferenceRoutingInput): Promise<Candidate[]> {
@@ -192,9 +195,26 @@ function statusAfterCooldown(status: InferenceConnectionStatus, cooldownActive: 
   return status === 'cooldown' && !cooldownActive ? 'healthy' : status;
 }
 
-function weightedScore(seed: string, candidate: Candidate): number {
+function uniformScore(seed: string, candidate: Candidate): number {
   const digest = createHash('sha256').update(`${seed}:${candidate.id}`).digest();
   return (digest.readUInt32BE(0) + 1) / 0x1_0000_0000;
+}
+
+/** Deterministic weighted rendezvous score. Larger weights win proportionally more keys. */
+function weightedScore(seed: string, candidate: Candidate, weight: number): number {
+  return Math.log(uniformScore(seed, candidate)) / Math.max(Number.EPSILON, weight);
+}
+
+function highestScore(seed: string, candidates: Candidate[], weightFor: (candidate: Candidate) => number): Candidate {
+  return [...candidates].sort(
+    (a, b) => weightedScore(seed, b, weightFor(b)) - weightedScore(seed, a, weightFor(a)) || a.id.localeCompare(b.id)
+  )[0]!;
+}
+
+function quotaWeightedCandidate(seed: string, candidates: Candidate[]): Candidate {
+  const knownCandidates = candidates.filter((candidate) => candidate.remainingFraction !== null);
+  if (knownCandidates.length === 0) return highestScore(seed, candidates, () => 1);
+  return highestScore(seed, knownCandidates, (candidate) => candidate.remainingFraction!);
 }
 
 function firstSequentialCandidate(candidates: Candidate[]): Candidate {
@@ -218,7 +238,10 @@ export function canFailOver(error: unknown, emittedOutput: boolean): boolean {
 }
 
 export const __testOnly = {
+  uniformScore,
   weightedScore,
+  quotaWeightedCandidate,
+  highestScore,
   firstSequentialCandidate,
   isUsable,
   statusAfterCooldown,

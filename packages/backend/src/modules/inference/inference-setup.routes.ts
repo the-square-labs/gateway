@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { container } from '@/container.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import type { AppEnv } from '@/types.js';
-import { codexCatalogForUser } from './inference-data-plane.routes.js';
+import { createHash } from 'node:crypto';
 import { inferenceAdapterDiscovery } from './inference-setup.contract.js';
+import { InferenceModelService } from './models/inference-model.service.js';
 import { inferenceSetupAuthMiddleware } from './inference-setup-auth.middleware.js';
 import type { InferenceSetupEvent } from './inference-setup-events.service.js';
 import { InferenceSetupEventsService } from './inference-setup-events.service.js';
@@ -31,14 +32,20 @@ function encodeSse(input: { id?: string; event: string; data?: unknown; comment?
   return new TextEncoder().encode(lines.join('\n'));
 }
 
+/** Content hash of the user's public model catalog; clients poll it for invalidation. */
+async function catalogVersionForUser(user: NonNullable<AppEnv['Variables']['user']>): Promise<string> {
+  const body = await container.resolve(InferenceModelService).listForUser(user);
+  return createHash('sha256').update(JSON.stringify(body)).digest('base64url');
+}
+
 export const inferenceSetupRoutes = new OpenAPIHono<AppEnv>();
 
 inferenceSetupRoutes.use('*', inferenceSetupAuthMiddleware);
 
 inferenceSetupRoutes.get('/me', async (c) => {
   const user = c.get('user')!;
-  const discovery = inferenceAdapterDiscovery(container.resolve(OAuthService), true);
-  const { version } = await codexCatalogForUser(user);
+  const discovery = inferenceAdapterDiscovery(container.resolve(OAuthService));
+  const version = await catalogVersionForUser(user);
   return c.json({
     user: { id: user.id, name: user.name, email: user.email, role: user.groupName },
     inference: { enabled: true, allowed: true },
@@ -67,7 +74,7 @@ inferenceSetupRoutes.delete('/tokens/:id', async (c) => {
 inferenceSetupRoutes.get('/events', async (c) => {
   const user = c.get('user')!;
   const events = container.resolve(InferenceSetupEventsService);
-  const { version } = await codexCatalogForUser(user);
+  const version = await catalogVersionForUser(user);
   const replay = events.since(c.req.header('Last-Event-ID'));
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;

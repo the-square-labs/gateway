@@ -17,7 +17,7 @@ import {
 import { users } from './users.js';
 
 export type InferenceProviderAuthType = 'oauth' | 'api_key' | 'local';
-export type InferenceRoutingStrategy = 'balanced' | 'sequential';
+export type InferenceRoutingStrategy = 'even' | 'balanced' | 'sequential';
 export type InferenceConnectionStatus =
   | 'pending'
   | 'healthy'

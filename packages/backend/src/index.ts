@@ -17,6 +17,10 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 
 import { createApp } from '@/app.js';
+import {
+  INFERENCE_CORE_INTERNAL_PORT,
+} from '@/modules/inference/core/inference-core-runtime.service.js';
+import { inferenceCoreInternalRoutes } from '@/modules/inference/core/inference-core-internal.routes.js';
 import { container, initializeContainer } from '@/bootstrap.js';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
@@ -102,6 +106,23 @@ function closeHttpServer(server: ReturnType<typeof serve>, deadline: number): Pr
   });
 }
 
+function startInferenceCoreInternalServer(): Promise<ReturnType<typeof serve>> {
+  return new Promise((resolvePromise, reject) => {
+    const server = serve(
+      {
+        fetch: inferenceCoreInternalRoutes.fetch,
+        port: INFERENCE_CORE_INTERNAL_PORT,
+        hostname: '0.0.0.0',
+      },
+      () => {
+        server.off('error', reject);
+        resolvePromise(server);
+      }
+    );
+    server.once('error', reject);
+  });
+}
+
 async function main() {
   try {
     const env = getEnv();
@@ -148,6 +169,12 @@ async function main() {
 
     // Inject WebSocket support into the HTTP server
     injectWebSocket(server);
+
+    // Internal core → Gateway callback listener (admission/settlement). Bound
+    // inside the container only; the port is never published to the host, so
+    // just the installer-managed Compose network can reach it.
+    const coreInternalServer = await startInferenceCoreInternalServer();
+    logger.info(`Inference core internal listener on 0.0.0.0:${INFERENCE_CORE_INTERNAL_PORT}`);
     const lifecycle = container.resolve(GatewayLifecycleService);
     server.prependListener('request', (request, response) =>
       lifecycle.trackHttpRequest(request, response, statusPageService.isCachedStatusHost(request.headers.host))
@@ -259,6 +286,7 @@ async function main() {
           terminateRemainingWebSockets(wss.clients);
           await closeWebSocketServer(wss);
           await closeHttpServer(server, deadline);
+          if (coreInternalServer) await closeHttpServer(coreInternalServer, deadline);
           logger.info('HTTP server closed');
         },
         finalize: async (deadline) => {

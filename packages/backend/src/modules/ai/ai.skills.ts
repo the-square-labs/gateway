@@ -250,7 +250,7 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 ### Identify the surface and prerequisites
 - Gateway Inference is separate from AI Workspace provider configuration and Gateway MCP. It is a standalone external model gateway with dedicated provider connections, models, accounting, limits, continuation state, and gwi_ runtime tokens; never reuse Workspace, MCP, gw_, or gwo_ credentials on its data plane.
 - Before configuring providers, models, limits, tokens, or client harnesses, activate the Inference tool category and read internal_documentation({ topic: "inference" }) for the current schemas and lifecycle.
-- Read Gateway settings before client setup. Confirm both generalSettings.features.inferenceEnabled and generalSettings.inference.harnessSpecificEndpointsEnabled; without read permission, tell the user an administrator must confirm them rather than guessing.
+- Read Gateway settings before client setup. Confirm generalSettings.features.inferenceEnabled; without read permission, tell the user an administrator must confirm it rather than guessing.
 - Users need feat:ai:use for inference and personal usage. Creating/revoking their runtime tokens also requires inference:tokens:manage. Never attempt to issue a token for another user.
 
 ### Administrator workflow
@@ -266,14 +266,13 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
   npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
   npx -y @wiolett/gateway-inference@latest setup codex
   npx -y @wiolett/gateway-inference@latest setup claude-code
-- Harness-specific endpoints must be enabled and their alpha-risk warning accepted before Codex or Claude Code setup. The base OpenAI-compatible adapter does not require that toggle.
 - Codex setup installs package-managed configuration, a private helper/loopback proxy, and the Gateway model catalog. Codex Desktop must also remain signed in through its normal OpenAI login; fully quit and reopen Codex after setup or login changes.
 - Claude Code setup requires Claude Code 2.1.129 or newer and configures its native Anthropic gateway contract with ANTHROPIC_BASE_URL, model discovery, and a private apiKeyHelper. It applies to the Claude Code CLI, not Claude Desktop or the VS Code extension.
 - If the user asks how to configure a harness but does not name one, ask whether they use Codex or Claude Code before giving harness-specific instructions.
 
 ### Manual clients and verification
 - OpenAI-compatible SDKs and clients use https://<gateway>/api/inference/v1 with a dedicated gwi_ token. The base adapter exposes the supported Models, Responses, and Chat Completions surfaces while inference is enabled.
-- Anthropic SDK baseURL is https://<gateway>/api/inference/anthropic because the SDK appends /v1; direct REST uses /api/inference/anthropic/v1. Do not guess other harness endpoints—read current documentation.
+- All inference clients use the single stable prefix https://<gateway>/api/inference/v1; the Anthropic SDK baseURL is https://<gateway>/api/inference because the SDK appends /v1 itself. Do not guess other harness endpoints—read current documentation.
 - A gwi_ secret is shown once. Direct the user to Profile > Authorizations > Inference API tokens or the dedicated current-user token tool, and never repeat or store the secret in assistant history.
 - After setup, verify model discovery and one small request. For administration changes also verify provider sync/health, user-visible model access, accounting, reasoning mapping, tools/continuation, and Codex compaction where applicable.
 - Provider credentials remain encrypted and read tools expose only masked metadata. Activity records usage metadata rather than prompts or model output.`,

@@ -97,6 +97,26 @@ variables:
         - tsconfig.json
         - packages/logging-sdk/**/*
 
+.gateway-inference-rules: &gateway-inference-rules
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^gateway-inference-v\d+\.\d+\.\d+$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - nx.json
+        - tsconfig.json
+        - packages/gateway-inference/**/*
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - nx.json
+        - tsconfig.json
+        - packages/gateway-inference/**/*
+
 .daemon-nginx-rules: &daemon-nginx-rules
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx$/
@@ -185,6 +205,15 @@ test-logging-sdk:
     - pnpm --filter @wiolett/gateway-logger test
     - pnpm --filter @wiolett/gateway-logger typecheck
   <<: *logging-sdk-rules
+
+test-gateway-inference:
+  stage: test
+  extends: .pnpm-job
+  script:
+    - pnpm --filter @wiolett/gateway-inference test
+    - pnpm --filter @wiolett/gateway-inference typecheck
+    - pnpm --filter @wiolett/gateway-inference build
+  <<: *gateway-inference-rules
 
 test-nginx-daemon:
   stage: test
@@ -526,6 +555,25 @@ publish-logging-sdk:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
         - packages/logging-sdk/**/*
+
+# The tag and NPM_TOKEN must be protected in GitLab. The runtime check makes
+# accidental publication from an unprotected ref fail closed as well.
+publish-gateway-inference:
+  stage: release
+  extends: .pnpm-job
+  needs:
+    - test-gateway-inference
+  resource_group: npm-gateway-inference
+  script:
+    - test "${CI_COMMIT_REF_PROTECTED}" = "true" || (echo "A protected tag is required to publish @wiolett/gateway-inference" && exit 1)
+    - test -n "${NPM_TOKEN}" || (echo "NPM_TOKEN CI variable is required to publish @wiolett/gateway-inference" && exit 1)
+    - PACKAGE_VERSION="$(node -p \"JSON.parse(require('node:fs').readFileSync('packages/gateway-inference/package.json', 'utf8')).version\")"
+    - test "${CI_COMMIT_TAG}" = "gateway-inference-v${PACKAGE_VERSION}" || (echo "Tag must match packages/gateway-inference/package.json" && exit 1)
+    - pnpm --filter @wiolett/gateway-inference build
+    - printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > ~/.npmrc
+    - cd packages/gateway-inference && npm publish --cache "${CI_PROJECT_DIR}/.npm" --access public
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^gateway-inference-v\d+\.\d+\.\d+$/ && $CI_COMMIT_REF_PROTECTED == "true"
 
 # ── Daemon builds (shared template) ───────────────────────────────
 # Triggered by tags like: v1.3.0-nginx, v1.3.0-docker, v1.3.0-monitoring

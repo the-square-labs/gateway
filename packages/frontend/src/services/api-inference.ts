@@ -10,7 +10,6 @@ import type {
   InferenceProviderCatalogItem,
   InferenceProviderConnection,
   InferenceSelfUsage,
-  InferenceSettings,
   InferenceSystemUsage,
   InferenceToken,
   InferenceUserUsage,
@@ -19,19 +18,6 @@ import type { ApiClientBaseConstructor } from "./api-mixins";
 
 export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class InferenceApi extends Base {
-    getInferenceSettings(): Promise<InferenceSettings> {
-      return this.request("/inference/settings");
-    }
-
-    async updateInferenceSettings(data: Partial<InferenceSettings>): Promise<InferenceSettings> {
-      const settings = await this.request<InferenceSettings>("/inference/settings", {
-        method: "PATCH",
-        body: JSON.stringify(data),
-      });
-      this.setCache("req:/api/inference/settings", settings);
-      return settings;
-    }
-
     listInferenceTokens(): Promise<InferenceToken[]> {
       return this.request("/inference/tokens");
     }
@@ -138,7 +124,7 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
       return this.request(`/inference/providers/connections/${id}`, { method: "DELETE" });
     }
 
-    updateInferenceRouting(providerId: string, routingStrategy: "balanced" | "sequential") {
+    updateInferenceRouting(providerId: string, routingStrategy: "even" | "balanced" | "sequential") {
       return this.request(`/inference/providers/${providerId}/routing`, {
         method: "PATCH",
         body: JSON.stringify({ routingStrategy }),

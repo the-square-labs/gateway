@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import { and, desc, eq, isNull, lte } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
   inferenceOAuthSessions,
   inferenceProviderConnections,
@@ -12,6 +12,13 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { InferenceCredentialVault } from '../inference-credential-vault.js';
+import type { InferenceCoreBridgeService } from '../core/inference-core-bridge.service.js';
+import { InferenceCoreClientError } from '../core/inference-core.client.js';
+import {
+  CORE_ACCOUNT_METADATA_KEY,
+  CORE_MANAGED_METADATA_KEY,
+  coreOAuthTarget,
+} from '../core/inference-core-provider-map.js';
 import { discoverAntigravityProject } from './inference-antigravity.js';
 import { pollCodexDevice, startCodexDevice } from './inference-codex-device.oauth.js';
 import { exchangeGithubCopilotCredential } from './inference-github-copilot.oauth.js';
@@ -33,6 +40,10 @@ interface PendingOAuthPayload {
   deviceAuthId?: string;
   userCode?: string;
   state: string;
+  /** Core-backed session marker: the login flow runs inside the managed core. */
+  coreManaged?: boolean;
+  /** ChatGPT pool login flow id issued by the core (codex-auth). */
+  coreFlowId?: string;
 }
 
 interface OAuthTokenResult extends InferenceCredentialPayload {
@@ -50,8 +61,13 @@ export class InferenceOAuthService {
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly vault: InferenceCredentialVault,
     private readonly registry: InferenceProviderRegistry,
-    private readonly fetcher: Fetcher = fetch
+    private readonly fetcher: Fetcher = fetch,
+    private readonly coreBridge?: InferenceCoreBridgeService
   ) {}
+
+  private async coreReady(): Promise<boolean> {
+    return this.coreBridge ? this.coreBridge.coreReady() : false;
+  }
 
   async start(
     userId: string,
@@ -76,119 +92,10 @@ export class InferenceOAuthService {
 
     const state = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 10 * 60_000);
-    let authorizationUrl: string;
-    let completionMode: string;
-    let userCode: string | undefined;
-    let pollIntervalSeconds: number | undefined;
-    let pending: PendingOAuthPayload;
-
-    if (provider.oauth.flow === 'redirect') {
-      const verifier = randomBytes(64).toString('base64url');
-      const challenge = createHash('sha256').update(verifier).digest('base64url');
-      const params = new URLSearchParams({
-        response_type: 'code',
-        client_id: provider.oauth.clientId,
-        redirect_uri: provider.oauth.redirectUri,
-        scope: provider.oauth.scopes,
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-        state,
-        ...provider.oauth.extraAuthorizeParams,
-      });
-      authorizationUrl = `${provider.oauth.authorizeUrl}?${params.toString()}`;
-      completionMode = 'paste_callback';
-      pending = { verifier, state };
-    } else if (provider.oauth.flow === 'codex_device') {
-      const started = await startCodexDevice(provider.oauth, this.fetcher);
-      authorizationUrl = started.authorizationUrl;
-      userCode = started.userCode;
-      pollIntervalSeconds = started.pollIntervalSeconds;
-      completionMode = 'device_poll';
-      pending = { ...started.pending, state };
-    } else {
-      const deviceId = randomUUID().replace(/-/g, '');
-      const response = await this.fetcher(provider.oauth.deviceAuthorizationUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          ...kimiHeaders(deviceId),
-          ...provider.oauth.deviceHeaders,
-        },
-        body: new URLSearchParams({
-          client_id: provider.oauth.clientId,
-          ...(provider.oauth.scopes ? { scope: provider.oauth.scopes } : {}),
-        }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok) {
-        throw new AppError(
-          502,
-          'INFERENCE_OAUTH_START_FAILED',
-          `Provider device authorization failed (${response.status})`
-        );
-      }
-      const body = asObject(await response.json());
-      const deviceCode = stringValue(body?.device_code);
-      userCode = stringValue(body?.user_code);
-      authorizationUrl =
-        provider.id === 'github-copilot'
-          ? `https://github.com/login/device?user_code=${encodeURIComponent(userCode ?? '')}`
-          : (stringValue(body?.verification_uri_complete) ?? stringValue(body?.verification_uri) ?? '');
-      if (!deviceCode || !userCode || !authorizationUrl) {
-        throw new AppError(502, 'INFERENCE_OAUTH_INVALID_RESPONSE', 'Provider device response is incomplete');
-      }
-      const expiresIn = numberValue(body?.expires_in) ?? 900;
-      pollIntervalSeconds = Math.max(1, numberValue(body?.interval) ?? 5);
-      expiresAt.setTime(Date.now() + Math.min(expiresIn * 1000, 10 * 60_000));
-      completionMode = 'device_poll';
-      pending = { deviceCode, deviceId, state };
+    if (!(await this.coreReady())) {
+      throw new AppError(409, 'INFERENCE_CORE_NOT_READY', 'Install the inference core before connecting providers');
     }
-
-    const sealed = this.vault.seal(pending);
-    const [session] = await this.db.transaction(async (tx) => {
-      await tx
-        .insert(inferenceProviderSettings)
-        .values({
-          providerId: provider.id,
-          ...(provider.subscription
-            ? {
-                termsAcceptedVersion: provider.termsVersion,
-                termsAcceptedAt: new Date(),
-                termsAcceptedBy: userId,
-              }
-            : {}),
-        })
-        .onConflictDoUpdate({
-          target: inferenceProviderSettings.providerId,
-          set: provider.subscription
-            ? {
-                termsAcceptedVersion: provider.termsVersion,
-                termsAcceptedAt: new Date(),
-                termsAcceptedBy: userId,
-                updatedAt: new Date(),
-              }
-            : { updatedAt: new Date() },
-        });
-      return tx
-        .insert(inferenceOAuthSessions)
-        .values({
-          providerId: provider.id,
-          userId,
-          connectionName: input.connectionName.trim(),
-          flow: provider.oauth!.flow === 'redirect' ? 'redirect' : 'device',
-          stateHash: hashState(state),
-          encryptedPayload: sealed.encryptedPayload,
-          encryptedDek: sealed.encryptedDek,
-          authorizationUrl,
-          completionMode,
-          userCode,
-          pollIntervalSeconds,
-          expiresAt,
-        })
-        .returning();
-    });
-
-    return serializeOAuthSession(session);
+    return this.startCoreSession(userId, provider, input, state, expiresAt);
   }
 
   async status(userId: string, sessionId: string) {
@@ -201,6 +108,10 @@ export class InferenceOAuthService {
         .returning();
       return serializeOAuthSession(expired ?? session);
     }
+    if (session.status === 'pending') {
+      const core = this.coreSessionPayload(session);
+      if (core) return this.pollCoreSession(session, core);
+    }
     if (session.status === 'pending' && session.flow === 'device' && (await this.claimDevicePoll(session))) {
       return this.complete(userId, sessionId);
     }
@@ -210,6 +121,18 @@ export class InferenceOAuthService {
   async cancel(userId: string, sessionId: string) {
     const session = await this.ownedSession(userId, sessionId);
     if (session.status !== 'pending') return serializeOAuthSession(session);
+    const core = this.coreSessionPayload(session);
+    if (core) {
+      // Best-effort: the local session is cancelled regardless of core state.
+      try {
+        const target = coreOAuthTarget(session.providerId);
+        const client = await this.coreBridge!.requireClient();
+        if (target?.kind === 'codex-pool') await client.coreCodexLoginCancel(core.coreFlowId);
+        else if (target) await client.coreOauthLoginCancel(target.oauthProvider);
+      } catch {
+        /* core cancel is best-effort */
+      }
+    }
     const [cancelled] = await this.db
       .update(inferenceOAuthSessions)
       .set({ status: 'cancelled', errorCode: 'oauth_cancelled', errorMessage: null, updatedAt: new Date() })
@@ -228,6 +151,9 @@ export class InferenceOAuthService {
         .where(eq(inferenceOAuthSessions.id, session.id));
       throw new AppError(410, 'INFERENCE_OAUTH_EXPIRED', 'OAuth session expired');
     }
+
+    const core = this.coreSessionPayload(session);
+    if (core) return this.completeCoreSession(session, core, callbackInput);
 
     const provider = this.registry.require(session.providerId);
     if (!provider.oauth) throw new AppError(400, 'INFERENCE_OAUTH_UNSUPPORTED', 'Provider OAuth is unavailable');
@@ -511,6 +437,305 @@ export class InferenceOAuthService {
     });
   }
 
+  // ------------------------------------------------------ core-backed logins
+  // Core-backed OAuth: the login flow runs inside the managed core and the
+  // credential never crosses into Gateway storage. The Gateway session row
+  // still owns browser-facing lifecycle (ownership, expiry, UI polling).
+
+  private async recordProviderTerms(
+    tx: DrizzleTransaction,
+    provider: InferenceProviderDefinition,
+    userId: string
+  ) {
+    await tx
+      .insert(inferenceProviderSettings)
+      .values({
+        providerId: provider.id,
+        ...(provider.subscription
+          ? {
+              termsAcceptedVersion: provider.termsVersion,
+              termsAcceptedAt: new Date(),
+              termsAcceptedBy: userId,
+            }
+          : {}),
+      })
+      .onConflictDoUpdate({
+        target: inferenceProviderSettings.providerId,
+        set: provider.subscription
+          ? {
+              termsAcceptedVersion: provider.termsVersion,
+              termsAcceptedAt: new Date(),
+              termsAcceptedBy: userId,
+              updatedAt: new Date(),
+            }
+          : { updatedAt: new Date() },
+      });
+  }
+
+  /** Sealed payload of a core-backed session, or null for legacy sessions. */
+  private coreSessionPayload(session: typeof inferenceOAuthSessions.$inferSelect): { coreFlowId?: string } | null {
+    const payload = this.vault.open<PendingOAuthPayload>({
+      encryptedPayload: session.encryptedPayload,
+      encryptedDek: session.encryptedDek,
+      keyVersion: 1,
+    });
+    if (payload.coreManaged !== true) return null;
+    return { ...(payload.coreFlowId ? { coreFlowId: payload.coreFlowId } : {}) };
+  }
+
+  private async startCoreSession(
+    userId: string,
+    provider: InferenceProviderDefinition,
+    input: { providerId: string; connectionName: string; acceptTerms: boolean; termsVersion?: string },
+    state: string,
+    expiresAt: Date
+  ) {
+    const target = coreOAuthTarget(provider.id);
+    if (!target) throw new AppError(400, 'INFERENCE_OAUTH_UNSUPPORTED', 'Provider does not support OAuth');
+    const client = await this.coreBridge!.requireClient();
+    let authorizationUrl: string;
+    let completionMode: string;
+    let userCode: string | undefined;
+    let coreFlowId: string | undefined;
+    if (target.kind === 'codex-pool') {
+      const started = await client.coreCodexLoginStart({ flow: 'device' }).catch((error: unknown) => {
+        throw asCoreOAuthError(error);
+      });
+      if (!started.url) {
+        throw new AppError(502, 'INFERENCE_OAUTH_START_FAILED', 'Core did not return an authorization URL');
+      }
+      coreFlowId = started.flowId;
+      authorizationUrl = started.url;
+      userCode = started.deviceCode ?? undefined;
+      if (!userCode) {
+        throw new AppError(502, 'INFERENCE_OAUTH_INVALID_RESPONSE', 'Core device response is incomplete');
+      }
+      completionMode = 'device_poll';
+    } else {
+      // A provider that already holds accounts must add, not replace, on reconnect.
+      const existing = await client.listCoreOauthAccounts(target.oauthProvider).catch(() => null);
+      const started = await client
+        .coreOauthLoginStart(target.oauthProvider, { addAccount: (existing?.accounts.length ?? 0) > 0 })
+        .catch((error: unknown) => {
+          throw asCoreOAuthError(error);
+        });
+      if (!started.url) {
+        throw new AppError(502, 'INFERENCE_OAUTH_START_FAILED', 'Core did not return an authorization URL');
+      }
+      authorizationUrl = started.url;
+      if (provider.oauth!.flow === 'device') {
+        userCode = typeof started.deviceCode === 'string' && started.deviceCode ? started.deviceCode : undefined;
+        if (!userCode) {
+          throw new AppError(502, 'INFERENCE_OAUTH_INVALID_RESPONSE', 'Core device response is incomplete');
+        }
+        completionMode = 'device_poll';
+      } else {
+        completionMode = 'paste_callback';
+      }
+    }
+    const sealed = this.vault.seal({
+      state,
+      coreManaged: true,
+      ...(coreFlowId ? { coreFlowId } : {}),
+    } satisfies PendingOAuthPayload);
+    const [session] = await this.db.transaction(async (tx) => {
+      await this.recordProviderTerms(tx, provider, userId);
+      return tx
+        .insert(inferenceOAuthSessions)
+        .values({
+          providerId: provider.id,
+          userId,
+          connectionName: input.connectionName.trim(),
+          flow: completionMode === 'device_poll' ? 'device' : 'redirect',
+          stateHash: hashState(state),
+          encryptedPayload: sealed.encryptedPayload,
+          encryptedDek: sealed.encryptedDek,
+          authorizationUrl,
+          completionMode,
+          userCode,
+          expiresAt,
+        })
+        .returning();
+    });
+    return serializeOAuthSession(session);
+  }
+
+  private async completeCoreSession(
+    session: typeof inferenceOAuthSessions.$inferSelect,
+    core: { coreFlowId?: string },
+    callbackInput?: string
+  ) {
+    const input = callbackInput?.trim();
+    if (input) {
+      const target = coreOAuthTarget(session.providerId);
+      if (!target) throw new AppError(400, 'INFERENCE_OAUTH_UNSUPPORTED', 'Provider does not support OAuth');
+      const client = await this.coreBridge!.requireClient();
+      try {
+        if (target.kind === 'codex-pool') {
+          if (!core.coreFlowId) {
+            throw new AppError(400, 'INFERENCE_OAUTH_STATE_INVALID', 'Core login flow reference is missing');
+          }
+          await client.coreCodexLoginCode(core.coreFlowId, input);
+        } else {
+          await client.coreOauthLoginCode(target.oauthProvider, input);
+        }
+      } catch (error) {
+        const mapped = asCoreOAuthError(error);
+        await this.db
+          .update(inferenceOAuthSessions)
+          .set({
+            status: 'error',
+            errorCode: 'oauth_exchange_failed',
+            errorMessage: mapped.message.slice(0, 500),
+            updatedAt: new Date(),
+          })
+          .where(eq(inferenceOAuthSessions.id, session.id));
+        throw mapped;
+      }
+    }
+    return this.pollCoreSession(session, core);
+  }
+
+  private async pollCoreSession(session: typeof inferenceOAuthSessions.$inferSelect, core: { coreFlowId?: string }) {
+    const provider = this.registry.require(session.providerId);
+    const target = coreOAuthTarget(provider.id);
+    if (!target) throw new AppError(400, 'INFERENCE_OAUTH_UNSUPPORTED', 'Provider does not support OAuth');
+    const client = await this.coreBridge!.requireClient();
+    if (target.kind === 'codex-pool') {
+      if (!core.coreFlowId) {
+        return this.failCoreSession(session, 'oauth_state_invalid', 'Core login flow reference is missing');
+      }
+      const status = await client.coreCodexLoginStatus(core.coreFlowId).catch((error: unknown) => {
+        throw asCoreOAuthError(error);
+      });
+      if (!status || status.status === 'expired') {
+        const [expired] = await this.db
+          .update(inferenceOAuthSessions)
+          .set({ status: 'expired', updatedAt: new Date() })
+          .where(and(eq(inferenceOAuthSessions.id, session.id), eq(inferenceOAuthSessions.status, 'pending')))
+          .returning();
+        return serializeOAuthSession(expired ?? session);
+      }
+      if (status.status === 'error') {
+        return this.failCoreSession(session, 'oauth_exchange_failed', status.error ?? 'Core login failed');
+      }
+      if (status.status === 'done' && status.accountId) {
+        return this.finalizeCoreSession(session, provider, { accountId: status.accountId, email: status.email });
+      }
+      return serializeOAuthSession(session);
+    }
+    const raw = await client.coreOauthLoginStatus(target.oauthProvider).catch((error: unknown) => {
+      throw asCoreOAuthError(error);
+    });
+    const status = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+    const errorMessage = typeof status?.error === 'string' ? status.error : undefined;
+    if (status?.done === true && errorMessage) {
+      return this.failCoreSession(session, 'oauth_exchange_failed', errorMessage);
+    }
+    if (status?.done === true && status.loggedIn === true) {
+      return this.finalizeCoreSession(session, provider, {
+        accountId: typeof status.activeAccountId === 'string' ? status.activeAccountId : undefined,
+        email: typeof status.email === 'string' ? status.email : undefined,
+      });
+    }
+    return serializeOAuthSession(session);
+  }
+
+  private async finalizeCoreSession(
+    session: typeof inferenceOAuthSessions.$inferSelect,
+    provider: InferenceProviderDefinition,
+    identity: { accountId?: string; email?: string }
+  ) {
+    if (!identity.accountId && !identity.email) {
+      return this.failCoreSession(session, 'oauth_identity_missing', 'Core did not report the account identity');
+    }
+    const connectionId = await this.persistCoreConnection(session.userId, provider, session.connectionName, identity);
+    await this.db
+      .update(inferenceOAuthSessions)
+      .set({ status: 'complete', connectionId, updatedAt: new Date() })
+      .where(eq(inferenceOAuthSessions.id, session.id));
+    return { ...serializeOAuthSession(session), status: 'complete' as const, connectionId };
+  }
+
+  private async failCoreSession(session: typeof inferenceOAuthSessions.$inferSelect, code: string, message: string) {
+    const [updated] = await this.db
+      .update(inferenceOAuthSessions)
+      .set({ status: 'error', errorCode: code, errorMessage: message.slice(0, 500), updatedAt: new Date() })
+      .where(eq(inferenceOAuthSessions.id, session.id))
+      .returning();
+    return serializeOAuthSession(updated ?? session);
+  }
+
+  /**
+   * Persist the browser-facing connection row for a core-held account. No
+   * credential row is written — the secret stays inside the core; a legacy
+   * row reconnecting through the core loses its Gateway credential here.
+   */
+  private async persistCoreConnection(
+    userId: string,
+    provider: InferenceProviderDefinition,
+    name: string,
+    identity: { accountId?: string; email?: string }
+  ): Promise<string> {
+    const accountExternalId = identity.accountId ?? identity.email!.toLowerCase();
+    return this.db.transaction(async (tx) => {
+      const existing = await tx.query.inferenceProviderConnections.findFirst({
+        where: and(
+          eq(inferenceProviderConnections.providerId, provider.id),
+          eq(inferenceProviderConnections.accountExternalId, accountExternalId),
+          isNull(inferenceProviderConnections.deletedAt)
+        ),
+      });
+      if (existing) {
+        await tx
+          .update(inferenceProviderConnections)
+          .set({
+            name,
+            accountLabel: identity.email ?? existing.accountLabel,
+            baseUrl: provider.baseUrl,
+            enabled: true,
+            status: 'pending',
+            healthReason: null,
+            metadata: {
+              ...existing.metadata,
+              [CORE_MANAGED_METADATA_KEY]: true,
+              ...(identity.accountId ? { [CORE_ACCOUNT_METADATA_KEY]: identity.accountId } : {}),
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(inferenceProviderConnections.id, existing.id));
+        await tx
+          .delete(inferenceProviderCredentials)
+          .where(eq(inferenceProviderCredentials.connectionId, existing.id));
+        return existing.id;
+      }
+      const [lastConnection] = await tx
+        .select({ routingOrder: inferenceProviderConnections.routingOrder })
+        .from(inferenceProviderConnections)
+        .where(isNull(inferenceProviderConnections.deletedAt))
+        .orderBy(desc(inferenceProviderConnections.routingOrder))
+        .limit(1);
+      const [connection] = await tx
+        .insert(inferenceProviderConnections)
+        .values({
+          providerId: provider.id,
+          name,
+          authType: 'oauth',
+          baseUrl: provider.baseUrl,
+          routingOrder: nextRoutingOrder(lastConnection?.routingOrder),
+          accountExternalId,
+          accountLabel: identity.email,
+          metadata: {
+            [CORE_MANAGED_METADATA_KEY]: true,
+            ...(identity.accountId ? { [CORE_ACCOUNT_METADATA_KEY]: identity.accountId } : {}),
+          },
+          createdBy: userId,
+        })
+        .returning();
+      return connection.id;
+    });
+  }
+
   private async ownedSession(userId: string, sessionId: string) {
     const session = await this.db.query.inferenceOAuthSessions.findFirst({
       where: and(eq(inferenceOAuthSessions.id, sessionId), eq(inferenceOAuthSessions.userId, userId)),
@@ -538,6 +763,16 @@ export class InferenceOAuthService {
 
 function hashState(state: string): string {
   return createHash('sha256').update(state).digest('hex');
+}
+
+/** Core management rejections surface their message; transport failures stay generic. */
+function asCoreOAuthError(error: unknown): Error {
+  if (error instanceof AppError) return error;
+  if (error instanceof InferenceCoreClientError) {
+    const status = error.status && error.status >= 400 && error.status < 500 ? error.status : 502;
+    return new AppError(status, 'INFERENCE_OAUTH_CORE_FAILED', error.message.slice(0, 500));
+  }
+  return new AppError(502, 'INFERENCE_OAUTH_CORE_FAILED', 'Core OAuth operation failed');
 }
 
 function parseCallback(input?: string): { code?: string; state?: string } {

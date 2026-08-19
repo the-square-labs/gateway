@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
+import { serializeModel } from './inference-provider.service.helpers.js';
 import { __testOnly, InferenceProviderService } from './inference-provider.service.js';
 
 describe('InferenceProviderService policy helpers', () => {
@@ -57,6 +58,34 @@ describe('InferenceProviderService policy helpers', () => {
     expect(__testOnly.connectionDisableBlockers(affected, ['model-a', 'model-b'])).toEqual([]);
   });
 
+  it('keeps catalog fallback compaction within a provider-reported input limit', () => {
+    const timestamp = new Date('2026-08-19T12:00:00.000Z');
+    const serialized = serializeModel(
+      {
+        id: 'model-id',
+        connectionId: 'connection-id',
+        remoteModelId: 'gpt-5.6-luna',
+        displayName: null,
+        contextWindow: 272_000,
+        maxInputTokens: 272_000,
+        maxOutputTokens: null,
+        autoCompactTokenLimit: null,
+        modalities: ['text'],
+        capabilities: {},
+        reasoningEfforts: [],
+        metadata: {},
+        available: true,
+        lastSeenAt: timestamp,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      'openai'
+    );
+
+    expect(serialized.maxInputTokens).toBe(272_000);
+    expect(serialized.autoCompactTokenLimit).toBe(272_000);
+  });
+
   it('reclaims abandoned running synchronizations without duplicating live ones', async () => {
     const now = new Date('2026-07-30T12:00:00.000Z');
     const where = vi.fn().mockResolvedValue([
@@ -66,14 +95,7 @@ describe('InferenceProviderService policy helpers', () => {
     ]);
     const from = vi.fn().mockReturnValue({ where });
     const db = { select: vi.fn().mockReturnValue({ from }) };
-    const service = new InferenceProviderService(
-      db as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never
-    );
+    const service = new InferenceProviderService(db as never, {} as never, {} as never, {} as never);
     const syncConnection = vi.spyOn(service, 'syncConnection').mockResolvedValue({} as never);
 
     await service.syncDue(now);
@@ -85,14 +107,7 @@ describe('InferenceProviderService policy helpers', () => {
   });
 
   it('checks for abandoned synchronizations immediately on scheduler startup', () => {
-    const service = new InferenceProviderService(
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never
-    );
+    const service = new InferenceProviderService({} as never, {} as never, {} as never, {} as never);
     const syncDue = vi.spyOn(service, 'syncDue').mockResolvedValue();
 
     service.start();
