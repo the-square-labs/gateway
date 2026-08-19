@@ -129,7 +129,10 @@ describe("InferenceProviderDialog", () => {
       key: "ArrowDown",
     });
     expect(
-      await screen.findByText("Distributes new threads evenly across available connections.")
+      await screen.findByText("Sends more new threads to connections with more remaining quota.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Distributes new threads equally across available connections.")
     ).toBeInTheDocument();
     expect(
       screen.getByText("Uses the highest connection until unavailable, then moves down the list.")

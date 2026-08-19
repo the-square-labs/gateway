@@ -1102,7 +1102,7 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings
-- generalSettings contains feature flags and shared limits. Inference is disabled by default under Settings > General > General settings, and its harness-specific endpoints are configured separately under Settings > Inference.
+- generalSettings contains feature flags and shared limits. Inference is disabled by default under Settings > General > General settings.
 - networkSecurity controls trusted private destinations and outbound request restrictions.
 - outboundWebhookPolicy controls allowed webhook destinations.
 
@@ -1201,7 +1201,7 @@ No global installation or PATH change is required:
 npx -y @wiolett/gateway-inference@latest
 \`\`\`
 
-An administrator must first enable **Harness-specific endpoints** in **Settings > Inference** and accept the alpha-risk warning. Harness APIs track unstable upstream contracts and may stop working after a client update; the base OpenAI-compatible adapter does not require this toggle. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report both \`generalSettings.features.inferenceEnabled\` and \`generalSettings.inference.harnessSpecificEndpointsEnabled\`. Without that read permission, do not guess either value: explain that an administrator must confirm them. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
+An administrator must first enable **Inference** in **Settings > General**. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report \`generalSettings.features.inferenceEnabled\`. Without that read permission, do not guess its value: explain that an administrator must confirm it. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
 
 #### Codex CLI and Desktop
 
@@ -1231,17 +1231,17 @@ API key:  gwi_...
 Models:   GET <base-url>/models
 \`\`\`
 
-Use this base adapter for OpenAI SDKs and OpenAI-compatible clients. It supports Responses and Chat Completions. Harness-specific adapters such as Codex and Anthropic are available only when an administrator enables them in **Settings > Inference**.
+Use this base adapter for OpenAI SDKs and OpenAI-compatible clients. It supports Responses and Chat Completions.
 
 ### Manual Anthropic-compatible setup
 
 \`\`\`text
-Anthropic SDK base URL: https://gateway.example.com/api/inference/anthropic
-Direct REST prefix:     https://gateway.example.com/api/inference/anthropic/v1
+Anthropic SDK base URL: https://gateway.example.com/api/inference
+Direct REST prefix:     https://gateway.example.com/api/inference/v1
 API key:                gwi_...
 \`\`\`
 
-Anthropic SDKs append \`/v1\` themselves, so configure the SDK base URL without \`/v1\`. Direct HTTP clients call \`/api/inference/anthropic/v1/messages\`. Dedicated \`gwi_\` tokens work as Bearer credentials and as \`x-api-key\`.
+Anthropic SDKs append \`/v1\` themselves, so configure the SDK base URL without \`/v1\`. Direct HTTP clients call \`/api/inference/v1/messages\`. Dedicated \`gwi_\` tokens work as Bearer credentials and as \`x-api-key\`.
 
 ## Safety And Verification
 

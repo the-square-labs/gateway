@@ -4,15 +4,6 @@ export const CreateInferenceTokenSchema = z.object({
   name: z.string().trim().min(1).max(255),
 });
 
-export const InferenceSettingsSchema = z.object({
-  harnessSpecificEndpointsEnabled: z.boolean(),
-});
-
-export const UpdateInferenceSettingsSchema = InferenceSettingsSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  'At least one field is required'
-);
-
 export const CreateInferenceProviderConnectionSchema = z.object({
   providerId: z.string().trim().min(1).max(80),
   name: z.string().trim().min(1).max(255),
@@ -44,7 +35,7 @@ export const UpdateInferenceProviderConnectionSchema = z
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
 
 export const UpdateInferenceProviderRoutingSchema = z.object({
-  routingStrategy: z.enum(['balanced', 'sequential']),
+  routingStrategy: z.enum(['even', 'balanced', 'sequential']),
 });
 
 const InferenceModelFieldsSchema = z.object({
@@ -89,10 +80,12 @@ export const CreateInferenceModelSourceSchema = z.object({
   capabilitiesOverride: z.record(z.boolean()).nullable().optional(),
   manualMetadata: z
     .object({
-      contextWindow: z.number().int().positive(),
-      maxInputTokens: z.number().int().positive(),
+      contextWindow: z.number().int().positive().optional(),
+      maxInputTokens: z.number().int().positive().optional(),
       maxOutputTokens: z.number().int().positive().optional(),
+      autoCompactTokenLimit: z.number().int().positive().optional(),
     })
+    .refine((value) => Object.keys(value).length > 0, 'At least one metadata field is required')
     .optional(),
   pricing: InferencePricingSchema.optional(),
 });

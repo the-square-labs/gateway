@@ -1,25 +1,20 @@
 export interface InferenceAdapters {
   openai: { baseUrl: string };
-  codex: { baseUrl: string; catalogUrl: string };
   anthropic: { baseUrl: string };
 }
 
 export type InferenceHarness = 'codex' | 'claude-code';
 
 export interface InferenceDiscovery {
-  schemaVersion: 1;
-  enabled: boolean;
-  harnessSpecificEndpointsEnabled?: boolean;
+  /** Schema served by the Gateway; consumers use the normalized adapters below. */
+  schemaVersion: 1 | 2;
+  enabled?: boolean;
   minimumCliVersion: string;
   oauth: {
     resource: string;
     authorizationServer: string;
   };
   adapters: InferenceAdapters;
-  harnesses: {
-    codex: { supported: boolean };
-    'claude-code'?: { supported: boolean };
-  };
 }
 
 export interface OAuthMetadata {

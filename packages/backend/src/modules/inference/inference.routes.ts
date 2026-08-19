@@ -14,7 +14,6 @@ import {
   deleteInferenceModelRoute,
   deleteInferenceUserLimitsRoute,
   disconnectInferenceProviderConnectionRoute,
-  getInferenceSettingsRoute,
   inferenceActivityFiltersRoute,
   inferenceActivityRoute,
   inferenceLimitUsersRoute,
@@ -36,7 +35,6 @@ import {
   syncInferenceProviderConnectionRoute,
   updateInferenceProviderConnectionRoute,
   updateInferenceProviderRoutingRoute,
-  updateInferenceSettingsRoute,
 } from './inference.docs.js';
 import {
   CompleteInferenceOAuthSchema,
@@ -48,7 +46,6 @@ import {
   StartInferenceOAuthSchema,
   UpdateInferenceProviderConnectionSchema,
   UpdateInferenceProviderRoutingSchema,
-  UpdateInferenceSettingsSchema,
 } from './inference.schemas.js';
 import { InferenceTokenService } from './inference-token.service.js';
 import { InferenceModelService } from './models/inference-model.service.js';
@@ -61,19 +58,6 @@ export const inferenceManagementRoutes = new OpenAPIHono<AppEnv>({ defaultHook: 
 inferenceManagementRoutes.use('*', authMiddleware);
 inferenceManagementRoutes.use('*', sessionOnly);
 inferenceManagementRoutes.use('*', requireScope('feat:ai:use'));
-
-inferenceManagementRoutes.openapi(
-  { ...getInferenceSettingsRoute, middleware: requireScope('inference:providers:view') },
-  async (c) => c.json(await container.resolve(GeneralSettingsService).getInferenceSettings())
-);
-
-inferenceManagementRoutes.openapi(
-  { ...updateInferenceSettingsRoute, middleware: requireScope('inference:providers:manage') },
-  async (c) => {
-    const input = UpdateInferenceSettingsSchema.parse(await c.req.json());
-    return c.json(await container.resolve(GeneralSettingsService).updateInferenceSettings(input));
-  }
-);
 
 inferenceManagementRoutes.openapi(listInferenceTokensRoute, async (c) => {
   const user = c.get('user')!;

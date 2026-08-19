@@ -167,7 +167,6 @@ describe('AIService maintenance tools', () => {
     const generalSettingsService = {
       getConfig: vi.fn().mockResolvedValue({
         features: { pkiEnabled: true, domainsEnabled: true, inferenceEnabled: true },
-        inference: { harnessSpecificEndpointsEnabled: true },
       }),
       updateConfig: vi.fn().mockResolvedValue({ features: { pkiEnabled: false, domainsEnabled: true } }),
     };
@@ -216,7 +215,6 @@ describe('AIService maintenance tools', () => {
         mcpExtendedCompatibility: false,
         generalSettings: {
           features: { inferenceEnabled: true },
-          inference: { harnessSpecificEndpointsEnabled: true },
         },
         availableGroups: [{ id: '00000000-0000-4000-8000-000000000001', name: 'viewer', isBuiltin: true }],
       },

@@ -14,6 +14,7 @@ export function ConfigureAIWorkspaceWizard({
   allowGatewayInference = true,
   initialStepCanSkip = true,
   completionActionLabel,
+  canManageInferenceCore,
 }: {
   open: boolean;
   onBack: () => void;
@@ -22,6 +23,7 @@ export function ConfigureAIWorkspaceWizard({
   allowGatewayInference?: boolean;
   initialStepCanSkip?: boolean;
   completionActionLabel?: string;
+  canManageInferenceCore?: boolean;
 }) {
   const [draft, setDraft] = useState<AssistantSetupDraft>(EMPTY_ASSISTANT_SETUP_DRAFT);
   const [screen, setScreen] = useState<"workspace" | "inference">("workspace");
@@ -51,6 +53,7 @@ export function ConfigureAIWorkspaceWizard({
       />
       <InferenceSetupWizard
         open={open && screen === "inference"}
+        canManageCoreOverride={canManageInferenceCore}
         onBack={() => setScreen("workspace")}
         onConfigured={() => onConfigured("gateway_inference")}
         onSkipped={async () => setScreen("workspace")}

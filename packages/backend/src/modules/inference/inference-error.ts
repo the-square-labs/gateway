@@ -12,11 +12,7 @@ export type InferenceErrorCode =
   | 'not_implemented';
 
 function isAnthropicPath(path: string): boolean {
-  return (
-    path.includes('/api/inference/anthropic/v1/') ||
-    path.endsWith('/messages') ||
-    path.endsWith('/messages/count_tokens')
-  );
+  return path.endsWith('/messages') || path.endsWith('/messages/count_tokens');
 }
 
 export function inferenceErrorResponse(

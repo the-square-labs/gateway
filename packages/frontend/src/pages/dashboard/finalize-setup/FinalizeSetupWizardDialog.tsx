@@ -103,7 +103,10 @@ export function FinalizeSetupWizardDialog({
           </AnimatePresence>
         </AnimatedHeight>
         {hasFooter && (
-          <DialogFooter className={footerLeft ? "sm:justify-between" : undefined}>
+          <DialogFooter
+            data-setup-footer=""
+            className={footerLeft ? "sm:justify-between" : undefined}
+          >
             {footerLeft && <div className="mr-auto flex items-center">{footerLeft}</div>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:space-x-2 sm:gap-0">
               {onBack && (

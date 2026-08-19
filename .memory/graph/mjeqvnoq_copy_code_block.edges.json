@@ -3,6 +3,16 @@
   "edges": [
     {
       "from_id": "mjeqvnoq",
+      "to_id": "0s83sww0",
+      "relation": "related_to",
+      "weight": 0.3452,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967221,
+      "updated_at": 1786064967221
+    },
+    {
+      "from_id": "mjeqvnoq",
       "to_id": "94t2cjlq",
       "relation": "same_area",
       "weight": 0.4766,
@@ -23,29 +33,19 @@
     },
     {
       "from_id": "mjeqvnoq",
-      "to_id": "ip47mets",
-      "relation": "related_to",
-      "weight": 0.3794,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967221,
-      "updated_at": 1786064967221
-    },
-    {
-      "from_id": "mjeqvnoq",
-      "to_id": "0s83sww0",
-      "relation": "related_to",
-      "weight": 0.3452,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967221,
-      "updated_at": 1786064967221
-    },
-    {
-      "from_id": "mjeqvnoq",
       "to_id": "dcfkgqwx",
       "relation": "related_to",
       "weight": 0.3433,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967221,
+      "updated_at": 1786064967221
+    },
+    {
+      "from_id": "mjeqvnoq",
+      "to_id": "ip47mets",
+      "relation": "related_to",
+      "weight": 0.3794,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967221,

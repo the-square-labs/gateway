@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Check, ExternalLink, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -71,8 +71,14 @@ export function InferenceProviderConnectDialog({
   const [oauth, setOAuth] = useState<InferenceOAuthSession | null>(null);
   const [callback, setCallback] = useState("");
   const [saving, setSaving] = useState(false);
-  const lastSubmittedCallback = useRef("");
   const selected = catalog.find((provider) => provider.id === providerId);
+  const oauthProvider = oauth
+    ? catalog.find((provider) => provider.id === oauth.providerId)
+    : selected;
+  const authorizationProviderLabel = (oauthProvider?.label ?? "Provider").replace(
+    /\s+subscription$/i,
+    ""
+  );
   const contentKey = oauth ? `oauth-${oauth.completionMode}` : `setup-${providerId}-${authType}`;
 
   useEffect(() => {
@@ -87,7 +93,6 @@ export function InferenceProviderConnectDialog({
     setAllowPrivateNetwork(false);
     setOAuth(null);
     setCallback("");
-    lastSubmittedCallback.current = "";
   }, [initial, open]);
 
   const selectProvider = (id: string) => {
@@ -171,30 +176,25 @@ export function InferenceProviderConnectDialog({
     return () => window.clearTimeout(timer);
   }, [finish, oauth, open, setOauthState]);
 
-  useEffect(() => {
+  const completeCallback = async () => {
     const value = callback.trim();
     if (
-      !open ||
       !oauth ||
       oauth.status !== "pending" ||
       oauth.completionMode !== "paste_callback" ||
       !isCompleteCallback(value) ||
-      lastSubmittedCallback.current === value
+      saving
     )
       return;
-    const timer = window.setTimeout(async () => {
-      lastSubmittedCallback.current = value;
-      setSaving(true);
-      try {
-        await finish(await api.completeInferenceOAuth(oauth.id, value));
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Authorization failed");
-      } finally {
-        setSaving(false);
-      }
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [callback, finish, oauth, open]);
+    setSaving(true);
+    try {
+      await finish(await api.completeInferenceOAuth(oauth.id, value));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Authorization failed");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const connect = async () => {
     if (!selected || !name.trim()) return;
@@ -388,22 +388,50 @@ export function InferenceProviderConnectDialog({
                   ) : (
                     <>
                       <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-                        <li>Open Claude authorization and sign in.</li>
-                        <li>Copy the code Claude shows, or the final localhost callback URL.</li>
-                        <li>Paste it below. Gateway submits it automatically.</li>
+                        <li>Open {authorizationProviderLabel} authorization and sign in.</li>
+                        <li>
+                          Copy the code {authorizationProviderLabel} shows, or the final localhost
+                          callback URL.
+                        </li>
+                        <li>Paste it below and confirm with the checkmark.</li>
                       </ol>
                       <Button asChild variant="outline">
                         <a href={oauth.authorizationUrl} target="_blank" rel="noreferrer">
                           <ExternalLink className="h-4 w-4" />
-                          Open Claude authorization
+                          Open {authorizationProviderLabel} authorization
                         </a>
                       </Button>
-                      <Input
-                        value={callback}
-                        onChange={(event) => setCallback(event.target.value)}
-                        placeholder="Paste code#state or callback URL"
-                        autoFocus
-                      />
+                      <form
+                        className="flex min-w-0 border border-input bg-background"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void completeCallback();
+                        }}
+                      >
+                        <Input
+                          value={callback}
+                          onChange={(event) => setCallback(event.target.value)}
+                          placeholder="Paste code#state or callback URL"
+                          className="min-w-0 flex-1 border-0"
+                          disabled={saving}
+                          autoFocus
+                        />
+                        <Button
+                          type="submit"
+                          variant="ghost"
+                          size="icon"
+                          className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                          disabled={saving || !isCompleteCallback(callback.trim())}
+                          aria-label={`Complete ${authorizationProviderLabel} authorization`}
+                          title="Complete authorization"
+                        >
+                          {saving ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Check className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </form>
                       {saving && (
                         <p className="text-xs text-muted-foreground">Completing authorization…</p>
                       )}

@@ -66,6 +66,7 @@ import type { BrowserSession, DatabaseConnection, LoggingSchema, Node, ProxyHost
 import { InferenceTokensSection } from "./inference/InferenceTokensSection";
 import { InferenceUsage } from "./inference/InferenceUsagePanels";
 import { ApiTokensSection } from "./settings/ApiTokensSection";
+import { InferenceEndpointSettingsPanel } from "./settings/inference/InferenceEndpointSettingsPanel";
 import { OAuthApplicationsSection } from "./settings/OAuthApplicationsSection";
 
 const PROFILE_TABS = ["preferences", "authorizations"] as const;
@@ -212,6 +213,8 @@ export function Profile() {
                   </div>
                 )}
               </PanelShell>
+
+              {canUseInference && <InferenceEndpointSettingsPanel />}
 
               {user?.authMethod !== "oidc" && <LocalAccountSecurityPanel />}
 

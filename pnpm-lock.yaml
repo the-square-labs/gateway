@@ -146,6 +146,9 @@ importers:
       winston:
         specifier: ^3.17.0
         version: 3.19.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -177,6 +180,9 @@ importers:
       '@types/ssh2':
         specifier: ^1.15.5
         version: 1.15.5
+      '@types/ws':
+        specifier: ^8.18.0
+        version: 8.18.1
       drizzle-kit:
         specifier: ^0.31.9
         version: 0.31.10

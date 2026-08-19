@@ -3,20 +3,20 @@
   "edges": [
     {
       "from_id": "dv6ewa57",
-      "to_id": "v80uezny",
-      "relation": "related_to",
-      "weight": 0.78,
-      "reason": "Defines authorized audit access to system PKI lifecycle and evidence metadata.",
+      "to_id": "gdptltym",
+      "relation": "same_workflow",
+      "weight": 0.74,
+      "reason": "Covers authorization and transaction-test verification for PKI lifecycle changes.",
       "source": "auto",
       "created_at": 1786067594059,
       "updated_at": 1786067594059
     },
     {
       "from_id": "dv6ewa57",
-      "to_id": "gdptltym",
-      "relation": "same_workflow",
-      "weight": 0.74,
-      "reason": "Covers authorization and transaction-test verification for PKI lifecycle changes.",
+      "to_id": "v80uezny",
+      "relation": "related_to",
+      "weight": 0.78,
+      "reason": "Defines authorized audit access to system PKI lifecycle and evidence metadata.",
       "source": "auto",
       "created_at": 1786067594059,
       "updated_at": 1786067594059

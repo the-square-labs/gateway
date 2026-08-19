@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "yjerrsgn",
-      "to_id": "nr9hvzr3",
-      "relation": "related_to",
-      "weight": 0.75,
-      "reason": "First-run setup lockout policy is operational context for Gateway startup and recovery.",
-      "source": "manual",
-      "created_at": 1784761859351,
-      "updated_at": 1784761859351
-    },
-    {
-      "from_id": "yjerrsgn",
       "to_id": "h0g48t5u",
       "relation": "related_to",
       "weight": 0.3321,
@@ -20,6 +10,16 @@
       "source": "auto",
       "created_at": 1786064968058,
       "updated_at": 1786064968058
+    },
+    {
+      "from_id": "yjerrsgn",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.75,
+      "reason": "First-run setup lockout policy is operational context for Gateway startup and recovery.",
+      "source": "manual",
+      "created_at": 1784761859351,
+      "updated_at": 1784761859351
     }
   ]
 }

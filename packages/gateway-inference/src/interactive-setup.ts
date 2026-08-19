@@ -10,7 +10,7 @@ const AUTHORIZATION_REQUIRED_CODES = new Set([
   'AUTHORIZATION_EXPIRED',
   'AUTHORIZATION_REVOKED',
 ]);
-const CLI_SUPPORTED_HARNESSES = new Set(['codex', 'claude-code']);
+const CLI_SUPPORTED_HARNESSES = ['codex', 'claude-code'];
 
 export interface InteractiveSetupSession {
   profile: GatewayProfile;
@@ -49,11 +49,9 @@ export async function runInteractiveInferenceSetup(input: {
     session = await input.session();
   }
 
-  const harnesses = supportedHarnesses(session.discovery);
-  if (harnesses.length === 0) {
-    throw new CliError('NO_SUPPORTED_HARNESSES', 'This Gateway does not advertise a supported inference harness.');
-  }
-  const harness = await input.ui.select('Which harness do you want to configure?', harnesses);
+  // Schema v2 gateways serve both harnesses from the single stable
+  // /api/inference/v1 prefix; there is no per-harness support advertisement.
+  const harness = await input.ui.select('Which harness do you want to configure?', supportedHarnesses());
   if (!harness) {
     input.ui.cancel('Setup cancelled.');
     return 0;
@@ -75,10 +73,8 @@ export function isAuthorizationRequired(error: unknown): boolean {
   return error instanceof CliError && AUTHORIZATION_REQUIRED_CODES.has(error.code);
 }
 
-function supportedHarnesses(discovery: InferenceDiscovery): InteractiveOption[] {
-  return Object.entries(discovery.harnesses)
-    .filter(([harness, value]) => value?.supported && CLI_SUPPORTED_HARNESSES.has(harness))
-    .map(([value]) => ({ value, ...harnessPresentation(value) }));
+function supportedHarnesses(): InteractiveOption[] {
+  return CLI_SUPPORTED_HARNESSES.map((value) => ({ value, ...harnessPresentation(value) }));
 }
 
 function harnessPresentation(harness: string): Pick<InteractiveOption, 'label' | 'hint'> {

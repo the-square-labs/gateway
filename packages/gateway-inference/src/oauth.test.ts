@@ -7,22 +7,17 @@ import { createLoopbackReceiver, type LoopbackReceiver, loginWithBrowser, refres
 import type { InferenceDiscovery, OAuthCredential, OAuthMetadata, RuntimeCredential } from './types.js';
 
 const discovery: InferenceDiscovery = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   enabled: true,
-  minimumCliVersion: '0.1.0',
+  minimumCliVersion: '0.3.0',
   oauth: {
     resource: 'https://gateway.example.com/api/inference/setup',
     authorizationServer: 'https://gateway.example.com',
   },
   adapters: {
     openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
-    codex: {
-      baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
-      catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models',
-    },
-    anthropic: { baseUrl: 'https://gateway.example.com/api/inference/anthropic' },
+    anthropic: { baseUrl: 'https://gateway.example.com/api/inference' },
   },
-  harnesses: { codex: { supported: true } },
 };
 
 const metadata: OAuthMetadata = {

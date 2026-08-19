@@ -70,6 +70,15 @@ describe('InferenceProviderRegistry parity', () => {
     expect(registry.require('openai-compatible').allowBaseUrlOverride).toBe(true);
   });
 
+  it('classifies coding and token plans as subscription-backed even when they use keys', () => {
+    const registry = new InferenceProviderRegistry();
+    for (const providerId of ['opencode-go', 'zai', 'alibaba-token-plan-intl']) {
+      expect(registry.require(providerId).subscription, providerId).toBe(true);
+      expect(registry.require(providerId).authTypes).toContain('api_key');
+    }
+    expect(registry.require('alibaba-token-plan-intl').liveModels).toBe(true);
+  });
+
   it('only exposes the approved connection templates while retaining parity definitions internally', () => {
     const registry = new InferenceProviderRegistry();
     expect(registry.listConnectable().map((provider) => provider.id)).toEqual([
@@ -83,6 +92,9 @@ describe('InferenceProviderRegistry parity', () => {
       'moonshot',
       'openai-compatible',
       'openrouter',
+      'opencode-go',
+      'zai',
+      'alibaba-token-plan-intl',
     ]);
     expect(registry.require('google')).toBeDefined();
     expect(() => registry.requireConnectable('google')).toThrow(/not connectable/);

@@ -81,7 +81,14 @@ export async function runInteractiveInferenceCommand(
       showAccount(input.ui, identity);
       continue;
     }
-    if (action === 'logout') return logout(input);
+    if (action === 'logout') {
+      const blocked = logoutBlockedReason(state);
+      if (blocked) {
+        input.ui.error(blocked);
+        continue;
+      }
+      return logout(input);
+    }
     if (action === 'setup') return setupHarness(input, codexIntegration, claudeCodeIntegration);
     if (action === 'sync') {
       state.models = await syncModels(input, codexIntegration);
@@ -202,6 +209,15 @@ function inferenceActions(state: InteractiveState): InteractiveOption[] {
     });
   }
   return options;
+}
+
+function logoutBlockedReason(state: InteractiveState): string | null {
+  const configured = [state.codexConfigured ? 'Codex' : null, state.claudeCodeConfigured ? 'Claude Code' : null].filter(
+    (name): name is string => name !== null
+  );
+  if (configured.length === 0) return null;
+  const names = configured.length === 1 ? configured[0] : `${configured[0]} and ${configured[1]}`;
+  return `Remove the ${names} ${configured.length === 1 ? 'integration' : 'integrations'} before logging out.`;
 }
 
 async function authenticate(input: InteractiveCommandInput): Promise<SetupIdentity | null> {

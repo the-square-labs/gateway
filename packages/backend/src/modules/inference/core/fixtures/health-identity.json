@@ -1,0 +1,9 @@
+{
+  "service": "opencodex",
+  "version": "2.26.0-wiolett.1",
+  "contractId": "wiolett-core/v1",
+  "coreProtocolMajor": 1,
+  "stateSchemaVersion": 1,
+  "instanceId": "ocx-inst-9f4c2d7a",
+  "startedAt": "2026-08-19T00:00:00.000Z"
+}

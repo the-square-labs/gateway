@@ -3,10 +3,20 @@
   "edges": [
     {
       "from_id": "2tjfa2g5",
-      "to_id": "gdptltym",
-      "relation": "same_area",
-      "weight": 0.4738,
-      "reason": "The memories share tags or vocabulary from the same area.",
+      "to_id": "37llsl1w",
+      "relation": "related_to",
+      "weight": 0.4112,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967727,
+      "updated_at": 1786064967727
+    },
+    {
+      "from_id": "2tjfa2g5",
+      "to_id": "7abclq2n",
+      "relation": "related_to",
+      "weight": 0.4072,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967727,
       "updated_at": 1786064967727
@@ -23,20 +33,10 @@
     },
     {
       "from_id": "2tjfa2g5",
-      "to_id": "37llsl1w",
-      "relation": "related_to",
-      "weight": 0.4112,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967727,
-      "updated_at": 1786064967727
-    },
-    {
-      "from_id": "2tjfa2g5",
-      "to_id": "7abclq2n",
-      "relation": "related_to",
-      "weight": 0.4072,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "gdptltym",
+      "relation": "same_area",
+      "weight": 0.4738,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967727,
       "updated_at": 1786064967727

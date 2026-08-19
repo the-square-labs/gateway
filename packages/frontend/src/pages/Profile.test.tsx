@@ -17,6 +17,9 @@ vi.mock("@/pages/inference/InferenceUsagePanels", () => ({
 vi.mock("@/pages/inference/InferenceTokensSection", () => ({
   InferenceTokensSection: () => <section>Inference token authorizations</section>,
 }));
+vi.mock("@/pages/settings/inference/InferenceEndpointSettingsPanel", () => ({
+  InferenceEndpointSettingsPanel: () => <section>Inference endpoints panel</section>,
+}));
 vi.mock("@/pages/settings/ApiTokensSection", () => ({
   ApiTokensSection: () => <section>Gateway API authorizations</section>,
 }));
@@ -69,14 +72,33 @@ describe("Profile", () => {
 
     expect(screen.getByRole("heading", { name: "Profile", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Alex Gateway")).toBeInTheDocument();
+    expect(screen.getByText("Inference endpoints panel")).toBeInTheDocument();
     expect(screen.getByText("Inference usage panel")).toBeInTheDocument();
     expect(screen.queryByText("Gateway API authorizations")).not.toBeInTheDocument();
 
     const profile = screen.getByText("Alex Gateway");
+    const endpoints = screen.getByText("Inference endpoints panel");
     const usage = screen.getByText("Inference usage panel");
     const theme = screen.getByText("Theme");
-    expect(profile.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      profile.compareDocumentPosition(endpoints) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      endpoints.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     expect(usage.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("hides inference endpoints when the user cannot use inference", () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: [] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderProfile("/profile");
+
+    expect(screen.queryByText("Inference endpoints panel")).not.toBeInTheDocument();
   });
 
   it("groups API, OAuth, inference credentials, and sessions on the Authorizations tab", async () => {

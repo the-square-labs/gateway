@@ -125,6 +125,11 @@ const envSchema = z.object({
   GITLAB_PROJECT_PATH: z.string().default('wiolett/gateway'),
   UPDATE_CHECK_INTERVAL_HOURS: z.coerce.number().default(4),
 
+  // Managed inference core. The distribution image repository is derived from
+  // the Gateway's own image; the override exists for development/lab installs
+  // where the Gateway image is a local build without the production repo name.
+  INFERENCE_CORE_DISTRIBUTION_IMAGE: z.string().trim().optional(),
+
   // PKI Master Key — 32 bytes as 64-char hex string for envelope encryption
   PKI_MASTER_KEY: z
     .string()

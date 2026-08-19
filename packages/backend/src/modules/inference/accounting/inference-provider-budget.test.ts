@@ -38,16 +38,21 @@ describe('provider API monthly budget', () => {
 });
 
 function fakeDatabase(settled: number, active: number) {
-  const groupBy = vi
-    .fn()
-    .mockResolvedValueOnce([{ connectionId: 'connection-1', microdollars: settled }])
-    .mockResolvedValueOnce([{ connectionId: 'connection-1', microdollars: active }]);
+  const results = [
+    [{ connectionId: 'connection-1', microdollars: settled }],
+    [{ connectionId: 'connection-1', microdollars: active }],
+    [],
+  ];
   return {
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        innerJoin: vi.fn(() => ({ where: vi.fn(() => ({ groupBy })) })),
-        where: vi.fn(() => ({ groupBy })),
-      })),
-    })),
+    select: vi.fn(() => {
+      const result = results.shift() ?? [];
+      const chain: Record<string, unknown> = {
+        groupBy: vi.fn().mockResolvedValue(result),
+      };
+      for (const method of ['from', 'innerJoin', 'leftJoin', 'where']) {
+        chain[method] = vi.fn().mockReturnValue(chain);
+      }
+      return chain;
+    }),
   };
 }

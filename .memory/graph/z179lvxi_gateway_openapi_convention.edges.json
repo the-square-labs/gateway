@@ -23,9 +23,9 @@
     },
     {
       "from_id": "z179lvxi",
-      "to_id": "asy6c7bj",
+      "to_id": "412x4uua",
       "relation": "related_to",
-      "weight": 0.3221,
+      "weight": 0.3101,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967674,
@@ -33,9 +33,9 @@
     },
     {
       "from_id": "z179lvxi",
-      "to_id": "412x4uua",
+      "to_id": "asy6c7bj",
       "relation": "related_to",
-      "weight": 0.3101,
+      "weight": 0.3221,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967674,

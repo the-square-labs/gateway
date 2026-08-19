@@ -11,6 +11,27 @@ import type { CliPaths } from './paths.js';
 import { ProfileStore } from './profiles.js';
 import type { OAuthCredential, RuntimeCredential } from './types.js';
 
+const MODELS = {
+  object: 'list',
+  data: [
+    {
+      id: 'gateway-model',
+      object: 'model',
+      created: 1,
+      owned_by: 'gateway',
+      display_name: 'Gateway Model',
+      context_window: 128_000,
+      max_input_tokens: 120_000,
+      auto_compact_token_limit: 100_000,
+      input_modalities: ['text'],
+      capabilities: { tools: true, reasoning: false },
+      supported_reasoning_efforts: [],
+      default_reasoning_effort: null,
+      supported_service_tiers: [],
+    },
+  ],
+};
+
 const CATALOG = {
   models: [
     {
@@ -86,22 +107,17 @@ describe('@wiolett/gateway-inference CLI', () => {
       },
     };
     const discovery = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       enabled: true,
-      minimumCliVersion: '0.1.0',
+      minimumCliVersion: '0.3.0',
       oauth: {
         resource: 'https://gateway.example.com/api/inference/setup',
         authorizationServer: 'https://gateway.example.com',
       },
       adapters: {
         openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
-        codex: {
-          baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
-          catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models',
-        },
-        anthropic: { baseUrl: 'https://gateway.example.com/api/inference/anthropic' },
+        anthropic: { baseUrl: 'https://gateway.example.com/api/inference' },
       },
-      harnesses: { codex: { supported: true } },
     };
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
@@ -143,8 +159,8 @@ describe('@wiolett/gateway-inference CLI', () => {
         );
       }
       if (url.endsWith('/api/inference/setup/tokens')) return json({ data: [] });
-      if (url.includes('/api/inference/codex/v1/models')) {
-        return new Response(JSON.stringify(CATALOG), { headers: { ETag: '"v1"' } });
+      if (url.endsWith('/api/inference/v1/models')) {
+        return new Response(JSON.stringify(MODELS), { headers: { ETag: '"v1"' } });
       }
       if (url.endsWith('/api/oauth/revoke')) return new Response(null, { status: 200 });
       throw new Error(`Unexpected request: ${url}`);
@@ -245,6 +261,21 @@ describe('@wiolett/gateway-inference CLI', () => {
     expect(credentials.runtime?.tokenId).toBe('token-1');
     await expect(readFile(join(isolatedHome, 'config.toml'), 'utf8')).resolves.not.toContain('Gateway Inference');
     await expect(readFile(join(codexHome, 'config.toml'), 'utf8')).resolves.toBe(configured);
+
+    interactiveUi.error.mockClear();
+    interactiveUi.select.mockReset().mockResolvedValueOnce('logout').mockResolvedValueOnce(null);
+    expect(await runCli([], dependencies)).toBe(0);
+    expect(interactiveUi.error).toHaveBeenCalledWith('Remove the Codex integration before logging out.');
+    expect(interactiveUi.select).toHaveBeenCalledTimes(2);
+    expect(credentials.oauth).not.toBeNull();
+
+    isolatedUi.outro.mockClear();
+    isolatedUi.select.mockReset().mockResolvedValueOnce('logout');
+    expect(await runCli([], isolatedDependencies)).toBe(0);
+    expect(credentials.oauth).toBeNull();
+    expect(isolatedUi.outro).toHaveBeenCalledWith(
+      'Logged out. Harness configuration and runtime tokens were left unchanged.'
+    );
 
     interactiveUi.gatewayOrigin.mockResolvedValueOnce(null);
     expect(await runCli(['login'], dependencies)).toBe(0);

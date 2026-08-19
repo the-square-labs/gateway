@@ -1,0 +1,24 @@
+{
+  "contractId": "wiolett-core/v1",
+  "rootRequestId": "1b4e28ba-2fa1-4d9c-8e3a-0f4f7c1a2b01",
+  "attemptId": "att_01J8ZK3M0Q7N6V5R4T2Y1XW0PV",
+  "parentAttemptId": null,
+  "attemptKind": "root",
+  "terminalStatus": "completed",
+  "coreAccountId": "acct_openai_primary",
+  "coreModelId": "gpt-5.6-terra",
+  "sourceType": "api",
+  "upstreamStatus": 200,
+  "errorCode": null,
+  "usage": {
+    "uncachedInputTokens": 3800,
+    "cachedInputTokens": 400,
+    "cacheWriteTokens": 0,
+    "outputTokens": 1250,
+    "reasoningTokens": 640
+  },
+  "usageEstimated": false,
+  "emittedOutput": true,
+  "startedAt": "2026-08-19T00:00:10.000Z",
+  "completedAt": "2026-08-19T00:00:18.000Z"
+}

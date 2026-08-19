@@ -3,20 +3,10 @@
   "edges": [
     {
       "from_id": "3b6g7z3k",
-      "to_id": "7abclq2n",
+      "to_id": "2tjfa2g5",
       "relation": "related_to",
-      "weight": 0.4219,
+      "weight": 0.3702,
       "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967593,
-      "updated_at": 1786064967593
-    },
-    {
-      "from_id": "3b6g7z3k",
-      "to_id": "fk86zmru",
-      "relation": "same_area",
-      "weight": 0.3892,
-      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967593,
       "updated_at": 1786064967593
@@ -33,9 +23,9 @@
     },
     {
       "from_id": "3b6g7z3k",
-      "to_id": "2tjfa2g5",
+      "to_id": "7abclq2n",
       "relation": "related_to",
-      "weight": 0.3702,
+      "weight": 0.4219,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967593,
@@ -46,6 +36,16 @@
       "to_id": "asy6c7bj",
       "relation": "same_area",
       "weight": 0.3584,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967593,
+      "updated_at": 1786064967593
+    },
+    {
+      "from_id": "3b6g7z3k",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.3892,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967593,

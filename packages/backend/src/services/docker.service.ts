@@ -123,6 +123,50 @@ export class DockerService {
   }
 
   /**
+   * Streaming variant of {@link request}: response chunks are forwarded to
+   * `onChunk` as they arrive instead of being buffered whole. Used for the
+   * NDJSON progress stream of image pulls, where buffering would hide all
+   * progress until the pull finished.
+   */
+  private requestStream(
+    method: string,
+    path: string,
+    body: unknown,
+    timeoutMs: number | undefined,
+    onChunk: (chunk: string) => void
+  ): Promise<{ statusCode: number }> {
+    return new Promise((resolve, reject) => {
+      const payload =
+        body === undefined ? undefined : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), 'utf-8');
+
+      const req = http.request(
+        {
+          socketPath: this.socketPath,
+          method,
+          path,
+          timeout: timeoutMs,
+          headers:
+            payload !== undefined ? { 'Content-Type': 'application/json', 'Content-Length': payload.byteLength } : {},
+        },
+        (res) => {
+          res.on('data', (chunk: Buffer) => onChunk(chunk.toString('utf-8')));
+          res.on('end', () => resolve({ statusCode: res.statusCode ?? 0 }));
+          res.on('error', reject);
+        }
+      );
+
+      req.on('timeout', () => {
+        req.destroy(new Error(`Docker API request timed out after ${timeoutMs}ms`));
+      });
+      req.on('error', reject);
+
+      if (payload !== undefined) req.write(payload);
+
+      req.end();
+    });
+  }
+
+  /**
    * Docker multiplexed stream format:
    *   [stream_type(1 byte)][0][0][0][size(4 bytes big-endian)][payload(size bytes)]
    *
@@ -271,6 +315,135 @@ export class DockerService {
       if (e instanceof Error && e.message.startsWith('Docker image pull error')) throw e;
     }
     logger.info('Image reference pulled successfully', { imageRef });
+  }
+
+  /**
+   * Pull an image by immutable reference while streaming the daemon's NDJSON
+   * progress. Reports only what Docker actually supplies: byte totals appear
+   * solely when every seen layer has a known size, layer counts count distinct
+   * layer ids, and a layer counts as completed on "Pull complete"/"Already
+   * exists". Long pulls get a matching request timeout.
+   */
+  async pullImageRefStreaming(imageRef: string, onProgress?: (progress: DockerPullProgress) => void): Promise<void> {
+    logger.info('Pulling Docker image by reference (streaming)', { imageRef });
+    const layers = new Map<string, { current: number; total: number; done: boolean; cached: boolean }>();
+    let ndjsonError: string | null = null;
+    let buffer = '';
+
+    const emit = () => {
+      if (!onProgress) return;
+      const all = [...layers.values()];
+      const layersTotal = all.length;
+      const layersCompleted = all.filter((layer) => layer.done).length;
+      const downloadable = all.filter((layer) => !layer.cached);
+      const downloadedBytes = downloadable.reduce((sum, layer) => sum + layer.current, 0);
+      const everySizeKnown =
+        downloadable.length > 0 && downloadable.every((layer) => layer.total > 0);
+      const progress: DockerPullProgress = { layersCompleted, layersTotal };
+      if (everySizeKnown) {
+        progress.downloadedBytes = downloadedBytes;
+        progress.totalBytes = downloadable.reduce((sum, layer) => sum + layer.total, 0);
+      }
+      onProgress(progress);
+    };
+
+    const handleLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let event: {
+        id?: string;
+        status?: string;
+        progressDetail?: { current?: number; total?: number };
+        error?: string;
+        message?: string;
+      };
+      try {
+        event = JSON.parse(trimmed);
+      } catch {
+        return;
+      }
+      if (typeof event.error === 'string' && event.error) {
+        ndjsonError = event.error;
+        return;
+      }
+      // Docker returns one JSON object with `message` (rather than an NDJSON
+      // `error`) for request-level failures such as a missing platform in a
+      // manifest list. Preserve that actionable daemon explanation.
+      if (typeof event.message === 'string' && event.message && !event.id && !event.status) {
+        ndjsonError = event.message;
+        return;
+      }
+      if (!event.id || !event.status) return;
+      const layer = layers.get(event.id) ?? { current: 0, total: 0, done: false, cached: false };
+      if (
+        event.status === 'Already exists' ||
+        event.status === 'Pull complete' ||
+        event.status === 'Download complete'
+      ) {
+        layer.done = true;
+        if (event.status === 'Already exists') layer.cached = true;
+        if (event.progressDetail?.total !== undefined) layer.total = event.progressDetail.total;
+        // A completed layer is fully downloaded even when the completion
+        // event itself carries no progress detail.
+        if (layer.total > 0) layer.current = layer.total;
+        else if (event.progressDetail?.current !== undefined) layer.current = event.progressDetail.current;
+      } else {
+        if (event.progressDetail?.current !== undefined) layer.current = event.progressDetail.current;
+        if (event.progressDetail?.total !== undefined) layer.total = event.progressDetail.total;
+      }
+      layers.set(event.id, layer);
+      emit();
+    };
+
+    const res = await this.requestStream(
+      'POST',
+      `${API_VERSION}/images/create?fromImage=${encodeURIComponent(imageRef)}`,
+      undefined,
+      30 * 60_000,
+      (chunk) => {
+        buffer += chunk;
+        let index = buffer.indexOf('\n');
+        while (index >= 0) {
+          handleLine(buffer.slice(0, index));
+          buffer = buffer.slice(index + 1);
+          index = buffer.indexOf('\n');
+        }
+      }
+    );
+    if (buffer.trim()) handleLine(buffer);
+    if (ndjsonError) throw new Error(`Docker image pull error: ${ndjsonError}`);
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker image pull failed (${res.statusCode})`);
+    }
+    logger.info('Image reference pulled successfully', { imageRef });
+  }
+
+  /**
+   * Create a named volume with ownership labels. Docker treats a create for an
+   * existing name as idempotent and returns the volume, so this is safe to
+   * retry after an interrupted operation.
+   */
+  async createVolume(name: string, labels: Record<string, string> = {}): Promise<void> {
+    const res = await this.request('POST', `${API_VERSION}/volumes/create`, { Name: name, Labels: labels });
+    if (res.statusCode !== 201 && res.statusCode !== 200) {
+      throw new Error(`Docker volume create failed (${res.statusCode}): ${res.body}`);
+    }
+  }
+
+  async inspectVolume(name: string): Promise<DockerVolumeInspect | null> {
+    const res = await this.request('GET', `${API_VERSION}/volumes/${encodeURIComponent(name)}`);
+    if (res.statusCode === 404) return null;
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker volume inspect failed (${res.statusCode}): ${res.body}`);
+    }
+    return JSON.parse(res.body) as DockerVolumeInspect;
+  }
+
+  /** Remove a volume; missing volumes are treated as already removed. */
+  async removeVolume(name: string): Promise<void> {
+    const res = await this.request('DELETE', `${API_VERSION}/volumes/${encodeURIComponent(name)}?force=true`);
+    if (res.statusCode === 204 || res.statusCode === 404) return;
+    throw new Error(`Docker volume remove failed (${res.statusCode}): ${res.body}`);
   }
 
   async imageExists(imageRef: string): Promise<boolean> {
@@ -452,6 +625,25 @@ export class DockerService {
   }
 
   /**
+   * Read a path out of a (possibly stopped) container as a tar archive. Used
+   * for state-volume backups: the helper container only mounts the volume and
+   * is never started, so nothing executes inside it.
+   */
+  async getContainerArchive(id: string, containerPath: string): Promise<Buffer> {
+    const params = new URLSearchParams({ path: containerPath });
+    const res = await this.request(
+      'GET',
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/archive?${params}`,
+      undefined,
+      300_000
+    );
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker get archive failed (${res.statusCode}): ${res.body}`);
+    }
+    return res.bodyRaw;
+  }
+
+  /**
    * Create, start, wait for completion, and clean up a one-shot container.
    */
   async runOneShot(config: DockerCreateContainerConfig): Promise<{ exitCode: number; output: string }> {
@@ -525,6 +717,23 @@ export interface DockerContainerFullInspect extends DockerContainerInspect {
   HostConfig?: {
     NetworkMode?: string;
   };
+  NetworkSettings?: {
+    Networks?: Record<string, { Aliases?: string[]; IPAddress?: string }>;
+  };
+}
+
+export interface DockerVolumeInspect {
+  Name: string;
+  Driver?: string;
+  Mountpoint?: string;
+  Labels?: Record<string, string>;
+}
+
+export interface DockerPullProgress {
+  downloadedBytes?: number;
+  totalBytes?: number;
+  layersCompleted?: number;
+  layersTotal?: number;
 }
 
 export interface DockerCreateContainerConfig {

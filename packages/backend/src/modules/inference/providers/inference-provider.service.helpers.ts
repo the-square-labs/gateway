@@ -104,6 +104,12 @@ export function serializeConnection(connection: typeof inferenceProviderConnecti
 
 export function serializeModel(model: typeof inferenceDiscoveredModels.$inferSelect, providerId?: string) {
   const known = providerId ? knownProviderModel(providerId, model.remoteModelId) : undefined;
+  const maxInputTokens = model.maxInputTokens ?? known?.maxInputTokens ?? null;
+  const detectedAutoCompactTokenLimit = model.autoCompactTokenLimit ?? known?.autoCompactTokenLimit ?? null;
+  const autoCompactTokenLimit =
+    detectedAutoCompactTokenLimit !== null && maxInputTokens !== null
+      ? Math.min(detectedAutoCompactTokenLimit, maxInputTokens)
+      : detectedAutoCompactTokenLimit;
   const reportedModalities = hasAny(model.metadata, [
     'input_modalities',
     'architecture',
@@ -124,9 +130,9 @@ export function serializeModel(model: typeof inferenceDiscoveredModels.$inferSel
     ...model,
     displayName: model.displayName ?? known?.displayName ?? null,
     contextWindow: model.contextWindow ?? known?.contextWindow ?? null,
-    maxInputTokens: model.maxInputTokens ?? known?.maxInputTokens ?? null,
+    maxInputTokens,
     maxOutputTokens: model.maxOutputTokens ?? known?.maxOutputTokens ?? null,
-    autoCompactTokenLimit: model.autoCompactTokenLimit ?? known?.autoCompactTokenLimit ?? null,
+    autoCompactTokenLimit,
     modalities: known && !reportedModalities ? known.modalities : model.modalities,
     capabilities: known && !reportedCapabilities ? known.capabilities : model.capabilities,
     reasoningEfforts: model.reasoningEfforts.length ? model.reasoningEfforts : (known?.reasoningEfforts ?? []),

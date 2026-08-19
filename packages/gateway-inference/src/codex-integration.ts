@@ -64,9 +64,8 @@ export class CodexIntegrationService {
     await installPrivateRuntime(runtimeSource, this.paths.runtimeFile);
 
     const catalog = await syncCodexCatalog({
-      catalogUrl: input.discovery.adapters.codex.catalogUrl,
+      modelsUrl: gatewayModelsUrl(input.discovery),
       token: runtimeCredential.token,
-      codexVersion: codex.version,
       catalogFile: integrationPaths.catalogFile,
       metadataFile: integrationPaths.metadataFile,
       lockFile: integrationPaths.lockFile,
@@ -81,7 +80,7 @@ export class CodexIntegrationService {
       paths: integrationPaths,
       profile: input.profileName,
       model: defaultModel,
-      baseUrl: input.discovery.adapters.codex.baseUrl,
+      baseUrl: input.discovery.adapters.openai.baseUrl,
       proxyBaseUrl: inferenceProxyBaseUrl(this.paths, input.profileName),
       runtimeFile: this.paths.runtimeFile,
       now: this.options.now,
@@ -91,7 +90,7 @@ export class CodexIntegrationService {
       await (this.options.proxyDaemon ?? inferenceProxyDaemonManager).ensure({
         paths: this.paths,
         profileName: input.profileName,
-        remoteBaseUrl: input.discovery.adapters.codex.baseUrl,
+        remoteBaseUrl: input.discovery.adapters.openai.baseUrl,
         runtimeFile: this.paths.runtimeFile,
         env: this.options.env,
       });
@@ -121,7 +120,7 @@ export class CodexIntegrationService {
     // could successfully update the catalog itself while every subsequent MCP
     // process kept executing an older bundled implementation indefinitely.
     await this.installRuntime();
-    const codex = await this.requireCodex();
+    await this.requireCodex();
     const runtime = await this.requireRuntimeCredential(input.profileName);
     const integrationPaths = resolveCodexPaths(this.paths, input.profileName, this.options.env, this.options.home);
     const config = await inspectCodexConfiguration({ paths: integrationPaths, profile: input.profileName });
@@ -129,9 +128,8 @@ export class CodexIntegrationService {
       throw new CliError('CODEX_NOT_CONFIGURED', 'Codex is not configured. Run setup first.');
     }
     const catalog = await syncCodexCatalog({
-      catalogUrl: input.discovery.adapters.codex.catalogUrl,
+      modelsUrl: gatewayModelsUrl(input.discovery),
       token: runtime.token,
-      codexVersion: codex.version,
       catalogFile: integrationPaths.catalogFile,
       metadataFile: integrationPaths.metadataFile,
       lockFile: integrationPaths.lockFile,
@@ -141,7 +139,7 @@ export class CodexIntegrationService {
     await (this.options.proxyDaemon ?? inferenceProxyDaemonManager).ensure({
       paths: this.paths,
       profileName: input.profileName,
-      remoteBaseUrl: input.discovery.adapters.codex.baseUrl,
+      remoteBaseUrl: input.discovery.adapters.openai.baseUrl,
       runtimeFile: this.paths.runtimeFile,
       env: this.options.env,
     });
@@ -202,7 +200,7 @@ export class CodexIntegrationService {
     });
 
     if (runtime && input.discovery) {
-      checks.push(await this.probeRuntimeToken(input.discovery, runtime, codex?.version ?? MINIMUM_CODEX_VERSION));
+      checks.push(await this.probeRuntimeToken(input.discovery, runtime));
     } else {
       checks.push({
         name: 'runtime-probe',
@@ -225,7 +223,7 @@ export class CodexIntegrationService {
       });
     }
     if (input.discovery) {
-      checks.push({ name: 'gateway', status: 'ok', message: input.discovery.adapters.codex.baseUrl });
+      checks.push({ name: 'gateway', status: 'ok', message: input.discovery.adapters.openai.baseUrl });
     }
     return {
       ok: checks.every((check) => check.status !== 'error'),
@@ -308,13 +306,8 @@ export class CodexIntegrationService {
     await installPrivateRuntime(runtimeSource, this.paths.runtimeFile);
   }
 
-  private async probeRuntimeToken(
-    discovery: InferenceDiscovery,
-    runtime: RuntimeCredential,
-    codexVersion: string
-  ): Promise<DiagnosticCheck> {
-    const url = new URL(discovery.adapters.codex.catalogUrl);
-    url.searchParams.set('client_version', codexVersion);
+  private async probeRuntimeToken(discovery: InferenceDiscovery, runtime: RuntimeCredential): Promise<DiagnosticCheck> {
+    const url = new URL(gatewayModelsUrl(discovery));
     try {
       const response = await (this.options.fetch ?? globalThis.fetch)(url, {
         headers: { Accept: 'application/json', Authorization: `Bearer ${runtime.token}` },
@@ -397,6 +390,10 @@ export class CodexIntegrationService {
   private run(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<CommandResult> {
     return (this.options.commandRunner ?? runCommand)(command, args, env);
   }
+}
+
+function gatewayModelsUrl(discovery: InferenceDiscovery): string {
+  return `${discovery.adapters.openai.baseUrl.replace(/\/+$/, '')}/models`;
 }
 
 function selectDefaultModel(catalog: Awaited<ReturnType<typeof readCatalog>>): string {

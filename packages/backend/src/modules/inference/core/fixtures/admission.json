@@ -1,0 +1,27 @@
+{
+  "request": {
+    "contractId": "wiolett-core/v1",
+    "rootRequestId": "1b4e28ba-2fa1-4d9c-8e3a-0f4f7c1a2b01",
+    "attemptId": "att_01J8ZK3M0Q7N6V5R4T2Y1XW0PV",
+    "parentAttemptId": null,
+    "attemptKind": "root",
+    "coreAccountId": "acct_openai_primary",
+    "coreModelId": "gpt-5.6-terra",
+    "sourceType": "api",
+    "operation": "responses",
+    "estimate": {
+      "inputTokens": 4200,
+      "maxOutputTokens": 8000
+    },
+    "occurredAt": "2026-08-19T00:00:10.000Z"
+  },
+  "allow": {
+    "decision": "allow",
+    "maxOutputTokens": 8000
+  },
+  "deny": {
+    "decision": "deny",
+    "reason": "budget_exceeded",
+    "retryAfterSeconds": 300
+  }
+}

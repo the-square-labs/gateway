@@ -1,6 +1,6 @@
-import { and, eq, gte, inArray, ne, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import type { DrizzleExecutor } from '@/db/client.js';
-import { inferenceRequests, inferenceUsageLedger } from '@/db/schema/index.js';
+import { inferenceRequestAttempts, inferenceRequests, inferenceUsageLedger } from '@/db/schema/index.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 
 type ProviderApiLimit = {
@@ -16,45 +16,73 @@ export async function providerApiMonthlySpend(
 ): Promise<Map<string, number>> {
   if (connectionIds.length === 0) return new Map();
   const monthStart = utcMonthStart(now);
-  const requestConditions = [
-    inArray(inferenceRequests.connectionId, connectionIds),
-    eq(inferenceRequests.budgetType, 'api'),
-  ];
-  if (excludeRequestId) requestConditions.push(ne(inferenceRequests.id, excludeRequestId));
+  const settledConnectionId = sql<string>`coalesce(${inferenceRequestAttempts.connectionId}, ${inferenceRequests.connectionId})`;
+  const settledConditions = [inArray(settledConnectionId, connectionIds), eq(inferenceUsageLedger.budgetType, 'api')];
+  if (excludeRequestId) settledConditions.push(ne(inferenceRequests.id, excludeRequestId));
 
   const settled = await database
     .select({
-      connectionId: inferenceRequests.connectionId,
+      connectionId: settledConnectionId,
       microdollars: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)`,
     })
     .from(inferenceUsageLedger)
     .innerJoin(inferenceRequests, eq(inferenceUsageLedger.requestId, inferenceRequests.id))
+    .leftJoin(inferenceRequestAttempts, eq(inferenceUsageLedger.attemptId, inferenceRequestAttempts.id))
     .where(
       and(
-        ...requestConditions,
+        ...settledConditions,
         eq(inferenceUsageLedger.entryType, 'settlement'),
         gte(inferenceUsageLedger.occurredAt, monthStart)
       )
     )
-    .groupBy(inferenceRequests.connectionId);
+    .groupBy(settledConnectionId);
 
-  const active = await database
+  const activeCoreConditions = [
+    inArray(inferenceRequestAttempts.connectionId, connectionIds),
+    eq(inferenceRequestAttempts.budgetType, 'api'),
+    inArray(inferenceRequestAttempts.status, ['pending', 'running']),
+    inArray(inferenceRequests.status, ['reserved', 'running']),
+    gte(inferenceRequestAttempts.startedAt, monthStart),
+  ];
+  if (excludeRequestId) activeCoreConditions.push(ne(inferenceRequests.id, excludeRequestId));
+  const activeCore = await database
+    .select({
+      connectionId: inferenceRequestAttempts.connectionId,
+      microdollars: sql<number>`COALESCE(SUM(${inferenceRequestAttempts.reservedApiMicrodollars}), 0)`,
+    })
+    .from(inferenceRequestAttempts)
+    .innerJoin(inferenceRequests, eq(inferenceRequestAttempts.requestId, inferenceRequests.id))
+    .where(and(...activeCoreConditions))
+    .groupBy(inferenceRequestAttempts.connectionId);
+
+  // Legacy executor reservations live on the request row. Exclude requests
+  // that already have a core attempt so core estimates are not counted twice.
+  const legacyConditions = [
+    inArray(inferenceRequests.connectionId, connectionIds),
+    eq(inferenceRequests.budgetType, 'api'),
+    inArray(inferenceRequests.status, ['reserved', 'running']),
+    gte(inferenceRequests.startedAt, monthStart),
+    isNull(inferenceRequestAttempts.id),
+  ];
+  if (excludeRequestId) legacyConditions.push(ne(inferenceRequests.id, excludeRequestId));
+  const activeLegacy = await database
     .select({
       connectionId: inferenceRequests.connectionId,
       microdollars: sql<number>`COALESCE(SUM(${inferenceRequests.apiMicrodollarsCharged}), 0)`,
     })
     .from(inferenceRequests)
-    .where(
+    .leftJoin(
+      inferenceRequestAttempts,
       and(
-        ...requestConditions,
-        inArray(inferenceRequests.status, ['reserved', 'running']),
-        gte(inferenceRequests.startedAt, monthStart)
+        eq(inferenceRequestAttempts.requestId, inferenceRequests.id),
+        isNotNull(inferenceRequestAttempts.coreAttemptId)
       )
     )
+    .where(and(...legacyConditions))
     .groupBy(inferenceRequests.connectionId);
 
   const result = new Map<string, number>();
-  for (const row of [...settled, ...active]) {
+  for (const row of [...settled, ...activeCore, ...activeLegacy]) {
     if (!row.connectionId) continue;
     const value = Number(row.microdollars);
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -69,12 +97,12 @@ export async function assertProviderApiBudget(
   database: DrizzleExecutor,
   connection: ProviderApiLimit,
   requestedMicrodollars: number,
-  requestId: string,
+  excludeRequestId?: string,
   now = new Date()
 ): Promise<void> {
   const limit = connection.apiMonthlyLimitMicrodollars;
   if (limit === null) return;
-  const spent = (await providerApiMonthlySpend(database, [connection.id], now, requestId)).get(connection.id) ?? 0;
+  const spent = (await providerApiMonthlySpend(database, [connection.id], now, excludeRequestId)).get(connection.id) ?? 0;
   if (providerApiBudgetAvailable(spent, requestedMicrodollars, limit)) return;
   throw new InferenceProtocolError(429, 'provider_api_budget_exhausted', 'Provider monthly API budget exhausted', {
     recoveryAt: nextUtcMonth(now).toISOString(),

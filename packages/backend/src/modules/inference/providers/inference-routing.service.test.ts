@@ -13,18 +13,45 @@ describe('inference routing policy', () => {
     minimumRemainingFraction: 0,
   };
 
-  it('is deterministic and keeps balanced routing equal across usable accounts', () => {
-    expect(__testOnly.weightedScore('thread-1', healthy)).toBe(__testOnly.weightedScore('thread-1', healthy));
+  it('keeps even routing deterministic and approximately equal', () => {
+    expect(__testOnly.uniformScore('thread-1', healthy)).toBe(__testOnly.uniformScore('thread-1', healthy));
     const lowQuota = { ...healthy, id: 'connection-b', remainingFraction: 0.05 };
     let healthyWins = 0;
     let lowWins = 0;
     for (let index = 0; index < 500; index += 1) {
       const seed = `thread-${index}`;
-      if (__testOnly.weightedScore(seed, healthy) > __testOnly.weightedScore(seed, lowQuota)) healthyWins += 1;
+      if (__testOnly.uniformScore(seed, healthy) > __testOnly.uniformScore(seed, lowQuota)) healthyWins += 1;
       else lowWins += 1;
     }
     expect(healthyWins).toBeGreaterThan(200);
     expect(lowWins).toBeGreaterThan(200);
+  });
+
+  it('weights balanced routing by remaining quota', () => {
+    const high = { ...healthy, id: 'connection-high', remainingFraction: 0.9 };
+    const low = { ...healthy, id: 'connection-low', remainingFraction: 0.1 };
+    let highWins = 0;
+    for (let index = 0; index < 2_000; index += 1) {
+      if (__testOnly.quotaWeightedCandidate(`thread-${index}`, [high, low]).id === high.id) highWins += 1;
+    }
+    expect(highWins).toBeGreaterThan(1_700);
+    expect(highWins).toBeLessThan(1_900);
+  });
+
+  it('excludes unknown quota candidates when known quota exists and falls back to even when all are unknown', () => {
+    const high = { ...healthy, id: 'connection-high', remainingFraction: 0.8 };
+    const low = { ...healthy, id: 'connection-low', remainingFraction: 0.2 };
+    const unknown = { ...healthy, id: 'connection-unknown', remainingFraction: null };
+    const selected = __testOnly.quotaWeightedCandidate('thread-42', [high, low, unknown]);
+    const expected = __testOnly.highestScore('thread-42', [high, low], (candidate) => candidate.remainingFraction!);
+    expect(selected.id).toBe(expected.id);
+    expect(selected.id).not.toBe(unknown.id);
+
+    const unknownA = { ...unknown, id: 'unknown-a' };
+    const unknownB = { ...unknown, id: 'unknown-b' };
+    expect(__testOnly.quotaWeightedCandidate('thread-43', [unknownA, unknownB]).id).toBe(
+      __testOnly.highestScore('thread-43', [unknownA, unknownB], () => 1).id
+    );
   });
 
   it('protects the new-thread and emergency floors', () => {

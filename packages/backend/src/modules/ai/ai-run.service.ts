@@ -1491,8 +1491,9 @@ export class AIRunService {
       return { run: stopped, duplicate: false };
     }
 
-    if (current.status === 'stopped') return { run: current, duplicate: true };
-    throw new AppError(409, 'AI_RUN_NOT_ACTIVE', 'AI run is no longer active');
+    // Stop is an idempotent user intent. The UI can race with a terminal snapshot, so a
+    // completed or otherwise terminal run is already in the desired non-active state.
+    return { run: current, duplicate: true };
   }
 
   async stopAllForShutdown(): Promise<void> {

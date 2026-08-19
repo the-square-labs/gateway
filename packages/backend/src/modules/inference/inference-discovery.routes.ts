@@ -10,7 +10,7 @@ export const inferenceDiscoveryRoutes = new OpenAPIHono<AppEnv>();
 inferenceDiscoveryRoutes.get('/wiolett-inference', async (c) => {
   const settings = await container.resolve(GeneralSettingsService).getConfig();
   return c.json({
-    ...inferenceAdapterDiscovery(container.resolve(OAuthService), settings.inference.harnessSpecificEndpointsEnabled),
+    ...inferenceAdapterDiscovery(container.resolve(OAuthService)),
     enabled: settings.features.inferenceEnabled,
   });
 });

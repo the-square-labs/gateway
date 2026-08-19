@@ -8,10 +8,6 @@ export interface InferenceToken {
   createdAt: string;
 }
 
-export interface InferenceSettings {
-  harnessSpecificEndpointsEnabled: boolean;
-}
-
 export interface InferenceUsageWindow {
   percentage: number;
   recoveryAt: string;
@@ -111,7 +107,7 @@ export interface InferenceProviderConnection {
   minimumRemainingPercent: number;
   apiMonthlyLimitMicrodollars: number | null;
   apiMonthlySpentMicrodollars: number;
-  routingStrategy: "balanced" | "sequential";
+  routingStrategy: "even" | "balanced" | "sequential";
   status: string;
   healthReason: string | null;
   syncStatus: "never" | "running" | "success" | "error";

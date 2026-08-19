@@ -13,26 +13,6 @@
     },
     {
       "from_id": "w75b8az4",
-      "to_id": "h130czul",
-      "relation": "same_area",
-      "weight": 0.4956,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967749,
-      "updated_at": 1786064967749
-    },
-    {
-      "from_id": "w75b8az4",
-      "to_id": "hh3v2vdi",
-      "relation": "same_workflow",
-      "weight": 0.4633,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967749,
-      "updated_at": 1786064967749
-    },
-    {
-      "from_id": "w75b8az4",
       "to_id": "b3glzfjy",
       "relation": "same_workflow",
       "weight": 0.4619,
@@ -47,6 +27,26 @@
       "relation": "same_area",
       "weight": 0.4275,
       "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "h130czul",
+      "relation": "same_area",
+      "weight": 0.4956,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "hh3v2vdi",
+      "relation": "same_workflow",
+      "weight": 0.4633,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1786064967749,
       "updated_at": 1786064967749

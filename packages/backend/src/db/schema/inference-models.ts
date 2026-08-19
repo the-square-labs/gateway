@@ -70,6 +70,10 @@ export const inferenceModelSources = pgTable(
       onDelete: 'set null',
     }),
     upstreamModelId: text('upstream_model_id').notNull(),
+    // Stable OpenCodex core references assigned when the source is published
+    // through the managed core; legacy pre-cutover sources keep them null.
+    coreAccountId: text('core_account_id'),
+    coreModelId: text('core_model_id'),
     sourceType: varchar('source_type', { length: 16 }).$type<InferenceModelSourceType>().notNull(),
     enabled: boolean('enabled').notNull().default(true),
     priority: integer('priority').notNull().default(0),

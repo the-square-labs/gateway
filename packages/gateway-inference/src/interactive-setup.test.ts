@@ -11,22 +11,17 @@ const SESSION = {
     updatedAt: '2026-07-30T00:00:00Z',
   },
   discovery: {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     enabled: true,
-    minimumCliVersion: '0.1.0',
+    minimumCliVersion: '0.3.0',
     oauth: {
       resource: 'https://gateway.example.com/api/inference/setup',
       authorizationServer: 'https://gateway.example.com',
     },
     adapters: {
       openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
-      codex: {
-        baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
-        catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models',
-      },
-      anthropic: { baseUrl: 'https://gateway.example.com/api/inference/anthropic/v1' },
+      anthropic: { baseUrl: 'https://gateway.example.com/api/inference' },
     },
-    harnesses: { codex: { supported: true as const } },
   },
   client: {} as InteractiveSetupSession['client'],
 } satisfies InteractiveSetupSession;
@@ -55,6 +50,7 @@ describe('interactive inference setup', () => {
     expect(authorize).toHaveBeenCalledWith('https://gateway.example.com');
     expect(ui.options).toEqual([
       expect.objectContaining({ value: 'codex', label: 'Codex CLI', hint: expect.stringContaining('catalog') }),
+      expect.objectContaining({ value: 'claude-code', label: 'Claude Code CLI' }),
     ]);
     expect(configure).toHaveBeenCalledWith('codex', SESSION);
     expect(ui.events).toEqual([
@@ -88,25 +84,15 @@ describe('interactive inference setup', () => {
     expect(ui.events).toContain('cancel:Setup cancelled.');
   });
 
-  it('offers Claude Code when the Gateway advertises its harness endpoint', async () => {
+  it('offers Claude Code alongside Codex on the single stable prefix', async () => {
     const ui = new FakeUi();
     ui.harness = 'claude-code';
     const configure = vi.fn(async () => ({ progress: 'Configured Claude Code', summary: 'Ready' }));
-    const session = {
-      ...SESSION,
-      discovery: {
-        ...SESSION.discovery,
-        harnesses: {
-          codex: { supported: true as const },
-          'claude-code': { supported: true as const },
-        },
-      },
-    };
 
     await runInteractiveInferenceSetup({
       profileName: 'default',
       ui,
-      session: async () => session,
+      session: async () => SESSION,
       authorize: vi.fn(),
       configure,
     });
@@ -120,7 +106,7 @@ describe('interactive inference setup', () => {
         }),
       ])
     );
-    expect(configure).toHaveBeenCalledWith('claude-code', session);
+    expect(configure).toHaveBeenCalledWith('claude-code', SESSION);
   });
 });
 

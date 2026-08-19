@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -14,6 +14,12 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { User } from '@/types.js';
 import type { InferenceBudgetPolicyService } from '../accounting/inference-budget-policy.js';
+import type { InferenceCoreBridgeService } from '../core/inference-core-bridge.service.js';
+import {
+  CORE_MANAGED_METADATA_KEY,
+  CORE_MODEL_METADATA_KEY,
+  coreProviderRef,
+} from '../core/inference-core-provider-map.js';
 import type { InferenceSetupEventsService } from '../inference-setup-events.service.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceProviderRegistry } from '../providers/inference-provider.registry.js';
@@ -41,8 +47,13 @@ export class InferenceModelService {
     private readonly access: InferenceModelAccessService,
     private readonly audit: AuditService,
     private readonly budgetPolicies: InferenceBudgetPolicyService,
-    private readonly setupEvents?: InferenceSetupEventsService
+    private readonly setupEvents?: InferenceSetupEventsService,
+    private readonly coreBridge?: InferenceCoreBridgeService
   ) {}
+
+  private async coreReady(): Promise<boolean> {
+    return this.coreBridge ? this.coreBridge.coreReady() : false;
+  }
 
   async listAdmin() {
     const models = await this.db.select().from(inferenceModels).orderBy(asc(inferenceModels.publicId));
@@ -154,11 +165,19 @@ export class InferenceModelService {
     }
     const upstreamModelId = discovered?.remoteModelId ?? input.upstreamModelId?.trim();
     if (!upstreamModelId) throw new AppError(400, 'INFERENCE_UPSTREAM_MODEL_REQUIRED', 'Upstream model ID is required');
+    const coreManaged = connection.metadata[CORE_MANAGED_METADATA_KEY] === true;
+    if (!coreManaged && (await this.coreReady())) {
+      throw new AppError(
+        409,
+        'INFERENCE_CORE_SOURCE_REQUIRED',
+        'Reconnect the provider through the inference core before publishing models'
+      );
+    }
     if (input.enabled !== false) {
       await this.assertSingleProviderModel(modelId, connection.providerId, upstreamModelId);
     }
     if (input.enabled !== false) validateReasoningMap(model.reasoningEfforts, input.reasoningEffortMap);
-    const sourceType = provider.subscription && connection.authType === 'oauth' ? 'subscription' : 'api';
+    const sourceType = provider.subscription ? 'subscription' : 'api';
     const pricing =
       sourceType === 'api'
         ? (pricingFromDiscoveredMetadata(discovered?.metadata) ??
@@ -180,6 +199,12 @@ export class InferenceModelService {
           connectionId: connection.id,
           discoveredModelId: discovered?.id,
           upstreamModelId,
+          ...(coreManaged
+            ? {
+                coreAccountId: coreProviderRef(connection),
+                coreModelId: coreModelId(connection, upstreamModelId, discovered?.metadata),
+              }
+            : {}),
           sourceType,
           enabled: input.enabled ?? true,
           priority: 0,
@@ -374,26 +399,31 @@ export class InferenceModelService {
     if (!modelIds.length) return { modelIds: [], apiUsageEnabled: false };
     const limits = await this.budgetPolicies.effective(userId);
     if (!limits.enabled) return { modelIds: [], apiUsageEnabled: false };
-    if (limits.apiMonthlyMicrodollars > 0) {
-      return { modelIds, apiUsageEnabled: true };
-    }
-
-    const subscriptionSources = await this.db
-      .select({ modelId: inferenceModelSources.modelId })
+    const availableSources = await this.db
+      .select({ modelId: inferenceModelSources.modelId, sourceType: inferenceModelSources.sourceType })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
+      .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
       .where(
         and(
           inArray(inferenceModelSources.modelId, modelIds),
           eq(inferenceModelSources.enabled, true),
-          eq(inferenceModelSources.sourceType, 'subscription'),
-          eq(inferenceProviderConnections.enabled, true)
+          eq(inferenceProviderConnections.enabled, true),
+          isNull(inferenceProviderConnections.deletedAt),
+          or(isNull(inferenceModelSources.discoveredModelId), eq(inferenceDiscoveredModels.available, true))
         )
       );
+    const availableModelIds = [...new Set(availableSources.map((source) => source.modelId))];
+    if (limits.apiMonthlyMicrodollars > 0) {
+      return { modelIds: availableModelIds, apiUsageEnabled: true };
+    }
+
     return {
       modelIds: filterModelIdsByApiBudget(
-        modelIds,
-        subscriptionSources.map((source) => source.modelId),
+        availableModelIds,
+        availableSources
+          .filter((source) => source.sourceType === 'subscription')
+          .map((source) => source.modelId),
         limits.apiMonthlyMicrodollars
       ),
       apiUsageEnabled: false,
@@ -612,6 +642,18 @@ export class InferenceModelService {
     await this.audit.log({ userId, action, resourceType: 'inference_model', resourceId, details });
     this.setupEvents?.publishCatalogChanged();
   }
+}
+
+function coreModelId(
+  connection: Pick<typeof inferenceProviderConnections.$inferSelect, 'id' | 'providerId' | 'authType'>,
+  upstreamModelId: string,
+  metadata?: Record<string, unknown>
+): string {
+  const discovered = metadata?.[CORE_MODEL_METADATA_KEY];
+  if (typeof discovered === 'string' && discovered.trim()) return discovered.trim();
+  if (connection.authType === 'oauth') return upstreamModelId;
+  const providerRef = coreProviderRef(connection);
+  return upstreamModelId.startsWith(`${providerRef}/`) ? upstreamModelId : `${providerRef}/${upstreamModelId}`;
 }
 
 interface CapabilitySourceRow {

@@ -77,6 +77,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'logging.environment.changed') return 'logs:environments:view';
   if (channel === 'logging.schema.changed') return 'logs:schemas:view';
   if (channel === 'system.update.changed') return 'admin:update';
+  if (channel === 'inference.core.changed') return 'inference:providers:view';
   if (channel === 'system.license.changed') return null;
   if (channel === 'system.config.changed') return null;
   if (channel === 'status-page.changed') return 'status-page:view';

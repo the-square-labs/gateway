@@ -72,7 +72,6 @@ describe('GeneralSettingsService feature settings', () => {
 
     expect((await service.getConfig()).features.siemEnabled).toBe(true);
     expect((await service.getConfig()).features.inferenceEnabled).toBe(false);
-    expect((await service.getConfig()).inference.harnessSpecificEndpointsEnabled).toBe(false);
     expect(
       (
         await service.updateConfig({
@@ -82,14 +81,7 @@ describe('GeneralSettingsService feature settings', () => {
     ).toBe(true);
     expect((await service.getConfig()).features.inferenceEnabled).toBe(true);
     expect((await service.updateConfig({ features: { siemEnabled: false } })).features.siemEnabled).toBe(false);
-    expect(
-      (
-        await service.updateInferenceSettings({
-          harnessSpecificEndpointsEnabled: true,
-        })
-      ).harnessSpecificEndpointsEnabled
-    ).toBe(true);
-    expect(onConflictDoUpdate).toHaveBeenCalledTimes(3);
+    expect(onConflictDoUpdate).toHaveBeenCalledTimes(2);
   });
 
   it('invokes the assistant fallback when inference is turned off', async () => {

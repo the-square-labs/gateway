@@ -5,6 +5,7 @@ import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { authMiddleware, optionalAuthMiddleware } from '@/modules/auth/auth.middleware.js';
 import { getSessionCookieName } from '@/modules/auth/session-cookie.js';
+import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
@@ -86,6 +87,7 @@ function createApp() {
   app.get('/auth/me', (c) => c.json({ userId: c.get('user')?.id, isBlocked: c.get('user')?.isBlocked }));
   app.post('/auth/logout', (c) => c.json({ userId: c.get('user')?.id, isBlocked: c.get('user')?.isBlocked }));
   app.get('/read', (c) => c.json({ userId: c.get('user')?.id }));
+  app.get('/api/inference/core/status', (c) => c.json({ userId: c.get('user')?.id }));
   app.post('/mutate', (c) => c.json({ userId: c.get('user')?.id }));
   return app;
 }
@@ -127,6 +129,25 @@ afterEach(() => {
 });
 
 describe('authMiddleware browser session credentials', () => {
+  it('allows the browser setup session to manage the inference core', async () => {
+    const setupSession = {
+      ...SESSION,
+      purpose: 'setup' as const,
+      setupSessionId: 'setup-session-1',
+    };
+    registerSession({ session: setupSession });
+    container.registerInstance(SetupAccessService, {
+      validateSession: vi.fn().mockResolvedValue(true),
+    } as unknown as SetupAccessService);
+
+    const response = await createApp().request('/api/inference/core/status', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ userId: USER.id });
+  });
+
   it('accepts a cookie session with a valid CSRF token for mutations', async () => {
     registerSession({ csrfValid: true });
 

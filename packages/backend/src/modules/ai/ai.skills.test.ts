@@ -97,7 +97,7 @@ describe('AISkillService', () => {
     expect(instructions).toContain('Gateway Inference is separate from AI Workspace');
     expect(instructions).toContain('npx -y @wiolett/gateway-inference@latest setup codex');
     expect(instructions).toContain('Claude Code 2.1.129 or newer');
-    expect(instructions).toContain('generalSettings.inference.harnessSpecificEndpointsEnabled');
+    expect(instructions).toContain('generalSettings.features.inferenceEnabled');
     expect(instructions).toContain('Deliverable files must be written under /workspace');
     expect(instructions).toContain('lead with concrete findings');
   });

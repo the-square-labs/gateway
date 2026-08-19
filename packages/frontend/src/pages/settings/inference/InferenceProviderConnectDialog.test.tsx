@@ -29,6 +29,20 @@ const XAI: InferenceProviderCatalogItem = {
   completionMode: "device_poll",
 };
 
+const CHATGPT: InferenceProviderCatalogItem = {
+  id: "openai",
+  label: "ChatGPT subscription",
+  family: "openai",
+  wireProtocol: "openai-responses",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+  authTypes: ["oauth"],
+  subscription: true,
+  featured: true,
+  termsVersion: "terms-v1",
+  oauthFlow: "redirect",
+  completionMode: "paste_callback",
+};
+
 describe("InferenceProviderConnectDialog", () => {
   afterEach(() => useConfirmDialog.getState().close());
 
@@ -174,12 +188,66 @@ describe("InferenceProviderConnectDialog", () => {
     expect(api.startInferenceOAuth).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Connect inference provider" })).toBeInTheDocument();
   });
+
+  it("labels a pasted callback flow with the selected provider and waits for confirmation", async () => {
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    const onConnected = vi.fn<() => void>();
+    vi.mocked(api.startInferenceOAuth).mockResolvedValue({
+      id: "session-chatgpt",
+      providerId: "openai",
+      status: "pending",
+      authorizationUrl: "https://auth.openai.com/authorize",
+      completionMode: "paste_callback",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    vi.mocked(api.completeInferenceOAuth).mockResolvedValue({
+      id: "session-chatgpt",
+      providerId: "openai",
+      status: "complete",
+      authorizationUrl: "https://auth.openai.com/authorize",
+      completionMode: "paste_callback",
+      connectionId: "connection-chatgpt",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+
+    renderConnectDialog({ catalog: [CHATGPT], onOpenChange, onConnected });
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "ChatGPT team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+
+    expect(await screen.findByText("Open ChatGPT authorization and sign in.")).toBeInTheDocument();
+    expect(screen.queryByText(/Claude/)).not.toBeInTheDocument();
+    const completeButton = screen.getByRole("button", {
+      name: "Complete ChatGPT authorization",
+    });
+    expect(completeButton).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText("Paste code#state or callback URL"), {
+      target: { value: "authorization-code#oauth-state" },
+    });
+    expect(completeButton).toBeEnabled();
+    expect(api.completeInferenceOAuth).not.toHaveBeenCalled();
+    fireEvent.click(completeButton);
+
+    await waitFor(() =>
+      expect(api.completeInferenceOAuth).toHaveBeenCalledWith(
+        "session-chatgpt",
+        "authorization-code#oauth-state"
+      )
+    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalled());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
 });
 
 function renderConnectDialog({
+  catalog = [XAI],
   onOpenChange = vi.fn(),
   onConnected = vi.fn(),
 }: {
+  catalog?: InferenceProviderCatalogItem[];
   onOpenChange?: (open: boolean) => void;
   onConnected?: () => void | Promise<void>;
 } = {}) {
@@ -189,7 +257,7 @@ function renderConnectDialog({
     <>
       <InferenceProviderConnectDialog
         open
-        catalog={[XAI]}
+        catalog={catalog}
         onOpenChange={handleOpenChange}
         onConnected={handleConnected}
       />

@@ -3,10 +3,20 @@
   "edges": [
     {
       "from_id": "lvklfxgs",
-      "to_id": "rzidwe4n",
+      "to_id": "dnv2klmw",
       "relation": "same_workflow",
-      "weight": 0.9,
-      "reason": "Both document Gateway upgrade validation with migrations, app/relay replacement, and preservation of database, Redis, and workload identity.",
+      "weight": 0.78,
+      "reason": "Both cover disposable Gateway upgrade E2E procedures that replace the app while preserving PostgreSQL, Redis, volumes, and runtime state.",
+      "source": "auto",
+      "created_at": 1786843023392,
+      "updated_at": 1786843023392
+    },
+    {
+      "from_id": "lvklfxgs",
+      "to_id": "iois3ul4",
+      "relation": "same_workflow",
+      "weight": 0.74,
+      "reason": "Both validate stateful Gateway and relay upgrades, including preserved infrastructure state and migration behavior.",
       "source": "auto",
       "created_at": 1786843023392,
       "updated_at": 1786843023392
@@ -23,20 +33,10 @@
     },
     {
       "from_id": "lvklfxgs",
-      "to_id": "dnv2klmw",
+      "to_id": "rzidwe4n",
       "relation": "same_workflow",
-      "weight": 0.78,
-      "reason": "Both cover disposable Gateway upgrade E2E procedures that replace the app while preserving PostgreSQL, Redis, volumes, and runtime state.",
-      "source": "auto",
-      "created_at": 1786843023392,
-      "updated_at": 1786843023392
-    },
-    {
-      "from_id": "lvklfxgs",
-      "to_id": "iois3ul4",
-      "relation": "same_workflow",
-      "weight": 0.74,
-      "reason": "Both validate stateful Gateway and relay upgrades, including preserved infrastructure state and migration behavior.",
+      "weight": 0.9,
+      "reason": "Both document Gateway upgrade validation with migrations, app/relay replacement, and preservation of database, Redis, and workload identity.",
       "source": "auto",
       "created_at": 1786843023392,
       "updated_at": 1786843023392

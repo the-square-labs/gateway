@@ -45,6 +45,8 @@ export interface InferenceProviderDefinition {
   subscription: boolean;
   featured: boolean;
   modelsPath?: string;
+  /** Force the managed core to use the provider's live model catalog. */
+  liveModels?: boolean;
   quotaKind?: 'chatgpt-wham' | 'anthropic-oauth' | 'kimi-usage' | 'xai-billing';
   staticModels?: string[];
   keyOptional?: boolean;

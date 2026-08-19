@@ -12,6 +12,9 @@ const CONNECTABLE_PROVIDER_IDS = new Set([
   'xai',
   'xai-apikey',
   'openrouter',
+  'opencode-go',
+  'zai',
+  'alibaba-token-plan-intl',
   'openai-compatible',
 ]);
 
@@ -179,7 +182,9 @@ const DEFINITIONS: readonly InferenceProviderDefinition[] = [
   chatProvider('together', 'Together', 'https://api.together.xyz/v1'),
   chatProvider('huggingface', 'Hugging Face', 'https://router.huggingface.co/v1'),
   chatProvider('mistral', 'Mistral', 'https://api.mistral.ai/v1'),
-  chatProvider('opencode-go', 'opencode go', 'https://opencode.ai/zen/go/v1'),
+  chatProvider('opencode-go', 'opencode go', 'https://opencode.ai/zen/go/v1', {
+    subscription: true,
+  }),
   chatProvider('opencode-free', 'OpenCode Free', 'https://opencode.ai/zen/v1', {
     authTypes: ['local'],
     keyOptional: true,
@@ -193,6 +198,7 @@ const DEFINITIONS: readonly InferenceProviderDefinition[] = [
   chatProvider('nvidia', 'NVIDIA NIM', 'https://integrate.api.nvidia.com/v1'),
   chatProvider('zai', 'Z.AI GLM Coding Plan', 'https://api.z.ai/api/coding/paas/v4', {
     models: ['glm-5.2', 'glm-5.2[1m]', 'glm-5.1', 'glm-5'],
+    subscription: true,
   }),
   chatProvider('siliconflow', 'SiliconFlow', 'https://api.siliconflow.cn/v1'),
   chatProvider('qwen-cloud', 'Qwen Cloud', 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', {
@@ -213,6 +219,8 @@ const DEFINITIONS: readonly InferenceProviderDefinition[] = [
     'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1',
     {
       allowBaseUrlOverride: true,
+      subscription: true,
+      liveModels: true,
     }
   ),
   chatProvider('zenmux', 'ZenMux', 'https://zenmux.ai/api/v1', {
@@ -391,6 +399,8 @@ function chatProvider(
     staticHeaders?: Record<string, string>;
     allowBaseUrlOverride?: boolean;
     privateNetworkByDefault?: boolean;
+    subscription?: boolean;
+    liveModels?: boolean;
   } = {}
 ): InferenceProviderDefinition {
   return {
@@ -400,9 +410,10 @@ function chatProvider(
     wireProtocol: 'openai-chat',
     baseUrl,
     authTypes: options.authTypes ?? ['api_key'],
-    subscription: false,
+    subscription: options.subscription ?? false,
     featured: false,
     modelsPath: '/models',
+    liveModels: options.liveModels,
     staticModels: options.models,
     keyOptional: options.keyOptional,
     staticHeaders: options.staticHeaders,

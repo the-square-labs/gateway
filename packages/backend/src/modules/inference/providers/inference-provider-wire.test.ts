@@ -122,6 +122,28 @@ describe('provider wire adapters', () => {
     expect(body).not.toHaveProperty('max_output_tokens');
   });
 
+  it('lifts system messages into instructions on the Gateway-to-core Responses wire', () => {
+    const body = providerRequestBody(
+      { ...registry.require('openai-apikey'), id: 'wiolett-core' },
+      'gpt-test',
+      {
+        ...REQUEST,
+        maxOutputTokens: 16,
+        messages: [
+          { role: 'system', content: [{ type: 'text', text: 'System instructions' }] },
+          ...REQUEST.messages,
+        ],
+      }
+    );
+
+    expect(body).toMatchObject({
+      instructions: 'System instructions',
+      max_output_tokens: 16,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Hello' }] }],
+    });
+    expect(body.input).not.toContainEqual(expect.objectContaining({ role: 'system' }));
+  });
+
   it('keeps tool history as Responses function items', () => {
     const body = providerRequestBody(registry.require('openai'), 'gpt-test', {
       ...REQUEST,

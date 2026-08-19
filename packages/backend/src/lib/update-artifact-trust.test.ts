@@ -7,6 +7,7 @@ import {
   UpdateArtifactTrustError,
   verifyDaemonUpdateManifest,
   verifyGatewayImageManifest,
+  verifyOpenCodexImageManifest,
   verifyRelayImageManifest,
 } from './update-artifact-trust.js';
 
@@ -60,6 +61,29 @@ const relayManifest = JSON.stringify({
   keyId: 'wiolett-update-v1',
   payload: relayPayload.toString('base64url'),
   signature: sign(null, relayPayload, gatewaySigningKey.privateKey).toString('base64url'),
+});
+const opencodexPayload = Buffer.from(
+  JSON.stringify({
+    kind: 'opencodex-image',
+    version: '2.26.0-wiolett.1',
+    tag: 'v2.26.0-wiolett.1',
+    image: 'registry.gitlab.wiolett.net/wiolett/gateway/opencodex',
+    digest: `sha256:${checksum}`,
+    imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/opencodex@sha256:${checksum}`,
+    sizeBytes: 412345678,
+    coreProtocolMajor: 1,
+    stateSchemaVersion: 1,
+    minGatewayVersion: 'v2.6.0',
+    releaseNotesUrl: 'https://docs.wiolett.net/releases/opencodex-2.26.0-wiolett.1',
+    buildRevision: 'cd762f832',
+    createdAt: '2026-08-19T00:00:00.000Z',
+  })
+);
+const opencodexManifest = JSON.stringify({
+  schemaVersion: 1,
+  keyId: 'wiolett-update-v1',
+  payload: opencodexPayload.toString('base64url'),
+  signature: sign(null, opencodexPayload, gatewaySigningKey.privateKey).toString('base64url'),
 });
 
 describe('update artifact trust', () => {
@@ -357,5 +381,100 @@ describe('update artifact trust', () => {
         publicKey.export({ type: 'spki', format: 'pem' })
       )
     ).toThrow('Relay update build version is invalid');
+  });
+
+  it('verifies an OpenCodex image manifest with digest, size, and protocol identity', () => {
+    const artifact = verifyOpenCodexImageManifest(
+      opencodexManifest,
+      {
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway/opencodex',
+        coreProtocolMajor: 1,
+      },
+      gatewayPublicKey
+    );
+
+    expect(artifact.version).toBe('2.26.0-wiolett.1');
+    expect(artifact.digest).toBe(`sha256:${checksum}`);
+    expect(artifact.imageRef).toBe(`registry.gitlab.wiolett.net/wiolett/gateway/opencodex@sha256:${checksum}`);
+    expect(artifact.sizeBytes).toBe(412345678);
+    expect(artifact.coreProtocolMajor).toBe(1);
+    expect(artifact.stateSchemaVersion).toBe(1);
+    expect(artifact.minGatewayVersion).toBe('v2.6.0');
+    expect(artifact.releaseNotesUrl).toBe('https://docs.wiolett.net/releases/opencodex-2.26.0-wiolett.1');
+  });
+
+  it('rejects an OpenCodex manifest pinned to a different version', () => {
+    expect(() =>
+      verifyOpenCodexImageManifest(
+        opencodexManifest,
+        {
+          image: 'registry.gitlab.wiolett.net/wiolett/gateway/opencodex',
+          coreProtocolMajor: 1,
+          version: '2.26.0-wiolett.2',
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('OpenCodex update version mismatch');
+  });
+
+  it('rejects an OpenCodex manifest with an incompatible core protocol major', () => {
+    expect(() =>
+      verifyOpenCodexImageManifest(
+        opencodexManifest,
+        {
+          image: 'registry.gitlab.wiolett.net/wiolett/gateway/opencodex',
+          coreProtocolMajor: 2,
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('OpenCodex core protocol major is incompatible');
+  });
+
+  it('rejects an OpenCodex manifest from a foreign image repository', () => {
+    expect(() =>
+      verifyOpenCodexImageManifest(
+        opencodexManifest,
+        {
+          image: 'registry.example.com/wiolett/opencodex',
+          coreProtocolMajor: 1,
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('OpenCodex update image mismatch');
+  });
+
+  it('rejects an OpenCodex manifest whose version is not a Wiolett release', () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        kind: 'opencodex-image',
+        version: '2.26.0',
+        tag: 'v2.26.0',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway/opencodex',
+        digest: `sha256:${checksum}`,
+        imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/opencodex@sha256:${checksum}`,
+        sizeBytes: 412345678,
+        coreProtocolMajor: 1,
+        stateSchemaVersion: 1,
+        buildRevision: 'cd762f832',
+        createdAt: '2026-08-19T00:00:00.000Z',
+      })
+    );
+    const manifest = JSON.stringify({
+      schemaVersion: 1,
+      keyId: 'wiolett-update-v1',
+      payload: payload.toString('base64url'),
+      signature: sign(null, payload, gatewaySigningKey.privateKey).toString('base64url'),
+    });
+
+    expect(() =>
+      verifyOpenCodexImageManifest(
+        manifest,
+        {
+          image: 'registry.gitlab.wiolett.net/wiolett/gateway/opencodex',
+          coreProtocolMajor: 1,
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('OpenCodex update version is not a Wiolett release');
   });
 });

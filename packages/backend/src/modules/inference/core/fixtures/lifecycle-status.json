@@ -1,0 +1,40 @@
+{
+  "state": "pulling",
+  "installed": null,
+  "latest": {
+    "version": "2.26.0-wiolett.1",
+    "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "sizeBytes": 412345678,
+    "releaseNotesUrl": "https://docs.wiolett.example/releases/opencodex-2.26.0-wiolett.1"
+  },
+  "compatibility": "unknown",
+  "health": {
+    "status": "unknown",
+    "version": null,
+    "coreProtocolMajor": null,
+    "stateSchemaVersion": null,
+    "checkedAt": null
+  },
+  "operation": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "kind": "install",
+    "phase": "pulling",
+    "status": "running",
+    "progress": {
+      "stage": "Downloading image",
+      "downloadedBytes": 123456789,
+      "totalBytes": 412345678,
+      "layersCompleted": 3,
+      "layersTotal": 9
+    },
+    "fromVersion": null,
+    "toVersion": "2.26.0-wiolett.1",
+    "fromDigest": null,
+    "toDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "error": null,
+    "startedAt": "2026-08-19T00:00:00.000Z",
+    "updatedAt": "2026-08-19T00:00:20.000Z",
+    "finishedAt": null
+  },
+  "lastError": null
+}

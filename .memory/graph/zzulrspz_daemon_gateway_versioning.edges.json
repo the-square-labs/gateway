@@ -3,6 +3,16 @@
   "edges": [
     {
       "from_id": "zzulrspz",
+      "to_id": "02e60mqr",
+      "relation": "same_workflow",
+      "weight": 0.3807,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064968140,
+      "updated_at": 1786064968140
+    },
+    {
+      "from_id": "zzulrspz",
       "to_id": "kufbu8qt",
       "relation": "same_workflow",
       "weight": 0.3898,
@@ -13,10 +23,10 @@
     },
     {
       "from_id": "zzulrspz",
-      "to_id": "02e60mqr",
-      "relation": "same_workflow",
-      "weight": 0.3807,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.3569,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064968140,
       "updated_at": 1786064968140
@@ -37,16 +47,6 @@
       "relation": "same_area",
       "weight": 0.3782,
       "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064968140,
-      "updated_at": 1786064968140
-    },
-    {
-      "from_id": "zzulrspz",
-      "to_id": "nr9hvzr3",
-      "relation": "related_to",
-      "weight": 0.3569,
-      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064968140,
       "updated_at": 1786064968140

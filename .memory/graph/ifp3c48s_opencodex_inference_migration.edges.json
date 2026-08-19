@@ -1,0 +1,15 @@
+{
+  "file_name": "ifp3c48s_opencodex_inference_migration",
+  "edges": [
+    {
+      "from_id": "ifp3c48s",
+      "to_id": "dcfkgqwx",
+      "relation": "same_workflow",
+      "weight": 0.94,
+      "reason": "Both document the Gateway inference bounded context, including OpenAI-compatible routing, dedicated gwi_ tokens, controls, and accounting.",
+      "source": "auto",
+      "created_at": 1787137864292,
+      "updated_at": 1787137864292
+    }
+  ]
+}

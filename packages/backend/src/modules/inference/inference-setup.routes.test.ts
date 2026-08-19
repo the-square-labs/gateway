@@ -69,7 +69,6 @@ function registerServices() {
     isFeatureEnabled: vi.fn().mockResolvedValue(true),
     getConfig: vi.fn().mockResolvedValue({
       features: { inferenceEnabled: true },
-      inference: { harnessSpecificEndpointsEnabled: true },
     }),
   } as unknown as GeneralSettingsService);
   container.registerInstance(InferenceTokenService, tokens as unknown as InferenceTokenService);
@@ -90,24 +89,21 @@ describe('inference setup discovery and control plane', () => {
       isFeatureEnabled: vi.fn().mockResolvedValue(false),
       getConfig: vi.fn().mockResolvedValue({
         features: { inferenceEnabled: false },
-        inference: { harnessSpecificEndpointsEnabled: false },
+        inference: {},
       }),
     } as unknown as GeneralSettingsService);
 
     const response = await createApp().request('/.well-known/wiolett-inference');
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       enabled: false,
-      harnessSpecificEndpointsEnabled: false,
-      minimumCliVersion: '0.1.0',
+      minimumCliVersion: '0.3.0',
       oauth: { resource: 'https://gateway.example.com/api/inference/setup' },
       adapters: {
         openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
-        codex: { catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models' },
-        anthropic: { baseUrl: 'https://gateway.example.com/api/inference/anthropic' },
+        anthropic: { baseUrl: 'https://gateway.example.com/api/inference' },
       },
-      harnesses: { codex: { supported: false }, 'claude-code': { supported: false } },
     });
   });
 

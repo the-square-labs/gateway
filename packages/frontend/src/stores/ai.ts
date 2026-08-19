@@ -527,6 +527,7 @@ function trySendWSMessage(msg: Parameters<AIWebSocketClient["send"]>[0]): boolea
 }
 const assistantDraftVersions = new Map<string, number>();
 const completedAssistantCommentVersions = new Map<string, number>();
+const terminalAssistantRuns = new Set<string>();
 const appliedConversationRevisions = new Map<string, number>();
 const assistantDeltaBuffers = new Map<
   string,
@@ -2223,6 +2224,7 @@ export function resetAIStateForAuthChange() {
   conversationLoadGeneration += 1;
   assistantDraftVersions.clear();
   completedAssistantCommentVersions.clear();
+  terminalAssistantRuns.clear();
   appliedConversationRevisions.clear();
   pendingToolCommands.clear();
   pendingInputCommands.clear();
@@ -2432,6 +2434,22 @@ function handleWSMessage(
         ),
       }));
       if (get().activeConversationId !== msg.conversationId) return;
+      const previousRunId = get().activeRunId;
+      const snapshotRun = msg.snapshot.runtime.activeRun;
+      if (!snapshotRun) {
+        const completedRunIds = new Set(
+          [...assistantDeltaBuffers.entries()]
+            .filter(([, buffer]) => buffer.message.conversationId === msg.conversationId)
+            .map(([runId]) => runId)
+        );
+        if (previousRunId) completedRunIds.add(previousRunId);
+        for (const runId of completedRunIds) {
+          flushAssistantDelta(runId, set, get);
+          terminalAssistantRuns.add(runId);
+        }
+      } else if (snapshotRun && isActiveRunStatus(snapshotRun.status)) {
+        terminalAssistantRuns.delete(snapshotRun.id);
+      }
       set((state) => {
         const projection = projectConversationSnapshot(
           msg.snapshot,
@@ -2511,6 +2529,7 @@ function handleWSMessage(
 
     case "assistant.comment_done":
       if (get().activeConversationId !== msg.conversationId) return;
+      if (terminalAssistantRuns.has(msg.runId)) return;
       flushAssistantDelta(msg.runId, set, get);
       completedAssistantCommentVersions.set(msg.runId, assistantDraftVersions.get(msg.runId) ?? 0);
       set((state) => ({
@@ -2540,6 +2559,9 @@ function handleWSMessage(
       if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       if (!isActiveRunStatus(msg.run?.status) && msg.run?.id) {
         flushAssistantDelta(msg.run.id, set, get);
+        terminalAssistantRuns.add(msg.run.id);
+      } else if (msg.run?.id) {
+        terminalAssistantRuns.delete(msg.run.id);
       }
       set((state) => ({
         recentConversations: patchRecentConversationRunStatus(
@@ -2791,6 +2813,7 @@ function queueAssistantDelta(
   set: (partial: Partial<AIState> | ((state: AIState) => Partial<AIState>)) => void,
   get: () => AIState
 ): void {
+  if (terminalAssistantRuns.has(message.runId)) return;
   const buffered = assistantDeltaBuffers.get(message.runId);
   const appliedVersion = assistantDraftVersions.get(message.runId) ?? 0;
   if (message.version <= Math.max(appliedVersion, buffered?.version ?? 0)) return;
