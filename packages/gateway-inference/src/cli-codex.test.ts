@@ -262,6 +262,21 @@ describe('@wiolett/gateway-inference CLI', () => {
     await expect(readFile(join(isolatedHome, 'config.toml'), 'utf8')).resolves.not.toContain('Gateway Inference');
     await expect(readFile(join(codexHome, 'config.toml'), 'utf8')).resolves.toBe(configured);
 
+    interactiveUi.error.mockClear();
+    interactiveUi.select.mockReset().mockResolvedValueOnce('logout').mockResolvedValueOnce(null);
+    expect(await runCli([], dependencies)).toBe(0);
+    expect(interactiveUi.error).toHaveBeenCalledWith('Remove the Codex integration before logging out.');
+    expect(interactiveUi.select).toHaveBeenCalledTimes(2);
+    expect(credentials.oauth).not.toBeNull();
+
+    isolatedUi.outro.mockClear();
+    isolatedUi.select.mockReset().mockResolvedValueOnce('logout');
+    expect(await runCli([], isolatedDependencies)).toBe(0);
+    expect(credentials.oauth).toBeNull();
+    expect(isolatedUi.outro).toHaveBeenCalledWith(
+      'Logged out. Harness configuration and runtime tokens were left unchanged.'
+    );
+
     interactiveUi.gatewayOrigin.mockResolvedValueOnce(null);
     expect(await runCli(['login'], dependencies)).toBe(0);
     expect(interactiveUi.gatewayOrigin).toHaveBeenCalledOnce();
