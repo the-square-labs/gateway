@@ -3,9 +3,9 @@
   "edges": [
     {
       "from_id": "qz6ixfnq",
-      "to_id": "hh3v2vdi",
+      "to_id": "b3glzfjy",
       "relation": "related_to",
-      "weight": 0.4174,
+      "weight": 0.3828,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064968048,
@@ -13,9 +13,9 @@
     },
     {
       "from_id": "qz6ixfnq",
-      "to_id": "b3glzfjy",
+      "to_id": "hh3v2vdi",
       "relation": "related_to",
-      "weight": 0.3828,
+      "weight": 0.4174,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064968048,

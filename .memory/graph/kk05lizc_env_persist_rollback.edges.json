@@ -3,6 +3,16 @@
   "edges": [
     {
       "from_id": "kk05lizc",
+      "to_id": "7rchqhpz",
+      "relation": "related_to",
+      "weight": 0.3496,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064968150,
+      "updated_at": 1786064968150
+    },
+    {
+      "from_id": "kk05lizc",
       "to_id": "gnonxe58",
       "relation": "related_to",
       "weight": 0.4168,
@@ -26,16 +36,6 @@
       "to_id": "qz6ixfnq",
       "relation": "related_to",
       "weight": 0.3552,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064968150,
-      "updated_at": 1786064968150
-    },
-    {
-      "from_id": "kk05lizc",
-      "to_id": "7rchqhpz",
-      "relation": "related_to",
-      "weight": 0.3496,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064968150,

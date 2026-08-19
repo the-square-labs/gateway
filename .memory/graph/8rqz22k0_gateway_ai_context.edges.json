@@ -3,9 +3,9 @@
   "edges": [
     {
       "from_id": "8rqz22k0",
-      "to_id": "fgmxlp0p",
+      "to_id": "7oked0dp",
       "relation": "same_area",
-      "weight": 0.5924,
+      "weight": 0.5674,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967934,
@@ -13,9 +13,19 @@
     },
     {
       "from_id": "8rqz22k0",
-      "to_id": "7oked0dp",
+      "to_id": "duvbj7h2",
+      "relation": "same_workflow",
+      "weight": 0.4984,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967934,
+      "updated_at": 1786064967934
+    },
+    {
+      "from_id": "8rqz22k0",
+      "to_id": "fgmxlp0p",
       "relation": "same_area",
-      "weight": 0.5674,
+      "weight": 0.5924,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967934,
@@ -37,16 +47,6 @@
       "relation": "same_area",
       "weight": 0.5111,
       "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967934,
-      "updated_at": 1786064967934
-    },
-    {
-      "from_id": "8rqz22k0",
-      "to_id": "duvbj7h2",
-      "relation": "same_workflow",
-      "weight": 0.4984,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1786064967934,
       "updated_at": 1786064967934

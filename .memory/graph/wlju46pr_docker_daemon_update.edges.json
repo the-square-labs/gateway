@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "wlju46pr",
-      "to_id": "muapjlzr",
-      "relation": "same_workflow",
-      "weight": 0.85,
-      "reason": "Snap/systemd Docker daemon installation compatibility and local daemon update procedures belong to the same daemon lifecycle.",
-      "source": "manual",
-      "created_at": 1784761859355,
-      "updated_at": 1784761859355
-    },
-    {
-      "from_id": "wlju46pr",
       "to_id": "c8ql9nhv",
       "relation": "uses_service",
       "weight": 0.5482,
@@ -33,9 +23,19 @@
     },
     {
       "from_id": "wlju46pr",
-      "to_id": "nr9hvzr3",
+      "to_id": "muapjlzr",
+      "relation": "same_workflow",
+      "weight": 0.85,
+      "reason": "Snap/systemd Docker daemon installation compatibility and local daemon update procedures belong to the same daemon lifecycle.",
+      "source": "manual",
+      "created_at": 1784761859355,
+      "updated_at": 1784761859355
+    },
+    {
+      "from_id": "wlju46pr",
+      "to_id": "muapjlzr",
       "relation": "uses_service",
-      "weight": 0.4767,
+      "weight": 0.4627,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1786064968089,
@@ -43,9 +43,9 @@
     },
     {
       "from_id": "wlju46pr",
-      "to_id": "muapjlzr",
+      "to_id": "nr9hvzr3",
       "relation": "uses_service",
-      "weight": 0.4627,
+      "weight": 0.4767,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1786064968089,

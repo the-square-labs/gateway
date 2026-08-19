@@ -3,9 +3,9 @@
   "edges": [
     {
       "from_id": "35fip13o",
-      "to_id": "mu4tydcq",
+      "to_id": "123u7vfm",
       "relation": "uses_service",
-      "weight": 0.541,
+      "weight": 0.3429,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1786064967696,
@@ -23,9 +23,9 @@
     },
     {
       "from_id": "35fip13o",
-      "to_id": "123u7vfm",
+      "to_id": "mu4tydcq",
       "relation": "uses_service",
-      "weight": 0.3429,
+      "weight": 0.541,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1786064967696,

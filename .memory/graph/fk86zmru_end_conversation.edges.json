@@ -3,6 +3,16 @@
   "edges": [
     {
       "from_id": "fk86zmru",
+      "to_id": "7oked0dp",
+      "relation": "same_area",
+      "weight": 0.5459,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967906,
+      "updated_at": 1786064967906
+    },
+    {
+      "from_id": "fk86zmru",
       "to_id": "8rqz22k0",
       "relation": "same_area",
       "weight": 0.5574,
@@ -16,16 +26,6 @@
       "to_id": "fgmxlp0p",
       "relation": "same_area",
       "weight": 0.5468,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967906,
-      "updated_at": 1786064967906
-    },
-    {
-      "from_id": "fk86zmru",
-      "to_id": "7oked0dp",
-      "relation": "same_area",
-      "weight": 0.5459,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967906,

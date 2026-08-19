@@ -3,20 +3,20 @@
   "edges": [
     {
       "from_id": "gahvf5k5",
-      "to_id": "myhj1f8i",
-      "relation": "same_workflow",
-      "weight": 0.82,
-      "reason": "Group MFA policy changes invalidate the shared dashboard bootstrap snapshot and affect dashboard authentication state.",
+      "to_id": "gdptltym",
+      "relation": "related_to",
+      "weight": 0.56,
+      "reason": "MFA session enforcement and auth-context changes must preserve dashboard state reset and bootstrap authorization boundaries.",
       "source": "auto",
       "created_at": 1786184820549,
       "updated_at": 1786184820549
     },
     {
       "from_id": "gahvf5k5",
-      "to_id": "gdptltym",
-      "relation": "related_to",
-      "weight": 0.56,
-      "reason": "MFA session enforcement and auth-context changes must preserve dashboard state reset and bootstrap authorization boundaries.",
+      "to_id": "myhj1f8i",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Group MFA policy changes invalidate the shared dashboard bootstrap snapshot and affect dashboard authentication state.",
       "source": "auto",
       "created_at": 1786184820549,
       "updated_at": 1786184820549

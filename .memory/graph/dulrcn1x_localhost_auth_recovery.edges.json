@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "dulrcn1x",
-      "to_id": "vrru6m60",
-      "relation": "same_workflow",
-      "weight": 0.94,
-      "reason": "Both define transport-specific session cookie selection, legacy compatibility, and matching HTTP/WebSocket authentication behavior.",
-      "source": "auto",
-      "created_at": 1786619232405,
-      "updated_at": 1786619232405
-    },
-    {
-      "from_id": "dulrcn1x",
       "to_id": "3fym4ikf",
       "relation": "same_area",
       "weight": 0.72,
@@ -27,6 +17,16 @@
       "relation": "same_workflow",
       "weight": 0.62,
       "reason": "Both cover local Gateway verification, browser reload behavior, and reusing the running Docker stand without recreation.",
+      "source": "auto",
+      "created_at": 1786619232405,
+      "updated_at": 1786619232405
+    },
+    {
+      "from_id": "dulrcn1x",
+      "to_id": "vrru6m60",
+      "relation": "same_workflow",
+      "weight": 0.94,
+      "reason": "Both define transport-specific session cookie selection, legacy compatibility, and matching HTTP/WebSocket authentication behavior.",
       "source": "auto",
       "created_at": 1786619232405,
       "updated_at": 1786619232405

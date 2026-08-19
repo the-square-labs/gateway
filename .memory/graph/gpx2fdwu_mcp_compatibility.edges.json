@@ -3,20 +3,20 @@
   "edges": [
     {
       "from_id": "gpx2fdwu",
-      "to_id": "dcfkgqwx",
-      "relation": "same_workflow",
-      "weight": 0.466,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "to_id": "123u7vfm",
+      "relation": "related_to",
+      "weight": 0.4609,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967233,
       "updated_at": 1786064967233
     },
     {
       "from_id": "gpx2fdwu",
-      "to_id": "123u7vfm",
-      "relation": "related_to",
-      "weight": 0.4609,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "dcfkgqwx",
+      "relation": "same_workflow",
+      "weight": 0.466,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1786064967233,
       "updated_at": 1786064967233

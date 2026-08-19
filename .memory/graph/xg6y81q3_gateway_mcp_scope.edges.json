@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "xg6y81q3",
-      "to_id": "gpx2fdwu",
-      "relation": "same_area",
-      "weight": 0.88,
-      "reason": "Both define Gateway MCP tool exposure, discovery, and compatibility behavior.",
-      "source": "auto",
-      "created_at": 1786067551577,
-      "updated_at": 1786067551577
-    },
-    {
-      "from_id": "xg6y81q3",
       "to_id": "123u7vfm",
       "relation": "same_area",
       "weight": 0.84,
@@ -27,6 +17,16 @@
       "relation": "related_to",
       "weight": 0.67,
       "reason": "Both govern conversation-scoped tool discovery and limiting visible Gateway tool schemas.",
+      "source": "auto",
+      "created_at": 1786067551577,
+      "updated_at": 1786067551577
+    },
+    {
+      "from_id": "xg6y81q3",
+      "to_id": "gpx2fdwu",
+      "relation": "same_area",
+      "weight": 0.88,
+      "reason": "Both define Gateway MCP tool exposure, discovery, and compatibility behavior.",
       "source": "auto",
       "created_at": 1786067551577,
       "updated_at": 1786067551577

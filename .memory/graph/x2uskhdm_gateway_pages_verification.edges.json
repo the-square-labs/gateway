@@ -13,16 +13,6 @@
     },
     {
       "from_id": "x2uskhdm",
-      "to_id": "kufbu8qt",
-      "relation": "same_workflow",
-      "weight": 0.3929,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786986368616,
-      "updated_at": 1786986368616
-    },
-    {
-      "from_id": "x2uskhdm",
       "to_id": "3ta908aa",
       "relation": "related_to",
       "weight": 0.3864,
@@ -33,9 +23,19 @@
     },
     {
       "from_id": "x2uskhdm",
-      "to_id": "lvklfxgs",
+      "to_id": "8c9f2oec",
+      "relation": "related_to",
+      "weight": 0.3719,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786986368616,
+      "updated_at": 1786986368616
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "kufbu8qt",
       "relation": "same_workflow",
-      "weight": 0.3779,
+      "weight": 0.3929,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1786986368616,
@@ -43,10 +43,10 @@
     },
     {
       "from_id": "x2uskhdm",
-      "to_id": "8c9f2oec",
-      "relation": "related_to",
-      "weight": 0.3719,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "lvklfxgs",
+      "relation": "same_workflow",
+      "weight": 0.3779,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1786986368616,
       "updated_at": 1786986368616

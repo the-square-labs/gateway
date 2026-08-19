@@ -3,20 +3,20 @@
   "edges": [
     {
       "from_id": "8zbznen7",
-      "to_id": "z638qk12",
-      "relation": "same_area",
-      "weight": 0.84,
-      "reason": "Both define AI Workspace integration onboarding and clarify that scenario setup is separate from the terminal Finalize Setup checklist.",
+      "to_id": "d8e1oh13",
+      "relation": "same_workflow",
+      "weight": 0.76,
+      "reason": "Both concern the AI Workspace scenario catalog and its scenario-driven dialog flow, including how users enter setup from scenarios.",
       "source": "auto",
       "created_at": 1786577241319,
       "updated_at": 1786577241319
     },
     {
       "from_id": "8zbznen7",
-      "to_id": "d8e1oh13",
-      "relation": "same_workflow",
-      "weight": 0.76,
-      "reason": "Both concern the AI Workspace scenario catalog and its scenario-driven dialog flow, including how users enter setup from scenarios.",
+      "to_id": "z638qk12",
+      "relation": "same_area",
+      "weight": 0.84,
+      "reason": "Both define AI Workspace integration onboarding and clarify that scenario setup is separate from the terminal Finalize Setup checklist.",
       "source": "auto",
       "created_at": 1786577241319,
       "updated_at": 1786577241319

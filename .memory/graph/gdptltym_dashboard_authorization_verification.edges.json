@@ -13,9 +13,9 @@
     },
     {
       "from_id": "gdptltym",
-      "to_id": "gnonxe58",
+      "to_id": "asy6c7bj",
       "relation": "related_to",
-      "weight": 0.4084,
+      "weight": 0.3999,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967294,
@@ -23,9 +23,9 @@
     },
     {
       "from_id": "gdptltym",
-      "to_id": "asy6c7bj",
+      "to_id": "gnonxe58",
       "relation": "related_to",
-      "weight": 0.3999,
+      "weight": 0.4084,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
       "created_at": 1786064967294,

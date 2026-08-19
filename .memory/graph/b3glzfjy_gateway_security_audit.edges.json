@@ -3,29 +3,19 @@
   "edges": [
     {
       "from_id": "b3glzfjy",
-      "to_id": "w75b8az4",
-      "relation": "same_workflow",
-      "weight": 0.4619,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967582,
-      "updated_at": 1786064967582
-    },
-    {
-      "from_id": "b3glzfjy",
-      "to_id": "nuc3c3hq",
-      "relation": "same_area",
-      "weight": 0.4395,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967582,
-      "updated_at": 1786064967582
-    },
-    {
-      "from_id": "b3glzfjy",
       "to_id": "123u7vfm",
       "relation": "uses_service",
       "weight": 0.3995,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967582,
+      "updated_at": 1786064967582
+    },
+    {
+      "from_id": "b3glzfjy",
+      "to_id": "asy6c7bj",
+      "relation": "uses_service",
+      "weight": 0.3945,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1786064967582,
@@ -43,10 +33,20 @@
     },
     {
       "from_id": "b3glzfjy",
-      "to_id": "asy6c7bj",
-      "relation": "uses_service",
-      "weight": 0.3945,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "to_id": "nuc3c3hq",
+      "relation": "same_area",
+      "weight": 0.4395,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967582,
+      "updated_at": 1786064967582
+    },
+    {
+      "from_id": "b3glzfjy",
+      "to_id": "w75b8az4",
+      "relation": "same_workflow",
+      "weight": 0.4619,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1786064967582,
       "updated_at": 1786064967582
