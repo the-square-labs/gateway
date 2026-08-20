@@ -1,4 +1,8 @@
-import { type StdioOptions, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CryptoService } from '@/services/crypto.service.js';
 
 export class ExportService {
@@ -74,59 +78,111 @@ export class ExportService {
     passphrase: string;
     chainPem?: string;
   }): Promise<Buffer> {
-    return new Promise<Buffer>((resolve, reject) => {
-      const passphraseFd = input.chainPem ? 6 : 5;
-      const stdio: StdioOptions = [
-        'ignore',
-        'pipe',
-        'pipe',
-        ...Array.from({ length: passphraseFd - 2 }, (): 'pipe' => 'pipe'),
-      ];
-      const child = spawn(
-        'openssl',
-        [
-          'pkcs12',
-          '-export',
-          '-inkey',
-          '/dev/fd/3',
-          '-in',
-          '/dev/fd/4',
-          ...(input.chainPem ? ['-certfile', '/dev/fd/5'] : []),
-          '-out',
-          '/dev/stdout',
-          '-passout',
-          `fd:${passphraseFd}`,
-          '-name',
-          'certificate',
-        ],
-        { stdio }
-      );
-      let stderr = '';
-      const output: Buffer[] = [];
-      child.stdout?.on('data', (chunk: Buffer) => output.push(Buffer.from(chunk)));
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
+    const tempDirectory = await mkdtemp(join(tmpdir(), 'gateway-pki-export-'));
+    const privateKeyPath = join(tempDirectory, 'private-key');
+    const certificatePath = join(tempDirectory, 'certificate');
+    const chainPath = join(tempDirectory, 'chain');
+    const archivePath = join(tempDirectory, 'archive');
+
+    try {
+      await chmod(tempDirectory, 0o700);
+      await Promise.all([
+        this.createFifo(privateKeyPath),
+        this.createFifo(certificatePath),
+        ...(input.chainPem ? [this.createFifo(chainPath)] : []),
+        this.createFifo(archivePath),
+      ]);
+
+      return await new Promise<Buffer>((resolve, reject) => {
+        const child = spawn(
+          'openssl',
+          [
+            'pkcs12',
+            '-export',
+            '-inkey',
+            privateKeyPath,
+            '-in',
+            certificatePath,
+            ...(input.chainPem ? ['-certfile', chainPath] : []),
+            '-out',
+            archivePath,
+            '-passout',
+            'fd:3',
+            '-name',
+            'certificate',
+          ],
+          { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] }
+        );
+        let stderr = '';
+        const output: Buffer[] = [];
+        let childExited = false;
+        let outputEnded = false;
+        let exitCode: number | null = null;
+        const complete = () => {
+          if (!childExited || !outputEnded) return;
+          if (exitCode === 0) resolve(Buffer.concat(output));
+          else reject(new Error(`PKCS#12 export failed${stderr ? ': OpenSSL rejected the certificate material' : ''}`));
+        };
+        const outputStream = createReadStream(archivePath);
+        outputStream.on('data', (chunk) => {
+          output.push(Buffer.from(chunk));
+        });
+        outputStream.once('end', () => {
+          outputEnded = true;
+          complete();
+        });
+        outputStream.once('error', () => {
+          child.kill();
+          reject(new Error('PKCS#12 export is unavailable'));
+        });
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        child.once('error', () => reject(new Error('PKCS#12 export is unavailable')));
+        child.once('close', (code) => {
+          childExited = true;
+          exitCode = code;
+          if (code === 0) complete();
+          else {
+            outputStream.destroy();
+            reject(new Error(`PKCS#12 export failed${stderr ? ': OpenSSL rejected the certificate material' : ''}`));
+          }
+        });
+        const passphraseStream = child.stdio[3];
+        if (!passphraseStream || !('end' in passphraseStream)) {
+          child.kill();
+          reject(new Error('PKCS#12 export is unavailable'));
+          return;
+        }
+        passphraseStream.end(input.passphrase);
+        void Promise.all([
+          this.writeFifo(privateKeyPath, input.privateKeyPem),
+          this.writeFifo(certificatePath, input.certPem),
+          ...(input.chainPem ? [this.writeFifo(chainPath, input.chainPem)] : []),
+        ]).catch(() => {
+          child.kill();
+          reject(new Error('PKCS#12 export is unavailable'));
+        });
       });
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  }
+
+  private async createFifo(path: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('mkfifo', ['-m', '600', path]);
       child.once('error', () => reject(new Error('PKCS#12 export is unavailable')));
-      child.once('close', (code) => {
-        if (code === 0) resolve(Buffer.concat(output));
-        else reject(new Error(`PKCS#12 export failed${stderr ? ': OpenSSL rejected the certificate material' : ''}`));
-      });
-      const writeToFd = (fd: number, content: string) => {
-        const stream = child.stdio[fd];
-        if (!stream || !('end' in stream)) return false;
-        stream.end(content);
-        return true;
-      };
-      if (
-        !writeToFd(3, input.privateKeyPem) ||
-        !writeToFd(4, input.certPem) ||
-        (input.chainPem && !writeToFd(5, input.chainPem)) ||
-        !writeToFd(passphraseFd, input.passphrase)
-      ) {
-        child.kill();
-        reject(new Error('PKCS#12 export is unavailable'));
-      }
+      child.once('close', (code) => (code === 0 ? resolve() : reject(new Error('PKCS#12 export is unavailable'))));
+    });
+  }
+
+  private async writeFifo(path: string, content: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const stream = createWriteStream(path, { mode: 0o600 });
+      stream.once('error', reject);
+      stream.once('finish', resolve);
+      stream.end(content);
     });
   }
 
