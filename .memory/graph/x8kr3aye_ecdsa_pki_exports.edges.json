@@ -1,0 +1,25 @@
+{
+  "file_name": "x8kr3aye_ecdsa_pki_exports",
+  "edges": [
+    {
+      "from_id": "x8kr3aye",
+      "to_id": "v80uezny",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both define security and audit boundaries for system PKI records without exposing private keys.",
+      "source": "auto",
+      "created_at": 1787183801027,
+      "updated_at": 1787183801027
+    },
+    {
+      "from_id": "x8kr3aye",
+      "to_id": "dv6ewa57",
+      "relation": "same_workflow",
+      "weight": 0.62,
+      "reason": "Both govern lifecycle-safe handling of Gateway-issued certificates, including ownership, state, and auditable operations.",
+      "source": "auto",
+      "created_at": 1787183801027,
+      "updated_at": 1787183801027
+    }
+  ]
+}

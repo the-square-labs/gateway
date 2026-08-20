@@ -1,6 +1,8 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +27,13 @@ import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { CertificateType, KeyAlgorithm, Template } from "@/types";
+
+const STEP_ANIMATION = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
+  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
+};
 
 interface CertificateIssueDialogProps {
   open: boolean;
@@ -161,215 +170,226 @@ export function CertificateIssueDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Step 1: CA & Template Selection */}
-        {step === 1 && (
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Issuing CA</label>
-              <Select value={selectedCAId || undefined} onValueChange={(v) => setSelectedCAId(v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a CA..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {activeCAs.map((ca) => (
-                    <SelectItem key={ca.id} value={ca.id}>
-                      {ca.commonName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+        <AnimatedHeight>
+          <AnimatePresence initial={false} mode="wait">
+            {/* Step 1: CA & Template Selection */}
+            {step === 1 && (
+              <motion.div key="certificate-step-1" {...STEP_ANIMATION} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Issuing CA</label>
+                  <Select
+                    value={selectedCAId || undefined}
+                    onValueChange={(v) => setSelectedCAId(v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a CA..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {activeCAs.map((ca) => (
+                        <SelectItem key={ca.id} value={ca.id}>
+                          {ca.commonName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            {templates.length > 0 && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Template</label>
-                <Select
-                  value={selectedTemplateId || "none"}
-                  onValueChange={(v) => handleTemplateSelect(v === "none" ? "" : v)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No template</SelectItem>
-                    {templates.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                {templates.length > 0 && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Template</label>
+                    <Select
+                      value={selectedTemplateId || "none"}
+                      onValueChange={(v) => handleTemplateSelect(v === "none" ? "" : v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No template</SelectItem>
+                        {templates.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Certificate Type</label>
+                    <Select
+                      value={type}
+                      onValueChange={(v) => {
+                        setType(v as CertificateType);
+                        setSelectedTemplateId("");
+                      }}
+                      disabled={!!selectedTemplateId}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tls-server">TLS Server</SelectItem>
+                        <SelectItem value="tls-client">TLS Client</SelectItem>
+                        <SelectItem value="code-signing">Code Signing</SelectItem>
+                        <SelectItem value="email">Email</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Key Algorithm</label>
+                    <Select
+                      value={keyAlgorithm}
+                      onValueChange={(v) => {
+                        setKeyAlgorithm(v as KeyAlgorithm);
+                        setSelectedTemplateId("");
+                      }}
+                      disabled={!!selectedTemplateId}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="rsa-2048">RSA-2048</SelectItem>
+                        <SelectItem value="rsa-4096">RSA-4096</SelectItem>
+                        <SelectItem value="ecdsa-p256">ECDSA-P256</SelectItem>
+                        <SelectItem value="ecdsa-p384">ECDSA-P384</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </motion.div>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Certificate Type</label>
-                <Select
-                  value={type}
-                  onValueChange={(v) => {
-                    setType(v as CertificateType);
-                    setSelectedTemplateId("");
-                  }}
-                  disabled={!!selectedTemplateId}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="tls-server">TLS Server</SelectItem>
-                    <SelectItem value="tls-client">TLS Client</SelectItem>
-                    <SelectItem value="code-signing">Code Signing</SelectItem>
-                    <SelectItem value="email">Email</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Key Algorithm</label>
-                <Select
-                  value={keyAlgorithm}
-                  onValueChange={(v) => {
-                    setKeyAlgorithm(v as KeyAlgorithm);
-                    setSelectedTemplateId("");
-                  }}
-                  disabled={!!selectedTemplateId}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="rsa-2048">RSA-2048</SelectItem>
-                    <SelectItem value="rsa-4096">RSA-4096</SelectItem>
-                    <SelectItem value="ecdsa-p256">ECDSA-P256</SelectItem>
-                    <SelectItem value="ecdsa-p384">ECDSA-P384</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Subject Details */}
-        {step === 2 && (
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Common Name (CN)</label>
-              <Input
-                value={commonName}
-                onChange={(e) => setCommonName(e.target.value)}
-                placeholder="e.g., api.example.com"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Validity (days)</label>
-              <NumericInput
-                value={validityDays}
-                onChange={(v) => setValidityDays(v)}
-                min={1}
-                max={3650}
-              />
-            </div>
-
-            {/* SANs */}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">
-                Subject Alternative Names
-                {sansRequired && <span className="text-destructive ml-1">*</span>}
-              </label>
-              {sansRequired && sans.length === 0 && (
-                <p className="text-xs text-destructive">
-                  At least one SAN is required for {type} certificates
-                </p>
-              )}
-              <div className="flex gap-2">
-                <Input
-                  value={sanInput}
-                  onChange={(e) => setSanInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addSAN())}
-                  placeholder="e.g., *.example.com or 192.168.1.1"
-                />
-                <Button variant="outline" size="icon" onClick={addSAN}>
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
-              {sans.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {sans.map((san) => (
-                    <Badge key={san} variant="secondary" className="gap-1">
-                      {san}
-                      <button onClick={() => removeSAN(san)}>
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
+            {/* Step 2: Subject Details */}
+            {step === 2 && (
+              <motion.div key="certificate-step-2" {...STEP_ANIMATION} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Common Name (CN)</label>
+                  <Input
+                    value={commonName}
+                    onChange={(e) => setCommonName(e.target.value)}
+                    placeholder="e.g., api.example.com"
+                  />
                 </div>
-              )}
-            </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Validity (days)</label>
+                  <NumericInput
+                    value={validityDays}
+                    onChange={(v) => setValidityDays(v)}
+                    min={1}
+                    max={3650}
+                  />
+                </div>
 
-            {/* Subject DN (optional) */}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Subject DN (optional)</label>
-              <div className="grid grid-cols-3 gap-2">
-                <Input
-                  value={dnO}
-                  onChange={(e) => setDnO(e.target.value)}
-                  placeholder="Organization (O)"
-                />
-                <Input
-                  value={dnOu}
-                  onChange={(e) => setDnOu(e.target.value)}
-                  placeholder="Org Unit (OU)"
-                />
-                <Input
-                  value={dnC}
-                  onChange={(e) => setDnC(e.target.value)}
-                  placeholder="Country (C)"
-                  maxLength={2}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 3: Review */}
-        {step === 3 && (
-          <div className="space-y-3 text-sm">
-            <div className="border border-border p-4 space-y-2">
-              <h3 className="font-semibold">Review</h3>
-              <div className="space-y-1.5">
-                <p>
-                  <span className="text-muted-foreground">CA:</span>{" "}
-                  {activeCAs.find((c) => c.id === selectedCAId)?.commonName}
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Type:</span>{" "}
-                  <span className="capitalize">{type}</span>
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Common Name:</span> {commonName}
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Key Algorithm:</span> {keyAlgorithm}
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Validity:</span> {validityDays} days
-                </p>
-                {sans.length > 0 && (
-                  <div>
-                    <span className="text-muted-foreground">SANs:</span>
-                    <div className="flex flex-wrap gap-1 mt-1">
+                {/* SANs */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">
+                    Subject Alternative Names
+                    {sansRequired && <span className="text-destructive ml-1">*</span>}
+                  </label>
+                  {sansRequired && sans.length === 0 && (
+                    <p className="text-xs text-destructive">
+                      At least one SAN is required for {type} certificates
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <Input
+                      value={sanInput}
+                      onChange={(e) => setSanInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addSAN())}
+                      placeholder="e.g., *.example.com or 192.168.1.1"
+                    />
+                    <Button variant="outline" size="icon" onClick={addSAN}>
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {sans.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
                       {sans.map((san) => (
-                        <Badge key={san} variant="secondary">
+                        <Badge key={san} variant="secondary" className="gap-1">
                           {san}
+                          <button onClick={() => removeSAN(san)}>
+                            <X className="h-3 w-3" />
+                          </button>
                         </Badge>
                       ))}
                     </div>
+                  )}
+                </div>
+
+                {/* Subject DN (optional) */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Subject DN (optional)</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Input
+                      value={dnO}
+                      onChange={(e) => setDnO(e.target.value)}
+                      placeholder="Organization (O)"
+                    />
+                    <Input
+                      value={dnOu}
+                      onChange={(e) => setDnOu(e.target.value)}
+                      placeholder="Org Unit (OU)"
+                    />
+                    <Input
+                      value={dnC}
+                      onChange={(e) => setDnC(e.target.value)}
+                      placeholder="Country (C)"
+                      maxLength={2}
+                    />
                   </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+                </div>
+              </motion.div>
+            )}
+
+            {/* Step 3: Review */}
+            {step === 3 && (
+              <motion.div
+                key="certificate-step-3"
+                {...STEP_ANIMATION}
+                className="space-y-3 text-sm"
+              >
+                <div className="border border-border p-4 space-y-2">
+                  <h3 className="font-semibold">Review</h3>
+                  <div className="space-y-1.5">
+                    <p>
+                      <span className="text-muted-foreground">CA:</span>{" "}
+                      {activeCAs.find((c) => c.id === selectedCAId)?.commonName}
+                    </p>
+                    <p>
+                      <span className="text-muted-foreground">Type:</span>{" "}
+                      <span className="capitalize">{type}</span>
+                    </p>
+                    <p>
+                      <span className="text-muted-foreground">Common Name:</span> {commonName}
+                    </p>
+                    <p>
+                      <span className="text-muted-foreground">Key Algorithm:</span> {keyAlgorithm}
+                    </p>
+                    <p>
+                      <span className="text-muted-foreground">Validity:</span> {validityDays} days
+                    </p>
+                    {sans.length > 0 && (
+                      <div>
+                        <span className="text-muted-foreground">SANs:</span>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {sans.map((san) => (
+                            <Badge key={san} variant="secondary">
+                              {san}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </AnimatedHeight>
 
         <DialogFooter>
           {step > 1 && (

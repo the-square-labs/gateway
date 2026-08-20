@@ -12,6 +12,16 @@ import type {
 } from "@/types";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
+export type CertificateExportFormat =
+  | "pem"
+  | "der"
+  | "pkcs12"
+  | "jks"
+  | "chain"
+  | "fullchain"
+  | "private-key"
+  | "pem-bundle";
+
 export function withPkiApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class PkiApiClient extends Base {
     // ── Certificate Authorities ───────────────────────────────────────
@@ -129,7 +139,11 @@ export function withPkiApi<TBase extends ApiClientBaseConstructor>(Base: TBase) 
       });
     }
 
-    async exportCertificate(id: string, format: string, passphrase?: string): Promise<Blob> {
+    async exportCertificate(
+      id: string,
+      format: CertificateExportFormat,
+      passphrase?: string
+    ): Promise<Blob> {
       if (format === "pkcs12" && !passphrase?.trim()) {
         throw new Error("Passphrase required for PKCS#12 export");
       }
@@ -144,7 +158,9 @@ export function withPkiApi<TBase extends ApiClientBaseConstructor>(Base: TBase) 
           ? "application/pkix-cert"
           : format === "pkcs12"
             ? "application/x-pkcs12"
-            : "application/x-pem-file";
+            : format === "pem-bundle"
+              ? "application/zip"
+              : "application/x-pem-file";
       return new Blob([bytes], { type });
     }
 

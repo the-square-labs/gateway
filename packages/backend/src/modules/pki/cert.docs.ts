@@ -56,7 +56,7 @@ export const exportCertificateRoute = appRoute({
   method: 'post',
   path: '/{id}/export',
   tags: ['Certificates'],
-  summary: 'Export a certificate',
+  summary: 'Export a certificate, PEM chain, private key, or PEM bundle',
   request: { params: IdParamSchema, ...jsonBody(ExportCertificateQuerySchema) },
   responses: { 200: { description: 'Certificate export payload' } },
 });

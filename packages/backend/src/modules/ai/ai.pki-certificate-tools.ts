@@ -95,22 +95,30 @@ export async function executePkiCertificateTool(
         if (input.format === 'der') {
           return { format: 'der', contentBase64: exportService.exportDER(cert.certificatePem).toString('base64') };
         }
+        if (
+          input.format === 'chain' ||
+          input.format === 'fullchain' ||
+          input.format === 'private-key' ||
+          input.format === 'pem-bundle'
+        ) {
+          throw new Error('UNSUPPORTED_EXPORT_FORMAT');
+        }
         if (!input.passphrase) throw new Error('PASSPHRASE_REQUIRED');
         const privateKey = await context.certService.getCertificatePrivateKey(a.certificateId);
         if (input.format === 'pkcs12') {
           if (!privateKey) throw new Error('NO_PRIVATE_KEY');
           return {
             format: 'pkcs12',
-            contentBase64: exportService
-              .exportPKCS12(cert.certificatePem, privateKey, input.passphrase)
-              .toString('base64'),
+            contentBase64: (
+              await exportService.exportPKCS12(cert.certificatePem, privateKey, input.passphrase)
+            ).toString('base64'),
           };
         }
         return {
           format: 'jks',
-          contentBase64: exportService
-            .exportJKS(cert.certificatePem, privateKey, input.passphrase, cert.commonName)
-            .toString('base64'),
+          contentBase64: (
+            await exportService.exportJKS(cert.certificatePem, privateKey, input.passphrase, cert.commonName)
+          ).toString('base64'),
         };
       }
       throw new Error(`Unsupported certificate operation: ${String(a.operation)}`);

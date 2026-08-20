@@ -30,6 +30,7 @@ import {
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate, formatSerialNumber, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
+import type { CertificateExportFormat } from "@/services/api-pki";
 import { useAuthStore } from "@/stores/auth";
 import type { Certificate } from "@/types";
 
@@ -72,7 +73,7 @@ export function CertificateDetail() {
   const [isRevoking, setIsRevoking] = useState(false);
   const [pkcs12DialogOpen, setPkcs12DialogOpen] = useState(false);
   const [pkcs12Passphrase, setPkcs12Passphrase] = useState("");
-  const [downloadingFormat, setDownloadingFormat] = useState<"pem" | "der" | "pkcs12" | null>(null);
+  const [downloadingFormat, setDownloadingFormat] = useState<CertificateExportFormat | null>(null);
 
   const handleRevoke = async () => {
     if (!cert) return;
@@ -90,7 +91,7 @@ export function CertificateDetail() {
     }
   };
 
-  const handleDownload = async (format: "pem" | "der" | "pkcs12", passphrase?: string) => {
+  const handleDownload = async (format: CertificateExportFormat, passphrase?: string) => {
     if (!cert) return;
     if (format === "pkcs12" && !passphrase?.trim()) {
       setPkcs12DialogOpen(true);
@@ -99,11 +100,20 @@ export function CertificateDetail() {
     setDownloadingFormat(format);
     try {
       const blob = await api.exportCertificate(cert.id, format, passphrase);
-      const ext = format === "pem" ? "pem" : format === "der" ? "der" : "p12";
+      const filenameByFormat: Record<CertificateExportFormat, string> = {
+        pem: `${cert.commonName}.pem`,
+        der: `${cert.commonName}.der`,
+        pkcs12: `${cert.commonName}.p12`,
+        jks: `${cert.commonName}.jks`,
+        chain: `${cert.commonName}-chain.pem`,
+        fullchain: `${cert.commonName}-fullchain.pem`,
+        "private-key": `${cert.commonName}-private-key.pem`,
+        "pem-bundle": `${cert.commonName}-pem.zip`,
+      };
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${cert.commonName}.${ext}`;
+      a.download = filenameByFormat[format];
       a.click();
       URL.revokeObjectURL(url);
       if (format === "pkcs12") {
@@ -178,6 +188,12 @@ export function CertificateDetail() {
               ...(canExportCertificate
                 ? [
                     {
+                      id: "certificate:download-pem-bundle",
+                      label: "Download PEM bundle (ZIP)",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => void handleDownload("pem-bundle"),
+                    },
+                    {
                       id: "certificate:download-pem",
                       label: "Download certificate as PEM",
                       icon: <Download className="h-4 w-4" />,
@@ -188,6 +204,24 @@ export function CertificateDetail() {
                       label: "Download certificate as DER",
                       icon: <Download className="h-4 w-4" />,
                       onClick: () => void handleDownload("der"),
+                    },
+                    {
+                      id: "certificate:download-chain",
+                      label: "Download intermediate CA chain",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => void handleDownload("chain"),
+                    },
+                    {
+                      id: "certificate:download-fullchain",
+                      label: "Download full chain as PEM",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => void handleDownload("fullchain"),
+                    },
+                    {
+                      id: "certificate:download-private-key",
+                      label: "Download private key as PEM",
+                      icon: <Download className="h-4 w-4" />,
+                      onClick: () => void handleDownload("private-key"),
                     },
                     {
                       id: "certificate:download-pkcs12",
@@ -229,13 +263,13 @@ export function CertificateDetail() {
           >
             {canExportCertificate && (
               <>
-                <Button variant="outline" onClick={() => void handleDownload("pem")}>
+                <Button variant="outline" onClick={() => void handleDownload("pem-bundle")}>
                   <Download className="h-4 w-4" />
-                  Download PEM
+                  Download PEM bundle
                 </Button>
-                <Button variant="outline" onClick={() => void handleDownload("der")}>
+                <Button variant="outline" onClick={() => void handleDownload("fullchain")}>
                   <Download className="h-4 w-4" />
-                  Download DER
+                  Download full chain
                 </Button>
                 <Button variant="outline" onClick={() => setPkcs12DialogOpen(true)}>
                   <Download className="h-4 w-4" />

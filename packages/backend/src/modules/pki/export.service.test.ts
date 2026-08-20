@@ -1,6 +1,44 @@
+import { webcrypto } from 'node:crypto';
+import * as x509 from '@peculiar/x509';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CryptoService } from '@/services/crypto.service.js';
 import { ExportService } from './export.service.js';
+
+async function createEcdsaCertificatePair() {
+  const now = Date.now();
+  const signingAlgorithm = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' };
+  const keys = await webcrypto.subtle.generateKey(signingAlgorithm, true, ['sign', 'verify']);
+  const certificate = await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: '01',
+    name: 'CN=ecdsa-export-test',
+    notBefore: new Date(now - 60_000),
+    notAfter: new Date(now + 86_400_000),
+    keys,
+    signingAlgorithm,
+  });
+  const privateKey = await webcrypto.subtle.exportKey('pkcs8', keys.privateKey);
+  return {
+    certificatePem: certificate.toString('pem'),
+    privateKeyPem: x509.PemConverter.encode(privateKey, 'PRIVATE KEY'),
+  };
+}
+
+function zipEntryNames(zip: Buffer): string[] {
+  const endOffset = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  expect(endOffset).toBeGreaterThanOrEqual(0);
+  const count = zip.readUInt16LE(endOffset + 10);
+  let offset = zip.readUInt32LE(endOffset + 16);
+  const names: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    expect(zip.readUInt32LE(offset)).toBe(0x02014b50);
+    const nameLength = zip.readUInt16LE(offset + 28);
+    const extraLength = zip.readUInt16LE(offset + 30);
+    const commentLength = zip.readUInt16LE(offset + 32);
+    names.push(zip.subarray(offset + 46, offset + 46 + nameLength).toString('utf8'));
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return names;
+}
 
 describe('ExportService', () => {
   let exportService: ExportService;
@@ -61,6 +99,42 @@ describe('ExportService', () => {
 
       const der = exportService.exportDER(certPem);
       expect(der.toString()).toBe(data);
+    });
+  });
+
+  describe('exportPEMBundle', () => {
+    it('contains the required PEM files and skips chain.pem when no intermediate exists', () => {
+      const archive = exportService.exportPEMBundle({
+        certificatePem: '-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----',
+        privateKeyPem: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----',
+        chainPems: [],
+      });
+
+      expect(zipEntryNames(archive)).toEqual(['certificate.pem', 'private-key.pem', 'fullchain.pem']);
+    });
+
+    it('includes an intermediate-only chain and leaf-first fullchain', () => {
+      const archive = exportService.exportPEMBundle({
+        certificatePem: '-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----',
+        privateKeyPem: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----',
+        chainPems: ['-----BEGIN CERTIFICATE-----\nintermediate\n-----END CERTIFICATE-----'],
+      });
+
+      expect(zipEntryNames(archive)).toEqual(['certificate.pem', 'private-key.pem', 'chain.pem', 'fullchain.pem']);
+      expect(archive.toString('utf8')).toContain(
+        'leaf\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nintermediate'
+      );
+    });
+  });
+
+  describe('exportPKCS12', () => {
+    it('exports an ECDSA certificate and private key', async () => {
+      const { certificatePem, privateKeyPem } = await createEcdsaCertificatePair();
+
+      const archive = await exportService.exportPKCS12(certificatePem, privateKeyPem, 'test-passphrase');
+
+      expect(archive.subarray(0, 2).toString('hex')).toBe('3082');
+      expect(archive.length).toBeGreaterThan(512);
     });
   });
 });

@@ -18,7 +18,7 @@ RUN pnpm build
 
 FROM node:24-alpine AS production
 
-RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+RUN apk add --no-cache openssl && corepack enable && corepack prepare pnpm@9.15.0 --activate
 
 WORKDIR /app
 

@@ -33,6 +33,19 @@ import { OCSPService } from './ocsp.service.js';
 
 export const certRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
+async function getIntermediateChainPems(caService: CAService, caId: string, includeSystem: boolean): Promise<string[]> {
+  const chainPems: string[] = [];
+  let currentCaId: string | null = caId;
+
+  while (currentCaId) {
+    const ca = await caService.getCA(currentCaId, { includeSystem });
+    if (ca.type === 'intermediate') chainPems.push(ca.certificatePem);
+    currentCaId = ca.parentId;
+  }
+
+  return chainPems;
+}
+
 certRoutes.use('*', authMiddleware);
 certRoutes.use('*', requireGatewayFeature('pkiEnabled', 'PKI'));
 certRoutes.use('*', requireLicenseFeature('internal-pki'));
@@ -130,6 +143,7 @@ certRoutes.openapi(
   { ...exportCertificateRoute, middleware: requireScopeForResource('pki:cert:export', 'id') },
   async (c) => {
     const certService = container.resolve(CertService);
+    const caService = container.resolve(CAService);
     const exportService = container.resolve(ExportService);
     const auditService = container.resolve(AuditService);
     const user = c.get('user')!;
@@ -141,6 +155,20 @@ certRoutes.openapi(
     const cert = await certService.getCertificate(id, {
       includeSystem: hasScope(scopes, 'admin:details:certificates'),
     });
+    const includeSystem = hasScope(scopes, 'admin:details:certificates');
+    const keyExport = async (format: 'pkcs12' | 'jks' | 'private-key' | 'pem-bundle') => {
+      const recorded = await auditService.log({
+        userId: user.id,
+        action: 'cert.export_key',
+        resourceType: 'certificate',
+        resourceId: id,
+        details: { format },
+        userAgent: c.req.header('user-agent'),
+      });
+      if (!recorded) {
+        throw new AppError(503, 'AUDIT_UNAVAILABLE', 'Private key export requires an audit record');
+      }
+    };
 
     switch (format) {
       case 'pem':
@@ -161,6 +189,65 @@ certRoutes.openapi(
         });
       }
 
+      case 'chain': {
+        const chainPems = await getIntermediateChainPems(caService, cert.caId, includeSystem);
+        if (!chainPems.length) {
+          return c.json({ code: 'NO_INTERMEDIATE_CHAIN', message: 'No intermediate CA chain is available' }, 404);
+        }
+        return new Response(exportService.exportChainPEM(chainPems), {
+          headers: {
+            'Content-Type': 'application/x-pem-file',
+            'Content-Disposition': `attachment; filename="${sanitizeFilename(cert.commonName)}-chain.pem"`,
+          },
+        });
+      }
+
+      case 'fullchain': {
+        const chainPems = await getIntermediateChainPems(caService, cert.caId, includeSystem);
+        return new Response(exportService.exportPEM(cert.certificatePem, chainPems), {
+          headers: {
+            'Content-Type': 'application/x-pem-file',
+            'Content-Disposition': `attachment; filename="${sanitizeFilename(cert.commonName)}-fullchain.pem"`,
+          },
+        });
+      }
+
+      case 'private-key': {
+        const privateKey = await certService.getCertificatePrivateKey(id);
+        if (!privateKey) {
+          return c.json({ code: 'NO_PRIVATE_KEY', message: 'Private key not available (CSR-based certificate)' }, 400);
+        }
+        await keyExport('private-key');
+        return new Response(privateKey, {
+          headers: {
+            'Content-Type': 'application/x-pem-file',
+            'Content-Disposition': `attachment; filename="${sanitizeFilename(cert.commonName)}-private-key.pem"`,
+          },
+        });
+      }
+
+      case 'pem-bundle': {
+        const privateKey = await certService.getCertificatePrivateKey(id);
+        if (!privateKey) {
+          return c.json({ code: 'NO_PRIVATE_KEY', message: 'Private key not available (CSR-based certificate)' }, 400);
+        }
+        await keyExport('pem-bundle');
+        const chainPems = await getIntermediateChainPems(caService, cert.caId, includeSystem);
+        return new Response(
+          exportService.exportPEMBundle({
+            certificatePem: cert.certificatePem,
+            privateKeyPem: privateKey,
+            chainPems,
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/zip',
+              'Content-Disposition': `attachment; filename="${sanitizeFilename(cert.commonName)}-pem.zip"`,
+            },
+          }
+        );
+      }
+
       case 'pkcs12': {
         if (!passphrase) {
           return c.json({ code: 'PASSPHRASE_REQUIRED', message: 'Passphrase required for PKCS#12 export' }, 400);
@@ -169,15 +256,9 @@ certRoutes.openapi(
         if (!privateKey) {
           return c.json({ code: 'NO_PRIVATE_KEY', message: 'Private key not available (CSR-based certificate)' }, 400);
         }
-        await auditService.log({
-          userId: user.id,
-          action: 'cert.export_key',
-          resourceType: 'certificate',
-          resourceId: id,
-          details: { format: 'pkcs12' },
-          userAgent: c.req.header('user-agent'),
-        });
-        const p12 = exportService.exportPKCS12(cert.certificatePem, privateKey, passphrase);
+        await keyExport('pkcs12');
+        const chainPems = await getIntermediateChainPems(caService, cert.caId, includeSystem);
+        const p12 = await exportService.exportPKCS12(cert.certificatePem, privateKey, passphrase, chainPems);
         return new Response(p12, {
           headers: {
             'Content-Type': 'application/x-pkcs12',
@@ -192,16 +273,9 @@ certRoutes.openapi(
         }
         const jksKey = await certService.getCertificatePrivateKey(id);
         if (jksKey) {
-          await auditService.log({
-            userId: user.id,
-            action: 'cert.export_key',
-            resourceType: 'certificate',
-            resourceId: id,
-            details: { format: 'jks' },
-            userAgent: c.req.header('user-agent'),
-          });
+          await keyExport('jks');
         }
-        const jks = exportService.exportJKS(cert.certificatePem, jksKey, passphrase, cert.commonName);
+        const jks = await exportService.exportJKS(cert.certificatePem, jksKey, passphrase, cert.commonName);
         return new Response(jks, {
           headers: {
             'Content-Type': 'application/x-java-keystore',

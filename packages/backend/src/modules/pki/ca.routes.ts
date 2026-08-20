@@ -178,7 +178,7 @@ caRoutes.openapi({ ...exportCAKeyRoute, middleware: requireScope('pki:ca:create:
   const { passphrase } = ExportCAKeySchema.parse(body);
 
   const { ca, privateKeyPem } = await caService.getCASigningMaterials(id);
-  const p12 = exportService.exportCAKey(privateKeyPem, ca.certificatePem, passphrase);
+  const p12 = await exportService.exportCAKey(privateKeyPem, ca.certificatePem, passphrase);
 
   await auditService.log({
     userId: user.id,

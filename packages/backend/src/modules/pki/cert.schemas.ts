@@ -55,7 +55,7 @@ export const CertificateListQuerySchema = z.object({
 });
 
 export const ExportCertificateQuerySchema = z.object({
-  format: z.enum(['pem', 'der', 'pkcs12', 'jks']),
+  format: z.enum(['pem', 'der', 'pkcs12', 'jks', 'chain', 'fullchain', 'private-key', 'pem-bundle']),
   passphrase: z.string().optional(),
 });
 
