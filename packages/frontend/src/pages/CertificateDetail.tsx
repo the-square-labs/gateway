@@ -267,9 +267,25 @@ export function CertificateDetail() {
                   <Download className="h-4 w-4" />
                   Download PEM bundle
                 </Button>
+                <Button variant="outline" onClick={() => void handleDownload("pem")}>
+                  <Download className="h-4 w-4" />
+                  Download PEM
+                </Button>
+                <Button variant="outline" onClick={() => void handleDownload("der")}>
+                  <Download className="h-4 w-4" />
+                  Download DER
+                </Button>
+                <Button variant="outline" onClick={() => void handleDownload("chain")}>
+                  <Download className="h-4 w-4" />
+                  Download intermediate CA chain
+                </Button>
                 <Button variant="outline" onClick={() => void handleDownload("fullchain")}>
                   <Download className="h-4 w-4" />
                   Download full chain
+                </Button>
+                <Button variant="outline" onClick={() => void handleDownload("private-key")}>
+                  <Download className="h-4 w-4" />
+                  Download private key
                 </Button>
                 <Button variant="outline" onClick={() => setPkcs12DialogOpen(true)}>
                   <Download className="h-4 w-4" />

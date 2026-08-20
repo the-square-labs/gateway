@@ -171,7 +171,7 @@ export function CertificateIssueDialog({
         </DialogHeader>
 
         <AnimatedHeight>
-          <AnimatePresence initial={false} mode="wait">
+          <AnimatePresence initial={false} mode="popLayout">
             {/* Step 1: CA & Template Selection */}
             {step === 1 && (
               <motion.div key="certificate-step-1" {...STEP_ANIMATION} className="space-y-4">
