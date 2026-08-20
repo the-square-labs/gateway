@@ -18,6 +18,7 @@ import {
 } from "@/services/ai-conversations";
 import { AIWebSocketClient } from "@/services/ai-websocket";
 import { api } from "@/services/api";
+import { invalidateToolStore } from "@/services/tool-store-invalidation";
 import { applyAssistantResourcePinAction } from "@/stores/assistant-resource-pins";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
@@ -222,88 +223,6 @@ function compactToolResultForModel(toolName: string, value: unknown): unknown {
     return { artifactId, filename, mediaType, sizeBytes, sourcePath, downloadUrl };
   }
   return value;
-}
-
-function invalidateStore(storeName: string): void {
-  switch (storeName) {
-    case "ca":
-      api.invalidateCache("req:/api/cas");
-      api.invalidateCache("cas:list:");
-      api.invalidateCache("req:/api/monitoring/dashboard");
-      api.invalidateCache("dashboard:stats:");
-      break;
-    case "certificates":
-      api.invalidateCache("req:/api/certificates");
-      api.invalidateCache("certificates:list:");
-      api.invalidateCache("req:/api/monitoring/dashboard");
-      api.invalidateCache("dashboard:stats:");
-      break;
-    case "ssl":
-      api.invalidateCache("req:/api/ssl-certificates");
-      api.invalidateCache("ssl:list:");
-      api.invalidateCache("req:/api/monitoring/dashboard");
-      api.invalidateCache("dashboard:stats:");
-      break;
-    case "proxy":
-      api.invalidateCache("req:/api/proxy-hosts");
-      api.invalidateCache("req:/api/proxy-host-folders/grouped");
-      api.invalidateCache("proxy:grouped");
-      api.invalidateCache("req:/api/domains");
-      api.invalidateCache("domains:list");
-      api.invalidateCache("req:/api/monitoring/dashboard");
-      api.invalidateCache("req:/api/monitoring/health-status");
-      api.invalidateCache("dashboard:stats:");
-      api.invalidateCache("dashboard:health");
-      break;
-    case "templates":
-      api.invalidateCache("req:/api/templates");
-      api.invalidateCache("templates");
-      break;
-    case "domains":
-      api.invalidateCache("req:/api/domains");
-      api.invalidateCache("domains");
-      break;
-    case "accessLists":
-      api.invalidateCache("req:/api/access-lists");
-      api.invalidateCache("access-lists:list");
-      break;
-    case "nodes":
-      api.invalidateCache("req:/api/nodes");
-      api.invalidateCache("req:/api/monitoring/dashboard");
-      api.invalidateCache("dashboard:stats:");
-      break;
-    case "groups":
-      api.invalidateCache("req:/api/admin/groups");
-      api.invalidateCache("req:/api/admin/users");
-      api.invalidateCache("admin:users");
-      break;
-    case "users":
-      api.invalidateCache("req:/api/admin/users");
-      api.invalidateCache("admin:users");
-      break;
-    case "containers":
-      api.invalidateCache("req:/api/docker");
-      break;
-    case "images":
-      api.invalidateCache("req:/api/docker");
-      break;
-    case "volumes":
-      api.invalidateCache("req:/api/docker");
-      break;
-    case "networks":
-      api.invalidateCache("req:/api/docker");
-      break;
-    case "integrations":
-      api.invalidateCache("req:/api/integrations/gitlab/connectors");
-      api.invalidateCache("settings:gitlab-connectors");
-      api.invalidateCache("req:/api/integrations/cloudflare/connectors");
-      api.invalidateCache("settings:cloudflare-connectors");
-      break;
-    case "dockerRegistries":
-      api.invalidateCache("req:/api/docker/registries");
-      api.invalidateCache("settings:docker-registries");
-      break;
-  }
 }
 
 interface AIState {
@@ -2583,7 +2502,7 @@ function handleWSMessage(
 
     case "stores.invalidated":
       if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
-      for (const storeName of msg.stores) invalidateStore(storeName);
+      for (const storeName of msg.stores) invalidateToolStore(storeName);
       break;
 
     case "question.answered":

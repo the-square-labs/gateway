@@ -71,7 +71,7 @@ describe('AIService Docker container config tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { success: true },
-      invalidateStores: [],
+      invalidateStores: ['containers', 'tasks'],
     });
     expect(dockerService.updateContainerEnv).toHaveBeenCalledWith(
       'node-1',
@@ -103,7 +103,7 @@ describe('AIService Docker container config tool routing', () => {
       )
     ).resolves.toMatchObject({
       result: { success: true },
-      invalidateStores: [],
+      invalidateStores: ['containers'],
     });
     expect(dockerService.writeFile).toHaveBeenCalledWith(
       'node-1',

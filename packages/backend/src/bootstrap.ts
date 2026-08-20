@@ -1365,7 +1365,8 @@ export async function initializeContainer(): Promise<void> {
     generalSettingsService,
     aiPlanService,
     dockerSnapshotService,
-    licensePolicyService
+    licensePolicyService,
+    eventBus
   );
   container.registerInstance(AIService, aiService);
   if (!container.isRegistered(AIService)) {

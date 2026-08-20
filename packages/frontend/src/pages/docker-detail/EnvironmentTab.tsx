@@ -7,6 +7,7 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Input } from "@/components/ui/input";
+import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -69,6 +70,7 @@ export function EnvironmentTab({
   const databaseLinksRef = useRef<ManagedDatabaseLinksSectionHandle>(null);
   const [databaseLinkDraft, setDatabaseLinkDraft] =
     useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
+  const envContainerIdRef = useRef(containerId);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = hasScope(`docker:containers:environment:${scopeSuffix}`);
@@ -99,11 +101,12 @@ export function EnvironmentTab({
   );
 
   const fetchEnv = useCallback(async () => {
+    const targetContainerId = envContainerIdRef.current;
     setIsLoading((current) => (isServiceEnv ? current : true));
     try {
       if (isServiceEnv) {
         const secretsData = canManageSecrets
-          ? await api.listDockerDeploymentSecrets(nodeId, containerId)
+          ? await api.listDockerDeploymentSecrets(nodeId, targetContainerId)
           : [];
         const serviceEnvRecord = JSON.parse(serviceEnvSignature) as Record<string, string>;
         const entries = Object.entries(serviceEnvRecord).map(([key, value]) => `${key}=${value}`);
@@ -127,8 +130,8 @@ export function EnvironmentTab({
       }
 
       const [data, secretsData] = await Promise.all([
-        canEdit ? api.getContainerEnv(nodeId, containerId) : Promise.resolve([]),
-        canManageSecrets ? api.listDockerSecrets(nodeId, containerId) : Promise.resolve([]),
+        canEdit ? api.getContainerEnv(nodeId, targetContainerId) : Promise.resolve([]),
+        canManageSecrets ? api.listDockerSecrets(nodeId, targetContainerId) : Promise.resolve([]),
       ]);
 
       if (canEdit) {
@@ -165,11 +168,44 @@ export function EnvironmentTab({
     } finally {
       setIsLoading(false);
     }
-  }, [canEdit, canManageSecrets, nodeId, containerId, isServiceEnv, serviceEnvSignature]);
+  }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature]);
 
   useEffect(() => {
+    envContainerIdRef.current = containerId;
     fetchEnv();
-  }, [fetchEnv]);
+  }, [containerId, fetchEnv]);
+
+  useRealtime(isServiceEnv ? null : "docker.container.changed", (payload) => {
+    const event = payload as {
+      nodeId?: string;
+      id?: string;
+      oldId?: string;
+      name?: string;
+      action?: string;
+      toolName?: string;
+      operation?: string;
+    };
+    if (event.nodeId !== nodeId) return;
+    const matchesContainer = containerName
+      ? !event.name || event.name === containerName
+      : event.id === containerId || event.oldId === containerId;
+    if (!matchesContainer) return;
+
+    if (event.action === "recreated" && event.id) {
+      if (event.id !== containerId) return;
+      envContainerIdRef.current = event.id;
+      void fetchEnv();
+      return;
+    }
+    if (
+      event.action === "tool-invalidated" &&
+      event.toolName === "manage_docker_container_config" &&
+      event.operation !== "update_env"
+    ) {
+      envContainerIdRef.current = event.id || containerId;
+      void fetchEnv();
+    }
+  });
 
   useEffect(() => {
     if (!canEdit || !canManageSecrets || isServiceEnv || !containerName) {

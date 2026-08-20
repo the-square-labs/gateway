@@ -10,6 +10,12 @@ import type { ManagedDatabase, ManagedDatabaseBinding } from "@/types";
 import { EnvironmentTab } from "./EnvironmentTab";
 
 vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn() }));
+const realtimeHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
+vi.mock("@/hooks/use-realtime", () => ({
+  useRealtime: (channel: string | null, handler: (payload: unknown) => void) => {
+    if (channel) realtimeHandlers.set(channel, handler);
+  },
+}));
 
 const database: ManagedDatabase = {
   id: "database-1",
@@ -46,6 +52,56 @@ describe("EnvironmentTab managed database links", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.mocked(confirm).mockReset();
+    realtimeHandlers.clear();
+  });
+
+  it("reloads environment from the replacement container after recreate settles", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    const getContainerEnv = vi
+      .spyOn(api, "getContainerEnv")
+      .mockResolvedValueOnce(["VERSION=old"])
+      .mockResolvedValueOnce(["VERSION=old"])
+      .mockResolvedValueOnce(["VERSION=new"]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <EnvironmentTab nodeId="node-1" containerId="container-old" containerName="app" />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByDisplayValue("old")).toBeInTheDocument();
+    rerender(
+      <MemoryRouter>
+        <EnvironmentTab nodeId="node-1" containerId="container-new" containerName="app" />
+      </MemoryRouter>
+    );
+    await waitFor(() =>
+      expect(getContainerEnv).toHaveBeenLastCalledWith("node-1", "container-new")
+    );
+    expect(screen.getByDisplayValue("old")).toBeInTheDocument();
+
+    realtimeHandlers.get("docker.container.changed")?.({
+      nodeId: "node-1",
+      name: "app",
+      id: "container-new",
+      oldId: "container-old",
+      action: "recreated",
+    });
+
+    expect(await screen.findByDisplayValue("new")).toBeInTheDocument();
+    expect(getContainerEnv).toHaveBeenLastCalledWith("node-1", "container-new");
   });
 
   it("hides a confirmed replacement from the ordinary env draft before save", async () => {

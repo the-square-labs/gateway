@@ -3,6 +3,7 @@ import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
+import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from '@/modules/ai/ai-tool-store-invalidation.js';
 import { resolveLiveSessionUser, resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { MFA_REQUIRED_CHANNEL_PREFIX } from '@/modules/auth/mfa-events.js';
 import {
@@ -70,6 +71,7 @@ function send(ws: WSContext, msg: ServerMsg) {
 function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('permissions.changed.')) return null;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return null;
+  if (channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) return null;
   if (channel === 'read-model.refreshed') return null;
   if (channel === 'domain.changed') return 'domains:view';
   if (channel === 'logging.logs.ingested') return 'logs:read';
@@ -129,6 +131,7 @@ function requiredScopeFor(channel: string): string | null {
 function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel.startsWith('permissions.changed.')) return true;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return true;
+  if (channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) return true;
   if (channel === 'read-model.refreshed') return true;
   if (channel === 'system.update.changed') return true;
   if (channel === 'system.license.changed') return true;
@@ -706,6 +709,13 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
       }
       if (ch.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) {
         const targetUserId = ch.slice(MFA_REQUIRED_CHANNEL_PREFIX.length);
+        if (targetUserId !== state.user?.id) {
+          rejected.push(ch);
+          continue;
+        }
+      }
+      if (ch.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) {
+        const targetUserId = ch.slice(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX.length);
         if (targetUserId !== state.user?.id) {
           rejected.push(ch);
           continue;

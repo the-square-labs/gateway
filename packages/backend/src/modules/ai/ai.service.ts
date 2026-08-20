@@ -131,6 +131,11 @@ import {
   estimateTextTokens,
   estimateToolSchemaTokens,
 } from './ai-token-estimator.js';
+import {
+  publishToolStoreInvalidation,
+  resolveToolStoreInvalidations,
+  toolInvalidationContext,
+} from './ai-tool-store-invalidation.js';
 
 const logger = createChildLogger('AIService');
 const SANDBOX_TOOL_NAMES = new Set([
@@ -852,7 +857,8 @@ export class AIService {
     private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService,
     private readonly planService?: AIPlanService,
     private readonly dockerSnapshotService?: DockerSnapshotService,
-    private readonly licensePolicyService?: LicensePolicyService
+    private readonly licensePolicyService?: LicensePolicyService,
+    private readonly eventBus?: EventBusService
   ) {}
 
   private async resolveCurrentApprovalMode(user: User): Promise<AIApprovalMode> {
@@ -1209,8 +1215,21 @@ export class AIService {
         pageContext: options.pageContext,
         conversationId: options.conversationId,
       });
-      const invalidateStores = TOOL_STORE_INVALIDATION_MAP[toolName] || [];
+      const invalidateStores = resolveToolStoreInvalidations(
+        toolName,
+        args,
+        TOOL_STORE_INVALIDATION_MAP[toolName] || []
+      );
       await this.persistToolRuntimeState(user, options, toolName, result);
+
+      publishToolStoreInvalidation(this.eventBus, {
+        userId: user.id,
+        source,
+        toolName,
+        stores: invalidateStores,
+        resourceId: getToolResourceId(toolDef, args),
+        context: toolInvalidationContext(args),
+      });
 
       if (source === 'mcp' && !auditEmittedDuringTool()) {
         await this.auditService.log({

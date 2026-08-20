@@ -1,5 +1,11 @@
 import { INFERENCE_CATALOG_CHANGED_CHANNEL } from "@/lib/inference-self-usage";
 import { api } from "@/services/api";
+import {
+  invalidateToolStore,
+  TOOL_STORE_INVALIDATION_CHANNEL_PREFIX,
+  type ToolStoreInvalidationPayload,
+  toolStoreEventChannels,
+} from "@/services/tool-store-invalidation";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
@@ -145,6 +151,24 @@ class EventStream {
         return;
       }
       if (msg.type === "event" && msg.channel) {
+        if (msg.channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) {
+          const payload = (msg.payload ?? {}) as ToolStoreInvalidationPayload;
+          const stores = Array.isArray(payload.stores) ? payload.stores : [];
+          for (const store of stores) invalidateToolStore(store);
+          const syntheticPayload = {
+            action: "tool-invalidated",
+            source: payload.source,
+            toolName: payload.toolName,
+            stores,
+            id: payload.resourceId,
+            ...(payload.context ?? {}),
+          };
+          for (const channel of toolStoreEventChannels(stores)) {
+            this.dispatch(channel, syntheticPayload);
+          }
+          this.dispatch(msg.channel, msg.payload);
+          return;
+        }
         // Direct store invalidation for node status changes
         if (msg.channel === "node.changed") {
           const payload = msg.payload as { action?: string; id?: string } | undefined;

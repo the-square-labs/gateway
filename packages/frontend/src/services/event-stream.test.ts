@@ -137,6 +137,47 @@ describe("eventStream", () => {
     unsubscribe();
   });
 
+  it("fans AI and MCP tool invalidations into the session-wide realtime bus", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const toolHandler = vi.fn();
+    const containerHandler = vi.fn();
+    const toolChannel = "tool.store.invalidated.user-1";
+    const unsubs = [
+      eventStream.subscribe(toolChannel, toolHandler),
+      eventStream.subscribe("docker.container.changed", containerHandler),
+    ];
+    eventStream.start();
+    vi.runAllTimers();
+    const socket = MockWebSocket.instances[0];
+    socket?.open();
+
+    socket?.emit({
+      type: "event",
+      channel: toolChannel,
+      payload: {
+        source: "mcp",
+        toolName: "manage_docker_container_config",
+        stores: ["containers", "tasks"],
+        resourceId: "container-1",
+        context: { operation: "update_env", nodeId: "node-1", containerId: "container-1" },
+      },
+    });
+
+    expect(invalidateCache).toHaveBeenCalledWith("req:/api/docker");
+    expect(containerHandler).toHaveBeenCalledWith({
+      action: "tool-invalidated",
+      source: "mcp",
+      toolName: "manage_docker_container_config",
+      stores: ["containers", "tasks"],
+      id: "container-1",
+      operation: "update_env",
+      nodeId: "node-1",
+      containerId: "container-1",
+    });
+    expect(toolHandler).toHaveBeenCalledOnce();
+    unsubs.forEach((unsubscribe) => unsubscribe());
+  });
+
   it("invalidates license bootstrap caches on license state changes", async () => {
     const { eventStream } = await import("@/services/event-stream");
     const handler = vi.fn();

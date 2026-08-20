@@ -74,6 +74,7 @@ import { TemplatesPage } from "@/pages/TemplatesPage";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { eventStream } from "@/services/event-stream";
+import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from "@/services/tool-store-invalidation";
 import { useAIStore } from "@/stores/ai";
 import {
   APP_STATUS_STORAGE_KEY,
@@ -838,6 +839,7 @@ function RealtimeBridge() {
   // session so warmed projections stay coherent even with no matching route mounted.
   useEffect(() => {
     if (!user) return;
+    const toolInvalidationChannel = `${TOOL_STORE_INVALIDATION_CHANNEL_PREFIX}${user.id}`;
     const auth = useAuthStore.getState();
     const canViewAnyDockerSnapshot = [
       "docker:containers:view",
@@ -846,6 +848,7 @@ function RealtimeBridge() {
       "docker:networks:view",
     ].some((scope) => auth.hasScopedAccess(scope));
     const channels: Array<[boolean, string]> = [
+      [true, toolInvalidationChannel],
       [auth.hasScopedAccess("domains:view"), "domain.changed"],
       [auth.hasScope("pki:templates:view"), "pki.template.changed"],
       [auth.hasScopedAccess("proxy:templates:view"), "nginx.template.changed"],
