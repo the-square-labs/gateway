@@ -139,6 +139,7 @@ export class ProxyDockerUpstreamService {
         id: nodes.id,
         type: nodes.type,
         status: nodes.status,
+        serviceAddresses: nodes.serviceAddresses,
         serviceAddress: nodes.serviceAddress,
         lastHealthReport: nodes.lastHealthReport,
       })

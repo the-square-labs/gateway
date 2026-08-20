@@ -129,6 +129,7 @@ export interface Node {
   hostname: string;
   displayName: string | null;
   appearanceColor: NodeAppearanceColor | null;
+  serviceAddresses?: string[];
   serviceAddress?: string | null;
   secondaryServiceAddress?: string | null;
   effectiveServiceAddress?: string | null;

@@ -110,4 +110,32 @@ describe("Combobox", () => {
     fireEvent.blur(input);
     expect(input).toHaveValue("new.example");
   });
+
+  it("preserves option group headings while filtering", async () => {
+    const user = userEvent.setup();
+    render(
+      <Combobox
+        freeText
+        value=""
+        options={[
+          { value: "automatic", label: "Automatic", group: "Address mode" },
+          { value: "192.168.1.2", label: "192.168.1.2", group: "Local addresses" },
+          { value: "8.8.8.8", label: "8.8.8.8", group: "Detected public addresses" },
+        ]}
+        onValueChange={vi.fn()}
+        ariaLabel="Service address"
+      />
+    );
+
+    const input = screen.getByRole("combobox", { name: "Service address" });
+    await user.click(input);
+    expect(screen.getByText("Address mode")).toBeInTheDocument();
+    expect(screen.getByText("Local addresses")).toBeInTheDocument();
+    expect(screen.getByText("Detected public addresses")).toBeInTheDocument();
+
+    await user.type(input, "8.8");
+    expect(screen.queryByText("Address mode")).not.toBeInTheDocument();
+    expect(screen.queryByText("Local addresses")).not.toBeInTheDocument();
+    expect(screen.getByText("Detected public addresses")).toBeInTheDocument();
+  });
 });

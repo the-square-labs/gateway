@@ -233,15 +233,15 @@ describe("AdminNodeDetail", () => {
     await user.clear(displayNameInput);
     await user.type(displayNameInput, "Docker Blue");
     await user.click(screen.getByRole("button", { name: "Blue color" }));
-    await user.click(screen.getByRole("combobox", { name: "Service Address" }));
-    await user.click(await screen.findByRole("option", { name: "8.8.8.8" }));
+    await user.click(screen.getByRole("combobox", { name: "Service Address 1" }));
+    await user.click(await screen.findByRole("button", { name: "8.8.8.8" }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
       expect(api.updateNode).toHaveBeenCalledWith("node-1", {
         displayName: "Docker Blue",
         appearanceColor: "blue",
-        serviceAddress: "8.8.8.8",
+        serviceAddresses: ["8.8.8.8"],
       })
     );
   });
@@ -277,7 +277,8 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /settings/i }));
 
-    expect(screen.getByRole("combobox", { name: "Service Address" })).toHaveTextContent(
+    expect(screen.getByRole("combobox", { name: "Service Address 1" })).toHaveAttribute(
+      "placeholder",
       "Automatic (8.8.8.8)"
     );
   });
@@ -322,27 +323,26 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /settings/i }));
-    await user.click(screen.getByRole("combobox", { name: "Service Address" }));
+    const serviceAddress = screen.getByRole("combobox", { name: "Service Address 1" });
+    await user.click(serviceAddress);
 
-    expect(await screen.findByRole("option", { name: "1.1.1.1" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "2606:4700:4700::1111" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "1.1.1.1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2606:4700:4700::1111" })).toBeInTheDocument();
+    expect(screen.getByText("Detected public addresses")).toBeInTheDocument();
     expect(screen.queryByText("192.168.1.20")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("option", { name: "Custom address" }));
-    const customAddressInput = screen.getByRole("textbox", { name: "Custom Service Address" });
-    await user.type(customAddressInput, "9.9.9.9");
+    await user.type(serviceAddress, "9.9.9.9");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
       expect(api.updateNode).toHaveBeenCalledWith("node-1", {
         displayName: "Edge 1",
         appearanceColor: null,
-        serviceAddress: "9.9.9.9",
-        secondaryServiceAddress: null,
+        serviceAddresses: ["9.9.9.9"],
       })
     );
   });
 
-  it("offers a disabled secondary Nginx address and blocks duplicate addresses", async () => {
+  it("adds and removes service address rows and blocks duplicate addresses", async () => {
     useAuthStore.setState({
       user: makeUser({
         scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
@@ -374,15 +374,76 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /settings/i }));
-    const secondaryAddress = screen.getByRole("combobox", { name: "Secondary Address" });
-    expect(secondaryAddress).toHaveTextContent("Disabled");
-
-    await user.click(secondaryAddress);
-    await user.click(await screen.findByRole("option", { name: "1.1.1.1" }));
+    const firstAddress = screen.getByRole("combobox", { name: "Service Address 1" });
+    await user.click(firstAddress);
+    await user.click(await screen.findByRole("button", { name: "1.1.1.1" }));
+    await user.click(screen.getByRole("button", { name: "Add service address" }));
+    const secondAddress = screen.getByRole("combobox", { name: "Service Address 2" });
+    await user.click(secondAddress);
+    await user.click(await screen.findByRole("button", { name: "1.1.1.1" }));
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
 
-    await user.click(screen.getByRole("combobox", { name: "Secondary Address" }));
-    await user.click(await screen.findByRole("option", { name: "8.8.8.8" }));
+    await user.clear(secondAddress);
+    await user.type(secondAddress, "https://invalid.example");
+    expect(
+      screen.getByText("Enter a valid IPv4, IPv6, or hostname for every address.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+
+    await user.clear(secondAddress);
+    await user.type(secondAddress, "8.8.8.8");
     expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Remove service address 1" }));
+    await waitFor(() =>
+      expect(screen.getAllByRole("combobox", { name: "Service Address 1" })).toHaveLength(1)
+    );
+    expect(screen.getByRole("combobox", { name: "Service Address 1" })).toHaveValue("8.8.8.8");
+    expect(screen.queryByRole("combobox", { name: "Service Address 2" })).not.toBeInTheDocument();
+  });
+
+  it("preserves migrated addresses and caps the list at ten rows", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({
+        id: "node-1",
+        type: "nginx",
+        hostname: "edge-1",
+        serviceAddresses: ["1.1.1.1", "8.8.8.8"],
+      }),
+      publicServiceAddresses: ["1.1.1.1", "8.8.8.8"],
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/node-1/details"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /settings/i }));
+    expect(screen.getByRole("combobox", { name: "Service Address 1" })).toHaveValue("1.1.1.1");
+    expect(screen.getByRole("combobox", { name: "Service Address 2" })).toHaveValue("8.8.8.8");
+    expect(screen.queryByText("Secondary Address")).not.toBeInTheDocument();
+
+    for (let index = 0; index < 8; index += 1) {
+      await user.click(screen.getByRole("button", { name: "Add service address" }));
+    }
+    expect(screen.getAllByRole("combobox", { name: /Service Address \d+/ })).toHaveLength(10);
+    expect(screen.queryByRole("button", { name: "Add service address" })).not.toBeInTheDocument();
   });
 });

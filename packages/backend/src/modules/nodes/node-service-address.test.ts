@@ -122,4 +122,15 @@ describe('node service address', () => {
       })
     ).toEqual(['8.8.8.8', '9.9.9.9']);
   });
+
+  it('returns every configured Nginx ingress address in its configured order', () => {
+    expect(
+      getEffectiveNginxIngressAddresses({
+        serviceAddresses: ['9.9.9.9', '1.1.1.1', '8.8.8.8'],
+        serviceAddress: '9.9.9.9',
+        secondaryServiceAddress: '1.1.1.1',
+        lastHealthReport: { publicIpAddresses: ['4.4.4.4'] } as never,
+      })
+    ).toEqual(['9.9.9.9', '1.1.1.1', '8.8.8.8']);
+  });
 });

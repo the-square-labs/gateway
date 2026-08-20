@@ -83,6 +83,7 @@ export function getReportedPublicNodeAddresses(node: { lastHealthReport?: NodeHe
 }
 
 export function getEffectiveNginxIngressAddress(node: {
+  serviceAddresses?: readonly string[] | null;
   serviceAddress?: string | null;
   lastHealthReport?: NodeHealthReport | null;
 }): string | null {
@@ -90,25 +91,20 @@ export function getEffectiveNginxIngressAddress(node: {
 }
 
 export function getEffectiveNginxIngressAddresses(node: {
+  serviceAddresses?: readonly string[] | null;
   serviceAddress?: string | null;
   secondaryServiceAddress?: string | null;
   lastHealthReport?: NodeHealthReport | null;
 }): string[] {
   const candidates = getReportedPublicNodeAddresses(node);
-  const configured = node.serviceAddress?.trim();
-  const primary = configured ? (isPubliclyRoutableIp(configured) ? configured : null) : (candidates[0] ?? null);
-  const secondary = node.secondaryServiceAddress?.trim();
-  return Array.from(
-    new Set(
-      [primary, secondary && isPubliclyRoutableIp(secondary) ? secondary : null].filter(
-        (address): address is string => !!address
-      )
-    )
-  );
+  const configured = getConfiguredNodeServiceAddresses(node);
+  if (configured.length === 0) return candidates.slice(0, 1);
+  return configured.filter(isPubliclyRoutableIp);
 }
 
 export function getEffectiveServiceAddressForNode(node: {
   type: string;
+  serviceAddresses?: readonly string[] | null;
   serviceAddress?: string | null;
   lastHealthReport?: NodeHealthReport | null;
 }): string | null {
@@ -116,10 +112,11 @@ export function getEffectiveServiceAddressForNode(node: {
 }
 
 export function getEffectiveNodeServiceAddress(node: {
+  serviceAddresses?: readonly string[] | null;
   serviceAddress?: string | null;
   lastHealthReport?: NodeHealthReport | null;
 }): string | null {
-  const configured = node.serviceAddress?.trim();
+  const configured = getConfiguredNodeServiceAddresses(node)[0];
   if (configured) return configured;
   return (
     node.lastHealthReport?.localIpAddresses?.find((address) => address.trim().length > 0) ??
@@ -135,10 +132,11 @@ export function getEffectiveNodeServiceAddress(node: {
  * arbitrary configured hostname.
  */
 export function getEffectivePublishedNodeIP(node: {
+  serviceAddresses?: readonly string[] | null;
   serviceAddress?: string | null;
   lastHealthReport?: NodeHealthReport | null;
 }): string | null {
-  const configured = node.serviceAddress?.trim();
+  const configured = getConfiguredNodeServiceAddresses(node)[0];
   if (configured && isIP(configured) !== 0) return configured;
   // Automatic service-address selection is local-first everywhere else in
   // Gateway. Keep published TLS endpoints consistent with that choice; all
@@ -149,4 +147,21 @@ export function getEffectivePublishedNodeIP(node: {
   const publicAddresses = node.lastHealthReport?.publicIpAddresses ?? [];
   const candidates = configured ? [...publicAddresses, ...localAddresses] : [...localAddresses, ...publicAddresses];
   return candidates.find((address) => isIP(address.trim()) !== 0) ?? null;
+}
+
+export function getConfiguredNodeServiceAddresses(node: {
+  serviceAddresses?: readonly string[] | null;
+  serviceAddress?: string | null;
+  secondaryServiceAddress?: string | null;
+}): string[] {
+  const values =
+    node.serviceAddresses == null ? [node.serviceAddress, node.secondaryServiceAddress] : node.serviceAddresses;
+  return Array.from(
+    new Set(
+      values
+        .filter((address): address is string => typeof address === 'string')
+        .map((address) => address.trim())
+        .filter(Boolean)
+    )
+  );
 }

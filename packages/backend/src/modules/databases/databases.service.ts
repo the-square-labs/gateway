@@ -1371,6 +1371,7 @@ export class DatabaseConnectionService {
         tlsEnabled: managedDatabaseInstances.tlsEnabled,
         status: managedDatabaseInstances.status,
         lastError: managedDatabaseInstances.lastError,
+        serviceAddresses: nodes.serviceAddresses,
         serviceAddress: nodes.serviceAddress,
         lastHealthReport: nodes.lastHealthReport,
         nodeStatus: nodes.status,
@@ -1411,10 +1412,12 @@ export class DatabaseConnectionService {
           ? null
           : managed.tlsEnabled
             ? getEffectivePublishedNodeIP({
+                serviceAddresses: managed.serviceAddresses,
                 serviceAddress: managed.serviceAddress,
                 lastHealthReport: managed.lastHealthReport,
               })
             : getEffectiveNodeServiceAddress({
+                serviceAddresses: managed.serviceAddresses,
                 serviceAddress: managed.serviceAddress,
                 lastHealthReport: managed.lastHealthReport,
               }),

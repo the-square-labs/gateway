@@ -1016,6 +1016,13 @@
       "when": 1787173195418,
       "tag": "0144_wakeful_colossus",
       "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1787214416204,
+      "tag": "0145_perpetual_firebrand",
+      "breakpoints": true
     }
   ]
 }

@@ -842,6 +842,7 @@ class ApiClient extends withInferenceCoreApi(
     data: {
       displayName?: string | null;
       appearanceColor?: import("@/types").NodeAppearanceColor | null;
+      serviceAddresses?: string[];
       serviceAddress?: string | null;
       secondaryServiceAddress?: string | null;
       confirmDomainDnsUpdate?: boolean;

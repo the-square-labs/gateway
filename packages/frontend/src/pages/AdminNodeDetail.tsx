@@ -1,7 +1,10 @@
-import { ArrowUpCircle, Pin, Settings, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowUpCircle, Minus, Pin, Plus, Settings, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
@@ -18,16 +21,6 @@ import {
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -88,6 +81,27 @@ const OFFLINE_DISABLED_TABS = new Set([
   "daemon-logs",
 ]);
 
+const MAX_SERVICE_ADDRESSES = 10;
+const SERVICE_ADDRESS_HOSTNAME_RE =
+  /^(?=.{1,253}\.?$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.?$/;
+
+function isValidServiceAddress(value: string): boolean {
+  if (value.length > 255) return false;
+  if (SERVICE_ADDRESS_HOSTNAME_RE.test(value)) return true;
+  if (!value.includes(":")) return false;
+  try {
+    new URL(`http://[${value}]/`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type ServiceAddressRow = {
+  id: number;
+  value: string;
+};
+
 export function AdminNodeDetail({
   resolvedNodeId,
   resolvedNodeSlug,
@@ -128,10 +142,9 @@ export function AdminNodeDetail({
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [appearanceName, setAppearanceName] = useState("");
   const [appearanceColor, setAppearanceColor] = useState<NodeAppearanceColor | null>(null);
-  const [serviceAddressMode, setServiceAddressMode] = useState("__auto__");
-  const [customServiceAddress, setCustomServiceAddress] = useState("");
-  const [secondaryServiceAddressMode, setSecondaryServiceAddressMode] = useState("__disabled__");
-  const [customSecondaryServiceAddress, setCustomSecondaryServiceAddress] = useState("");
+  const [serviceAddressRows, setServiceAddressRows] = useState<ServiceAddressRow[]>([
+    { id: 0, value: "" },
+  ]);
   const [appearanceSaving, setAppearanceSaving] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [lockSaving, setLockSaving] = useState(false);
@@ -168,20 +181,46 @@ export function AdminNodeDetail({
   const nginxPublicAddresses = node?.publicServiceAddresses ?? [];
   const automaticServiceAddress =
     node?.type === "nginx" ? nginxPublicAddresses[0] : localIpAddresses[0] || publicIpAddresses[0];
-  const selectedServiceAddress =
-    serviceAddressMode === "__auto__"
-      ? automaticServiceAddress || null
-      : serviceAddressMode === "__custom__"
-        ? customServiceAddress.trim() || null
-        : serviceAddressMode;
-  const selectedSecondaryServiceAddress =
-    secondaryServiceAddressMode === "__disabled__"
-      ? null
-      : secondaryServiceAddressMode === "__custom__"
-        ? customSecondaryServiceAddress.trim() || null
-        : secondaryServiceAddressMode;
+  const serviceAddressOptions = useMemo<ComboboxOption[]>(() => {
+    const options: ComboboxOption[] = [
+      {
+        value: "",
+        label: automaticServiceAddress
+          ? `Automatic (${automaticServiceAddress})`
+          : "Automatic (no IP reported)",
+        group: "Address mode",
+        keywords: "automatic detected",
+      },
+    ];
+    const seen = new Set([""]);
+    const addAddresses = (addresses: string[], group: string) => {
+      for (const address of addresses) {
+        if (seen.has(address)) continue;
+        seen.add(address);
+        options.push({ value: address, label: address, group });
+      }
+    };
+    if (node?.type !== "nginx") addAddresses(localIpAddresses, "Local addresses");
+    addAddresses(
+      node?.type === "nginx" ? nginxPublicAddresses : publicIpAddresses,
+      "Detected public addresses"
+    );
+    return options;
+  }, [
+    automaticServiceAddress,
+    localIpAddresses,
+    nginxPublicAddresses,
+    node?.type,
+    publicIpAddresses,
+  ]);
+  const trimmedServiceAddresses = serviceAddressRows.map((row) => row.value.trim());
+  const configuredServiceAddresses = trimmedServiceAddresses.filter(Boolean);
   const serviceAddressesDuplicate =
-    !!selectedServiceAddress && selectedServiceAddress === selectedSecondaryServiceAddress;
+    new Set(configuredServiceAddresses).size !== configuredServiceAddresses.length;
+  const serviceAddressesIncomplete = trimmedServiceAddresses.slice(1).some((address) => !address);
+  const serviceAddressesInvalid = configuredServiceAddresses.some(
+    (address) => !isValidServiceAddress(address)
+  );
   const nonInteractiveWhileUpdating =
     nodeUpdating && activeTab !== "details" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
@@ -381,28 +420,17 @@ export function AdminNodeDetail({
     if (!node) return;
     setAppearanceName(node.displayName ?? "");
     setAppearanceColor(node.appearanceColor ?? null);
-    const detectedAddresses =
-      node.type === "nginx" ? nginxPublicAddresses : [...localIpAddresses, ...publicIpAddresses];
-    if (!node.serviceAddress) {
-      setServiceAddressMode("__auto__");
-      setCustomServiceAddress("");
-    } else if (detectedAddresses.includes(node.serviceAddress)) {
-      setServiceAddressMode(node.serviceAddress);
-      setCustomServiceAddress("");
-    } else {
-      setServiceAddressMode("__custom__");
-      setCustomServiceAddress(node.serviceAddress);
-    }
-    if (!node.secondaryServiceAddress) {
-      setSecondaryServiceAddressMode("__disabled__");
-      setCustomSecondaryServiceAddress("");
-    } else if (nginxPublicAddresses.includes(node.secondaryServiceAddress)) {
-      setSecondaryServiceAddressMode(node.secondaryServiceAddress);
-      setCustomSecondaryServiceAddress("");
-    } else {
-      setSecondaryServiceAddressMode("__custom__");
-      setCustomSecondaryServiceAddress(node.secondaryServiceAddress);
-    }
+    const configuredAddresses =
+      node.serviceAddresses ??
+      [node.serviceAddress, node.secondaryServiceAddress].filter(
+        (address): address is string => !!address
+      );
+    setServiceAddressRows(
+      (configuredAddresses.length > 0 ? configuredAddresses : [""]).map((value, index) => ({
+        id: index,
+        value,
+      }))
+    );
     setAppearanceOpen(true);
   };
 
@@ -410,26 +438,13 @@ export function AdminNodeDetail({
     if (!id) return;
     setAppearanceSaving(true);
     try {
-      const serviceAddress =
-        serviceAddressMode === "__auto__"
-          ? null
-          : serviceAddressMode === "__custom__"
-            ? customServiceAddress.trim() || null
-            : serviceAddressMode;
-      const secondaryServiceAddress =
-        secondaryServiceAddressMode === "__disabled__"
-          ? null
-          : secondaryServiceAddressMode === "__custom__"
-            ? customSecondaryServiceAddress.trim() || null
-            : secondaryServiceAddressMode;
       const update = {
         displayName: appearanceName.trim() || null,
         appearanceColor,
         ...((node?.type === "docker" || node?.type === "databases" || node?.type === "nginx") &&
         canEditNodeServiceAddress
-          ? { serviceAddress }
+          ? { serviceAddresses: configuredServiceAddresses }
           : {}),
-        ...(node?.type === "nginx" && canEditNodeServiceAddress ? { secondaryServiceAddress } : {}),
       };
       let updated: Node;
       try {
@@ -867,179 +882,178 @@ export function AdminNodeDetail({
           <DialogHeader>
             <DialogTitle>Node Settings</DialogTitle>
           </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Display Name</label>
-              <Input
-                aria-label="Display Name"
-                value={appearanceName}
-                onChange={(e) => setAppearanceName(e.target.value)}
-                placeholder={node.hostname}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void handleAppearanceSave();
-                }}
-              />
-              <p className="text-xs text-muted-foreground">
-                Leave empty to use the hostname ({node.hostname})
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Color</label>
-              <div className="grid grid-cols-8 gap-2">
-                <button
-                  type="button"
-                  aria-label="Default color"
-                  className={cn(
-                    "aspect-square w-full border border-input bg-muted",
-                    appearanceColor === null && "border-white"
-                  )}
-                  style={appearanceColor === null ? { borderColor: "#fff" } : undefined}
-                  onClick={() => setAppearanceColor(null)}
+          <AnimatedHeight>
+            <div className="space-y-5">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Display Name</label>
+                <Input
+                  aria-label="Display Name"
+                  value={appearanceName}
+                  onChange={(e) => setAppearanceName(e.target.value)}
+                  placeholder={node.hostname}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleAppearanceSave();
+                  }}
                 />
-                {NODE_APPEARANCE_COLOR_OPTIONS.map((option) => (
+                <p className="text-xs text-muted-foreground">
+                  Leave empty to use the hostname ({node.hostname})
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Color</label>
+                <div className="grid grid-cols-8 gap-2">
                   <button
-                    key={option.value}
                     type="button"
-                    aria-label={`${option.label} color`}
+                    aria-label="Default color"
                     className={cn(
-                      "aspect-square w-full border border-input",
-                      option.swatchClassName,
-                      appearanceColor === option.value && "border-white"
+                      "aspect-square w-full border border-input bg-muted",
+                      appearanceColor === null && "border-white"
                     )}
-                    style={appearanceColor === option.value ? { borderColor: "#fff" } : undefined}
-                    onClick={() => setAppearanceColor(option.value)}
+                    style={appearanceColor === null ? { borderColor: "#fff" } : undefined}
+                    onClick={() => setAppearanceColor(null)}
                   />
-                ))}
+                  {NODE_APPEARANCE_COLOR_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-label={`${option.label} color`}
+                      className={cn(
+                        "aspect-square w-full border border-input",
+                        option.swatchClassName,
+                        appearanceColor === option.value && "border-white"
+                      )}
+                      style={appearanceColor === option.value ? { borderColor: "#fff" } : undefined}
+                      onClick={() => setAppearanceColor(option.value)}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Preview:</span>
+                  <Badge
+                    variant="secondary"
+                    size="inline"
+                    className={getNodeAppearanceColor(appearanceColor)?.badgeClassName}
+                  >
+                    {appearanceName.trim() || node.hostname}
+                  </Badge>
+                </div>
               </div>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>Preview:</span>
-                <Badge
-                  variant="secondary"
-                  size="inline"
-                  className={getNodeAppearanceColor(appearanceColor)?.badgeClassName}
-                >
-                  {appearanceName.trim() || node.hostname}
-                </Badge>
-              </div>
+              {(node.type === "docker" || node.type === "databases" || node.type === "nginx") && (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Service Addresses</label>
+                  <div className="w-full border border-input bg-background">
+                    <AnimatePresence initial={false} mode="popLayout">
+                      {serviceAddressRows.map((row, index) => (
+                        <motion.div
+                          layout
+                          key={row.id}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 4 }}
+                          transition={{
+                            opacity: { duration: 0.12 },
+                            y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
+                          }}
+                          className="flex min-w-0 border-b border-input last:border-b-0"
+                        >
+                          <Combobox
+                            freeText
+                            showAllOptionsOnFocus
+                            ariaLabel={`Service Address ${index + 1}`}
+                            value={row.value}
+                            options={
+                              index === 0
+                                ? serviceAddressOptions
+                                : serviceAddressOptions.filter((option) => option.value)
+                            }
+                            placeholder={
+                              index === 0
+                                ? automaticServiceAddress
+                                  ? `Automatic (${automaticServiceAddress})`
+                                  : "Automatic (no IP reported)"
+                                : node.type === "nginx"
+                                  ? "Public IPv4 or IPv6 address"
+                                  : "IPv4, IPv6, or hostname"
+                            }
+                            searchPlaceholder="Enter or select an address"
+                            emptyMessage="Enter a valid IP address or hostname."
+                            disabled={!canEditNodeServiceAddress}
+                            className="min-w-0 flex-1"
+                            inputClassName="h-9 rounded-none border-0 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                            renderOption={(option) =>
+                              option.value ? (
+                                <span className="font-mono text-xs">{option.label}</span>
+                              ) : (
+                                option.label
+                              )
+                            }
+                            onValueChange={(value) =>
+                              setServiceAddressRows((rows) =>
+                                rows.map((candidate) =>
+                                  candidate.id === row.id ? { ...candidate, value } : candidate
+                                )
+                              )
+                            }
+                          />
+                          {serviceAddressRows.length > 1 ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Remove service address ${index + 1}`}
+                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              disabled={!canEditNodeServiceAddress}
+                              onClick={() =>
+                                setServiceAddressRows((rows) =>
+                                  rows.filter((candidate) => candidate.id !== row.id)
+                                )
+                              }
+                            >
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                          {index === serviceAddressRows.length - 1 &&
+                          serviceAddressRows.length < MAX_SERVICE_ADDRESSES ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              aria-label="Add service address"
+                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              disabled={!canEditNodeServiceAddress}
+                              onClick={() =>
+                                setServiceAddressRows((rows) => [
+                                  ...rows,
+                                  {
+                                    id: Math.max(...rows.map((candidate) => candidate.id)) + 1,
+                                    value: "",
+                                  },
+                                ])
+                              }
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {node.type === "databases"
+                      ? "Used as the hosts shown for published managed database ports."
+                      : node.type === "nginx"
+                        ? "Used as the public ingress addresses for domains assigned to this node."
+                        : "Used by routes to reach published Docker ports. The first address is preferred."}
+                  </p>
+                  {serviceAddressesInvalid ? (
+                    <p className="text-xs text-destructive">
+                      Enter a valid IPv4, IPv6, or hostname for every address.
+                    </p>
+                  ) : null}
+                </div>
+              )}
             </div>
-            {(node.type === "docker" || node.type === "databases" || node.type === "nginx") && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Service Address</label>
-                <Select
-                  value={serviceAddressMode}
-                  onValueChange={setServiceAddressMode}
-                  disabled={!canEditNodeServiceAddress}
-                >
-                  <SelectTrigger aria-label="Service Address">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__auto__">
-                      {automaticServiceAddress
-                        ? `Automatic (${automaticServiceAddress})`
-                        : "Automatic (no IP reported)"}
-                    </SelectItem>
-                    {node.type !== "nginx" && localIpAddresses.length > 0 && (
-                      <SelectGroup>
-                        <SelectLabel>Local addresses</SelectLabel>
-                        {localIpAddresses.map((address) => (
-                          <SelectItem key={address} value={address}>
-                            {address}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    )}
-                    {(node.type === "nginx" ? nginxPublicAddresses : publicIpAddresses).length >
-                      0 && (
-                      <>
-                        <SelectSeparator />
-                        <SelectGroup>
-                          <SelectLabel>Detected public addresses</SelectLabel>
-                          {(node.type === "nginx" ? nginxPublicAddresses : publicIpAddresses).map(
-                            (address) => (
-                              <SelectItem key={address} value={address}>
-                                {address}
-                              </SelectItem>
-                            )
-                          )}
-                        </SelectGroup>
-                      </>
-                    )}
-                    <SelectSeparator />
-                    <SelectItem value="__custom__">Custom address</SelectItem>
-                  </SelectContent>
-                </Select>
-                {serviceAddressMode === "__custom__" && (
-                  <Input
-                    aria-label="Custom Service Address"
-                    value={customServiceAddress}
-                    onChange={(event) => setCustomServiceAddress(event.target.value)}
-                    placeholder={
-                      node.type === "nginx"
-                        ? "Public IPv4 or IPv6 address"
-                        : node.type === "databases"
-                          ? "database-node.internal"
-                          : "docker-node.internal"
-                    }
-                    disabled={!canEditNodeServiceAddress}
-                    className="font-mono text-xs"
-                  />
-                )}
-                <p className="text-xs text-muted-foreground">
-                  {node.type === "databases"
-                    ? "Used as the host shown for published managed database ports."
-                    : node.type === "nginx"
-                      ? "Used as the public ingress address for domains assigned to this node."
-                      : "Used by routes to reach published Docker ports."}
-                </p>
-              </div>
-            )}
-            {node.type === "nginx" && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Secondary Address</label>
-                <Select
-                  value={secondaryServiceAddressMode}
-                  onValueChange={setSecondaryServiceAddressMode}
-                  disabled={!canEditNodeServiceAddress}
-                >
-                  <SelectTrigger aria-label="Secondary Address">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__disabled__">Disabled</SelectItem>
-                    {nginxPublicAddresses.length > 0 && (
-                      <>
-                        <SelectSeparator />
-                        <SelectGroup>
-                          <SelectLabel>Detected public addresses</SelectLabel>
-                          {nginxPublicAddresses.map((address) => (
-                            <SelectItem key={address} value={address}>
-                              {address}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </>
-                    )}
-                    <SelectSeparator />
-                    <SelectItem value="__custom__">Custom address</SelectItem>
-                  </SelectContent>
-                </Select>
-                {secondaryServiceAddressMode === "__custom__" && (
-                  <Input
-                    aria-label="Custom Secondary Address"
-                    value={customSecondaryServiceAddress}
-                    onChange={(event) => setCustomSecondaryServiceAddress(event.target.value)}
-                    placeholder="Public IPv4 or IPv6 address"
-                    disabled={!canEditNodeServiceAddress}
-                    className="font-mono text-xs"
-                  />
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Used as an additional public ingress address for domains assigned to this node.
-                </p>
-              </div>
-            )}
-          </div>
+          </AnimatedHeight>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAppearanceOpen(false)}>
               Cancel
@@ -1048,10 +1062,9 @@ export function AdminNodeDetail({
               onClick={handleAppearanceSave}
               disabled={
                 appearanceSaving ||
-                (serviceAddressMode === "__custom__" && !customServiceAddress.trim()) ||
-                (secondaryServiceAddressMode === "__custom__" &&
-                  !customSecondaryServiceAddress.trim()) ||
-                serviceAddressesDuplicate
+                serviceAddressesIncomplete ||
+                serviceAddressesDuplicate ||
+                serviceAddressesInvalid
               }
             >
               {appearanceSaving ? "Saving..." : "Save"}

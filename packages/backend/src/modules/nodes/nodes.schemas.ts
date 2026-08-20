@@ -9,27 +9,51 @@ export const CreateNodeSchema = z.object({
   displayName: z.string().max(255).optional(),
 });
 
-export const UpdateNodeSchema = z.object({
-  displayName: z.string().max(255).nullable().optional(),
-  appearanceColor: z.enum(NODE_APPEARANCE_COLORS).nullable().optional(),
-  serviceAddress: z
-    .string()
-    .trim()
-    .min(1)
-    .max(255)
-    .refine(isValidNodeServiceAddress, 'Must be a valid IP address or hostname')
-    .nullable()
-    .optional(),
-  secondaryServiceAddress: z
-    .string()
-    .trim()
-    .min(1)
-    .max(255)
-    .refine(isValidNodeServiceAddress, 'Must be a valid IP address or hostname')
-    .nullable()
-    .optional(),
-  confirmDomainDnsUpdate: z.boolean().optional(),
-});
+const NodeServiceAddressSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine(isValidNodeServiceAddress, 'Must be a valid IP address or hostname');
+
+const NodeServiceAddressesSchema = z
+  .array(NodeServiceAddressSchema)
+  .max(10)
+  .superRefine((addresses, context) => {
+    const seen = new Set<string>();
+    for (const [index, address] of addresses.entries()) {
+      if (seen.has(address)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Service addresses must be unique',
+          path: [index],
+        });
+      }
+      seen.add(address);
+    }
+  });
+
+export const UpdateNodeSchema = z
+  .object({
+    displayName: z.string().max(255).nullable().optional(),
+    appearanceColor: z.enum(NODE_APPEARANCE_COLORS).nullable().optional(),
+    serviceAddresses: NodeServiceAddressesSchema.optional(),
+    serviceAddress: NodeServiceAddressSchema.nullable().optional(),
+    secondaryServiceAddress: NodeServiceAddressSchema.nullable().optional(),
+    confirmDomainDnsUpdate: z.boolean().optional(),
+  })
+  .superRefine((input, context) => {
+    if (
+      input.serviceAddresses !== undefined &&
+      (input.serviceAddress !== undefined || input.secondaryServiceAddress !== undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Use serviceAddresses without legacy service address fields',
+        path: ['serviceAddresses'],
+      });
+    }
+  });
 
 export const UpdateNodeServiceCreationLockSchema = z.object({
   serviceCreationLocked: z.boolean(),

@@ -109,13 +109,17 @@ interface OwnerCredentials {
   databaseName?: string;
 }
 
-function managedDatabaseServiceAddresses(node: { serviceAddress: string | null; lastHealthReport: unknown }): string[] {
+function managedDatabaseServiceAddresses(node: {
+  serviceAddresses: string[];
+  serviceAddress: string | null;
+  lastHealthReport: unknown;
+}): string[] {
   const health = node.lastHealthReport as
     | { localIpAddresses?: unknown; publicIpAddresses?: unknown }
     | null
     | undefined;
   const values = [
-    node.serviceAddress,
+    ...node.serviceAddresses,
     ...(Array.isArray(health?.publicIpAddresses) ? health.publicIpAddresses : []),
     ...(Array.isArray(health?.localIpAddresses) ? health.localIpAddresses : []),
   ];
@@ -593,6 +597,7 @@ export class ManagedDatabaseService {
         id: managedDatabaseInstances.id,
         nodeId: managedDatabaseInstances.nodeId,
         certificateId: managedDatabaseInstances.certificateId,
+        serviceAddresses: nodes.serviceAddresses,
         serviceAddress: nodes.serviceAddress,
         lastHealthReport: nodes.lastHealthReport,
       })
@@ -1643,6 +1648,7 @@ export class ManagedDatabaseService {
         id: nodes.id,
         type: nodes.type,
         status: nodes.status,
+        serviceAddresses: nodes.serviceAddresses,
         serviceAddress: nodes.serviceAddress,
         lastHealthReport: nodes.lastHealthReport,
       })
@@ -1658,7 +1664,7 @@ export class ManagedDatabaseService {
 
   private async ensureManagedDatabaseCertificate(
     row: ManagedDatabaseRow,
-    node: { serviceAddress: string | null; lastHealthReport: unknown }
+    node: { serviceAddresses: string[]; serviceAddress: string | null; lastHealthReport: unknown }
   ): Promise<ManagedDatabaseRow> {
     if (row.certificateId || !this.databaseCA) return row;
     const serviceAddresses = managedDatabaseServiceAddresses(node);

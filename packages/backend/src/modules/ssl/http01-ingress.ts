@@ -79,7 +79,7 @@ export async function resolveHttp01Ingress(
 
   const node = await db.query.nodes.findFirst({
     where: sql`${nodes.id} = ${nodeId}`,
-    columns: { id: true, type: true, status: true, serviceAddress: true, lastHealthReport: true },
+    columns: { id: true, type: true, status: true, serviceAddresses: true, lastHealthReport: true },
   });
   if (!node || node.type !== 'nginx' || node.status !== 'online') {
     throw new AppError(409, 'HTTP01_INGRESS_UNAVAILABLE', 'The Nginx ingress assigned to this domain is not online', {

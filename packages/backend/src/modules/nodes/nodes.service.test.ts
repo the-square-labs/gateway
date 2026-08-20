@@ -189,6 +189,57 @@ describe('NodesService enrollment token creation', () => {
     expect(updatedValues).toHaveBeenCalledWith(expect.objectContaining({ serviceAddress: '9.9.9.9' }));
   });
 
+  it('persists the canonical address list and synchronizes the legacy address columns', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddresses: ['9.9.9.9'],
+      serviceAddress: '9.9.9.9',
+      secondaryServiceAddress: null,
+      lastHealthReport: { localIpAddresses: [], publicIpAddresses: ['9.9.9.9'] },
+    };
+    let selection = 0;
+    const updatedValues = vi.fn((values) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...existing, ...values }]) })),
+    }));
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => {
+            selection += 1;
+            return selection === 1 ? { limit: vi.fn(async () => [existing]) } : Promise.resolve([]);
+          }),
+        })),
+      })),
+      update: vi.fn(() => ({ set: updatedValues })),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+    const serviceAddresses = ['9.9.9.9', '1.1.1.1', '8.8.8.8'];
+
+    await expect(service.update(existing.id, { serviceAddresses }, 'user-1')).resolves.toMatchObject({
+      serviceAddresses,
+      serviceAddress: '9.9.9.9',
+      secondaryServiceAddress: '1.1.1.1',
+    });
+    expect(updatedValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceAddresses,
+        serviceAddress: '9.9.9.9',
+        secondaryServiceAddress: '1.1.1.1',
+      })
+    );
+  });
+
   it('rejects a secondary Nginx address that matches the effective primary address', async () => {
     const existing = {
       id: 'node-1',

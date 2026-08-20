@@ -32,6 +32,7 @@ import {
   writeNodeFile,
 } from './node-file-operations.js';
 import {
+  getConfiguredNodeServiceAddresses,
   getEffectiveNginxIngressAddress,
   getEffectiveNginxIngressAddresses,
   getEffectiveServiceAddressForNode,
@@ -50,6 +51,10 @@ const logger = createChildLogger('NodesService');
 function isNonEmptyAddressSubset(addresses: string[], allowedAddresses: string[]): boolean {
   const allowed = new Set(allowedAddresses);
   return addresses.length > 0 && addresses.every((address) => allowed.has(address));
+}
+
+function orderedAddressesEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((address, index) => address === right[index]);
 }
 
 function stripNodeHealthHistory<T extends { healthHistory?: unknown }>(node: T): Omit<T, 'healthHistory'> {
@@ -167,6 +172,7 @@ export class NodesService {
         displayName: nodes.displayName,
         slug: nodes.slug,
         appearanceColor: nodes.appearanceColor,
+        serviceAddresses: nodes.serviceAddresses,
         serviceAddress: nodes.serviceAddress,
         secondaryServiceAddress: nodes.secondaryServiceAddress,
         status: nodes.status,
@@ -350,12 +356,51 @@ export class NodesService {
       throw new AppError(404, 'NOT_FOUND', 'Node not found');
     }
 
-    if (existing.type === 'nginx' && input.serviceAddress) {
-      if (!isPubliclyRoutableIp(input.serviceAddress)) {
+    const legacyAddressUpdateRequested =
+      input.serviceAddress !== undefined || input.secondaryServiceAddress !== undefined;
+    const serviceAddressesUpdateRequested = input.serviceAddresses !== undefined || legacyAddressUpdateRequested;
+    const currentServiceAddresses = getConfiguredNodeServiceAddresses(existing);
+    const nextServiceAddresses =
+      input.serviceAddresses !== undefined
+        ? input.serviceAddresses
+        : legacyAddressUpdateRequested
+          ? [
+              input.serviceAddress === undefined ? existing.serviceAddress : input.serviceAddress,
+              input.secondaryServiceAddress === undefined
+                ? existing.secondaryServiceAddress
+                : input.secondaryServiceAddress,
+              ...currentServiceAddresses.slice(2),
+            ].filter((address): address is string => !!address)
+          : currentServiceAddresses;
+
+    if (new Set(nextServiceAddresses).size !== nextServiceAddresses.length) {
+      throw new AppError(400, 'DUPLICATE_NGINX_SERVICE_ADDRESSES', 'Node service addresses must be different');
+    }
+    if (
+      existing.type === 'nginx' &&
+      input.serviceAddresses === undefined &&
+      input.secondaryServiceAddress &&
+      input.secondaryServiceAddress ===
+        getEffectiveNginxIngressAddress({
+          serviceAddress: input.serviceAddress === undefined ? existing.serviceAddress : input.serviceAddress,
+          lastHealthReport: this.registry.getNode(id)?.lastHealthReport ?? existing.lastHealthReport,
+        })
+    ) {
+      throw new AppError(
+        400,
+        'DUPLICATE_NGINX_SERVICE_ADDRESSES',
+        'Primary and secondary Nginx service addresses must be different'
+      );
+    }
+
+    if (existing.type === 'nginx' && serviceAddressesUpdateRequested) {
+      const invalidAddress = nextServiceAddresses.find((address) => !isPubliclyRoutableIp(address));
+      if (invalidAddress) {
         throw new AppError(
           400,
           'INVALID_NGINX_SERVICE_ADDRESS',
-          'Nginx service address must be a publicly routable IP address'
+          'Every Nginx service address must be a publicly routable IP address',
+          { address: invalidAddress }
         );
       }
     }
@@ -367,51 +412,24 @@ export class NodesService {
         'Secondary service address is only supported for Nginx nodes'
       );
     }
-    if (existing.type === 'nginx' && input.secondaryServiceAddress) {
-      if (!isPubliclyRoutableIp(input.secondaryServiceAddress)) {
-        throw new AppError(
-          400,
-          'INVALID_NGINX_SECONDARY_SERVICE_ADDRESS',
-          'Nginx secondary service address must be a publicly routable IP address'
-        );
-      }
-    }
-
     let shouldReconcileAssignedDomains = false;
     let approvedDnsTarget: string | null | undefined;
-    const ingressAddressChanged = input.serviceAddress !== undefined || input.secondaryServiceAddress !== undefined;
+    const ingressAddressChanged =
+      existing.type === 'nginx' &&
+      serviceAddressesUpdateRequested &&
+      !orderedAddressesEqual(currentServiceAddresses, nextServiceAddresses);
     if (existing.type === 'nginx' && ingressAddressChanged) {
       const liveHealthReport = this.registry.getNode(id)?.lastHealthReport ?? existing.lastHealthReport;
       const previousAddresses = getEffectiveNginxIngressAddresses({
+        serviceAddresses: currentServiceAddresses,
         serviceAddress: existing.serviceAddress,
         secondaryServiceAddress: existing.secondaryServiceAddress,
         lastHealthReport: liveHealthReport,
       });
       const nextAddresses = getEffectiveNginxIngressAddresses({
-        serviceAddress: input.serviceAddress === undefined ? existing.serviceAddress : input.serviceAddress,
-        secondaryServiceAddress:
-          input.secondaryServiceAddress === undefined
-            ? existing.secondaryServiceAddress
-            : input.secondaryServiceAddress,
+        serviceAddresses: nextServiceAddresses,
         lastHealthReport: liveHealthReport,
       });
-      if (nextAddresses.length === 1) {
-        const nextPrimary = getEffectiveNginxIngressAddress({
-          serviceAddress: input.serviceAddress === undefined ? existing.serviceAddress : input.serviceAddress,
-          lastHealthReport: liveHealthReport,
-        });
-        const nextSecondary =
-          input.secondaryServiceAddress === undefined
-            ? existing.secondaryServiceAddress?.trim()
-            : input.secondaryServiceAddress?.trim();
-        if (nextPrimary && nextSecondary && nextPrimary === nextSecondary) {
-          throw new AppError(
-            400,
-            'DUPLICATE_NGINX_SERVICE_ADDRESSES',
-            'Primary and secondary Nginx service addresses must be different'
-          );
-        }
-      }
       const affectedDomains = await this.db
         .select({ id: domains.id, dnsTargetIps: domains.dnsTargetIps })
         .from(domains)
@@ -442,9 +460,11 @@ export class NodesService {
     const updateData = {
       displayName: input.displayName === undefined ? existing.displayName : input.displayName,
       appearanceColor: input.appearanceColor === undefined ? existing.appearanceColor : input.appearanceColor,
-      serviceAddress: input.serviceAddress === undefined ? existing.serviceAddress : input.serviceAddress,
-      secondaryServiceAddress:
-        input.secondaryServiceAddress === undefined ? existing.secondaryServiceAddress : input.secondaryServiceAddress,
+      serviceAddresses: serviceAddressesUpdateRequested ? nextServiceAddresses : existing.serviceAddresses,
+      serviceAddress: serviceAddressesUpdateRequested ? (nextServiceAddresses[0] ?? null) : existing.serviceAddress,
+      secondaryServiceAddress: serviceAddressesUpdateRequested
+        ? (nextServiceAddresses[1] ?? null)
+        : existing.secondaryServiceAddress,
       updatedAt: new Date(),
     };
     const updateNode = async (slug?: string) => {
@@ -483,10 +503,7 @@ export class NodesService {
       details: {
         ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
         ...(input.appearanceColor !== undefined ? { appearanceColor: input.appearanceColor } : {}),
-        ...(input.serviceAddress !== undefined ? { serviceAddress: input.serviceAddress } : {}),
-        ...(input.secondaryServiceAddress !== undefined
-          ? { secondaryServiceAddress: input.secondaryServiceAddress }
-          : {}),
+        ...(serviceAddressesUpdateRequested ? { serviceAddresses: nextServiceAddresses } : {}),
       },
     });
     const slugChange = updated.slug === existing.slug ? {} : { oldSlug: existing.slug, slug: updated.slug };
@@ -494,15 +511,10 @@ export class NodesService {
     if (updated.slug !== existing.slug) {
       this.eventBus?.publish('node.slug.changed', { id, oldSlug: existing.slug, slug: updated.slug });
     }
-    if (
-      ingressAddressChanged &&
-      ((input.serviceAddress !== undefined && input.serviceAddress !== existing.serviceAddress) ||
-        (input.secondaryServiceAddress !== undefined &&
-          input.secondaryServiceAddress !== existing.secondaryServiceAddress) ||
-        shouldReconcileAssignedDomains)
-    ) {
+    if (ingressAddressChanged || shouldReconcileAssignedDomains) {
       this.eventBus?.publish('node.service_address.changed', {
         id,
+        serviceAddresses: updated.serviceAddresses,
         serviceAddress: updated.serviceAddress,
         secondaryServiceAddress: updated.secondaryServiceAddress,
         effectiveServiceAddress: getEffectiveServiceAddressForNode(updated),

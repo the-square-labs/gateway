@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,7 @@ export interface ComboboxOption {
   value: string;
   label: string;
   keywords?: string;
+  group?: string;
   disabled?: boolean;
 }
 
@@ -173,27 +174,33 @@ export function Combobox({
             <div className="px-2 py-1.5 text-sm text-muted-foreground">{emptyMessage}</div>
           ) : (
             filteredOptions.map((option, index) => (
-              <button
-                type="button"
-                key={option.value}
-                ref={
-                  index === activeIndex
-                    ? (element) => element?.scrollIntoView({ block: "nearest" })
-                    : undefined
-                }
-                aria-disabled={option.disabled}
-                className={cn(
-                  "relative flex w-full items-center gap-2 whitespace-nowrap px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground aria-disabled:opacity-50",
-                  index === activeIndex && "bg-accent text-accent-foreground"
-                )}
-                onMouseEnter={() => setActiveIndex(index)}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  selectOption(option);
-                }}
-              >
-                {renderOption?.(option) ?? option.label}
-              </button>
+              <Fragment key={option.value}>
+                {option.group && option.group !== filteredOptions[index - 1]?.group ? (
+                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                    {option.group}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  ref={
+                    index === activeIndex
+                      ? (element) => element?.scrollIntoView({ block: "nearest" })
+                      : undefined
+                  }
+                  aria-disabled={option.disabled}
+                  className={cn(
+                    "relative flex w-full items-center gap-2 whitespace-nowrap px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground aria-disabled:opacity-50",
+                    index === activeIndex && "bg-accent text-accent-foreground"
+                  )}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    selectOption(option);
+                  }}
+                >
+                  {renderOption?.(option) ?? option.label}
+                </button>
+              </Fragment>
             ))
           )}
         </PopoverContent>

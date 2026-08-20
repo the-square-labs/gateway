@@ -1,4 +1,16 @@
-import { boolean, index, integer, jsonb, pgEnum, pgTable, timestamp, unique, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { nodeFolders } from './node-folders.js';
 
 export const nodeTypeEnum = pgEnum('node_type', ['nginx', 'bastion', 'monitoring', 'docker', 'databases']);
@@ -130,6 +142,7 @@ export const nodes = pgTable(
     displayName: varchar('display_name', { length: 255 }),
     slug: varchar('slug', { length: 60 }).notNull(),
     appearanceColor: varchar('appearance_color', { length: 32 }),
+    serviceAddresses: text('service_addresses').array().notNull().default([]),
     serviceAddress: varchar('service_address', { length: 255 }),
     secondaryServiceAddress: varchar('secondary_service_address', { length: 255 }),
     status: nodeStatusEnum('status').notNull().default('pending'),

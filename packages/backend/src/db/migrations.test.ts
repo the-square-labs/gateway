@@ -58,6 +58,13 @@ describe('drizzle migration metadata', () => {
     expect(migration).not.toMatch(/DELETE FROM "ai_conversation_search_documents"\s*;$/m);
   });
 
+  it('backfills the ordered node service address list from the legacy columns', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0145_perpetual_firebrand.sql'), 'utf8');
+
+    expect(migration).toContain('ADD COLUMN "service_addresses" text[] DEFAULT \'{}\' NOT NULL');
+    expect(migration).toContain('ARRAY_REMOVE(ARRAY["service_address", "secondary_service_address"], NULL)');
+  });
+
   it('backfills resource slugs deterministically before enforcing constraints', () => {
     const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0056_strange_yellowjacket.sql'), 'utf8');
 

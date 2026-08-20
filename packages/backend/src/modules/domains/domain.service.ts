@@ -1230,6 +1230,7 @@ export class DomainsService {
         hostname: nodes.hostname,
         displayName: nodes.displayName,
         appearanceColor: nodes.appearanceColor,
+        serviceAddresses: nodes.serviceAddresses,
         serviceAddress: nodes.serviceAddress,
         secondaryServiceAddress: nodes.secondaryServiceAddress,
         lastHealthReport: nodes.lastHealthReport,
@@ -1242,11 +1243,13 @@ export class DomainsService {
 
   private getNodeEffectiveIngressAddresses(node: {
     id: string;
+    serviceAddresses: string[];
     serviceAddress: string | null;
     secondaryServiceAddress: string | null;
     lastHealthReport: (typeof nodes.$inferSelect)['lastHealthReport'];
   }): string[] {
     return getEffectiveNginxIngressAddresses({
+      serviceAddresses: node.serviceAddresses,
       serviceAddress: node.serviceAddress,
       secondaryServiceAddress: node.secondaryServiceAddress,
       lastHealthReport: this.nodeRegistry?.getNode(node.id)?.lastHealthReport ?? node.lastHealthReport,

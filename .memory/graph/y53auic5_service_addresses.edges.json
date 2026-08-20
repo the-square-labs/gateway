@@ -1,0 +1,15 @@
+{
+  "file_name": "y53auic5_service_addresses",
+  "edges": [
+    {
+      "from_id": "y53auic5",
+      "to_id": "8c9f2oec",
+      "relation": "same_workflow",
+      "weight": 0.96,
+      "reason": "Defines Domain DNS and Nginx ingress reconciliation over effective node service addresses.",
+      "source": "auto",
+      "created_at": 1787215919532,
+      "updated_at": 1787215919532
+    }
+  ]
+}

@@ -288,6 +288,21 @@ describe('nodesRoutes service address access', () => {
     expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: '8.8.8.8' }, 'user-1');
   });
 
+  it('applies node config edit access to the canonical service address list', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
+    const serviceAddresses = ['8.8.8.8', '1.1.1.1', '9.9.9.9'];
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAddresses }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddresses }, 'user-1');
+  });
+
   it('requires domain edit access before confirming assigned DNS target changes', async () => {
     mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
     mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
