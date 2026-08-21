@@ -153,10 +153,13 @@ describe("InferenceProvidersPanel", () => {
       () => new Promise(() => {})
     );
 
-    render(<InferenceProvidersPanel />);
+    const { rerender } = render(<InferenceProvidersPanel />);
 
     expect(screen.getByText("cached-account")).toBeInTheDocument();
     expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+    rerender(<InferenceProvidersPanel refreshToken={1} />);
+    expect(api.listInferenceProviderCatalog).toHaveBeenCalledTimes(2);
+    expect(api.listInferenceProviderConnections).toHaveBeenCalledTimes(2);
   });
 
   it("assigns persisted routing order from the visible drag order", () => {

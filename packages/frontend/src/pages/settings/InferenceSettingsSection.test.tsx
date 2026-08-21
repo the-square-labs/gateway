@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -6,23 +6,46 @@ import { makeUser } from "@/test/fixtures";
 import type { InferenceCoreStatus } from "@/types/inference-core";
 import { InferenceSettingsSection } from "./InferenceSettingsSection";
 
+const realtimeSubscriptions = vi.hoisted(
+  () => new Map<string, { handler: () => void; onReconnect?: () => void }>()
+);
+
+vi.mock("@/hooks/use-realtime", () => ({
+  useRealtime: (
+    channel: string | null,
+    handler: () => void,
+    options: { onReconnect?: () => void } = {}
+  ) => {
+    if (channel) realtimeSubscriptions.set(channel, { handler, onReconnect: options.onReconnect });
+  },
+}));
 vi.mock("../inference/InferenceActivityPanel", () => ({
-  InferenceActivityPanel: () => <div>Activity panel</div>,
+  InferenceActivityPanel: ({ refreshToken }: { refreshToken?: number }) => (
+    <div data-testid="activity-revision">Activity panel {refreshToken}</div>
+  ),
 }));
 vi.mock("../inference/InferenceAdminTables", () => ({
-  InferenceUsersTable: () => <div>Users table</div>,
+  InferenceUsersTable: ({ refreshToken }: { refreshToken?: number }) => (
+    <div data-testid="users-revision">Users table {refreshToken}</div>
+  ),
 }));
 vi.mock("../inference/InferenceUsagePanels", () => ({
-  InferenceOverview: () => <div>Usage overview</div>,
+  InferenceOverview: ({ refreshToken }: { refreshToken?: number }) => (
+    <div data-testid="overview-revision">Usage overview {refreshToken}</div>
+  ),
 }));
 vi.mock("./inference/InferenceEndpointSettingsPanel", () => ({
   InferenceEndpointSettingsPanel: () => <div>Endpoint settings</div>,
 }));
 vi.mock("./inference/InferenceModelsPanel", () => ({
-  InferenceModelsPanel: () => <div>Models panel</div>,
+  InferenceModelsPanel: ({ refreshToken }: { refreshToken?: number }) => (
+    <div data-testid="models-revision">Models panel {refreshToken}</div>
+  ),
 }));
 vi.mock("./inference/InferenceProvidersPanel", () => ({
-  InferenceProvidersPanel: () => <div>Providers panel</div>,
+  InferenceProvidersPanel: ({ refreshToken }: { refreshToken?: number }) => (
+    <div data-testid="providers-revision">Providers panel {refreshToken}</div>
+  ),
 }));
 
 function makeStatus(overrides: Partial<InferenceCoreStatus> = {}): InferenceCoreStatus {
@@ -67,6 +90,7 @@ function setUser(scopes: string[]) {
 
 describe("InferenceSettingsSection", () => {
   afterEach(() => {
+    realtimeSubscriptions.clear();
     vi.restoreAllMocks();
   });
 
@@ -92,8 +116,8 @@ describe("InferenceSettingsSection", () => {
     render(<InferenceSettingsSection />);
 
     expect(await screen.findByText("Running")).toBeInTheDocument();
-    expect(await screen.findByText("Providers panel")).toBeInTheDocument();
-    expect(screen.getByText("Models panel")).toBeInTheDocument();
+    expect(await screen.findByTestId("providers-revision")).toBeInTheDocument();
+    expect(screen.getByTestId("models-revision")).toBeInTheDocument();
   });
 
   it("keeps core actions hidden from viewers while still showing status", async () => {
@@ -106,5 +130,33 @@ describe("InferenceSettingsSection", () => {
     expect(
       screen.queryByRole("button", { name: /Install inference core/ })
     ).not.toBeInTheDocument();
+  });
+
+  it("refreshes mounted inference panels when realtime catalog and usage events arrive", async () => {
+    setUser([
+      "inference:providers:view",
+      "inference:providers:manage",
+      "inference:models:manage",
+      "inference:usage:view",
+      "inference:limits:manage",
+    ]);
+    vi.spyOn(api, "getInferenceCoreStatus").mockResolvedValue(readyStatus);
+
+    render(<InferenceSettingsSection />);
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.getByTestId("providers-revision")).toHaveTextContent("0");
+    expect(screen.getByTestId("models-revision")).toHaveTextContent("0");
+    expect(screen.getByTestId("overview-revision")).toHaveTextContent("0");
+
+    act(() => realtimeSubscriptions.get("inference.catalog.changed")?.handler());
+    expect(screen.getByTestId("providers-revision")).toHaveTextContent("1");
+    expect(screen.getByTestId("models-revision")).toHaveTextContent("1");
+    expect(screen.getByTestId("overview-revision")).toHaveTextContent("0");
+
+    act(() => realtimeSubscriptions.get("inference.usage.changed")?.onReconnect?.());
+    expect(screen.getByTestId("overview-revision")).toHaveTextContent("1");
+    expect(screen.getByTestId("users-revision")).toHaveTextContent("1");
+    expect(screen.getByTestId("activity-revision")).toHaveTextContent("1");
   });
 });

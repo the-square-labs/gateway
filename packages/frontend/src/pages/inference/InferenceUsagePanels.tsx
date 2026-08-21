@@ -326,7 +326,7 @@ export function CompactInferenceUsage({
   );
 }
 
-export function InferenceOverview() {
+export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number }) {
   const cachedUsage = api.getCached<InferenceSystemUsage>(
     "req:/api/inference/usage/system",
     Number.POSITIVE_INFINITY
@@ -349,7 +349,10 @@ export function InferenceOverview() {
     }
   }, []);
 
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void refreshToken;
+    void load();
+  }, [load, refreshToken]);
 
   const totals = useMemo(() => {
     const requests = usage?.requestTotals.reduce((sum, row) => sum + Number(row.requests), 0) ?? 0;

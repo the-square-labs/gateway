@@ -341,6 +341,7 @@ describe("eventStream", () => {
       eventStream.subscribe("system.relay.health.changed", vi.fn()),
       eventStream.subscribe("database.folder.changed", vi.fn()),
       eventStream.subscribe("inference.catalog.changed", vi.fn()),
+      eventStream.subscribe("inference.usage.changed", vi.fn()),
     ];
     eventStream.start();
     vi.runAllTimers();
@@ -354,6 +355,7 @@ describe("eventStream", () => {
     socket?.emit({ type: "event", channel: "system.relay.health.changed", payload: {} });
     socket?.emit({ type: "event", channel: "database.folder.changed", payload: {} });
     socket?.emit({ type: "event", channel: "inference.catalog.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "inference.usage.changed", payload: {} });
 
     for (const prefix of [
       "req:/api/notifications/alert-rules",
@@ -369,6 +371,8 @@ describe("eventStream", () => {
       "req:/api/databases",
       "databases:list",
       "req:/api/inference",
+      "req:/api/inference/usage",
+      "req:/api/inference/limits",
     ]) {
       expect(invalidateCache).toHaveBeenCalledWith(prefix);
     }

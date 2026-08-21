@@ -111,7 +111,13 @@ describe("InferenceModelDialog", () => {
     expect(screen.getByTestId("model-identity-fields")).toHaveClass(
       "sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]"
     );
-    expect(screen.getByText("vision unavailable")).toBeInTheDocument();
+    const unavailableCapability = screen.getByText("vision unavailable");
+    expect(unavailableCapability).toBeInTheDocument();
+    expect(unavailableCapability.parentElement?.parentElement).toHaveClass(
+      "w-full",
+      "min-w-0",
+      "flex-wrap"
+    );
     expect(screen.queryByText(/vision unavailable on/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/provider account or key/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/add source|source priority/i)).not.toBeInTheDocument();

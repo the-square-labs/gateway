@@ -196,6 +196,50 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('delivers all inference usage invalidations to usage administrators', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['inference:usage:view'] },
+      effectiveScopes: ['inference:usage:view'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: [INFERENCE_USAGE_CHANGED_CHANNEL] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'subscribed',
+        channels: [INFERENCE_USAGE_CHANGED_CHANNEL],
+        rejected: [],
+      })
+    );
+    eventBus.publish(INFERENCE_USAGE_CHANGED_CHANNEL, {
+      targetUserId: '22222222-2222-4222-8222-222222222222',
+      reason: 'settlement',
+    });
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: INFERENCE_USAGE_CHANGED_CHANNEL,
+        payload: {
+          targetUserId: '22222222-2222-4222-8222-222222222222',
+          reason: 'settlement',
+        },
+      })
+    );
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('authorizes catalog invalidations for inference users', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

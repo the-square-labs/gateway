@@ -72,9 +72,11 @@ function getUserInitials(name: string | null, email: string): string {
 export function InferenceUsersTable({
   canManage,
   canViewUsage = true,
+  refreshToken = 0,
 }: {
   canManage: boolean;
   canViewUsage?: boolean;
+  refreshToken?: number;
 }) {
   const usersCacheKey = canViewUsage
     ? "req:/api/inference/usage/users"
@@ -131,7 +133,10 @@ export function InferenceUsersTable({
     [canManage, canViewUsage]
   );
 
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void refreshToken;
+    void load();
+  }, [load, refreshToken]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();

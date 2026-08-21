@@ -63,8 +63,10 @@ export function reorderProviderConnections(
 
 export function InferenceProvidersPanel({
   onConnectionsChanged,
+  refreshToken = 0,
 }: {
   onConnectionsChanged?: () => void;
+  refreshToken?: number;
 }) {
   const canManage = useAuthStore((state) => state.hasScope("inference:providers:manage"));
   const cachedCatalog = api.getCached<InferenceProviderCatalogItem[]>(
@@ -116,7 +118,10 @@ export function InferenceProvidersPanel({
     []
   );
 
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void refreshToken;
+    void load();
+  }, [load, refreshToken]);
 
   const changed = async () => {
     await load({ showLoading: false });

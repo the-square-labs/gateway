@@ -263,6 +263,13 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScope(scopes, 'feat:ai:configure')
     );
   }
+  if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
+    return (
+      hasScope(scopes, 'feat:ai:use') ||
+      hasScope(scopes, 'inference:usage:view') ||
+      hasScope(scopes, 'inference:limits:manage')
+    );
+  }
   if (channel === 'logging.logs.ingested') {
     return hasScopeBase(scopes, 'logs:read');
   }
@@ -337,6 +344,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
   if (channel === 'system.config.changed') return true;
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
     const event = payload as Partial<InferenceUsageChangedEvent> | undefined;
+    if (hasScope(scopes, 'inference:usage:view') || hasScope(scopes, 'inference:limits:manage')) return true;
     return event?.targetUserId === null || event?.targetUserId === userId;
   }
   if (channel === INFERENCE_SETUP_EVENT_CHANNEL) return hasChannelAccess(scopes, channel);
