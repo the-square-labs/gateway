@@ -120,10 +120,12 @@ describe("InferenceActivityPanel", () => {
     });
     vi.mocked(api.listInferenceActivity).mockImplementation(() => new Promise(() => {}));
 
-    render(<InferenceActivityPanel />);
+    const { rerender } = render(<InferenceActivityPanel />);
 
     expect(screen.getByText("User cached")).toBeInTheDocument();
     expect(screen.queryByText("Loading activity...")).not.toBeInTheDocument();
+    rerender(<InferenceActivityPanel refreshToken={1} />);
+    expect(api.listInferenceActivity).toHaveBeenCalledTimes(2);
   });
 });
 

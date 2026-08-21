@@ -327,9 +327,11 @@ describe("InferenceUsage", () => {
     );
     vi.mocked(api.getInferenceSystemUsage).mockImplementation(() => new Promise(() => {}));
 
-    render(<InferenceOverview />);
+    const { rerender } = render(<InferenceOverview />);
 
     expect(screen.getByText("9,876")).toBeInTheDocument();
     expect(screen.getByText("9")).toBeInTheDocument();
+    rerender(<InferenceOverview refreshToken={1} />);
+    expect(api.getInferenceSystemUsage).toHaveBeenCalledTimes(2);
   });
 });

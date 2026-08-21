@@ -387,7 +387,8 @@ export async function initializeContainer(): Promise<void> {
     inferenceProviderRegistry,
     auditService,
     inferenceDestinationPolicy,
-    inferenceCoreBridgeService
+    inferenceCoreBridgeService,
+    inferenceSetupEvents
   );
   container.registerInstance(InferenceProviderService, inferenceProviderService);
   inferenceProviderService.start();

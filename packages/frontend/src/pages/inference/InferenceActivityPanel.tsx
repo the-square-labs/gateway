@@ -34,7 +34,7 @@ import type {
 
 type ActivityStatus = NonNullable<InferenceActivityQuery["status"]> | "all";
 
-export function InferenceActivityPanel() {
+export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: number }) {
   const cachedRecent = api.getCached<InferenceActivityPage>(
     "req:/api/inference/usage/activity?page=1&limit=6",
     Number.POSITIVE_INFINITY
@@ -74,7 +74,10 @@ export function InferenceActivityPanel() {
     }
   }, []);
 
-  useEffect(() => void loadRecent(), [loadRecent]);
+  useEffect(() => {
+    void refreshToken;
+    void loadRecent();
+  }, [loadRecent, refreshToken]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 180);
@@ -119,11 +122,13 @@ export function InferenceActivityPanel() {
   );
 
   useEffect(() => {
+    void refreshToken;
     if (!open) return;
     void loadPage(1, true);
-  }, [loadPage, open]);
+  }, [loadPage, open, refreshToken]);
 
   useEffect(() => {
+    void refreshToken;
     if (!open) return;
     const currentRequest = ++filterRequestId.current;
     void api
@@ -136,7 +141,7 @@ export function InferenceActivityPanel() {
           toast.error(error instanceof Error ? error.message : "Failed to load activity filters");
         }
       });
-  }, [open]);
+  }, [open, refreshToken]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;

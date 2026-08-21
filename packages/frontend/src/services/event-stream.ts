@@ -1,4 +1,7 @@
-import { INFERENCE_CATALOG_CHANGED_CHANNEL } from "@/lib/inference-self-usage";
+import {
+  INFERENCE_CATALOG_CHANGED_CHANNEL,
+  INFERENCE_USAGE_CHANGED_CHANNEL,
+} from "@/lib/inference-self-usage";
 import { api } from "@/services/api";
 import {
   invalidateToolStore,
@@ -314,6 +317,8 @@ class EventStream {
           invalidate("req:/api/system/version", "system:version");
         } else if (msg.channel === INFERENCE_CATALOG_CHANGED_CHANNEL) {
           invalidate("req:/api/inference", "settings:ai-config", "req:/api/ai/config");
+        } else if (msg.channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
+          invalidate("req:/api/inference/usage", "req:/api/inference/limits");
         }
 
         this.dispatch(msg.channel, msg.payload);

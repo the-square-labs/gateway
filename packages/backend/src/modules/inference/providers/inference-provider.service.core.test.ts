@@ -100,14 +100,16 @@ function createService(options: {
   };
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const destinations = { assertAllowed: vi.fn().mockResolvedValue(undefined) };
+  const setupEvents = { publishCatalogChanged: vi.fn() };
   const service = new InferenceProviderService(
     db as never,
     new InferenceProviderRegistry(),
     audit as never,
     destinations as never,
-    bridge as never
+    bridge as never,
+    setupEvents as never
   );
-  return { service, db, client, bridge, audit };
+  return { service, db, client, bridge, audit, setupEvents };
 }
 
 describe('inference provider service — core-managed delegation', () => {
@@ -182,7 +184,7 @@ describe('inference provider service — core-managed delegation', () => {
   });
 
   it('syncs core-managed connections from the core catalog and quota reports', async () => {
-    const { service, db } = createService({});
+    const { service, db, setupEvents } = createService({});
     db.update.mockReturnValue(updateChain());
     const persistModels = vi.fn().mockResolvedValue(undefined);
     const persistQuota = vi.fn().mockResolvedValue(undefined);
@@ -209,6 +211,7 @@ describe('inference provider service — core-managed delegation', () => {
       { dimension: '7d', remainingFraction: 0.6, resetAt: new Date(1_800_000_000_000) },
     ]);
     expect(service.getConnection).toHaveBeenCalledWith('conn-1');
+    expect(setupEvents.publishCatalogChanged).toHaveBeenCalledOnce();
   });
 
   it('repairs live discovery on an existing Alibaba Token Plan connection before syncing', async () => {
@@ -243,7 +246,7 @@ describe('inference provider service — core-managed delegation', () => {
   });
 
   it('mirrors enable/disable to the core provider entry before updating the row', async () => {
-    const { service, db, client } = createService({});
+    const { service, db, client, setupEvents } = createService({});
     db.update.mockReturnValue(updateChain());
     // assertConnectionCanDisable: affected models + remaining sources
     db.select.mockReturnValueOnce(selectChain([])).mockReturnValueOnce(selectChain([]));
@@ -252,10 +255,11 @@ describe('inference provider service — core-managed delegation', () => {
     await service.updateConnection('user-1', 'conn-1', { enabled: false });
 
     expect(client.patchCoreProvider).toHaveBeenCalledWith('core-conn-1', { disabled: true });
+    expect(setupEvents.publishCatalogChanged).toHaveBeenCalledOnce();
   });
 
   it('keeps routing strategy in Gateway without pushing it into core pools', async () => {
-    const { service, db, client } = createService({});
+    const { service, db, client, setupEvents } = createService({});
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
     db.insert.mockReturnValue({ values: vi.fn().mockReturnValue({ onConflictDoUpdate }) });
 
@@ -265,6 +269,7 @@ describe('inference provider service — core-managed delegation', () => {
 
     await service.setRoutingStrategy('user-1', 'openai-apikey', 'even');
     expect(client.setCoreCodexPoolStrategy).not.toHaveBeenCalled();
+    expect(setupEvents.publishCatalogChanged).toHaveBeenCalledTimes(2);
   });
 
   it('removes codex pool accounts on disconnect and tolerates an unreachable core', async () => {
@@ -274,7 +279,7 @@ describe('inference provider service — core-managed delegation', () => {
       authType: 'oauth',
       metadata: { coreManaged: true, coreAccountId: 'chatgpt-1' },
     };
-    const { service, db, client } = createService({});
+    const { service, db, client, setupEvents } = createService({});
     db.query.inferenceProviderConnections.findFirst.mockResolvedValue(oauthConnection);
     db.select.mockReturnValueOnce(selectChain([])).mockReturnValueOnce(selectChain([]));
     db.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
@@ -282,6 +287,7 @@ describe('inference provider service — core-managed delegation', () => {
 
     await service.disconnect('user-1', 'conn-1');
     expect(client.deleteCoreCodexAccount).toHaveBeenCalledWith('chatgpt-1');
+    expect(setupEvents.publishCatalogChanged).toHaveBeenCalledOnce();
 
     const unreachable = createService({ bridgeError: new AppError(409, 'CORE_NOT_READY', 'not ready') });
     unreachable.db.query.inferenceProviderConnections.findFirst.mockResolvedValue(oauthConnection);

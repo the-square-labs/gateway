@@ -31,6 +31,7 @@ import {
   parseCoreModelRows,
   parseCoreQuotaReports,
 } from '../core/inference-core-provider-map.js';
+import type { InferenceSetupEventsService } from '../inference-setup-events.service.js';
 import type { InferenceDestinationPolicy } from './inference-destination-policy.js';
 import type { InferenceProviderRegistry } from './inference-provider.registry.js';
 import {
@@ -66,7 +67,8 @@ export class InferenceProviderService {
     private readonly registry: InferenceProviderRegistry,
     private readonly audit: AuditService,
     private readonly destinations: InferenceDestinationPolicy,
-    private readonly coreBridge?: InferenceCoreBridgeService
+    private readonly coreBridge?: InferenceCoreBridgeService,
+    private readonly setupEvents?: InferenceSetupEventsService
   ) {}
 
   /** Management delegates to the core as soon as it is installed and ready. */
@@ -214,7 +216,9 @@ export class InferenceProviderService {
         updatedAt: new Date(),
       })
       .where(eq(inferenceProviderConnections.id, connectionId));
-    return this.getConnection(connectionId);
+    const result = await this.getConnection(connectionId);
+    this.setupEvents?.publishCatalogChanged();
+    return result;
   }
 
   async updateConnection(
@@ -266,7 +270,9 @@ export class InferenceProviderService {
       resourceId: connectionId,
       details: { fields: Object.keys(input) },
     });
-    return this.getConnection(connectionId);
+    const result = await this.getConnection(connectionId);
+    this.setupEvents?.publishCatalogChanged();
+    return result;
   }
 
   async setRoutingStrategy(userId: string, providerId: string, routingStrategy: 'even' | 'balanced' | 'sequential') {
@@ -285,6 +291,7 @@ export class InferenceProviderService {
       resourceId: providerId,
       details: { routingStrategy },
     });
+    this.setupEvents?.publishCatalogChanged();
     return { providerId, routingStrategy };
   }
 
@@ -307,6 +314,7 @@ export class InferenceProviderService {
       resourceType: 'inference_provider_connection',
       resourceId: connectionId,
     });
+    this.setupEvents?.publishCatalogChanged();
   }
 
   start(): void {
@@ -516,7 +524,9 @@ export class InferenceProviderService {
         })
         .where(eq(inferenceProviderConnections.id, connectionId));
     }
-    return this.getConnection(connectionId);
+    const result = await this.getConnection(connectionId);
+    this.setupEvents?.publishCatalogChanged();
+    return result;
   }
 
   /**

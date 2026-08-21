@@ -238,10 +238,13 @@ describe("InferenceUsersTable", () => {
     vi.spyOn(api, "listInferenceUsersUsage").mockImplementation(() => new Promise(() => {}));
     vi.spyOn(api, "listInferenceLimits").mockImplementation(() => new Promise(() => {}));
 
-    render(<InferenceUsersTable canManage />);
+    const { rerender } = render(<InferenceUsersTable canManage />);
 
     expect(screen.getByText("Cached User")).toBeInTheDocument();
     expect(screen.queryByText("Loading users...")).not.toBeInTheDocument();
+    rerender(<InferenceUsersTable canManage refreshToken={1} />);
+    expect(api.listInferenceUsersUsage).toHaveBeenCalledTimes(2);
+    expect(api.listInferenceLimits).toHaveBeenCalledTimes(2);
   });
 
   it("loads policy-only user rows without calling the protected usage endpoint", async () => {
