@@ -55,10 +55,14 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
-  useRealtime("pages.token.changed", (payload) => {
-    const event = payload as { projectId?: string };
-    if (!event.projectId || event.projectId === projectId) void load();
-  });
+  useRealtime(
+    "pages.token.changed",
+    (payload) => {
+      const event = payload as { projectId?: string };
+      if (!event.projectId || event.projectId === projectId) void load();
+    },
+    { onReconnect: load }
+  );
 
   const create = async () => {
     if (!name.trim() || saving) return;

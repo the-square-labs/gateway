@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useRealtime } from "@/hooks/use-realtime";
 import {
   buildFinalScopes,
   deriveAllowedResourceIdsByScope,
@@ -27,6 +28,7 @@ import {
 } from "@/lib/scope-utils";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
+import { oauthAuthorizationChangedChannel } from "@/services/user-resource-events";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import type {
@@ -157,6 +159,9 @@ export function OAuthApplicationsSection({
   useEffect(() => {
     void load();
   }, [load]);
+  useRealtime(user?.id ? oauthAuthorizationChangedChannel(user.id) : null, () => void load(), {
+    onReconnect: load,
+  });
 
   const openDetails = (authorization: OAuthAuthorization) => {
     const parsed = parseScopesForForm(authorization.scopes);

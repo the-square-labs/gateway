@@ -1079,7 +1079,12 @@ export class DockerManagementService {
     containerId: string,
     config: Record<string, unknown>,
     userId: string,
-    options?: { skipImagePull?: boolean; skipWebhookCleanup?: boolean; actorScopes?: string[] }
+    options?: {
+      skipImagePull?: boolean;
+      skipWebhookCleanup?: boolean;
+      actorScopes?: string[];
+      backgroundImagePull?: boolean;
+    }
   ) {
     await this.assertContainerMigrationAllowed(nodeId, containerId);
     return recreateDockerContainerWithConfig(

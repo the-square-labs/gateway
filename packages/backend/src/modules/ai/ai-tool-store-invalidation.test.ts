@@ -21,6 +21,21 @@ describe('AI and MCP tool store invalidation', () => {
     ]);
   });
 
+  it('derives operation-specific invalidations for leaf resources managed by composite tools', () => {
+    expect(resolveToolStoreInvalidations('manage_api_token', { operation: 'list' }, [])).toEqual([]);
+    expect(resolveToolStoreInvalidations('manage_api_token', { operation: 'update' }, [])).toEqual(['apiTokens']);
+    expect(resolveToolStoreInvalidations('manage_inference_token', { operation: 'revoke' }, [])).toEqual([
+      'inferenceTokens',
+    ]);
+    expect(resolveToolStoreInvalidations('manage_oauth_authorization', { operation: 'update_scopes' }, [])).toEqual([
+      'oauthAuthorizations',
+    ]);
+    expect(resolveToolStoreInvalidations('manage_logging', { resource: 'token', operation: 'create' }, [])).toEqual([
+      'loggingTokens',
+    ]);
+    expect(resolveToolStoreInvalidations('manage_pages', { operation: 'token_revoke' }, [])).toEqual(['pageTokens']);
+  });
+
   it('publishes only safe resource context to the target user channel', () => {
     const eventBus = { publish: vi.fn() };
     const context = toolInvalidationContext({

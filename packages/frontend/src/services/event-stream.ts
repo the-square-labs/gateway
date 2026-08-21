@@ -163,7 +163,7 @@ class EventStream {
             id: payload.resourceId,
             ...(payload.context ?? {}),
           };
-          for (const channel of toolStoreEventChannels(stores)) {
+          for (const channel of toolStoreEventChannels(stores, payload.userId)) {
             this.dispatch(channel, syntheticPayload);
           }
           this.dispatch(msg.channel, msg.payload);
@@ -290,6 +290,14 @@ class EventStream {
           invalidate("req:/api/logging/environments", "logging:environments");
         } else if (msg.channel === "logging.schema.changed") {
           invalidate("req:/api/logging/schemas", "logging:schemas");
+        } else if (msg.channel === "logging.token.changed") {
+          invalidate("req:/api/logging/environments", "logging:tokens");
+        } else if (msg.channel.startsWith("api.token.changed.")) {
+          invalidate("req:/api/tokens", "settings:api-tokens");
+        } else if (msg.channel.startsWith("inference.token.changed.")) {
+          invalidate("req:/api/inference/tokens", "settings:inference-tokens");
+        } else if (msg.channel.startsWith("oauth.authorization.changed.")) {
+          invalidate("req:/api/oauth/authorizations", "settings:oauth-authorizations");
         } else if (msg.channel === "system.relay.health.changed") {
           invalidate("req:/api/system/relay", "relay:", "settings:relay");
         } else if (msg.channel === "system.config.changed") {

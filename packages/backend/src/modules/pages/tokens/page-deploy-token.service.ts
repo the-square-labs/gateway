@@ -4,6 +4,8 @@ import type { DrizzleClient } from '@/db/client.js';
 import { pageDeployTokens, pageProjects } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
+import { PAGE_EVENT_CHANNELS, pageProjectEvent } from '../page-events.js';
 import type { CreatePageDeployTokenInput } from './page-deploy-token.schemas.js';
 
 export function hashPageDeployToken(raw: string): string {
@@ -38,10 +40,16 @@ export function assertPageDeployTokenTagAllowed(token: ValidatedPageDeployToken,
 }
 
 export class PageDeployTokenService {
+  private eventBus?: EventBusService;
+
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService
   ) {}
+
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
+  }
 
   async list(projectId: string) {
     await this.ensureProject(projectId);
@@ -94,6 +102,7 @@ export class PageDeployTokenService {
         allowUserTag: token.allowUserTag,
       },
     });
+    this.eventBus?.publish(PAGE_EVENT_CHANNELS.token, pageProjectEvent(projectId, 'create', { id: token.id }));
     return {
       id: token.id,
       projectId,
@@ -127,6 +136,7 @@ export class PageDeployTokenService {
       resourceId: tokenId,
       details: { projectId, name: token.name, tokenPrefix: token.tokenPrefix },
     });
+    this.eventBus?.publish(PAGE_EVENT_CHANNELS.token, pageProjectEvent(projectId, 'revoke', { id: tokenId }));
   }
 
   async validate(raw: string): Promise<ValidatedPageDeployToken | null> {

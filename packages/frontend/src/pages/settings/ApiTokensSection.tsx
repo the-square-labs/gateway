@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useRealtime } from "@/hooks/use-realtime";
 import {
   buildFinalScopes,
   deriveAllowedResourceIdsByScope,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/scope-utils";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
+import { apiTokenChangedChannel } from "@/services/user-resource-events";
 import { useCAStore } from "@/stores/ca";
 import type { DatabaseConnection, LoggingSchema, Node, ProxyHost, User } from "@/types";
 import { API_TOKEN_SCOPES, type ApiToken, RESOURCE_SCOPABLE_SCOPES } from "@/types";
@@ -97,6 +99,9 @@ export function ApiTokensSection({
   useEffect(() => {
     loadTokens();
   }, [loadTokens]);
+  useRealtime(user?.id ? apiTokenChangedChannel(user.id) : null, () => void loadTokens(), {
+    onReconnect: loadTokens,
+  });
 
   const openTokenEdit = (token: ApiToken) => {
     setEditingToken(token);

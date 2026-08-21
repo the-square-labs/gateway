@@ -77,16 +77,16 @@ import { InferenceAccountingService } from '@/modules/inference/accounting/infer
 import { InferenceBudgetLockService } from '@/modules/inference/accounting/inference-budget-lock.service.js';
 import { InferenceBudgetPolicyService } from '@/modules/inference/accounting/inference-budget-policy.js';
 import { InferenceBudgetReservationService } from '@/modules/inference/accounting/inference-budget-reservation.service.js';
+import { InferenceCoreAccountingService } from '@/modules/inference/accounting/inference-core-accounting.service.js';
 import { InferenceReservationReconciler } from '@/modules/inference/accounting/inference-reservation-reconciler.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
-import { InferenceCoreOperationService } from '@/modules/inference/core/inference-core-operation.service.js';
 import { InferenceCoreBridgeService } from '@/modules/inference/core/inference-core-bridge.service.js';
+import { InferenceCoreExecutor } from '@/modules/inference/core/inference-core-executor.service.js';
+import { InferenceCoreOperationService } from '@/modules/inference/core/inference-core-operation.service.js';
+import { InferenceCoreProxyService } from '@/modules/inference/core/inference-core-proxy.service.js';
 import { InferenceCoreRuntimeService } from '@/modules/inference/core/inference-core-runtime.service.js';
 import { InferenceCoreStore } from '@/modules/inference/core/inference-core-store.js';
-import { InferenceCoreAccountingService } from '@/modules/inference/accounting/inference-core-accounting.service.js';
 import { InferenceCredentialVault } from '@/modules/inference/inference-credential-vault.js';
-import { InferenceCoreExecutor } from '@/modules/inference/core/inference-core-executor.service.js';
-import { InferenceCoreProxyService } from '@/modules/inference/core/inference-core-proxy.service.js';
 import { InferenceRuntimeService } from '@/modules/inference/inference-runtime.service.js';
 import { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
 import { InferenceTokenService } from '@/modules/inference/inference-token.service.js';
@@ -327,6 +327,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(AdminUserFolderService, adminUserFolderService);
 
   const oauthService = new OAuthService(db, cacheService, auditService, authSettingsService, generalSettingsService);
+  oauthService.setEventBus(eventBus);
   container.registerInstance(OAuthService, oauthService);
 
   const templatesService = new TemplatesService(db);
@@ -350,9 +351,11 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(ExportService, exportService);
 
   const tokensService = new TokensService(db, auditService);
+  tokensService.setEventBus(eventBus);
   container.registerInstance(TokensService, tokensService);
 
   const inferenceTokenService = new InferenceTokenService(db, auditService);
+  inferenceTokenService.setEventBus(eventBus);
   container.registerInstance(InferenceTokenService, inferenceTokenService);
   const inferenceCredentialVault = new InferenceCredentialVault(cryptoService);
   container.registerInstance(InferenceCredentialVault, inferenceCredentialVault);
@@ -661,6 +664,7 @@ export async function initializeContainer(): Promise<void> {
   integrationsService.setDockerRegistryService(dockerRegistryService);
 
   const dockerSecretService = new DockerSecretService(db, auditService, cryptoService);
+  dockerSecretService.setEventBus(eventBus);
   dockerSecretService.setMigrationGuard(dockerMigrationGuard);
   container.registerInstance(DockerSecretService, dockerSecretService);
 
@@ -1017,6 +1021,7 @@ export async function initializeContainer(): Promise<void> {
   await pageArtifactStore.initialize();
   container.registerInstance(PageArtifactStore, pageArtifactStore);
   const pageDeployTokenService = new PageDeployTokenService(db, auditService);
+  pageDeployTokenService.setEventBus(eventBus);
   container.registerInstance(PageDeployTokenService, pageDeployTokenService);
   const pageDeploymentService = new PageDeploymentService(db, auditService, generalSettingsService, pageArtifactStore);
   pageDeploymentService.setEventBus(eventBus);
@@ -1247,6 +1252,7 @@ export async function initializeContainer(): Promise<void> {
   loggingEnvironmentFolderService.setEventBus(eventBus);
   container.registerInstance(LoggingEnvironmentFolderService, loggingEnvironmentFolderService);
   const loggingTokenService = new LoggingTokenService(db, auditService);
+  loggingTokenService.setEventBus(eventBus);
   loggingTokenService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingTokenService, loggingTokenService);
   const loggingSchemaService = new LoggingSchemaService(db, auditService);

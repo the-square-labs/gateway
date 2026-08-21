@@ -71,6 +71,7 @@ export function EnvironmentTab({
   const [databaseLinkDraft, setDatabaseLinkDraft] =
     useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
   const envContainerIdRef = useRef(containerId);
+  const envRequestGenerationRef = useRef(0);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = hasScope(`docker:containers:environment:${scopeSuffix}`);
@@ -102,6 +103,10 @@ export function EnvironmentTab({
 
   const fetchEnv = useCallback(async () => {
     const targetContainerId = envContainerIdRef.current;
+    const requestGeneration = ++envRequestGenerationRef.current;
+    const isCurrentRequest = () =>
+      requestGeneration === envRequestGenerationRef.current &&
+      targetContainerId === envContainerIdRef.current;
     setIsLoading((current) => (isServiceEnv ? current : true));
     try {
       if (isServiceEnv) {
@@ -114,6 +119,7 @@ export function EnvironmentTab({
           const idx = entry.indexOf("=");
           return { key: entry.slice(0, idx), value: entry.slice(idx + 1) };
         });
+        if (!isCurrentRequest()) return;
         setEnvVars(parsed);
         setOriginalEnv(entries);
         setRawText(entries.join("\n"));
@@ -133,6 +139,7 @@ export function EnvironmentTab({
         canEdit ? api.getContainerEnv(nodeId, targetContainerId) : Promise.resolve([]),
         canManageSecrets ? api.listDockerSecrets(nodeId, targetContainerId) : Promise.resolve([]),
       ]);
+      if (!isCurrentRequest()) return;
 
       if (canEdit) {
         const parsed = (data ?? []).map((entry: string) => {
@@ -164,9 +171,11 @@ export function EnvironmentTab({
         setDeletedSecretIds(new Set());
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to fetch environment");
+      if (isCurrentRequest()) {
+        toast.error(err instanceof Error ? err.message : "Failed to fetch environment");
+      }
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest()) setIsLoading(false);
     }
   }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature]);
 
@@ -175,37 +184,52 @@ export function EnvironmentTab({
     fetchEnv();
   }, [containerId, fetchEnv]);
 
-  useRealtime(isServiceEnv ? null : "docker.container.changed", (payload) => {
-    const event = payload as {
-      nodeId?: string;
-      id?: string;
-      oldId?: string;
-      name?: string;
-      action?: string;
-      toolName?: string;
-      operation?: string;
-    };
-    if (event.nodeId !== nodeId) return;
-    const matchesContainer = containerName
-      ? !event.name || event.name === containerName
-      : event.id === containerId || event.oldId === containerId;
-    if (!matchesContainer) return;
+  useEffect(
+    () => () => {
+      envRequestGenerationRef.current++;
+    },
+    []
+  );
 
-    if (event.action === "recreated" && event.id) {
-      if (event.id !== containerId) return;
-      envContainerIdRef.current = event.id;
-      void fetchEnv();
-      return;
-    }
-    if (
-      event.action === "tool-invalidated" &&
-      event.toolName === "manage_docker_container_config" &&
-      event.operation !== "update_env"
-    ) {
-      envContainerIdRef.current = event.id || containerId;
-      void fetchEnv();
-    }
-  });
+  useRealtime(
+    isServiceEnv ? null : "docker.container.changed",
+    (payload) => {
+      const event = payload as {
+        nodeId?: string;
+        id?: string;
+        oldId?: string;
+        name?: string;
+        action?: string;
+        toolName?: string;
+        operation?: string;
+      };
+      if (event.nodeId !== nodeId) return;
+      const matchesContainer = containerName
+        ? !event.name || event.name === containerName
+        : event.id === containerId || event.oldId === containerId;
+      if (!matchesContainer) return;
+
+      if (event.action === "recreated" && event.id) {
+        if (event.id !== containerId) return;
+        envContainerIdRef.current = event.id;
+        void fetchEnv();
+        return;
+      }
+      if (event.action?.startsWith("secret")) {
+        void fetchEnv();
+        return;
+      }
+      if (
+        event.action === "tool-invalidated" &&
+        event.toolName === "manage_docker_container_config" &&
+        event.operation !== "update_env"
+      ) {
+        envContainerIdRef.current = event.id || containerId;
+        void fetchEnv();
+      }
+    },
+    { onReconnect: fetchEnv }
+  );
 
   useEffect(() => {
     if (!canEdit || !canManageSecrets || isServiceEnv || !containerName) {

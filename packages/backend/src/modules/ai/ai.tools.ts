@@ -1628,7 +1628,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     destructive: true,
     category: 'Settings',
     requiredScope: 'feat:ai:use',
-    invalidateStores: ['settings'],
+    invalidateStores: [],
     historyRetention: { mode: 'never_full' },
   },
 

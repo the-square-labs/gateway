@@ -5,6 +5,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
 
 const logger = createChildLogger('DockerSecretService');
@@ -13,6 +14,7 @@ const MASKED_VALUE = '••••••••';
 
 export class DockerSecretService {
   private migrationGuard?: DockerMigrationGuard;
+  private eventBus?: EventBusService;
 
   constructor(
     private db: DrizzleClient,
@@ -22,6 +24,10 @@ export class DockerSecretService {
 
   setMigrationGuard(guard: DockerMigrationGuard) {
     this.migrationGuard = guard;
+  }
+
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
   }
 
   /**
@@ -77,6 +83,7 @@ export class DockerSecretService {
     });
 
     logger.debug('Secret created', { nodeId, containerName, key });
+    this.publishChanged(nodeId, containerName, 'secret_create', row.id);
     return { id: row.id, key: row.key, value: MASKED_VALUE, createdAt: row.createdAt, updatedAt: row.updatedAt };
   }
 
@@ -107,6 +114,7 @@ export class DockerSecretService {
       resourceId: id,
       details: { nodeId: existing.nodeId, containerName: existing.containerName, key: existing.key },
     });
+    this.publishChanged(existing.nodeId, existing.containerName, 'secret_update', id);
 
     return { id: row.id, key: row.key, value: MASKED_VALUE, createdAt: row.createdAt, updatedAt: row.updatedAt };
   }
@@ -131,6 +139,7 @@ export class DockerSecretService {
       resourceId: id,
       details: { nodeId: existing.nodeId, containerName: existing.containerName, key: existing.key },
     });
+    this.publishChanged(existing.nodeId, existing.containerName, 'secret_delete', id);
   }
 
   /**
@@ -179,6 +188,7 @@ export class DockerSecretService {
       resourceId: containerName,
       details: { nodeId, containerName, secretKeys: Object.keys(secrets).sort() },
     });
+    this.publishChanged(nodeId, containerName, 'secrets_import');
   }
 
   async deleteImported(nodeId: string, containerName: string): Promise<void> {
@@ -222,5 +232,26 @@ export class DockerSecretService {
   private decrypt(encryptedJson: string): string {
     const parsed = JSON.parse(encryptedJson) as { encryptedKey: string; encryptedDek: string };
     return this.cryptoService.decryptString(parsed);
+  }
+
+  private publishChanged(nodeId: string, containerName: string, action: string, secretId?: string): void {
+    if (containerName.startsWith('deployment:')) {
+      const deploymentId = containerName.slice('deployment:'.length);
+      this.eventBus?.publish('docker.deployment.changed', {
+        action,
+        deploymentId,
+        scopeResourceId: deploymentId,
+        nodeId,
+        secretId,
+      });
+      return;
+    }
+    this.eventBus?.publish('docker.container.changed', {
+      action,
+      nodeId,
+      containerName,
+      name: containerName,
+      secretId,
+    });
   }
 }

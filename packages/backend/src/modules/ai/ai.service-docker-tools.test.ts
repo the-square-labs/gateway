@@ -186,6 +186,46 @@ describe('AIService Docker tool routing', () => {
     });
   });
 
+  it('requests a background image recreate and returns its task identity', async () => {
+    const dockerService = {
+      inspectContainer: vi
+        .fn()
+        .mockResolvedValueOnce({ scopeResourceId: 'scope-1' })
+        .mockResolvedValueOnce({ Config: { Image: 'nginx:old' } }),
+      recreateWithConfig: vi.fn().mockResolvedValue({
+        accepted: true,
+        status: 'pending',
+        taskId: 'task-1',
+        containerId: 'container-1',
+      }),
+    };
+    const service = createService(dockerService);
+    const user = {
+      ...BASE_USER,
+      scopes: ['docker:containers:manage:node-1', 'docker:containers:edit:node-1/scope-1'],
+    };
+
+    await expect(
+      service.executeTool(user, 'update_docker_container_image', {
+        nodeId: 'node-1',
+        containerId: 'container-1',
+        imageTag: 'new',
+      })
+    ).resolves.toMatchObject({
+      result: {
+        success: true,
+        data: { accepted: true, status: 'pending', taskId: 'task-1' },
+      },
+    });
+    expect(dockerService.recreateWithConfig).toHaveBeenCalledWith(
+      'node-1',
+      'container-1',
+      { image: 'nginx:new' },
+      'user-1',
+      { actorScopes: user.scopes, backgroundImagePull: true }
+    );
+  });
+
   it('requires source view, environment, and secret scopes before duplication', async () => {
     const dockerService = {
       inspectContainer: vi.fn(),
@@ -399,7 +439,7 @@ describe('AIService Docker tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { Name: 'cache' },
-      invalidateStores: [],
+      invalidateStores: ['volumes'],
     });
     expect(dockerService.createVolume).toHaveBeenCalledWith('node-1', { name: 'cache' }, 'user-1');
 
@@ -412,7 +452,7 @@ describe('AIService Docker tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { success: true },
-      invalidateStores: [],
+      invalidateStores: ['volumes'],
     });
     expect(dockerService.removeVolume).toHaveBeenCalledWith('node-1', 'cache', true, 'user-1');
   });
@@ -432,7 +472,7 @@ describe('AIService Docker tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { success: true },
-      invalidateStores: [],
+      invalidateStores: ['networks', 'containers'],
     });
     expect(dockerService.connectContainerToNetwork).toHaveBeenCalledWith('node-1', 'frontend', 'container-1', 'user-1');
   });

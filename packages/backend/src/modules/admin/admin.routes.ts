@@ -48,6 +48,7 @@ import {
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
@@ -441,6 +442,10 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
     if (webTransport.restartRequired) {
       container.resolve(RuntimeRestartService).request('web identity or transport changed');
     }
+    container.resolve(EventBusService).publish('system.config.changed', {
+      action: 'gateway_settings_updated',
+      userId: currentUser.id,
+    });
 
     return c.json({
       ...updated,

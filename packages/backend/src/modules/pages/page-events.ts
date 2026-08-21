@@ -6,6 +6,7 @@ export const PAGE_EVENT_CHANNELS = {
   migration: 'pages.migration.changed',
   folder: 'pages.folder.changed',
   config: 'pages.config.changed',
+  token: 'pages.token.changed',
 } as const;
 
 export interface PageProjectEvent {

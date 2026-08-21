@@ -6,6 +6,7 @@ import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from '@/modules/ai/ai-tool-store-invalidation.js';
 import { resolveLiveSessionUser, resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { MFA_REQUIRED_CHANNEL_PREFIX } from '@/modules/auth/mfa-events.js';
+import { userResourceChannelUserId } from '@/modules/auth/user-resource-events.js';
 import {
   DockerAccessResourceService,
   dockerScopedNodeIds,
@@ -72,12 +73,14 @@ function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('permissions.changed.')) return null;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return null;
   if (channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) return null;
+  if (userResourceChannelUserId(channel)) return null;
   if (channel === 'read-model.refreshed') return null;
   if (channel === 'domain.changed') return 'domains:view';
   if (channel === 'logging.logs.ingested') return 'logs:read';
   if (channel === 'logging.health.changed') return 'housekeeping:view';
   if (channel === 'logging.environment.changed') return 'logs:environments:view';
   if (channel === 'logging.schema.changed') return 'logs:schemas:view';
+  if (channel === 'logging.token.changed') return 'logs:tokens:view';
   if (channel === 'system.update.changed') return 'admin:update';
   if (channel === 'inference.core.changed') return 'inference:providers:view';
   if (channel === 'system.license.changed') return null;
@@ -132,6 +135,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel.startsWith('permissions.changed.')) return true;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return true;
   if (channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) return true;
+  if (userResourceChannelUserId(channel)) return true;
   if (channel === 'read-model.refreshed') return true;
   if (channel === 'system.update.changed') return true;
   if (channel === 'system.license.changed') return true;
@@ -268,6 +272,9 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'logging.schema.changed') {
     return hasScopeBase(scopes, 'logs:schemas:view') || hasScope(scopes, 'logs:schemas:folders:manage');
   }
+  if (channel === 'logging.token.changed') {
+    return hasScopeBase(scopes, 'logs:tokens:view');
+  }
   if (channel === 'user.changed') {
     return hasScopeBase(scopes, 'admin:users') || hasScope(scopes, 'admin:users:folders:manage');
   }
@@ -323,6 +330,8 @@ function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unkn
 }
 
 function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown, userId?: string): boolean {
+  const resourceChannelUserId = userResourceChannelUserId(channel);
+  if (resourceChannelUserId) return resourceChannelUserId === userId;
   if (channel === 'system.update.changed') return true;
   if (channel === 'system.license.changed') return true;
   if (channel === 'system.config.changed') return true;
@@ -447,7 +456,8 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasScope(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage');
   }
   if (channel.startsWith('pages.')) {
-    const projectId = (payload as { scopeResourceId?: string; projectId?: string } | undefined)?.scopeResourceId;
+    const event = payload as { scopeResourceId?: string; projectId?: string } | undefined;
+    const projectId = event?.scopeResourceId ?? event?.projectId;
     if (!projectId) {
       return channel === 'pages.migration.changed' && hasScope(scopes, 'pages:settings:view');
     }
@@ -471,6 +481,12 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       hasScope(scopes, 'logs:schemas:view') ||
       !!(schemaId && hasScope(scopes, `logs:schemas:view:${schemaId}`)) ||
       (!schemaId && hasScope(scopes, 'logs:schemas:folders:manage'))
+    );
+  }
+  if (channel === 'logging.token.changed') {
+    const environmentId = (payload as { environmentId?: string } | undefined)?.environmentId;
+    return (
+      hasScope(scopes, 'logs:tokens:view') || !!(environmentId && hasScope(scopes, `logs:tokens:view:${environmentId}`))
     );
   }
   if (channel.startsWith('proxy.host')) {
@@ -720,6 +736,11 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
           rejected.push(ch);
           continue;
         }
+      }
+      const resourceChannelUserId = userResourceChannelUserId(ch);
+      if (resourceChannelUserId && resourceChannelUserId !== state.user?.id) {
+        rejected.push(ch);
+        continue;
       }
       const unsub = eventBus.subscribe(ch, (payload) => {
         if (!canReceiveChannelPayload(state.scopes, ch, payload, state.user?.id)) return;

@@ -1,4 +1,9 @@
 import { api } from "@/services/api";
+import {
+  apiTokenChangedChannel,
+  inferenceTokenChangedChannel,
+  oauthAuthorizationChangedChannel,
+} from "@/services/user-resource-events";
 
 export const TOOL_STORE_INVALIDATION_CHANNEL_PREFIX = "tool.store.invalidated.";
 
@@ -23,9 +28,11 @@ const STORE_EVENT_CHANNELS: Record<string, string[]> = {
   images: ["docker.image.changed"],
   integrations: ["integration.connector.changed"],
   logging: ["logging.environment.changed", "logging.schema.changed"],
+  loggingTokens: ["logging.token.changed"],
   networks: ["docker.network.changed"],
   nodes: ["node.changed"],
   pages: ["pages.project.changed"],
+  pageTokens: ["pages.token.changed"],
   proxy: ["proxy.host.changed"],
   "proxy-hosts": ["proxy.host.changed"],
   settings: ["system.config.changed"],
@@ -37,6 +44,7 @@ const STORE_EVENT_CHANNELS: Record<string, string[]> = {
 };
 
 export interface ToolStoreInvalidationPayload {
+  userId?: string;
   source?: "ai" | "mcp";
   toolName?: string;
   stores?: string[];
@@ -137,8 +145,23 @@ export function invalidateToolStore(storeName: string): void {
     case "logging":
       invalidate("req:/api/logging", "logging:");
       break;
+    case "loggingTokens":
+      invalidate("req:/api/logging/environments", "logging:tokens");
+      break;
     case "pages":
       invalidate("req:/api/pages", "pages:");
+      break;
+    case "pageTokens":
+      invalidate("req:/api/pages", "pages:tokens");
+      break;
+    case "apiTokens":
+      invalidate("req:/api/tokens", "settings:api-tokens");
+      break;
+    case "inferenceTokens":
+      invalidate("req:/api/inference/tokens", "settings:inference-tokens");
+      break;
+    case "oauthAuthorizations":
+      invalidate("req:/api/oauth/authorizations", "settings:oauth-authorizations");
       break;
     case "folders":
       invalidate("folders:");
@@ -146,8 +169,16 @@ export function invalidateToolStore(storeName: string): void {
   }
 }
 
-export function toolStoreEventChannels(stores: string[]): string[] {
-  return [...new Set(stores.flatMap((store) => STORE_EVENT_CHANNELS[store] ?? []))];
+export function toolStoreEventChannels(stores: string[], userId?: string): string[] {
+  const channels = stores.flatMap((store) => STORE_EVENT_CHANNELS[store] ?? []);
+  if (userId) {
+    if (stores.includes("apiTokens")) channels.push(apiTokenChangedChannel(userId));
+    if (stores.includes("inferenceTokens")) channels.push(inferenceTokenChangedChannel(userId));
+    if (stores.includes("oauthAuthorizations")) {
+      channels.push(oauthAuthorizationChangedChannel(userId));
+    }
+  }
+  return [...new Set(channels)];
 }
 
 function invalidate(...prefixes: string[]): void {

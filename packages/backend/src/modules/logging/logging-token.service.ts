@@ -5,6 +5,7 @@ import { loggingEnvironments, loggingIngestTokens, loggingSchemas } from '@/db/s
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CreateLoggingTokenInput } from './logging.schemas.js';
 
 export function hashLoggingToken(raw: string): string {
@@ -13,6 +14,7 @@ export function hashLoggingToken(raw: string): string {
 
 export class LoggingTokenService {
   private licensePolicy?: LicensePolicyService;
+  private eventBus?: EventBusService;
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService
@@ -20,6 +22,10 @@ export class LoggingTokenService {
 
   setLicensePolicyService(service: LicensePolicyService): void {
     this.licensePolicy = service;
+  }
+
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
   }
 
   async list(environmentId: string) {
@@ -63,6 +69,7 @@ export class LoggingTokenService {
       resourceId: token.id,
       details: { environmentId, name: token.name, tokenPrefix: token.tokenPrefix },
     });
+    this.eventBus?.publish('logging.token.changed', { action: 'create', id: token.id, environmentId });
     return {
       id: token.id,
       environmentId: token.environmentId,
@@ -93,6 +100,7 @@ export class LoggingTokenService {
       resourceId: tokenId,
       details: { environmentId, name: token.name, tokenPrefix: token.tokenPrefix },
     });
+    this.eventBus?.publish('logging.token.changed', { action: 'delete', id: tokenId, environmentId });
   }
 
   async validate(rawToken: string) {

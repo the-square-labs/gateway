@@ -2082,6 +2082,7 @@ export class AIService {
         const availableGroups = groups
           .filter((group) => isScopeSubset(getEffectiveGroupScopes(group), user.scopes))
           .map((group) => ({ id: group.id, name: group.name, isBuiltin: group.isBuiltin }));
+        this.eventBus?.publish('system.config.changed', { action: 'gateway_settings_updated' });
         return {
           ...settings,
           mcpServerEnabled: mcpSettings.serverEnabled,

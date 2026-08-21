@@ -192,7 +192,7 @@ describe('AIService AI settings tools', () => {
     try {
       await expect(service.executeTool(TOKEN_USER, 'manage_api_token', { operation: 'list' })).resolves.toEqual({
         result: [{ id: 'token-1', name: 'Deploy', scopes: ['nodes:details'] }],
-        invalidateStores: ['settings'],
+        invalidateStores: [],
       });
       expect(tokensService.listTokens).toHaveBeenCalledWith('user-1');
 
@@ -204,7 +204,7 @@ describe('AIService AI settings tools', () => {
         })
       ).resolves.toEqual({
         result: { id: 'token-2', name: 'Proxy', scopes: ['proxy:view'], token: 'gw_secret' },
-        invalidateStores: ['settings'],
+        invalidateStores: ['apiTokens'],
       });
       expect(tokensService.createToken).toHaveBeenCalledWith('user-1', { name: 'Proxy', scopes: ['proxy:view'] });
 
@@ -214,12 +214,12 @@ describe('AIService AI settings tools', () => {
           tokenId: 'token-2',
           scopes: ['nodes:details'],
         })
-      ).resolves.toEqual({ result: { success: true }, invalidateStores: ['settings'] });
+      ).resolves.toEqual({ result: { success: true }, invalidateStores: ['apiTokens'] });
       expect(tokensService.updateToken).toHaveBeenCalledWith('user-1', 'token-2', { scopes: ['nodes:details'] });
 
       await expect(
         service.executeTool(TOKEN_USER, 'manage_api_token', { operation: 'revoke', tokenId: 'token-2' })
-      ).resolves.toEqual({ result: { success: true }, invalidateStores: ['settings'] });
+      ).resolves.toEqual({ result: { success: true }, invalidateStores: ['apiTokens'] });
       expect(tokensService.revokeToken).toHaveBeenCalledWith('user-1', 'token-2');
     } finally {
       resolveSpy.mockRestore();

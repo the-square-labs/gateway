@@ -122,7 +122,7 @@ describe('AIService user-owned conversation and OAuth tools', () => {
       })
     ).resolves.toEqual({
       result: { ...authorization, scopes: ['nodes:details'] },
-      invalidateStores: [],
+      invalidateStores: ['oauthAuthorizations'],
     });
     await expect(
       service.executeTool(BASE_USER, 'manage_oauth_authorization', {
@@ -130,7 +130,7 @@ describe('AIService user-owned conversation and OAuth tools', () => {
         clientId: 'goc_client',
         resource: 'https://gateway.test/api',
       })
-    ).resolves.toEqual({ result: { revoked: true }, invalidateStores: [] });
+    ).resolves.toEqual({ result: { revoked: true }, invalidateStores: ['oauthAuthorizations'] });
 
     expect(oauthService.listUserAuthorizations).toHaveBeenCalledWith(BASE_USER.id);
     expect(oauthService.updateUserAuthorizationScopes).toHaveBeenCalledWith(

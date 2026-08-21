@@ -42,6 +42,45 @@ function createService(dispatch: {
 }
 
 describe('DockerManagementService recreate registry auth', () => {
+  it('returns a pending task response before a replacement image finishes pulling', async () => {
+    let finishPull: ((value: { success: boolean; detail: string }) => void) | undefined;
+    const pullResult = new Promise<{ success: boolean; detail: string }>((resolve) => {
+      finishPull = resolve;
+    });
+    const inspect = {
+      Id: 'container-1',
+      Name: '/app',
+      Config: { Image: 'nginx:new', Labels: {} },
+      State: { Status: 'running' },
+    };
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn(async (_nodeId: string, action: string) => {
+        if (action === 'inspect') return { success: true, detail: JSON.stringify(inspect) };
+        if (action === 'recreate') return { success: true, detail: JSON.stringify({ Id: 'container-2' }) };
+        return { success: false, error: `unexpected action ${action}` };
+      }),
+      sendDockerImageCommand: vi.fn(() => pullResult),
+    };
+    const service = createService(dispatch);
+
+    await expect(
+      service.recreateWithConfig('node-1', 'container-1', { image: 'nginx:new' }, 'user-1', {
+        backgroundImagePull: true,
+      })
+    ).resolves.toMatchObject({ accepted: true, status: 'pending', containerId: 'container-1', image: 'nginx:new' });
+    expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalledWith(
+      'node-1',
+      'recreate',
+      expect.anything(),
+      expect.anything()
+    );
+
+    finishPull?.({ success: true, detail: 'nginx:new' });
+    await vi.waitFor(() => {
+      expect(dispatch.sendDockerContainerCommand.mock.calls.some((call) => call[1] === 'recreate')).toBe(true);
+    });
+  });
+
   it('tries matching private registry credentials until a recreate image pull succeeds', async () => {
     const inspect = {
       Id: 'container-1',

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -102,6 +102,60 @@ describe("EnvironmentTab managed database links", () => {
 
     expect(await screen.findByDisplayValue("new")).toBeInTheDocument();
     expect(getContainerEnv).toHaveBeenLastCalledWith("node-1", "container-new");
+  });
+
+  it("ignores a stale environment response from the previous container id", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    let resolveOld: ((value: string[]) => void) | undefined;
+    let resolveNew: ((value: string[]) => void) | undefined;
+    vi.spyOn(api, "getContainerEnv")
+      .mockImplementationOnce(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolveOld = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolveNew = resolve;
+          })
+      );
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <EnvironmentTab nodeId="node-1" containerId="container-old" containerName="app" />
+      </MemoryRouter>
+    );
+    await waitFor(() =>
+      expect(api.getContainerEnv).toHaveBeenCalledWith("node-1", "container-old")
+    );
+    rerender(
+      <MemoryRouter>
+        <EnvironmentTab nodeId="node-1" containerId="container-new" containerName="app" />
+      </MemoryRouter>
+    );
+    await waitFor(() =>
+      expect(api.getContainerEnv).toHaveBeenCalledWith("node-1", "container-new")
+    );
+
+    await act(async () => resolveNew?.(["VERSION=new"]));
+    expect(await screen.findByDisplayValue("new")).toBeInTheDocument();
+    await act(async () => resolveOld?.(["VERSION=old"]));
+    expect(screen.queryByDisplayValue("old")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("new")).toBeInTheDocument();
   });
 
   it("hides a confirmed replacement from the ordinary env draft before save", async () => {

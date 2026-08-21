@@ -301,9 +301,14 @@ export async function executeDockerTool(
         user.id,
         {
           actorScopes: user.scopes,
+          backgroundImagePull: true,
         }
       );
-      return { success: true, message: `Container updating to ${targetRef}`, data };
+      return {
+        success: true,
+        message: `Container image update accepted for ${targetRef}; track task ${String(data?.taskId ?? '')}`,
+        data,
+      };
     }
     case 'get_docker_container_logs':
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);

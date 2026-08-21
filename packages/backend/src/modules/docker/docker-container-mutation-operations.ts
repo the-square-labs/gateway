@@ -1,4 +1,5 @@
 import type { DrizzleClient } from '@/db/client.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
@@ -25,6 +26,8 @@ import {
   normalizeMountDefinitionsFromInspect,
 } from './docker-socket-mount.guard.js';
 import type { DockerTaskService } from './docker-task.service.js';
+
+const logger = createChildLogger('DockerContainerMutationOperations');
 
 export interface DockerContainerMutationContext {
   db: DrizzleClient;
@@ -843,7 +846,12 @@ export async function recreateWithConfig(
   containerId: string,
   config: Record<string, unknown>,
   userId: string,
-  options?: { skipImagePull?: boolean; skipWebhookCleanup?: boolean; actorScopes?: string[] }
+  options?: {
+    skipImagePull?: boolean;
+    skipWebhookCleanup?: boolean;
+    actorScopes?: string[];
+    backgroundImagePull?: boolean;
+  }
 ) {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
@@ -860,6 +868,8 @@ export async function recreateWithConfig(
     delete config.env;
   }
   const inspect = await ctx.inspectContainer(nodeId, containerId);
+  const requestedImage = typeof config.image === 'string' ? config.image.trim() : '';
+  const hasRequestedImage = !!requestedImage;
   const currentRuntimeProfile = inspect?.HostConfig?.Runtime === 'runsc' ? 'secure' : 'default';
   await ctx.assertDockerRuntimeProfileAvailable(nodeId, config.runtimeProfile, currentRuntimeProfile);
   assertSecureRuntimeConfiguration(config, inspect);
@@ -897,78 +907,106 @@ export async function recreateWithConfig(
   ctx.emitTransition(nodeId, name, containerId, 'recreating');
   const task = await ctx.createTask(nodeId, containerId, name, 'recreate');
 
-  // Inject decrypted secrets into the recreate config's env (keyed by container name)
-  if (ctx.environmentService) {
-    const storedEnv = await ctx.environmentService.getDecryptedMap(nodeId, name);
-    if (Object.keys(storedEnv).length > 0) {
-      const existingEnv = normalizeEnvRecord(config.env) || {};
-      config.env = { ...storedEnv, ...existingEnv };
-    }
-  }
+  const executeRecreate = async () => {
+    try {
+      // Inject decrypted values in the task so image-changing requests can return immediately.
+      if (ctx.environmentService) {
+        const storedEnv = await ctx.environmentService.getDecryptedMap(nodeId, name);
+        if (Object.keys(storedEnv).length > 0) {
+          const existingEnv = normalizeEnvRecord(config.env) || {};
+          config.env = { ...storedEnv, ...existingEnv };
+        }
+      }
+      if (ctx.secretService) {
+        const secrets = await ctx.secretService.getDecryptedMap(nodeId, name);
+        if (Object.keys(secrets).length > 0) {
+          const existingEnv = normalizeEnvRecord(config.env) || {};
+          config.env = { ...existingEnv, ...secrets };
+        }
+      }
+      if (task?.id && ctx.taskService) {
+        await ctx.taskService
+          .update(task.id, {
+            status: 'running',
+            progress: hasRequestedImage ? 'Pulling image' : 'Recreating container',
+          })
+          .catch(() => {});
+      }
+      if (!options?.skipImagePull) {
+        await pullConfigImage(ctx, nodeId, config, undefined, options?.actorScopes ?? []);
+      }
 
-  if (ctx.secretService) {
-    const secrets = await ctx.secretService.getDecryptedMap(nodeId, name);
-    if (Object.keys(secrets).length > 0) {
-      const existingEnv = normalizeEnvRecord(config.env) || {};
-      config.env = { ...existingEnv, ...secrets };
-    }
-  }
+      if (task?.id && ctx.taskService && hasRequestedImage) {
+        await ctx.taskService.update(task.id, { status: 'running', progress: 'Recreating container' }).catch(() => {});
+      }
 
-  try {
-    if (!options?.skipImagePull) {
-      await pullConfigImage(ctx, nodeId, config, undefined, options?.actorScopes ?? []);
-    }
+      const result = await ctx.nodeDispatch.sendDockerContainerCommand(
+        nodeId,
+        'recreate',
+        { containerId, configJson: JSON.stringify(config) },
+        Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
+      );
+      const data = ctx.parseResult(result);
+      const daemonTaskId = asyncDaemonTaskId(data, 'recreate');
+      const newRuntimeId = daemonTaskId ? '' : String(data?.Id ?? data?.id ?? '');
+      if (newRuntimeId) {
+        await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
+      }
+      await ctx.auditService.log({
+        action: 'docker.container.recreate',
+        userId,
+        resourceType: 'docker-container',
+        resourceId: containerId,
+        details: { nodeId, name, containerName: name },
+      });
+      if (!options?.skipWebhookCleanup && typeof config.image === 'string') {
+        ctx.imageCleanupService?.scheduleCleanupForContainer(nodeId, name, config.image).catch(() => {});
+      }
 
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(
-      nodeId,
-      'recreate',
-      { containerId, configJson: JSON.stringify(config) },
-      Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
-    );
-    const data = ctx.parseResult(result);
-    const daemonTaskId = asyncDaemonTaskId(data, 'recreate');
-    const newRuntimeId = daemonTaskId ? '' : String(data?.Id ?? data?.id ?? '');
-    if (newRuntimeId) {
-      await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
+      ctx.watchRecreateByName(
+        nodeId,
+        name,
+        containerId,
+        task?.id,
+        'Container recreated',
+        expectedState,
+        daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
+        undefined,
+        daemonTaskId
+      );
+      return data && typeof data === 'object'
+        ? { ...data, taskId: task?.id, containerId, name }
+        : { taskId: task?.id, containerId, name };
+    } catch (err) {
+      ctx.clearTransition(nodeId, name);
+      if (task && ctx.taskService) {
+        await ctx.taskService
+          .update(task.id, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : 'Unknown error',
+            completedAt: new Date(),
+          })
+          .catch(() => {});
+      }
+      throw err;
     }
-    await ctx.auditService.log({
-      action: 'docker.container.recreate',
-      userId,
-      resourceType: 'docker-container',
-      resourceId: containerId,
-      details: { nodeId, name, containerName: name },
+  };
+
+  if (options?.backgroundImagePull && hasRequestedImage && !options.skipImagePull) {
+    void executeRecreate().catch((error) => {
+      logger.error('Background image recreate failed', { nodeId, containerId, name, error });
     });
-    if (!options?.skipWebhookCleanup && typeof config.image === 'string') {
-      ctx.imageCleanupService?.scheduleCleanupForContainer(nodeId, name, config.image).catch(() => {});
-    }
-
-    ctx.watchRecreateByName(
-      nodeId,
-      name,
+    return {
+      accepted: true,
+      status: 'pending',
+      taskId: task?.id,
       containerId,
-      task?.id,
-      'Container recreated',
-      expectedState,
-      daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
-      undefined,
-      daemonTaskId
-    );
-    return data && typeof data === 'object'
-      ? { ...data, taskId: task?.id, containerId, name }
-      : { taskId: task?.id, containerId, name };
-  } catch (err) {
-    ctx.clearTransition(nodeId, name);
-    if (task && ctx.taskService) {
-      await ctx.taskService
-        .update(task.id, {
-          status: 'failed',
-          error: err instanceof Error ? err.message : 'Unknown error',
-          completedAt: new Date(),
-        })
-        .catch(() => {});
-    }
-    throw err;
+      name,
+      image: requestedImage,
+    };
   }
+
+  return executeRecreate();
 }
 
 function assertSecureRuntimeConfiguration(config: Record<string, unknown>, inspect?: Record<string, any>) {

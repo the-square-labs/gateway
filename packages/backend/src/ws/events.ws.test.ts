@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from '@/modules/ai/ai-tool-store-invalidation.js';
+import { apiTokenChangedChannel } from '@/modules/auth/user-resource-events.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from '@/modules/inference/accounting/inference-usage-events.js';
 import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
@@ -43,6 +44,34 @@ afterEach(() => {
 });
 
 describe('events websocket authentication', () => {
+  it('delivers personal resource changes only to the owning user session', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({ user: USER, effectiveScopes: [] });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+    const ownChannel = apiTokenChangedChannel(USER.id);
+    const otherChannel = apiTokenChangedChannel('22222222-2222-4222-8222-222222222222');
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: [ownChannel, otherChannel] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: [ownChannel], rejected: [otherChannel] })
+    );
+    eventBus.publish(ownChannel, { action: 'update', id: 'token-1' });
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'event', channel: ownChannel, payload: { action: 'update', id: 'token-1' } })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('delivers tool invalidations only to the owning user session', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

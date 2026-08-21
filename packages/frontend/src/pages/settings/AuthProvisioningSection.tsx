@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
@@ -296,6 +297,7 @@ export function AuthProvisioningSection({
   );
   const skipNextCidrsBlur = useRef(false);
   const skipNextWebhookCidrsBlur = useRef(false);
+  const hasUnsavedDraftRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -360,6 +362,10 @@ export function AuthProvisioningSection({
   useEffect(() => {
     load();
   }, [load]);
+  const reloadIfDraftClean = useCallback(() => {
+    if (!hasUnsavedDraftRef.current) void load();
+  }, [load]);
+  useRealtime("system.config.changed", reloadIfDraftClean, { onReconnect: reloadIfDraftClean });
 
   const selectedGroup = useMemo(
     () =>
@@ -990,6 +996,18 @@ export function AuthProvisioningSection({
         smtpDraft.password.length > 0 ||
         smtpDraft.senderName !== (settings.smtp?.senderName ?? DEFAULT_SMTP_DRAFT.senderName) ||
         smtpDraft.senderEmail !== (settings.smtp?.senderEmail ?? DEFAULT_SMTP_DRAFT.senderEmail))
+  );
+  hasUnsavedDraftRef.current = Boolean(
+    generalHasChanges ||
+      oidcHasChanges ||
+      loggingHasChanges ||
+      mfaHasChanges ||
+      smtpHasChanges ||
+      (settings &&
+        trustedProxyCidrs.trim() !== settings.networkSecurity.trustedProxyCidrs.join(", ")) ||
+      (settings &&
+        webhookPrivateCidrs.trim() !==
+          settings.outboundWebhookPolicy.allowedPrivateCidrs.join(", "))
   );
 
   if (!initialLoadComplete) return <Skeleton />;

@@ -9,6 +9,8 @@ import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import { inferenceTokenChangedChannel } from '@/modules/auth/user-resource-events.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import type { CreateInferenceTokenInput } from './inference.schemas.js';
 
@@ -52,10 +54,16 @@ export interface ManagedInferenceTokenInput {
 
 @injectable()
 export class InferenceTokenService {
+  private eventBus?: EventBusService;
+
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly auditService: AuditService
   ) {}
+
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
+  }
 
   async createToken(userId: string, input: CreateInferenceTokenInput) {
     const raw = `gwi_${randomBytes(32).toString('hex')}`;
@@ -77,6 +85,7 @@ export class InferenceTokenService {
       resourceId: token.id,
       details: { name: token.name, tokenPrefix: token.tokenPrefix },
     });
+    this.eventBus?.publish(inferenceTokenChangedChannel(userId), { action: 'create', id: token.id, userId });
 
     return { ...serializeToken(token), token: raw };
   }
@@ -140,6 +149,11 @@ export class InferenceTokenService {
         replaced: input.replaceExisting === true,
       },
     });
+    this.eventBus?.publish(inferenceTokenChangedChannel(userId), {
+      action: input.replaceExisting ? 'replace' : 'create',
+      id: token.id,
+      userId,
+    });
     return { ...serializeManagedToken(token), token: raw };
   }
 
@@ -196,6 +210,7 @@ export class InferenceTokenService {
       resourceId: token.id,
       details: { name: token.name, tokenPrefix: token.tokenPrefix },
     });
+    this.eventBus?.publish(inferenceTokenChangedChannel(userId), { action: 'revoke', id: token.id, userId });
   }
 
   async validateToken(rawToken: string): Promise<{ user: User; tokenId: string; tokenPrefix: string } | null> {

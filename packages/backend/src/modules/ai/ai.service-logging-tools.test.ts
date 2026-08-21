@@ -107,7 +107,7 @@ describe('AIService logging tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { id: 'schema-1' },
-      invalidateStores: [],
+      invalidateStores: ['logging'],
     });
 
     await expect(
@@ -117,7 +117,7 @@ describe('AIService logging tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { id: 'schema-2' },
-      invalidateStores: [],
+      invalidateStores: ['logging'],
     });
 
     expect(loggingSchemaService.create).toHaveBeenNthCalledWith(
@@ -148,7 +148,7 @@ describe('AIService logging tool routing', () => {
       })
     ).resolves.toMatchObject({
       result: { id: 'token-1' },
-      invalidateStores: [],
+      invalidateStores: ['loggingTokens'],
     });
     expect(loggingTokenService.create).toHaveBeenCalledWith('env-1', { name: 'ingest', expiresAt: null }, 'user-1');
   });

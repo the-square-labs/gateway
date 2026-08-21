@@ -4,6 +4,7 @@ export const TOOL_STORE_INVALIDATION_CHANNEL_PREFIX = 'tool.store.invalidated.';
 
 const SAFE_CONTEXT_KEYS = [
   'operation',
+  'resource',
   'nodeId',
   'containerId',
   'containerName',
@@ -17,6 +18,10 @@ const SAFE_CONTEXT_KEYS = [
   'groupId',
   'registryId',
   'networkId',
+  'environmentId',
+  'schemaId',
+  'tokenId',
+  'clientId',
   'name',
 ] as const;
 
@@ -58,6 +63,48 @@ export function resolveToolStoreInvalidations(
   } else if (toolName === 'manage_docker_network') {
     stores.add('networks');
     if (operation === 'connect' || operation === 'disconnect') stores.add('containers');
+  } else if (toolName === 'manage_pages') {
+    if (operation === 'token_create' || operation === 'token_revoke') stores.add('pageTokens');
+    if (
+      operation === 'profile_configure' ||
+      operation === 'profile_disable' ||
+      operation.startsWith('project_') ||
+      operation === 'deployment_pin' ||
+      operation === 'deployment_delete' ||
+      operation === 'tag_move' ||
+      operation === 'tag_delete' ||
+      operation.startsWith('config_save_') ||
+      operation === 'config_reset_tag'
+    ) {
+      stores.add('pages');
+    }
+    if (
+      operation === 'profile_configure' ||
+      operation === 'profile_disable' ||
+      ['project_create', 'project_update', 'project_migrate', 'project_delete', 'tag_move', 'tag_delete'].includes(
+        operation
+      )
+    ) {
+      stores.add('proxy-hosts');
+    }
+  } else if (toolName === 'manage_logging') {
+    let resource = typeof args.resource === 'string' ? args.resource : '';
+    let loggingOperation = operation;
+    if (loggingOperation.includes('.')) {
+      const [operationResource, operationName] = loggingOperation.split('.', 2);
+      resource ||= operationResource ?? '';
+      loggingOperation = operationName ?? '';
+    }
+    const normalizedResource = resource.toLowerCase().replace(/-/g, '_').replace(/s$/, '');
+    if (['create', 'add', 'update', 'edit', 'patch', 'delete', 'remove', 'destroy'].includes(loggingOperation)) {
+      stores.add(normalizedResource === 'token' || normalizedResource === 'ingest_token' ? 'loggingTokens' : 'logging');
+    }
+  } else if (toolName === 'manage_inference_token' && ['create', 'revoke'].includes(operation)) {
+    stores.add('inferenceTokens');
+  } else if (toolName === 'manage_oauth_authorization' && ['update_scopes', 'revoke'].includes(operation)) {
+    stores.add('oauthAuthorizations');
+  } else if (toolName === 'manage_api_token' && ['create', 'update', 'revoke'].includes(operation)) {
+    stores.add('apiTokens');
   }
 
   return [...stores];

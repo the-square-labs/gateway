@@ -17,11 +17,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
+import { useRealtime } from "@/hooks/use-realtime";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
+import { inferenceTokenChangedChannel } from "@/services/user-resource-events";
+import { useAuthStore } from "@/stores/auth";
 import type { InferenceToken } from "@/types/inference";
 
 export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
+  const userId = useAuthStore((state) => state.user?.id);
   const [tokens, setTokens] = useState<InferenceToken[]>([]);
   const [loading, setLoading] = useState(true);
   const initialLoading = useInitialLoading(loading);
@@ -44,6 +48,9 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
   }, []);
 
   useEffect(() => void load(), [load]);
+  useRealtime(userId ? inferenceTokenChangedChannel(userId) : null, () => void load(), {
+    onReconnect: load,
+  });
 
   const create = async () => {
     if (!name.trim()) return;

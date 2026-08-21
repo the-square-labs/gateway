@@ -11,6 +11,8 @@ import { canonicalizeScopes, isApiTokenScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import { apiTokenChangedChannel } from '@/modules/auth/user-resource-events.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import type { CreateTokenInput, UpdateTokenInput } from './tokens.schemas.js';
 
@@ -22,10 +24,16 @@ function hashToken(raw: string): string {
 
 @injectable()
 export class TokensService {
+  private eventBus?: EventBusService;
+
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly auditService: AuditService
   ) {}
+
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
+  }
 
   async createToken(userId: string, input: CreateTokenInput) {
     const raw = `gw_${randomBytes(32).toString('hex')}`;
@@ -52,6 +60,7 @@ export class TokensService {
       resourceId: token.id,
       details: { name: token.name, scopes: token.scopes },
     });
+    this.eventBus?.publish(apiTokenChangedChannel(userId), { action: 'create', id: token.id, userId });
 
     return {
       id: token.id,
@@ -106,6 +115,7 @@ export class TokensService {
         ...(input.scopes !== undefined ? { previousScopes: token.scopes, scopes: patch.scopes } : {}),
       },
     });
+    this.eventBus?.publish(apiTokenChangedChannel(userId), { action: 'update', id: tokenId, userId });
   }
 
   async revokeToken(userId: string, tokenId: string): Promise<void> {
@@ -126,6 +136,7 @@ export class TokensService {
       resourceId: tokenId,
       details: { name: token.name, scopes: token.scopes },
     });
+    this.eventBus?.publish(apiTokenChangedChannel(userId), { action: 'revoke', id: tokenId, userId });
   }
 
   async validateToken(

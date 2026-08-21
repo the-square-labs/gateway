@@ -701,6 +701,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const config = ContainerRecreateSchema.parse(body);
       const data = await service.recreateWithConfig(nodeId, containerId, config, user.id, {
         actorScopes: c.get('effectiveScopes') || [],
+        backgroundImagePull: true,
       });
       return c.json({ data });
     }

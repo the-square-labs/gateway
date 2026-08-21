@@ -19,8 +19,10 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import { oauthAuthorizationChangedChannel } from '@/modules/auth/user-resource-events.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import type { OAuthAuthorizeQuery, OAuthClientRegistrationInput, OAuthTokenRequest } from './oauth.schemas.js';
 import { hashSecret, OAuthTokenLifecycle, randomSecret } from './oauth-token-lifecycle.js';
@@ -117,6 +119,7 @@ function assertRedirectUriAllowed(uri: string, extendedCompatibility: boolean): 
 @injectable()
 export class OAuthService {
   private readonly tokenLifecycle: OAuthTokenLifecycle;
+  private eventBus?: EventBusService;
 
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
@@ -135,6 +138,10 @@ export class OAuthService {
       assertResourceAllowed: (user, resource) => this.assertResourceAllowed(user, resource),
       grantScopes: (user, resource, requestedScopes) => this.grantScopes(user, resource, requestedScopes),
     });
+  }
+
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
   }
 
   getIssuerUrl(): string {
@@ -437,10 +444,28 @@ export class OAuthService {
   }
 
   async revokeUserAuthorization(userId: string, clientId: string, resource: string): Promise<void> {
-    return this.tokenLifecycle.revokeUserAuthorization(userId, clientId, resource);
+    await this.tokenLifecycle.revokeUserAuthorization(userId, clientId, resource);
+    this.eventBus?.publish(oauthAuthorizationChangedChannel(userId), {
+      action: 'revoke',
+      clientId,
+      resource,
+      userId,
+    });
   }
 
   async updateUserAuthorizationScopes(user: User, clientId: string, resource: string, requestedScopes: string[]) {
-    return this.tokenLifecycle.updateUserAuthorizationScopes(user, clientId, resource, requestedScopes);
+    const authorization = await this.tokenLifecycle.updateUserAuthorizationScopes(
+      user,
+      clientId,
+      resource,
+      requestedScopes
+    );
+    this.eventBus?.publish(oauthAuthorizationChangedChannel(user.id), {
+      action: 'update',
+      clientId,
+      resource,
+      userId: user.id,
+    });
+    return authorization;
   }
 }

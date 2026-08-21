@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useRealtime } from "@/hooks/use-realtime";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError } from "@/stores/license-paywall";
@@ -47,6 +48,14 @@ export function LoggingTokenPanel({
   useEffect(() => {
     load();
   }, [load]);
+  useRealtime(
+    "logging.token.changed",
+    (payload) => {
+      const event = payload as { environmentId?: string };
+      if (event.environmentId === environment.id) load();
+    },
+    { onReconnect: load }
+  );
 
   const create = async () => {
     try {

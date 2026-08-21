@@ -178,6 +178,39 @@ describe("eventStream", () => {
     unsubs.forEach((unsubscribe) => unsubscribe());
   });
 
+  it("fans personal token invalidations into the owning user channel", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const handler = vi.fn();
+    const toolChannel = "tool.store.invalidated.user-1";
+    const tokenChannel = "api.token.changed.user-1";
+    const unsubs = [
+      eventStream.subscribe(toolChannel, vi.fn()),
+      eventStream.subscribe(tokenChannel, handler),
+    ];
+    eventStream.start();
+    vi.runAllTimers();
+    MockWebSocket.instances[0]?.open();
+
+    MockWebSocket.instances[0]?.emit({
+      type: "event",
+      channel: toolChannel,
+      payload: {
+        userId: "user-1",
+        source: "ai",
+        toolName: "manage_api_token",
+        stores: ["apiTokens"],
+        resourceId: "token-1",
+        context: { operation: "update" },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "tool-invalidated", id: "token-1", operation: "update" })
+    );
+    expect(invalidateCache).toHaveBeenCalledWith("settings:api-tokens");
+    unsubs.forEach((unsubscribe) => unsubscribe());
+  });
+
   it("invalidates license bootstrap caches on license state changes", async () => {
     const { eventStream } = await import("@/services/event-stream");
     const handler = vi.fn();

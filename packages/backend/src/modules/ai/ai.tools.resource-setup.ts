@@ -70,7 +70,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     category: 'Pages',
     requiredScope: 'pages:view',
-    invalidateStores: ['pages', 'proxy-hosts'],
+    invalidateStores: [],
     historyRetention: { mode: 'summary_only' },
   },
   {
