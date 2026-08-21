@@ -1,4 +1,8 @@
-import type { InferenceProviderDefinition } from '../providers/inference-provider.types.js';
+import { createHash } from 'node:crypto';
+import type {
+  InferenceProviderDefinition,
+  InferenceProviderModelPricing,
+} from '../providers/inference-provider.types.js';
 
 /**
  * Deterministic mapping between Gateway provider/connection records and core
@@ -119,13 +123,69 @@ export interface CoreModelRow {
   supportsReasoningSummaries?: boolean;
   supportsServiceTier?: boolean;
   supportsVerbosity?: boolean;
+  pricing?: CoreModelPricing;
+}
+
+export interface CoreModelPricing {
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+  cachedInputUsdPerMillion: number;
+  cacheWriteUsdPerMillion: number;
+  source: 'opencodex-catalog';
+}
+
+function parseCoreModelPricing(value: unknown): CoreModelPricing | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const pricing = value as Record<string, unknown>;
+  if (pricing.source !== 'opencodex-catalog') return undefined;
+  const values = [
+    pricing.inputUsdPerMillion,
+    pricing.outputUsdPerMillion,
+    pricing.cachedInputUsdPerMillion,
+    pricing.cacheWriteUsdPerMillion,
+  ];
+  if (values.some((candidate) => typeof candidate !== 'number' || !Number.isFinite(candidate) || candidate < 0)) {
+    return undefined;
+  }
+  return {
+    inputUsdPerMillion: pricing.inputUsdPerMillion as number,
+    outputUsdPerMillion: pricing.outputUsdPerMillion as number,
+    cachedInputUsdPerMillion: pricing.cachedInputUsdPerMillion as number,
+    cacheWriteUsdPerMillion: pricing.cacheWriteUsdPerMillion as number,
+    source: 'opencodex-catalog',
+  };
+}
+
+function usdPerMillionToMicrodollars(value: number): number | undefined {
+  const converted = Math.round(value * 1_000_000);
+  return Number.isSafeInteger(converted) && converted >= 0 ? converted : undefined;
+}
+
+/** Convert the managed-core USD rates into Gateway's exact integer accounting units. */
+export function coreModelPricing(row: CoreModelRow): InferenceProviderModelPricing | undefined {
+  if (!row.pricing) return undefined;
+  const input = usdPerMillionToMicrodollars(row.pricing.inputUsdPerMillion);
+  const output = usdPerMillionToMicrodollars(row.pricing.outputUsdPerMillion);
+  const cachedInput = usdPerMillionToMicrodollars(row.pricing.cachedInputUsdPerMillion);
+  const cacheWrite = usdPerMillionToMicrodollars(row.pricing.cacheWriteUsdPerMillion);
+  if (input === undefined || output === undefined || cachedInput === undefined || cacheWrite === undefined) {
+    return undefined;
+  }
+  const rates = [input, output, cachedInput, cacheWrite];
+  const digest = createHash('sha256').update(rates.join(':')).digest('hex').slice(0, 24);
+  return {
+    version: `opencodex-catalog-v1-${digest}`,
+    inputMicrodollarsPerMillion: input,
+    cachedInputMicrodollarsPerMillion: cachedInput,
+    cacheWriteMicrodollarsPerMillion: cacheWrite,
+    outputMicrodollarsPerMillion: output,
+    source: 'provider',
+  };
 }
 
 /** Project OpenCodex catalog metadata onto Gateway's boolean capability map. */
 export function coreModelCapabilities(row: CoreModelRow): Record<string, boolean> {
-  const capabilities = Object.fromEntries(
-    (row.capabilities ?? []).map((capability) => [capability, true] as const)
-  );
+  const capabilities = Object.fromEntries((row.capabilities ?? []).map((capability) => [capability, true] as const));
   const modalities = new Set(row.inputModalities ?? []);
   return {
     ...capabilities,
@@ -133,9 +193,7 @@ export function coreModelCapabilities(row: CoreModelRow): Record<string, boolean
     reasoning: (row.reasoningEfforts?.length ?? 0) > 0,
     vision: modalities.has('image'),
     ...(row.parallelToolCalls !== undefined ? { parallelToolCalls: row.parallelToolCalls } : {}),
-    ...(row.supportsReasoningSummaries !== undefined
-      ? { reasoningSummaries: row.supportsReasoningSummaries }
-      : {}),
+    ...(row.supportsReasoningSummaries !== undefined ? { reasoningSummaries: row.supportsReasoningSummaries } : {}),
     ...(row.supportsServiceTier !== undefined ? { serviceTier: row.supportsServiceTier } : {}),
     ...(row.supportsVerbosity !== undefined ? { verbosity: row.supportsVerbosity } : {}),
   };
@@ -148,6 +206,7 @@ export function parseCoreModelRows(body: unknown): CoreModelRow[] {
     if (!entry || typeof entry !== 'object') continue;
     const row = entry as Record<string, unknown>;
     if (typeof row.provider !== 'string' || typeof row.id !== 'string') continue;
+    const pricing = parseCoreModelPricing(row.pricing);
     rows.push({
       provider: row.provider,
       id: row.id,
@@ -161,10 +220,14 @@ export function parseCoreModelRows(body: unknown): CoreModelRow[] {
         : {}),
       ...(typeof row.defaultReasoningEffort === 'string' ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),
       ...(Array.isArray(row.inputModalities)
-        ? { inputModalities: row.inputModalities.filter((modality): modality is string => typeof modality === 'string') }
+        ? {
+            inputModalities: row.inputModalities.filter((modality): modality is string => typeof modality === 'string'),
+          }
         : {}),
       ...(Array.isArray(row.capabilities)
-        ? { capabilities: row.capabilities.filter((capability): capability is string => typeof capability === 'string') }
+        ? {
+            capabilities: row.capabilities.filter((capability): capability is string => typeof capability === 'string'),
+          }
         : {}),
       ...(typeof row.parallelToolCalls === 'boolean' ? { parallelToolCalls: row.parallelToolCalls } : {}),
       ...(typeof row.supportsReasoningSummaries === 'boolean'
@@ -172,6 +235,7 @@ export function parseCoreModelRows(body: unknown): CoreModelRow[] {
         : {}),
       ...(typeof row.supportsServiceTier === 'boolean' ? { supportsServiceTier: row.supportsServiceTier } : {}),
       ...(typeof row.supportsVerbosity === 'boolean' ? { supportsVerbosity: row.supportsVerbosity } : {}),
+      ...(pricing ? { pricing } : {}),
     });
   }
   return rows;
@@ -201,9 +265,8 @@ export function parseCoreQuotaReports(body: unknown): CoreQuotaReport[] {
     const report = entry as Record<string, unknown>;
     if (typeof report.provider !== 'string' || !report.quota || typeof report.quota !== 'object') continue;
     const quota = report.quota as Record<string, unknown>;
-    const credits = quota.creditsUsd && typeof quota.creditsUsd === 'object'
-      ? (quota.creditsUsd as Record<string, unknown>)
-      : null;
+    const credits =
+      quota.creditsUsd && typeof quota.creditsUsd === 'object' ? (quota.creditsUsd as Record<string, unknown>) : null;
     parsed.push({
       provider: report.provider,
       quota: {
@@ -247,24 +310,36 @@ export function coreQuotaToWindows(report: CoreQuotaReport): Array<{
     resetAt?: Date;
     metadata?: Record<string, unknown>;
   }> = [];
+  const resetDate = (value: number | undefined): Date | undefined => {
+    if (value === undefined || !Number.isFinite(value) || value <= 0) return undefined;
+    const date = new Date(value > 10_000_000_000 ? value : value * 1000);
+    return Number.isFinite(date.getTime()) ? date : undefined;
+  };
   const usage = (percent: number | undefined, resetAt: number | undefined, dimension: string) => {
     if (percent === undefined) return;
+    const normalizedResetAt = resetDate(resetAt);
     windows.push({
       dimension,
       remainingFraction: Math.max(0, Math.min(1, 1 - percent / 100)),
-      ...(resetAt !== undefined ? { resetAt: new Date(resetAt) } : {}),
+      ...(normalizedResetAt ? { resetAt: normalizedResetAt } : {}),
     });
   };
   usage(report.quota.fiveHourPercent, report.quota.fiveHourResetAt, '5h');
   usage(report.quota.weeklyPercent, report.quota.weeklyResetAt, '7d');
   usage(report.quota.monthlyPercent, report.quota.monthlyResetAt, '30d');
-  if (report.quota.creditsUsd && (report.quota.creditsUsd.remaining !== undefined || report.quota.creditsUsd.limit !== undefined)) {
+  if (
+    report.quota.creditsUsd &&
+    (report.quota.creditsUsd.remaining !== undefined || report.quota.creditsUsd.limit !== undefined)
+  ) {
+    const remaining = report.quota.creditsUsd.remaining;
+    const limit = report.quota.creditsUsd.limit;
     windows.push({
       dimension: 'subscription',
-      ...(report.quota.creditsUsd.remaining !== undefined
-        ? { remainingValue: String(report.quota.creditsUsd.remaining) }
+      ...(remaining !== undefined && limit !== undefined && limit >= 0
+        ? { remainingFraction: limit === 0 ? 0 : Math.max(0, Math.min(1, remaining / limit)) }
         : {}),
-      ...(report.quota.creditsUsd.limit !== undefined ? { limitValue: String(report.quota.creditsUsd.limit) } : {}),
+      ...(remaining !== undefined ? { remainingValue: String(remaining) } : {}),
+      ...(limit !== undefined ? { limitValue: String(limit) } : {}),
     });
   }
   return windows;

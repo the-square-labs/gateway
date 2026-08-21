@@ -1,11 +1,11 @@
 import { injectable } from 'tsyringe';
-import { AppError } from '@/middleware/error-handler.js';
 import type { InferenceCoreStateRow } from '@/db/schema/inference-core.js';
-import { InferenceCredentialVault } from '../inference-credential-vault.js';
+import { AppError } from '@/middleware/error-handler.js';
+import type { InferenceCredentialVault } from '../inference-credential-vault.js';
 import { InferenceCoreClient } from './inference-core.client.js';
-import { WIOLETT_CORE_CONTRACT_ID, INFERENCE_CORE_PROTOCOL_MAJOR } from './inference-core.contract.js';
-import { InferenceCoreStore } from './inference-core-store.js';
+import { INFERENCE_CORE_PROTOCOL_MAJOR, WIOLETT_CORE_CONTRACT_ID } from './inference-core.contract.js';
 import type { InferenceCoreCredentials } from './inference-core-runtime.service.js';
+import type { InferenceCoreStore } from './inference-core-store.js';
 
 const CORE_CONTAINER_ALIAS = 'inference-core';
 const CORE_PORT = 10100;

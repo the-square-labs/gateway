@@ -53,9 +53,7 @@ function createApp() {
 
 function registerAuth(valid = true) {
   container.registerInstance(InferenceTokenService, {
-    validateToken: vi.fn().mockResolvedValue(
-      valid ? { user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_a' } : null
-    ),
+    validateToken: vi.fn().mockResolvedValue(valid ? { user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_a' } : null),
   } as unknown as InferenceTokenService);
 }
 

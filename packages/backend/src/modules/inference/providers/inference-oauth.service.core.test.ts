@@ -173,7 +173,9 @@ describe('inference oauth service — core-backed sessions', () => {
       query: { inferenceProviderConnections: { findFirst: vi.fn().mockResolvedValue(null) } },
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }),
+          where: vi
+            .fn()
+            .mockReturnValue({ orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }),
         }),
       }),
       insert: vi.fn().mockReturnValue(insertChain([{ id: 'conn-new' }])),
@@ -227,9 +229,7 @@ describe('inference oauth service — core-backed sessions', () => {
     const result = await service.status('user-1', 'session-1');
 
     expect(result.status).toBe('error');
-    expect(chain.set).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'error', errorMessage: 'user declined' })
-    );
+    expect(chain.set).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', errorMessage: 'user declined' }));
   });
 
   it('submits pasted callback input to the core before polling', async () => {
@@ -288,7 +288,9 @@ describe('inference oauth service — core-backed sessions', () => {
       query: { inferenceProviderConnections: { findFirst: vi.fn().mockResolvedValue(null) } },
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }),
+          where: vi
+            .fn()
+            .mockReturnValue({ orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }),
         }),
       }),
       insert: vi.fn().mockReturnValue(insertChain([{ id: 'conn-anthropic' }])),

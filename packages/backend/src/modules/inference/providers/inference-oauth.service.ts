@@ -11,16 +11,16 @@ import {
   inferenceProviderSettings,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
-import type { InferenceCredentialVault } from '../inference-credential-vault.js';
-import type { InferenceCoreBridgeService } from '../core/inference-core-bridge.service.js';
 import { InferenceCoreClientError } from '../core/inference-core.client.js';
+import type { InferenceCoreBridgeService } from '../core/inference-core-bridge.service.js';
 import {
   CORE_ACCOUNT_METADATA_KEY,
   CORE_MANAGED_METADATA_KEY,
   coreOAuthTarget,
 } from '../core/inference-core-provider-map.js';
+import type { InferenceCredentialVault } from '../inference-credential-vault.js';
 import { discoverAntigravityProject } from './inference-antigravity.js';
-import { pollCodexDevice, startCodexDevice } from './inference-codex-device.oauth.js';
+import { pollCodexDevice } from './inference-codex-device.oauth.js';
 import { exchangeGithubCopilotCredential } from './inference-github-copilot.oauth.js';
 import type { InferenceProviderRegistry } from './inference-provider.registry.js';
 import { nextRoutingOrder } from './inference-provider.service.helpers.js';
@@ -442,11 +442,7 @@ export class InferenceOAuthService {
   // credential never crosses into Gateway storage. The Gateway session row
   // still owns browser-facing lifecycle (ownership, expiry, UI polling).
 
-  private async recordProviderTerms(
-    tx: DrizzleTransaction,
-    provider: InferenceProviderDefinition,
-    userId: string
-  ) {
+  private async recordProviderTerms(tx: DrizzleTransaction, provider: InferenceProviderDefinition, userId: string) {
     await tx
       .insert(inferenceProviderSettings)
       .values({
@@ -704,9 +700,7 @@ export class InferenceOAuthService {
             updatedAt: new Date(),
           })
           .where(eq(inferenceProviderConnections.id, existing.id));
-        await tx
-          .delete(inferenceProviderCredentials)
-          .where(eq(inferenceProviderCredentials.connectionId, existing.id));
+        await tx.delete(inferenceProviderCredentials).where(eq(inferenceProviderCredentials.connectionId, existing.id));
         return existing.id;
       }
       const [lastConnection] = await tx

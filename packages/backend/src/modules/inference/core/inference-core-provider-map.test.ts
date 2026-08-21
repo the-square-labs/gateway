@@ -5,6 +5,7 @@ import {
   coreAdapterForWireProtocol,
   coreKeyProviderName,
   coreModelCapabilities,
+  coreModelPricing,
   coreOAuthTarget,
   coreProviderRef,
   coreQuotaToWindows,
@@ -159,6 +160,52 @@ describe('inference core provider mapping', () => {
     });
   });
 
+  it('parses and converts OpenCodex catalog pricing into exact accounting units', () => {
+    const [row] = parseCoreModelRows([
+      {
+        provider: 'core-1',
+        id: 'openai/gpt-5.6-sol',
+        pricing: {
+          inputUsdPerMillion: 5,
+          outputUsdPerMillion: 30,
+          cachedInputUsdPerMillion: 0.5,
+          cacheWriteUsdPerMillion: 6.25,
+          source: 'opencodex-catalog',
+        },
+      },
+    ]);
+    expect(row?.pricing).toEqual({
+      inputUsdPerMillion: 5,
+      outputUsdPerMillion: 30,
+      cachedInputUsdPerMillion: 0.5,
+      cacheWriteUsdPerMillion: 6.25,
+      source: 'opencodex-catalog',
+    });
+    expect(coreModelPricing(row!)).toMatchObject({
+      version: expect.stringMatching(/^opencodex-catalog-v1-[a-f0-9]{24}$/),
+      inputMicrodollarsPerMillion: 5_000_000,
+      outputMicrodollarsPerMillion: 30_000_000,
+      cachedInputMicrodollarsPerMillion: 500_000,
+      cacheWriteMicrodollarsPerMillion: 6_250_000,
+      source: 'provider',
+    });
+    expect(
+      parseCoreModelRows([
+        {
+          provider: 'core-1',
+          id: 'invalid',
+          pricing: {
+            inputUsdPerMillion: -1,
+            outputUsdPerMillion: 1,
+            cachedInputUsdPerMillion: 0,
+            cacheWriteUsdPerMillion: 0,
+            source: 'opencodex-catalog',
+          },
+        },
+      ])[0]
+    ).not.toHaveProperty('pricing');
+  });
+
   it('does not advertise tools when the core catalog does not support them', () => {
     expect(
       coreModelCapabilities({
@@ -179,6 +226,7 @@ describe('inference core provider mapping', () => {
             fiveHourPercent: 25,
             fiveHourResetAt: 1_800_000_000_000,
             weeklyPercent: 150,
+            weeklyResetAt: 1_800_000_000,
             creditsUsd: { remaining: 12.5, limit: 50 },
           },
         },
@@ -189,8 +237,11 @@ describe('inference core provider mapping', () => {
     const windows = coreQuotaToWindows(reports[0]!);
     expect(windows).toEqual([
       { dimension: '5h', remainingFraction: 0.75, resetAt: new Date(1_800_000_000_000) },
-      { dimension: '7d', remainingFraction: 0 },
-      { dimension: 'subscription', remainingValue: '12.5', limitValue: '50' },
+      { dimension: '7d', remainingFraction: 0, resetAt: new Date(1_800_000_000_000) },
+      { dimension: 'subscription', remainingFraction: 0.25, remainingValue: '12.5', limitValue: '50' },
+    ]);
+    expect(coreQuotaToWindows({ provider: 'x', quota: { weeklyPercent: 50, weeklyResetAt: 0 } })).toEqual([
+      { dimension: '7d', remainingFraction: 0.5 },
     ]);
     expect(coreQuotaToWindows({ provider: 'x', quota: {} })).toEqual([]);
     expect(parseCoreQuotaReports(null)).toEqual([]);

@@ -3,12 +3,12 @@ import type WebSocketType from 'ws';
 import { container } from '@/container.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
+import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import { acquireInferenceConcurrency, consumeInferenceRateLimit } from '../inference-limit.middleware.js';
 import { InferenceTokenService } from '../inference-token.service.js';
+import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
 import { InferenceProtocolError, inferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { canFailOver } from '../providers/inference-routing.service.js';
-import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
-import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import { coreRequestHeaders, newCoreRequestContext } from './inference-core-context.js';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 
@@ -509,9 +509,8 @@ function shouldFailOverWsEvent(event: Record<string, unknown>): boolean {
     (typeof error?.type === 'string' && error.type) ||
     'provider_unavailable';
   const rawStatus = event.status ?? error?.status;
-  const status = typeof rawStatus === 'number' && [401, 408, 409, 429, 502, 503, 504].includes(rawStatus)
-    ? rawStatus
-    : 503;
+  const status =
+    typeof rawStatus === 'number' && [401, 408, 409, 429, 502, 503, 504].includes(rawStatus) ? rawStatus : 503;
   return canFailOver(
     new InferenceProtocolError(status as 401 | 409 | 429 | 502 | 503, code, 'The selected provider attempt failed'),
     false

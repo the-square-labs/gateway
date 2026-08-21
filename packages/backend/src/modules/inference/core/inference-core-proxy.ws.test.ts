@@ -75,7 +75,12 @@ function registerCommon() {
     resolveTarget: vi.fn().mockResolvedValue({
       model: { id: 'model-1', publicId: 'gpt-5.5', reasoningEfforts: [], defaultReasoningEffort: null },
       selected: {
-        source: { id: 'source-1', reasoningEffortMap: {}, coreAccountId: 'core-conn-1', coreModelId: 'core-conn-1/gpt-5.5' },
+        source: {
+          id: 'source-1',
+          reasoningEffortMap: {},
+          coreAccountId: 'core-conn-1',
+          coreModelId: 'core-conn-1/gpt-5.5',
+        },
         connection: { id: 'conn-1' },
       },
       upstreamModel: 'core-conn-1/gpt-5.5',
@@ -120,19 +125,16 @@ describe('core responses websocket proxy', () => {
     expect(upstream.options.headers['x-opencodex-api-key']).toBe('ocx_data');
     expect(upstream.options.headers['x-wiolett-signature']).toBeTruthy();
 
-    upstream.handlers['open']?.();
+    upstream.handlers.open?.();
     const frame = JSON.parse(upstream.sent[0]!);
     expect(frame.response.model).toBe('core-conn-1/gpt-5.5');
 
-    upstream.handlers['message']?.(JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi' }));
+    upstream.handlers.message?.(JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi' }));
     expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('output_text.delta'));
 
-    upstream.handlers['message']?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } }));
-    upstream.handlers['close']?.();
-    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
-      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-      'completed'
-    );
+    upstream.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } }));
+    upstream.handlers.close?.();
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
   });
 
   it('rejects a second turn while one is active', async () => {
@@ -165,18 +167,15 @@ describe('core responses websocket proxy', () => {
     const message = { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) };
     await handlers.onMessage?.(message as never, ws as never);
     const first = upstreamInstances[0]!;
-    first.handlers['open']?.();
+    first.handlers.open?.();
     // The concurrency lease is held for the whole turn: exactly one eval (acquire) so far.
     expect(evalMock).toHaveBeenCalledTimes(1);
 
-    first.handlers['message']?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } }));
+    first.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } }));
     // The proxy closes the per-turn upstream itself; the core never does.
     expect(first.readyState).toBe(3);
-    first.handlers['close']?.();
-    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
-      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-      'completed'
-    );
+    first.handlers.close?.();
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
     // Turn end released the lease (acquire + release evals).
     await vi.waitFor(() => expect(evalMock).toHaveBeenCalledTimes(2));
 
@@ -230,10 +229,10 @@ describe('core responses websocket proxy', () => {
     );
 
     const first = upstreamInstances[0]!;
-    first.handlers['error']?.(new Error('connection reset'));
+    first.handlers.error?.(new Error('connection reset'));
     await vi.waitFor(() => expect(upstreamInstances).toHaveLength(2));
     const second = upstreamInstances[1]!;
-    second.handlers['open']?.();
+    second.handlers.open?.();
 
     const firstContext = JSON.parse(
       Buffer.from(first.options.headers['x-wiolett-context']!, 'base64url').toString('utf8')
@@ -251,12 +250,9 @@ describe('core responses websocket proxy', () => {
     );
     expect(ws.send).not.toHaveBeenCalled();
 
-    second.handlers['message']?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_2' } }));
+    second.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_2' } }));
     await vi.waitFor(() =>
-      expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
-        '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-        'completed'
-      )
+      expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed')
     );
   });
 });

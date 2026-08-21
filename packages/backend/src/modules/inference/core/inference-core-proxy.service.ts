@@ -10,9 +10,9 @@ import {
   inferenceProviderConnections,
 } from '@/db/schema/index.js';
 import type { AppEnv, User } from '@/types.js';
-import type { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
-import type { InferenceAccountingService } from '../accounting/inference-accounting.service.js';
 import { unitCharge } from '../accounting/inference-accounting.helpers.js';
+import type { InferenceAccountingService } from '../accounting/inference-accounting.service.js';
+import type { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import type { InferenceModelService } from '../models/inference-model.service.js';
 import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
@@ -39,7 +39,10 @@ export type CoreProxyOperation =
   | 'live'
   | 'realtime/calls';
 
-const OPERATION_PROTOCOL: Record<CoreProxyOperation, 'responses' | 'chat_completions' | 'messages' | 'images' | 'search' | 'realtime'> = {
+const OPERATION_PROTOCOL: Record<
+  CoreProxyOperation,
+  'responses' | 'chat_completions' | 'messages' | 'images' | 'search' | 'realtime'
+> = {
   responses: 'responses',
   'responses/compact': 'responses',
   'chat/completions': 'chat_completions',
@@ -116,8 +119,12 @@ export class InferenceCoreProxyService {
   }> {
     const resolved = await this.models.resolveForUser(user, publicModelId);
     const excluded = new Set(options.excludeConnectionIds ?? []);
-    const candidates = (await this.coreCandidates(resolved.model.id, resolved.sources.map((source) => source.id)))
-      .filter((candidate) => !excluded.has(candidate.connection.id));
+    const candidates = (
+      await this.coreCandidates(
+        resolved.model.id,
+        resolved.sources.map((source) => source.id)
+      )
+    ).filter((candidate) => !excluded.has(candidate.connection.id));
     assertRoutable(candidates);
     const selection = await this.routing.select({
       providerId: candidates[0]!.connection.providerId,
@@ -126,7 +133,7 @@ export class InferenceCoreProxyService {
       existingThread: options.existingThread === true,
     });
     const selected = candidates.find((row) => row.connection.id === selection.connectionId);
-    if (!selected || !selected.source.coreAccountId || !selected.source.coreModelId) {
+    if (!selected?.source.coreAccountId || !selected.source.coreModelId) {
       throw new InferenceProtocolError(503, 'service_unavailable', 'The selected model source is not core-backed');
     }
     return {
@@ -146,14 +153,10 @@ export class InferenceCoreProxyService {
   async proxy(c: Context<AppEnv>, operation: CoreProxyOperation): Promise<Response> {
     const { user, tokenId } = requireAuth(c);
     const prepared = await this.prepareBody(c, operation);
-    let resolved = await this.resolveTarget(
-      user,
-      prepared.publicModelId,
-      {
-        ...(prepared.affinityKey ? { affinityKey: prepared.affinityKey } : {}),
-        existingThread: prepared.existingThread,
-      }
-    );
+    let resolved = await this.resolveTarget(user, prepared.publicModelId, {
+      ...(prepared.affinityKey ? { affinityKey: prepared.affinityKey } : {}),
+      existingThread: prepared.existingThread,
+    });
     // Realtime is not admitted by the core; it keeps the legacy fixed-charge
     // accounting at the Gateway edge. Everything else correlates through the
     // request row the core's admission callback references.
@@ -393,7 +396,10 @@ export class InferenceCoreProxyService {
 
   // ----------------------------------------------------------- preparation
 
-  private async prepareBody(c: Context<AppEnv>, operation: CoreProxyOperation): Promise<{
+  private async prepareBody(
+    c: Context<AppEnv>,
+    operation: CoreProxyOperation
+  ): Promise<{
     publicModelId: string;
     units: number;
     headers: Record<string, string>;
@@ -530,7 +536,11 @@ function exactCoreAccountId(selected: SourceCandidate): string {
   const metadataAccountId = selected.connection.metadata?.[CORE_ACCOUNT_METADATA_KEY];
   if (selected.connection.authType === 'oauth') {
     if (typeof metadataAccountId !== 'string' || !metadataAccountId) {
-      throw new InferenceProtocolError(503, 'core_account_unavailable', 'The selected OAuth account is not linked to the core');
+      throw new InferenceProtocolError(
+        503,
+        'core_account_unavailable',
+        'The selected OAuth account is not linked to the core'
+      );
     }
     return metadataAccountId;
   }

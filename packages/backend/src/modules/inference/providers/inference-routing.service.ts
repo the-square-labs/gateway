@@ -5,8 +5,7 @@ import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { inferenceProviderConnections, inferenceProviderSettings, inferenceQuotaSnapshots } from '@/db/schema/index.js';
-import type { InferenceConnectionStatus } from '@/db/schema/inference-providers.js';
-import type { InferenceRoutingStrategy } from '@/db/schema/inference-providers.js';
+import type { InferenceConnectionStatus, InferenceRoutingStrategy } from '@/db/schema/inference-providers.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 
 const AFFINITY_TTL_SECONDS = 24 * 60 * 60;

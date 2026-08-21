@@ -1,15 +1,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import type { AppEnv } from '@/types.js';
-import {
-  type CoreProxyOperation,
-  InferenceCoreProxyService,
-} from './core/inference-core-proxy.service.js';
+import { type CoreProxyOperation, InferenceCoreProxyService } from './core/inference-core-proxy.service.js';
 import { inferenceAuthMiddleware } from './inference-auth.middleware.js';
 import { inferenceErrorResponse } from './inference-error.js';
 import { inferenceConcurrencyMiddleware, inferenceRateLimitMiddleware } from './inference-limit.middleware.js';
-import { inferenceProtocolError } from './protocol/inference-protocol.error.js';
 import { InferenceModelService } from './models/inference-model.service.js';
+import { inferenceProtocolError } from './protocol/inference-protocol.error.js';
 
 /**
  * The single stable public data plane (plan T5): /api/inference/v1 with the
@@ -21,14 +18,23 @@ export const inferenceDataPlaneRoutes = new OpenAPIHono<AppEnv>();
 
 inferenceDataPlaneRoutes.onError((error, c) => {
   const protocolError = inferenceProtocolError(error);
-  return inferenceErrorResponse(c, protocolError.status, protocolError.code, protocolError.message, protocolError.details);
+  return inferenceErrorResponse(
+    c,
+    protocolError.status,
+    protocolError.code,
+    protocolError.message,
+    protocolError.details
+  );
 });
 inferenceDataPlaneRoutes.use('*', inferenceAuthMiddleware);
 inferenceDataPlaneRoutes.use('*', inferenceRateLimitMiddleware);
 inferenceDataPlaneRoutes.use('*', inferenceConcurrencyMiddleware);
 inferenceDataPlaneRoutes.use('*', async (c, next) => {
   c.header('X-Accel-Buffering', 'no');
-  c.header('Cache-Control', c.req.method === 'GET' && c.req.path.endsWith('/models') ? 'private, no-cache' : 'no-store');
+  c.header(
+    'Cache-Control',
+    c.req.method === 'GET' && c.req.path.endsWith('/models') ? 'private, no-cache' : 'no-store'
+  );
   await next();
 });
 

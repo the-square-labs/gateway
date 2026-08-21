@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
-import { InferenceModelService } from './inference-model.service.js';
 import { InferenceProviderRegistry } from '../providers/inference-provider.registry.js';
+import { InferenceModelService } from './inference-model.service.js';
 
 const MODEL = {
   id: 'model-1',
@@ -40,9 +40,7 @@ function createService(options: { coreReady?: boolean; connection?: unknown } = 
     query: {
       inferenceModels: { findFirst: vi.fn().mockResolvedValue(MODEL) },
       inferenceProviderConnections: {
-        findFirst: vi.fn().mockResolvedValue(
-          options.connection === undefined ? CORE_CONNECTION : options.connection
-        ),
+        findFirst: vi.fn().mockResolvedValue(options.connection === undefined ? CORE_CONNECTION : options.connection),
       },
       inferenceDiscoveredModels: { findFirst: vi.fn().mockResolvedValue(DISCOVERED) },
     },
@@ -160,12 +158,17 @@ describe('inference model availability — live discovered sources', () => {
       { effective: vi.fn().mockResolvedValue({ enabled: true, apiMonthlyMicrodollars }) } as never
     );
     return {
-      availability: (service as unknown as {
-        modelAvailabilityForUser(userId: string, modelIds: string[]): Promise<{
-          modelIds: string[];
-          apiUsageEnabled: boolean;
-        }>;
-      }).modelAvailabilityForUser('user-1', ['model-1']),
+      availability: (
+        service as unknown as {
+          modelAvailabilityForUser(
+            userId: string,
+            modelIds: string[]
+          ): Promise<{
+            modelIds: string[];
+            apiUsageEnabled: boolean;
+          }>;
+        }
+      ).modelAvailabilityForUser('user-1', ['model-1']),
       chain,
     };
   }

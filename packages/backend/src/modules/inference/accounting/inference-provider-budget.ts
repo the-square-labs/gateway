@@ -102,7 +102,8 @@ export async function assertProviderApiBudget(
 ): Promise<void> {
   const limit = connection.apiMonthlyLimitMicrodollars;
   if (limit === null) return;
-  const spent = (await providerApiMonthlySpend(database, [connection.id], now, excludeRequestId)).get(connection.id) ?? 0;
+  const spent =
+    (await providerApiMonthlySpend(database, [connection.id], now, excludeRequestId)).get(connection.id) ?? 0;
   if (providerApiBudgetAvailable(spent, requestedMicrodollars, limit)) return;
   throw new InferenceProtocolError(429, 'provider_api_budget_exhausted', 'Provider monthly API budget exhausted', {
     recoveryAt: nextUtcMonth(now).toISOString(),

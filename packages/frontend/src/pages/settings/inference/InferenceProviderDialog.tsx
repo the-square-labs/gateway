@@ -56,7 +56,9 @@ export function InferenceProviderDialog({
 }: Props) {
   const [enabled, setEnabled] = useState(true);
   const [name, setName] = useState("");
-  const [routingStrategy, setRoutingStrategy] = useState<"even" | "balanced" | "sequential">("balanced");
+  const [routingStrategy, setRoutingStrategy] = useState<"even" | "balanced" | "sequential">(
+    "balanced"
+  );
   const [minimumRemainingPercent, setMinimumRemainingPercent] = useState(0);
   const [apiMonthlyLimitUsd, setApiMonthlyLimitUsd] = useState("");
   const [saving, setSaving] = useState(false);
@@ -86,6 +88,9 @@ export function InferenceProviderDialog({
     const quota = quotaForDimension(displayedConnection.quota, dimension);
     return quota ? [{ dimension, label, quota }] : [];
   });
+  const providerBalance = displayedConnection.quota.find(
+    (quota) => quota.remainingValue != null || quota.limitValue != null
+  );
   const dirty =
     name.trim() !== displayedConnection.name ||
     enabled !== displayedConnection.enabled ||
@@ -179,6 +184,17 @@ export function InferenceProviderDialog({
           </PanelShell>
         )}
 
+        {providerBalance && (
+          <PanelShell
+            title="Provider balance"
+            description="Latest synchronized credit balance reported by the provider"
+          >
+            <SettingsControlRow title="Available credits">
+              <ProviderBalanceValue quota={providerBalance} />
+            </SettingsControlRow>
+          </PanelShell>
+        )}
+
         <PanelShell
           title="Connection"
           description="Health, routing availability, and synchronization"
@@ -208,7 +224,9 @@ export function InferenceProviderDialog({
           >
             <Select
               value={routingStrategy}
-              onValueChange={(value) => setRoutingStrategy(value as "even" | "balanced" | "sequential")}
+              onValueChange={(value) =>
+                setRoutingStrategy(value as "even" | "balanced" | "sequential")
+              }
               disabled={!canManage}
             >
               <SelectTrigger aria-label="Routing strategy">
@@ -374,6 +392,33 @@ function QuotaWindowValue({ quota }: { quota: InferenceQuotaWindow }) {
       {quota.resetAt && (
         <p className="text-xs text-muted-foreground">
           Resets {formatRelativeDate(quota.resetAt)} · {formatDate(quota.resetAt)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ProviderBalanceValue({ quota }: { quota: InferenceQuotaWindow }) {
+  const remaining = quota.remainingValue == null ? null : Number(quota.remainingValue);
+  const limit = quota.limitValue == null ? null : Number(quota.limitValue);
+  const formattedRemaining =
+    remaining !== null && Number.isFinite(remaining) ? `$${remaining.toFixed(2)}` : null;
+  const formattedLimit = limit !== null && Number.isFinite(limit) ? `$${limit.toFixed(2)}` : null;
+  return (
+    <div className="text-right">
+      <p className="text-sm">
+        {formattedRemaining && formattedLimit
+          ? `${formattedRemaining} of ${formattedLimit} remaining`
+          : formattedRemaining
+            ? `${formattedRemaining} remaining`
+            : formattedLimit
+              ? `${formattedLimit} total`
+              : "Unknown"}
+        {quota.stale || quota.status === "stale" ? " · stale" : ""}
+      </p>
+      {quota.remainingFraction != null && (
+        <p className="text-xs text-muted-foreground">
+          {Math.round(quota.remainingFraction * 100)}% remaining
         </p>
       )}
     </div>
