@@ -7,23 +7,40 @@ import {
   Gauge,
   MemoryStick,
   Network,
+  Plus,
+  RefreshCw,
   Save,
   Server,
   Waypoints,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { NumericInput } from "@/components/ui/numeric-input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { AuthProvisioningSettings, DashboardRelaySnapshot } from "@/types";
+import type {
+  AuthProvisioningSettings,
+  DashboardRelayInstance,
+  DashboardRelaySnapshot,
+} from "@/types";
 
 const MAX_HISTORY = 60;
 const RELAY_SETTINGS_CACHE_KEY = "req:/api/admin/auth-settings";
@@ -58,6 +75,17 @@ function admissionLabel(state: string | undefined) {
   }
 }
 
+function sortRelayInstances(instances: DashboardRelayInstance[]): DashboardRelayInstance[] {
+  return [...instances].sort((left, right) => {
+    if (left.kind !== right.kind) return left.kind === "local" ? -1 : 1;
+    const byName = left.displayName.localeCompare(right.displayName, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+    return byName || left.id.localeCompare(right.id);
+  });
+}
+
 export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [initialSnapshot] = useState(() => {
     const cachedSettings = api.getCached<AuthProvisioningSettings>(
@@ -81,6 +109,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   );
   const [dataLanes, setDataLanes] = useState(initialRelay?.dataLanes ?? 4);
   const [readChunkBytes, setReadChunkBytes] = useState(initialRelay?.readChunkBytes ?? 32 * 1024);
+  const [assignmentSpreadMode, setAssignmentSpreadMode] = useState<"fixed" | "all">(
+    initialRelay?.assignmentSpread?.mode ?? "fixed"
+  );
+  const [assignmentSpreadCount, setAssignmentSpreadCount] = useState(
+    initialRelay?.assignmentSpread?.mode === "fixed" ? initialRelay.assignmentSpread.count : 2
+  );
   const [grantTtlHours, setGrantTtlHours] = useState(
     initialSnapshot.settings?.generalSettings.relayGrantTtlHours ?? 4
   );
@@ -100,6 +134,11 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     initialRelay?.hardPressurePercent ?? 95
   );
   const [saving, setSaving] = useState(false);
+  const [poolAction, setPoolAction] = useState(false);
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const [enrollName, setEnrollName] = useState("");
+  const [enrollAddress, setEnrollAddress] = useState("");
+  const [enrollCommand, setEnrollCommand] = useState("");
 
   const recordStatus = useCallback((next: DashboardRelaySnapshot | null) => {
     setStatus(next);
@@ -120,6 +159,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     recordStatus(nextStatus);
     setDataLanes(nextSettings.generalSettings.relay?.dataLanes ?? 4);
     setReadChunkBytes(nextSettings.generalSettings.relay?.readChunkBytes ?? 32 * 1024);
+    setAssignmentSpreadMode(nextSettings.generalSettings.relay?.assignmentSpread?.mode ?? "fixed");
+    setAssignmentSpreadCount(
+      nextSettings.generalSettings.relay?.assignmentSpread?.mode === "fixed"
+        ? nextSettings.generalSettings.relay.assignmentSpread.count
+        : 2
+    );
     setGrantTtlHours(nextSettings.generalSettings.relayGrantTtlHours);
     setAutoRecovery(nextSettings.generalSettings.relayAutoRecovery);
     setAdaptiveAdmissionEnabled(
@@ -157,6 +202,10 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           relay: {
             dataLanes,
             readChunkBytes,
+            assignmentSpread:
+              assignmentSpreadMode === "all"
+                ? { mode: "all" }
+                : { mode: "fixed", count: assignmentSpreadCount },
             adaptiveAdmissionEnabled,
             proxyTargetPressurePercent,
             databaseReservePercent,
@@ -174,6 +223,123 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     }
   };
 
+  const rebalance = async () => {
+    if (
+      !(await confirm({
+        title: "Rebalance Relay Pool?",
+        description:
+          "Gateway will pre-register every target and verify every source before switching new tunnels to the new assignments.",
+        confirmLabel: "Rebalance",
+      }))
+    )
+      return;
+    setPoolAction(true);
+    try {
+      await api.rebalanceRelayPool();
+      recordStatus(await api.getRelayStatus());
+      toast.success("Relay rebalance staged");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Relay rebalance failed");
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
+  const setDrain = async (instance: DashboardRelayInstance, enabled: boolean) => {
+    if (
+      enabled &&
+      !(await confirm({
+        title: `Drain ${instance.displayName}?`,
+        description:
+          "New tunnels will stop using this relay. Existing streams are allowed to finish.",
+        confirmLabel: "Drain relay",
+        variant: "destructive",
+      }))
+    )
+      return;
+    setPoolAction(true);
+    try {
+      recordStatus(await api.setRelayInstanceDrain(instance.id, enabled));
+      toast.success(enabled ? "Relay is draining" : "Relay resumed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Relay action failed");
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
+  const forceDisconnect = async (instance: DashboardRelayInstance) => {
+    if (
+      !(await confirm({
+        title: `Disconnect active streams on ${instance.displayName}?`,
+        description:
+          "This immediately terminates every active tunnel on this relay. Clients may reconnect through another ready instance.",
+        confirmLabel: "Force disconnect",
+        variant: "destructive",
+      }))
+    )
+      return;
+    setPoolAction(true);
+    try {
+      recordStatus(await api.forceDisconnectRelayInstance(instance.id));
+      toast.success("Active relay streams disconnected");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Relay action failed");
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
+  const removeRelay = async (instance: DashboardRelayInstance) => {
+    if (!instance.nodeId) return;
+    if (
+      !(await confirm({
+        title: `Remove ${instance.displayName}?`,
+        description:
+          "This removes the drained relay identity and its retired assignment records. The supervisor must be uninstalled separately on the host.",
+        confirmLabel: "Remove relay",
+        variant: "destructive",
+      }))
+    )
+      return;
+    setPoolAction(true);
+    try {
+      await api.deleteNode(instance.nodeId);
+      await load();
+      toast.success("Relay node removed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Relay removal failed");
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
+  const createRelayEnrollment = async () => {
+    if (!enrollName.trim() || !enrollAddress.trim()) return;
+    setPoolAction(true);
+    try {
+      const result = await api.createNode({
+        type: "relay",
+        hostname: "pending",
+        displayName: enrollName.trim(),
+        serviceAddresses: [enrollAddress.trim()],
+        servicePort: 9443,
+      });
+      const target =
+        result.gatewayEnrollmentTargets?.public?.gateway ??
+        result.gatewayEnrollmentTargets?.local?.gateway;
+      if (!target) throw new Error("Gateway enrollment address is unavailable");
+      setEnrollCommand(
+        `curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-relay-node.sh | sudo bash -s -- --gateway ${target} --token ${result.enrollmentToken} --gateway-cert-sha256 ${result.gatewayCertSha256} --advertise-address ${enrollAddress.trim()}`
+      );
+      toast.success("Relay enrollment created");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create relay enrollment");
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
   if (!initialLoadComplete) return <Skeleton />;
 
   if (!settings) return null;
@@ -187,19 +353,152 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const persistedRelay = settings.generalSettings.relay;
   const persistedDataLanes = persistedRelay?.dataLanes ?? 4;
   const persistedReadChunkBytes = persistedRelay?.readChunkBytes ?? 32 * 1024;
+  const persistedAssignmentSpread = persistedRelay?.assignmentSpread ?? {
+    mode: "fixed" as const,
+    count: 2,
+  };
   const hasChanges =
     dataLanes !== persistedDataLanes ||
     readChunkBytes !== persistedReadChunkBytes ||
+    assignmentSpreadMode !== persistedAssignmentSpread.mode ||
+    (assignmentSpreadMode === "fixed" &&
+      (persistedAssignmentSpread.mode !== "fixed" ||
+        assignmentSpreadCount !== persistedAssignmentSpread.count)) ||
     adaptiveAdmissionEnabled !== (persistedRelay?.adaptiveAdmissionEnabled ?? true) ||
     proxyTargetPressurePercent !== (persistedRelay?.proxyTargetPressurePercent ?? 70) ||
     databaseReservePercent !== (persistedRelay?.databaseReservePercent ?? 20) ||
     hardPressurePercent !== (persistedRelay?.hardPressurePercent ?? 95) ||
     grantTtlHours !== settings.generalSettings.relayGrantTtlHours ||
     autoRecovery !== settings.generalSettings.relayAutoRecovery;
+  const instances = sortRelayInstances(status?.instances ?? []);
+  const readyInstances = instances.filter((instance) => instance.state === "ready").length;
+  const faultDomains = new Set(instances.map((instance) => instance.faultDomainId)).size;
+  const hottestInstance = instances.reduce<DashboardRelayInstance | null>(
+    (current, instance) =>
+      !current || metric(instance.health?.pressurePercent) > metric(current.health?.pressurePercent)
+        ? instance
+        : current,
+    null
+  );
+  const instanceColumns: SimpleTableColumn<DashboardRelayInstance>[] = [
+    {
+      id: "name",
+      header: "Instance",
+      render: (row) => (
+        <div>
+          <div className="font-medium">{row.displayName}</div>
+          <div className="text-xs text-muted-foreground">
+            {row.kind === "local"
+              ? "Gateway host"
+              : `${row.advertisedAddresses.join(", ")}:${row.servicePort}`}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: "state",
+      header: "State",
+      render: (row) => {
+        const policyExpired = Boolean(
+          row.kind === "remote" &&
+            row.policyExpiresAt &&
+            Date.parse(row.policyExpiresAt) <= Date.now()
+        );
+        return (
+          <div className="space-y-1">
+            <Badge
+              variant={
+                row.state === "ready" && !policyExpired
+                  ? "success"
+                  : row.state === "draining" || row.state === "synchronizing"
+                    ? "warning"
+                    : "destructive"
+              }
+            >
+              {policyExpired ? "policy expired" : row.state}
+            </Badge>
+            {row.updateStep && !["pending", "ready"].includes(row.updateStep.state) && (
+              <div className="text-xs text-muted-foreground">
+                Update: {row.updateStep.state}
+                {row.updateStep.error ? ` · ${row.updateStep.error}` : ""}
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: "assignments",
+      header: "Assignments",
+      render: (row) => `${row.activeAssignments} active`,
+    },
+    {
+      id: "load",
+      header: "Load",
+      render: (row) =>
+        `${metric(row.health?.activeTunnels)} tunnels · ${metric(row.health?.pressurePercent)}%`,
+    },
+    {
+      id: "version",
+      header: "Version",
+      render: (row) => (
+        <div>
+          <div>
+            {row.buildVersion ??
+              (row.kind === "local" ? (status?.local?.relayBuildVersion ?? "unknown") : "unknown")}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            protocol v{row.protocolMajor ?? "-"} · policy r{row.appliedPolicyRevision}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: "actions",
+      header: "",
+      align: "right",
+      render: (row) =>
+        row.kind === "remote" ? (
+          <div className="flex justify-end gap-2">
+            {row.state === "draining" && metric(row.health?.activeTunnels) > 0 && (
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!canEdit || poolAction}
+                onClick={() => void forceDisconnect(row)}
+              >
+                Force disconnect
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              disabled={!canEdit || poolAction}
+              onClick={() => void setDrain(row, row.state !== "draining")}
+            >
+              {row.state === "draining" ? "Resume" : "Drain"}
+            </Button>
+            {["draining", "offline", "error"].includes(row.state) &&
+              metric(row.health?.activeTunnels) === 0 &&
+              row.activeAssignments === 0 && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={!canEdit || poolAction}
+                  onClick={() => void removeRelay(row)}
+                >
+                  Remove
+                </Button>
+              )}
+          </div>
+        ) : (
+          <Badge variant="secondary">Local</Badge>
+        ),
+    },
+  ];
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 border border-border bg-card p-3 text-sm">
-        <span className="font-medium">Gateway Relay</span>
+        <span className="font-medium">Relay Pool</span>
         <Badge
           variant={
             healthy
@@ -213,10 +512,69 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         </Badge>
         <Badge variant="secondary">build {status?.relayBuildVersion ?? "unknown"}</Badge>
         <Badge variant="secondary">protocol v{status?.protocolMajor ?? "-"}</Badge>
+        <Badge variant="secondary">
+          {readyInstances}/{instances.length} ready
+        </Badge>
+        <Badge variant={faultDomains > 1 ? "success" : "secondary"}>
+          {faultDomains} fault domain{faultDomains === 1 ? "" : "s"}
+        </Badge>
+        <Badge variant="secondary">
+          worst {metric(status?.worstPressurePercent)}%
+          {hottestInstance ? ` · ${hottestInstance.displayName}` : ""}
+        </Badge>
         <Badge variant={status?.admissionState === "normal" ? "secondary" : "warning"}>
           {admissionLabel(status?.admissionState)}
         </Badge>
       </div>
+
+      <PanelShell
+        title="Relay instances"
+        description="One logical Relay Pool; active assignments use separate physical hosts"
+        actions={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setEnrollOpen(true)}
+              disabled={!canEdit || poolAction}
+            >
+              <Plus className="h-4 w-4" />
+              Add relay node
+            </Button>
+            <Button
+              onClick={() => void rebalance()}
+              disabled={!canEdit || poolAction || !status?.rebalanceAvailable}
+            >
+              <RefreshCw className="h-4 w-4" />
+              Rebalance
+            </Button>
+          </>
+        }
+      >
+        <SimpleTable
+          columns={instanceColumns}
+          rows={instances}
+          getRowKey={(row) => row.id}
+          emptyMessage="No relay instances are registered"
+        />
+        {status?.state === "rebalance_available" && (
+          <p className="border-t border-border p-3 text-sm text-warning">
+            Relay capacity or workload spread changed. Existing Secure Links stay unchanged until
+            you rebalance explicitly.
+          </p>
+        )}
+        {status?.staging && status.staging.length > 0 && (
+          <p className="border-t border-border p-3 text-sm text-warning">
+            Rebalance is verifying {status.staging.length} staged assignment generation
+            {status.staging.length === 1 ? "" : "s"} before activation.
+          </p>
+        )}
+        {status?.update && (
+          <p className="border-t border-border p-3 text-sm text-muted-foreground">
+            Pool update to {status.update.targetVersion}: {status.update.state}
+            {status.update.error ? ` · ${status.update.error}` : ""}
+          </p>
+        )}
+      </PanelShell>
 
       <div>
         <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Tunnel activity</h3>
@@ -381,6 +739,41 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           />
         </SettingsControlRow>
         <SettingsControlRow
+          title="Default workload relay spread"
+          description="Active relay instances used by new workload connections; apply bulk changes with Rebalance"
+          controlsClassName="sm:w-96 sm:min-w-96 sm:max-w-96"
+        >
+          <div className="flex w-full items-center gap-2">
+            <Select
+              value={assignmentSpreadMode}
+              onValueChange={(value) => setAssignmentSpreadMode(value as "fixed" | "all")}
+              disabled={!canEdit || saving}
+            >
+              <SelectTrigger
+                className="min-w-0 flex-1"
+                aria-label="Default workload relay spread mode"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed">Fixed count</SelectItem>
+                <SelectItem value="all">All ready relays</SelectItem>
+              </SelectContent>
+            </Select>
+            {assignmentSpreadMode === "fixed" && (
+              <NumericInput
+                value={assignmentSpreadCount}
+                onChange={setAssignmentSpreadCount}
+                min={1}
+                max={64}
+                disabled={!canEdit || saving}
+                aria-label="Default workload relay count"
+                className="w-24 shrink-0"
+              />
+            )}
+          </div>
+        </SettingsControlRow>
+        <SettingsControlRow
           title="Adaptive admission"
           description="Throttle new proxy streams only when measured relay pressure rises"
         >
@@ -445,6 +838,56 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <Switch checked={autoRecovery} onChange={setAutoRecovery} disabled={!canEdit || saving} />
         </SettingsControlRow>
       </PanelShell>
+
+      <Dialog
+        open={enrollOpen}
+        onOpenChange={(open) => {
+          setEnrollOpen(open);
+          if (!open) setEnrollCommand("");
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add relay node</DialogTitle>
+          </DialogHeader>
+          {enrollCommand ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Run this command as root on the relay host:
+              </p>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap border border-border bg-muted p-3 text-xs">
+                {enrollCommand}
+              </pre>
+              <Button onClick={() => void navigator.clipboard.writeText(enrollCommand)}>
+                Copy command
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <Input
+                value={enrollName}
+                onChange={(event) => setEnrollName(event.target.value)}
+                placeholder="Relay name"
+              />
+              <Input
+                value={enrollAddress}
+                onChange={(event) => setEnrollAddress(event.target.value)}
+                placeholder="Reachable IP or hostname"
+              />
+              <p className="text-xs text-muted-foreground">
+                Gateway does not open firewall or NAT rules. TCP 9443 must be reachable by
+                participating nodes.
+              </p>
+              <Button
+                onClick={() => void createRelayEnrollment()}
+                disabled={poolAction || !enrollName.trim() || !enrollAddress.trim()}
+              >
+                Create enrollment
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

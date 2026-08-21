@@ -34,7 +34,7 @@ function closeStream(stream: { end?: () => void; destroy?: () => void } | null |
 export interface ConnectedNode {
   connectionId: string;
   nodeId: string;
-  type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases';
+  type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay';
   hostname: string;
   commandStream: ServerDuplexStream<DaemonMessage, GatewayCommand>;
   logStream: ServerDuplexStream<unknown, unknown> | null;
@@ -219,7 +219,7 @@ export class NodeRegistryService {
 
   async register(
     nodeId: string,
-    type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases',
+    type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay',
     hostname: string,
     configVersionHash: string,
     commandStream: ServerDuplexStream<DaemonMessage, GatewayCommand>,
@@ -331,7 +331,7 @@ export class NodeRegistryService {
     return Array.from(this.nodes.values());
   }
 
-  getNodesByType(type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases'): ConnectedNode[] {
+  getNodesByType(type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay'): ConnectedNode[] {
     return this.getAllNodes().filter((n) => n.type === type);
   }
 

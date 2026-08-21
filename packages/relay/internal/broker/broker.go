@@ -3,6 +3,7 @@ package broker
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -26,13 +27,14 @@ const (
 )
 
 type endpointRegistration struct {
-	endpointID  string
-	generation  uint64
-	expiresAt   atomic.Int64
-	maxSessions atomic.Uint32
-	incoming    chan *relayv1.IncomingTunnel
-	stop        chan struct{}
-	stopOnce    sync.Once
+	endpointID           string
+	generation           uint64
+	assignmentGeneration uint64
+	expiresAt            atomic.Int64
+	maxSessions          atomic.Uint32
+	incoming             chan *relayv1.IncomingTunnel
+	stop                 chan struct{}
+	stopOnce             sync.Once
 }
 
 func (r *endpointRegistration) close() { r.stopOnce.Do(func() { close(r.stop) }) }
@@ -49,16 +51,17 @@ type pendingTunnel struct {
 }
 
 type activeTunnel struct {
-	routeID            string
-	routeGeneration    uint64
-	sourceKind         string
-	sourceID           string
-	endpointID         string
-	endpointGeneration uint64
-	trafficClass       string
-	metrics            *routeMetrics
-	stop               chan struct{}
-	stopOnce           sync.Once
+	routeID              string
+	routeGeneration      uint64
+	sourceKind           string
+	sourceID             string
+	endpointID           string
+	endpointGeneration   uint64
+	assignmentGeneration uint64
+	trafficClass         string
+	metrics              *routeMetrics
+	stop                 chan struct{}
+	stopOnce             sync.Once
 }
 
 func (t *activeTunnel) close() { t.stopOnce.Do(func() { close(t.stop) }) }
@@ -79,6 +82,7 @@ type Broker struct {
 	activeByTarget map[string]uint64
 	routeMetrics   map[string]*routeMetrics
 	metricsSince   time.Time
+	draining       atomic.Bool
 }
 
 func New(store *policy.Store) *Broker {
@@ -226,19 +230,68 @@ type RuntimeSnapshot struct {
 	ActiveProxyTunnels    uint64
 	ActiveDatabaseTunnels uint64
 	Admission             admission.Snapshot
+	Draining              bool
+	AssignmentTunnels     []AssignmentTunnelCount
+}
+
+type AssignmentTunnelCount struct {
+	EndpointID           string
+	AssignmentGeneration uint64
+	ActiveTunnels        uint64
 }
 
 func (b *Broker) RuntimeSnapshot() RuntimeSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	usage := b.usageLocked()
+	assignmentCounts := make(map[string]AssignmentTunnelCount)
+	for _, tunnel := range b.active {
+		key := policyAssignmentKey(tunnel.endpointID, tunnel.assignmentGeneration)
+		count := assignmentCounts[key]
+		count.EndpointID = tunnel.endpointID
+		count.AssignmentGeneration = tunnel.assignmentGeneration
+		count.ActiveTunnels++
+		assignmentCounts[key] = count
+	}
+	assignmentTunnels := make([]AssignmentTunnelCount, 0, len(assignmentCounts))
+	for _, count := range assignmentCounts {
+		assignmentTunnels = append(assignmentTunnels, count)
+	}
+	sort.Slice(assignmentTunnels, func(i, j int) bool {
+		if assignmentTunnels[i].EndpointID == assignmentTunnels[j].EndpointID {
+			return assignmentTunnels[i].AssignmentGeneration < assignmentTunnels[j].AssignmentGeneration
+		}
+		return assignmentTunnels[i].EndpointID < assignmentTunnels[j].EndpointID
+	})
 	return RuntimeSnapshot{
 		RegisteredEndpoints:   uint64(len(b.endpoints)),
 		ActiveTunnels:         uint64(len(b.active)),
 		ActiveProxyTunnels:    usage.ActiveProxy,
 		ActiveDatabaseTunnels: usage.ActiveDatabase,
 		Admission:             b.admission.GetSnapshot(),
+		Draining:              b.draining.Load(),
+		AssignmentTunnels:     assignmentTunnels,
 	}
+}
+
+func (b *Broker) SetDraining(value bool) { b.draining.Store(value) }
+
+func (b *Broker) Draining() bool { return b.draining.Load() }
+
+// ForceDisconnect closes established streams only after the control plane has
+// explicitly placed the worker in drain mode. It never changes policy or
+// resumes admission by itself.
+func (b *Broker) ForceDisconnect() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.draining.Load() {
+		return 0
+	}
+	count := uint64(len(b.active))
+	for _, tunnel := range b.active {
+		tunnel.close()
+	}
+	return count
 }
 
 func (b *Broker) Reconcile(previous, next *policy.Snapshot) {
@@ -271,15 +324,15 @@ func (b *Broker) reconcileLocked(next *policy.Snapshot) {
 		}
 	}
 	for id, registration := range b.endpoints {
-		endpoint := next.Endpoints[id]
+		endpoint := next.Endpoint(registration.endpointID, registration.assignmentGeneration)
 		if endpoint == nil || endpoint.Generation != registration.generation {
 			registration.close()
 			delete(b.endpoints, id)
 		}
 	}
 	for _, tunnel := range b.active {
-		route := next.Routes[tunnel.routeID]
-		endpoint := next.Endpoints[tunnel.endpointID]
+		route := next.Route(tunnel.routeID, tunnel.assignmentGeneration)
+		endpoint := next.Endpoint(tunnel.endpointID, tunnel.assignmentGeneration)
 		if route == nil || route.Generation != tunnel.routeGeneration || endpoint == nil || endpoint.Generation != tunnel.endpointGeneration {
 			tunnel.close()
 		}
@@ -303,7 +356,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
-	registration := &endpointRegistration{endpointID: claims.EndpointID, generation: claims.EndpointGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{})}
+	registration := &endpointRegistration{endpointID: claims.EndpointID, generation: claims.EndpointGeneration, assignmentGeneration: claims.AssignmentGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{})}
 	registration.expiresAt.Store(claims.ExpiresAt)
 	registration.maxSessions.Store(claims.MaxConcurrentSessions)
 	b.mu.Lock()
@@ -311,17 +364,19 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
-	if previous := b.endpoints[claims.EndpointID]; previous != nil {
+	registrationKey := policyAssignmentKey(claims.EndpointID, claims.AssignmentGeneration)
+	if previous := b.endpoints[registrationKey]; previous != nil {
 		previous.close()
-		b.closeEndpointSessionsLocked(claims.EndpointID)
+		b.closeEndpointSessionsLocked(claims.EndpointID, claims.AssignmentGeneration)
 	}
-	b.endpoints[claims.EndpointID] = registration
+	b.endpoints[registrationKey] = registration
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
-		if b.endpoints[registration.endpointID] == registration {
-			delete(b.endpoints, registration.endpointID)
-			b.closeEndpointSessionsLocked(registration.endpointID)
+		key := policyAssignmentKey(registration.endpointID, registration.assignmentGeneration)
+		if b.endpoints[key] == registration {
+			delete(b.endpoints, key)
+			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
 		}
 		b.mu.Unlock()
 		registration.close()
@@ -362,11 +417,11 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 			if verifyErr != nil {
 				return status.Error(codes.PermissionDenied, verifyErr.Error())
 			}
-			if next.EndpointID != registration.endpointID || next.EndpointGeneration != registration.generation {
+			if next.EndpointID != registration.endpointID || next.EndpointGeneration != registration.generation || next.AssignmentGeneration != registration.assignmentGeneration {
 				return status.Error(codes.FailedPrecondition, "renewal changes endpoint identity")
 			}
 			b.mu.Lock()
-			if b.endpoints[registration.endpointID] != registration {
+			if b.endpoints[registrationKey] != registration {
 				b.mu.Unlock()
 				return status.Error(codes.Aborted, "endpoint policy was revoked")
 			}
@@ -405,6 +460,9 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	if open == nil {
 		return status.Error(codes.InvalidArgument, "first tunnel frame must open")
 	}
+	if b.draining.Load() {
+		return status.Error(codes.Unavailable, "relay is draining")
+	}
 	claims, err := b.verifier.Verify(open.Grant, "connect", client)
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -423,12 +481,12 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
-	route := snapshot.Routes[claims.RouteID]
+	route := snapshot.Route(claims.RouteID, claims.AssignmentGeneration)
 	if route == nil {
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, "connect grant route was revoked")
 	}
-	endpoint := snapshot.Endpoints[route.TargetEndpointId]
+	endpoint := snapshot.Endpoint(route.TargetEndpointId, claims.AssignmentGeneration)
 	if endpoint == nil {
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, "connect grant endpoint was revoked")
@@ -437,7 +495,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	trafficClass := routeTrafficClass(route)
 	metrics := b.routeMetricsLocked(route.RouteId)
 	startedAt := time.Now()
-	registration := b.endpoints[endpoint.EndpointId]
+	registration := b.endpoints[policyAssignmentKey(endpoint.EndpointId, claims.AssignmentGeneration)]
 	if registration == nil || time.Now().Unix() > registration.expiresAt.Load() {
 		metrics.opened.Add(1)
 		metrics.touch()
@@ -459,7 +517,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	}
 	metrics.opened.Add(1)
 	metrics.touch()
-	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
+	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
 	pending := &pendingTunnel{endpoint: endpoint, session: session, accepted: make(chan acceptedConnection, 1)}
 	metrics.active.Add(1)
 	b.pending[token] = pending
@@ -628,9 +686,17 @@ func (b *Broker) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer) er
 	}
 }
 
-func (b *Broker) closeEndpointSessionsLocked(endpointID string) {
+func policyAssignmentKey(id string, generation uint64) string {
+	if generation == 0 {
+		return id
+	}
+	return fmt.Sprintf("%s:%d", id, generation)
+}
+
+func (b *Broker) closeEndpointSessionsLocked(endpointID string, assignmentGenerations ...uint64) {
 	for _, tunnel := range b.active {
-		if tunnel.endpointID != endpointID {
+		if tunnel.endpointID != endpointID ||
+			(len(assignmentGenerations) > 0 && tunnel.assignmentGeneration != assignmentGenerations[0]) {
 			continue
 		}
 		tunnel.close()

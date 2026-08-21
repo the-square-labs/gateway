@@ -28,12 +28,15 @@ type ConsoleConfig struct {
 
 // BaseConfig holds the configuration common to all daemons.
 type BaseConfig struct {
-	Gateway   GatewayConfig `yaml:"gateway"`
-	TLS       TLSConfig     `yaml:"tls"`
-	Console   ConsoleConfig `yaml:"console"`
-	StateDir  string        `yaml:"state_dir"`
-	LogLevel  string        `yaml:"log_level"`
-	LogFormat string        `yaml:"log_format"`
+	Gateway  GatewayConfig `yaml:"gateway"`
+	TLS      TLSConfig     `yaml:"tls"`
+	Console  ConsoleConfig `yaml:"console"`
+	StateDir string        `yaml:"state_dir"`
+	// HostIdentityPath points at the one opaque identity shared by every
+	// installer-managed Gateway daemon on the physical host.
+	HostIdentityPath string `yaml:"host_identity_path"`
+	LogLevel         string `yaml:"log_level"`
+	LogFormat        string `yaml:"log_format"`
 }
 
 // IsEnrolled checks whether mTLS credentials exist on disk.
@@ -81,8 +84,9 @@ func LoadBaseConfig(path string) (*BaseConfig, error) {
 	}
 
 	cfg := &BaseConfig{
-		LogLevel:  "info",
-		LogFormat: "json",
+		HostIdentityPath: "/var/lib/gateway/host-identity",
+		LogLevel:         "info",
+		LogFormat:        "json",
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {

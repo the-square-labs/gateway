@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 )
 
@@ -103,5 +104,26 @@ requestComplete:
 		}
 	default:
 		t.Fatal("bridge did not send final close")
+	}
+}
+
+func TestOrderRelayCandidatesBalancesEqualLoadAndPrefersLeastActive(t *testing.T) {
+	candidates := []*pb.RelayDataCandidate{{RelayInstanceId: "relay-a"}, {RelayInstanceId: "relay-b"}}
+	firstRouter := &relayTunnelRouter{targetID: "relay-a"}
+	secondRouter := &relayTunnelRouter{targetID: "relay-b"}
+	plugin := &DockerPlugin{relayTunnels: map[string]*relayTunnelRouter{
+		"relay-a": firstRouter,
+		"relay-b": secondRouter,
+	}}
+
+	if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-a" {
+		t.Fatalf("first candidate = %q, want relay-a", got)
+	}
+	if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-b" {
+		t.Fatalf("round-robin candidate = %q, want relay-b", got)
+	}
+	firstRouter.active.Store(2)
+	if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-b" {
+		t.Fatalf("least-active candidate = %q, want relay-b", got)
 	}
 }

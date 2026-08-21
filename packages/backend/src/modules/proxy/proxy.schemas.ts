@@ -37,6 +37,7 @@ const RewriteRuleSchema = z.object({
 });
 
 const HealthCheckBodyMatchModeSchema = z.enum(['includes', 'exact', 'starts_with', 'ends_with']);
+const RelaySpreadModeSchema = z.enum(['inherit', 'fixed', 'all']);
 
 // ---------------------------------------------------------------------------
 // Create
@@ -66,6 +67,8 @@ export const CreateProxyHostSchema = z
     dockerProtocol: z.literal('tcp').optional(),
     pageProjectId: z.string().uuid().optional(),
     pageTagId: z.string().uuid().optional(),
+    relaySpreadMode: RelaySpreadModeSchema.optional(),
+    relaySpreadCount: z.number().int().min(1).max(64).optional().nullable(),
 
     // SSL
     sslEnabled: z.boolean().default(false),
@@ -136,6 +139,21 @@ export const CreateProxyHostSchema = z
           path: ['forwardPort'],
         });
       }
+    }
+
+    if (data.relaySpreadMode === 'fixed' && data.relaySpreadCount == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Relay spread count is required in fixed mode',
+        path: ['relaySpreadCount'],
+      });
+    }
+    if (data.relaySpreadMode !== 'fixed' && data.relaySpreadCount != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Relay spread count is only available in fixed mode',
+        path: ['relaySpreadCount'],
+      });
     }
 
     if (data.type === 'proxy' && data.upstreamKind === 'docker_container') {
@@ -239,6 +257,8 @@ export const UpdateProxyHostSchema = z.object({
   dockerProtocol: z.literal('tcp').optional().nullable(),
   pageProjectId: z.string().uuid().optional().nullable(),
   pageTagId: z.string().uuid().optional().nullable(),
+  relaySpreadMode: RelaySpreadModeSchema.optional(),
+  relaySpreadCount: z.number().int().min(1).max(64).optional().nullable(),
 
   sslEnabled: z.boolean().optional(),
   sslForced: z.boolean().optional(),

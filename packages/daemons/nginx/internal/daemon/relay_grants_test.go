@@ -6,7 +6,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
-func TestRelayGrantStoreSignalsOnlyLaneCountChanges(t *testing.T) {
+func TestRelayGrantStoreSignalsOnlyLaneOrTargetChanges(t *testing.T) {
 	store, err := newRelayGrantStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -39,5 +39,23 @@ func assertRelayRuntimeSignal(t *testing.T, changed <-chan struct{}, want bool) 
 		if want {
 			t.Fatal("expected relay runtime change signal")
 		}
+	}
+}
+
+func TestOrderRelayCandidatesBalancesEqualLoadAndPrefersLeastActive(t *testing.T) {
+	candidates := []*pb.RelayDataCandidate{{RelayInstanceId: "relay-a"}, {RelayInstanceId: "relay-b"}}
+	firstTunnel := &nginxRelayTunnel{targetID: "relay-a"}
+	secondTunnel := &nginxRelayTunnel{targetID: "relay-b"}
+	plugin := &NginxPlugin{relayTunnels: []*nginxRelayTunnel{firstTunnel, secondTunnel}}
+
+	if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-a" {
+		t.Fatalf("first candidate = %q, want relay-a", got)
+	}
+	if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-b" {
+		t.Fatalf("round-robin candidate = %q, want relay-b", got)
+	}
+	firstTunnel.active.Store(2)
+	if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-b" {
+		t.Fatalf("least-active candidate = %q, want relay-b", got)
 	}
 }

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."system_certificate_owner_type" ADD VALUE 'relay_node_server';

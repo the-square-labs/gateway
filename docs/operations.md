@@ -18,6 +18,8 @@ Gateway verifies the signed release manifest, pulls the selected image by its im
 
 App-only updates leave established managed-database binding streams on the relay running. Updating the relay itself is an explicit data-plane maintenance event and may interrupt those streams. The one-time migration from a pre-relay deployment also has an expected interruption while public `9443/tcp` ownership moves from `app` to `relay`.
 
+Relay Pool updates are durable and one-at-a-time. With at least two ready physical fault domains, Gateway drains a remote instance, updates and verifies its signed worker and supervisor artifacts, returns it to service, and then continues. The local Compose relay is updated last. Drain waits up to 30 minutes and pauses instead of killing long-lived streams; the operator may wait again or use the explicitly confirmed **Force disconnect** action. A failed worker health/version check restores the previous binary, and a supervisor update is committed only after it reconnects at the expected version. Connector image references are promoted only after the whole pool succeeds.
+
 Manual update:
 
 ```bash

@@ -126,6 +126,8 @@ Gateway запускается как Docker stack на control-plane серве
 
 Relay — отдельный long-lived container и единственный публичный владелец `9443/tcp`. Обычные app-only обновления сохраняют relay container и установленные managed-database binding streams; обновление relay остается отдельным событием обслуживания data plane.
 
+Локальный relay можно расширить до единого Relay Pool в **Settings > Relay**. Дополнительные relay-ноды подключаются через отдельный supervisor, исходяще соединяются с Gateway для управления и публикуют только настроенный data endpoint relay (по умолчанию TCP `9443`) для участвующих managed hosts. Gateway не меняет firewall, не выполняет NAT traversal и не создаёт overlay network. Добавление ноды само по себе не переносит трафик: это делает только явный Rebalance, после которого новые соединения распределяются по заранее проверенному активному набору relay workload-а, а пользователь по-прежнему видит один логический Secure Link.
+
 Узлам не нужны входящие management-порты. Public traffic ports, например `80` и `443` на nginx nodes, все еще нужны для сервисов, которые вы публикуете.
 
 ## Security Model

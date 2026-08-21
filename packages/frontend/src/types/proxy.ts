@@ -53,6 +53,8 @@ export interface ProxyHost {
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;
   dockerProtocol?: "tcp" | null;
+  relaySpreadMode?: "inherit" | "fixed" | "all";
+  relaySpreadCount?: number | null;
   pageTarget?: {
     projectId: string;
     projectName: string;
@@ -347,6 +349,8 @@ export interface CreateProxyHostRequest {
   dockerProtocol?: "tcp" | null;
   pageProjectId?: string | null;
   pageTagId?: string | null;
+  relaySpreadMode?: "inherit" | "fixed" | "all";
+  relaySpreadCount?: number | null;
   sslEnabled?: boolean;
   sslForced?: boolean;
   http2Support?: boolean;

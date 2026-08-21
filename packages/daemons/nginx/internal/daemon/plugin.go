@@ -43,6 +43,7 @@ type NginxPlugin struct {
 	pagesRuntimeConfigAvailable bool
 	relayTunnelMu               sync.Mutex
 	relayTunnels                []*nginxRelayTunnel
+	relaySelection              uint64
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
@@ -292,7 +293,7 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 }
 
 func (p *NginxPlugin) capabilities() []string {
-	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "proxy_secure_links_v1"}
+	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1"}
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
 	}

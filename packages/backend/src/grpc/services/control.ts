@@ -1,7 +1,7 @@
 import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { and, eq, sql } from 'drizzle-orm';
 import { container } from '@/container.js';
-import { nodes } from '@/db/schema/index.js';
+import { nodes, relayInstances } from '@/db/schema/index.js';
 import type { NodeGpuDevice } from '@/db/schema/nodes.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -27,6 +27,16 @@ function clearPendingCommandRegistration(nodeId: string, token: symbol): void {
 // Throttle health history writes — track last recorded timestamp per node
 const lastRecordedTs = new Map<string, number>();
 const HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000; // one entry per 30s
+
+async function markRelayInstanceOffline(deps: GrpcServerDeps, nodeId: string): Promise<void> {
+  if (deps.registry.getNode(nodeId)) return;
+  const [node] = await deps.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  if (node?.type !== 'relay' || deps.registry.getNode(nodeId)) return;
+  await deps.db
+    .update(relayInstances)
+    .set({ state: 'offline', updatedAt: new Date() })
+    .where(eq(relayInstances.nodeId, nodeId));
+}
 
 export function mapDockerRuntimeStatus(raw: DaemonMessage['dockerRuntimeStatus']) {
   if (!raw) return undefined;
@@ -264,6 +274,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         closed = true;
         if (nodeId && deps.registry.getNode(nodeId)?.commandStream === stream) {
           await deps.registry.deregister(nodeId, stream as any);
+          await markRelayInstanceOffline(deps, nodeId);
         }
         stream.end();
       };
@@ -275,6 +286,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         });
         if (nodeId) {
           await deps.registry.deregister(nodeId, stream as any);
+          await markRelayInstanceOffline(deps, nodeId);
         }
         stream.end();
         (stream as any).destroy?.();
@@ -302,13 +314,16 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         try {
           if (closed) return;
           // A daemon can log from an auxiliary stream while its registration
-          // is still awaiting database/certificate validation. Keep only
-          // those operational logs until the command stream has an identity;
-          // other pre-registration frames retain the existing rejection path.
+          // is still awaiting database/certificate validation. Keep those
+          // operational logs until the command stream has an identity. The
+          // Relay supervisor also publishes an immediate runtime snapshot from
+          // OnSessionStart; ignore that replaceable snapshot until registration
+          // commits instead of racing it against the async identity lookup.
           if (registering && msg.daemonLog) {
             pendingDaemonLogs.push(msg.daemonLog);
             return;
           }
+          if (registering && msg.relayRuntimeStatus) return;
           if (msg.register) {
             // First message must be RegisterMessage
             if (nodeId || registering) {
@@ -358,6 +373,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 configVersionHash: nodes.configVersionHash,
                 certificateSerial: nodes.certificateSerial,
                 certificateFingerprint: nodes.certificateFingerprint,
+                hostIdentityId: nodes.hostIdentityId,
                 status: nodes.status,
               })
               .from(nodes)
@@ -419,7 +435,29 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.end();
               return;
             }
-            const nodeType = node.type as 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases';
+            const nodeType = node.type as 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay';
+            if (nodeType === 'relay') {
+              const [relayInstance] = await deps.db
+                .select({ id: relayInstances.id, faultDomainId: relayInstances.faultDomainId })
+                .from(relayInstances)
+                .where(eq(relayInstances.nodeId, claimedNodeId))
+                .limit(1);
+              if (
+                !relayInstance ||
+                msg.register.daemonType !== 'relay' ||
+                !msg.register.capabilities?.includes('relay_pool_v1') ||
+                msg.register.relayInstanceId !== relayInstance.id ||
+                !node.hostIdentityId ||
+                msg.register.hostIdentityId !== node.hostIdentityId ||
+                relayInstance.faultDomainId !== node.hostIdentityId
+              ) {
+                logger.error('Relay registration identity or capability mismatch', { nodeId: claimedNodeId });
+                registering = false;
+                clearPendingCommandRegistration(claimedNodeId, registrationToken);
+                stream.end();
+                return;
+              }
+            }
             const gatewayHash = node.configVersionHash;
 
             try {
@@ -550,6 +588,19 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 }
               });
             }
+            if (deps.relayPolicy && nodeType === 'relay') {
+              setImmediate(async () => {
+                try {
+                  if (!isClaimedStreamCurrent(claimedNodeId)) return;
+                  await deps.relayPolicy!.syncRemoteInstancePolicy(claimedNodeId);
+                } catch (error) {
+                  logger.warn('Failed to synchronize remote relay policy after reconnect', {
+                    nodeId: claimedNodeId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              });
+            }
 
             // A v2 Nginx daemon reconciles on every reconnect; an older daemon
             // retains the established hash-mismatch-only resync path.
@@ -587,7 +638,54 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               await endStaleStream();
               return;
             }
-            if (msg.dockerRuntimeStatus) {
+            if (msg.relayRuntimeStatus) {
+              const runtime = msg.relayRuntimeStatus;
+              const [instance] = await deps.db
+                .select({ id: relayInstances.id })
+                .from(relayInstances)
+                .where(eq(relayInstances.nodeId, activeNodeId))
+                .limit(1);
+              if (!instance || runtime.relayInstanceId !== instance.id) {
+                await failRegisteredStream('Relay runtime status identity mismatch');
+                return;
+              }
+              const nextState = ['joining', 'synchronizing', 'ready', 'draining', 'offline', 'error'].includes(
+                runtime.state
+              )
+                ? (runtime.state as 'joining' | 'synchronizing' | 'ready' | 'draining' | 'offline' | 'error')
+                : 'error';
+              await deps.db
+                .update(relayInstances)
+                .set({
+                  state: nextState,
+                  buildVersion: runtime.buildVersion || null,
+                  protocolMajor: runtime.protocolMajor || null,
+                  capabilities: {
+                    protocolMajor: runtime.protocolMajor || 0,
+                    features: runtime.capabilities ?? [],
+                  },
+                  appliedPolicyRevision: Number(runtime.appliedPolicyRevision || 0),
+                  policyExpiresAt: Number(runtime.policyExpiresAtUnix || 0)
+                    ? new Date(Number(runtime.policyExpiresAtUnix) * 1000)
+                    : null,
+                  lastSeenAt: new Date(),
+                  health: {
+                    activeTunnels: Number(runtime.activeTunnels || 0),
+                    registeredEndpoints: Number(runtime.registeredEndpoints || 0),
+                    pressurePercent: runtime.pressurePercent || 0,
+                    admissionState: runtime.draining ? 'draining' : nextState,
+                    policySigningKeyIds: runtime.policySigningKeyIds ?? [],
+                    assignmentTunnels: (runtime.assignmentTunnels ?? []).map((count) => ({
+                      endpointId: count.endpointId,
+                      assignmentGeneration: Number(count.assignmentGeneration),
+                      activeTunnels: Number(count.activeTunnels),
+                    })),
+                  },
+                  updatedAt: new Date(),
+                })
+                .where(eq(relayInstances.id, instance.id));
+              deps.registry.publishNodeChanged(activeNodeId, 'online');
+            } else if (msg.dockerRuntimeStatus) {
               const runtimeStatus = mapDockerRuntimeStatus(msg.dockerRuntimeStatus);
               if (!runtimeStatus) {
                 logger.warn('Ignored invalid Docker runtime status update', { nodeId: activeNodeId });
@@ -904,6 +1002,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
           logger.info('Node stream ended', { nodeId });
           lastRecordedTs.delete(nodeId);
           await deps.registry.deregister(nodeId, stream as any);
+          await markRelayInstanceOffline(deps, nodeId);
           await deps.auditService.log({
             userId: null,
             action: 'node.disconnected',
@@ -920,6 +1019,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
           logger.warn('Node stream error', { nodeId, error: err.message });
           lastRecordedTs.delete(nodeId);
           await deps.registry.deregister(nodeId, stream as any);
+          await markRelayInstanceOffline(deps, nodeId);
           await deps.auditService.log({
             userId: null,
             action: 'node.disconnected',

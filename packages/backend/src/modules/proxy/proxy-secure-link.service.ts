@@ -899,6 +899,22 @@ export class ProxySecureLinkService {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
     if (!host || host.secureLinkGeneration < 1) throw new Error('Secure Link is not prepared for cutover');
     if (host.secureLinkMigratedAt) return host;
+
+    if (!host.nodeId) throw new Error('Secure Link source node is unavailable');
+    // A staged assignment becoming active changes the source grant bundle and
+    // rebuilds its relay lanes asynchronously. Serialize the final source sync
+    // and prove the new lanes before making the cutover durable; otherwise the
+    // immediate Nginx config probe can race that rebuild and reset a healthy
+    // Secure Link.
+    await this.syncSourceNode(host.nodeId);
+    const probe = await this.probeSecureLink(host.nodeId, {
+      linkId: host.id,
+      scheme: host.forwardScheme ?? 'http',
+      path: host.healthCheckUrl || '/',
+      timeoutSeconds: 10,
+    });
+    if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link cutover probe failed');
+
     const [committed] = await this.db
       .update(proxyHosts)
       .set({ secureLinkMigratedAt: new Date(), updatedAt: new Date() })

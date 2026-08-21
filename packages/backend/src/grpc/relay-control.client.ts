@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { Duplex } from 'node:stream';
+import type { PeerCertificate } from 'node:tls';
 import * as grpc from '@grpc/grpc-js';
-import { loadRelayV1Proto } from './relay-proto.js';
+import { decodeRelayV1Message, loadRelayV1Proto } from './relay-proto.js';
 
 export const RELAY_MAX_FRAME_BYTES = 1024 * 1024;
 
@@ -10,6 +12,14 @@ export interface SignedRelayGrant {
   keyId: string;
   payload: Buffer;
   signature: Buffer;
+}
+
+export interface RelayTunnelCandidate {
+  addresses: string[];
+  port: number;
+  certificateIdentity: string;
+  certificateFingerprint: string;
+  grant: SignedRelayGrant;
 }
 
 export interface RelayPolicySnapshot {
@@ -137,6 +147,13 @@ export interface RelayHealthResponse {
   memoryLimitBytes?: string;
   openFileDescriptors?: string;
   fileDescriptorLimit?: string;
+  poolId?: string;
+  relayInstanceId?: string;
+  capabilities?: string[];
+  policyExpiresAtUnix?: string;
+  draining?: boolean;
+  assignmentTunnels?: Array<{ endpointId: string; assignmentGeneration: string; activeTunnels: string }>;
+  policyKeyIds?: string[];
 }
 
 export interface RelayRouteRuntimeResponse {
@@ -221,6 +238,23 @@ export class RelayControlClient {
     return this.unary('ApplySnapshot', snapshot, timeoutMs) as Promise<{ appliedRevision: string; unchanged: boolean }>;
   }
 
+  async applyEncodedSnapshot(
+    encoded: Buffer,
+    timeoutMs = 5_000
+  ): Promise<{ appliedRevision: string; unchanged: boolean }> {
+    const request = decodeRelayV1Message('ApplySnapshotRequest', encoded);
+    return this.unary('ApplySnapshot', request, timeoutMs) as Promise<{ appliedRevision: string; unchanged: boolean }>;
+  }
+
+  async bootstrapPolicyTrust(
+    keyId: string,
+    publicKey: Buffer,
+    publicKeyFingerprint: string,
+    timeoutMs = 5_000
+  ): Promise<void> {
+    await this.unary('BootstrapPolicyTrust', { keyId, publicKey, publicKeyFingerprint }, timeoutMs);
+  }
+
   async reloadIdentity(timeoutMs = 2_000): Promise<boolean> {
     if (!this.pendingIdentityReload) {
       const next = this.createClients();
@@ -268,7 +302,67 @@ export class RelayControlClient {
   }
 
   openTunnel(grant: SignedRelayGrant, timeoutMs = 5_000): Promise<Duplex> {
-    const stream = this.broker.OpenTunnel() as grpc.ClientDuplexStream<RelayTunnelMessage, RelayTunnelMessage>;
+    return this.openTunnelWithBroker(this.broker, grant, timeoutMs);
+  }
+
+  async openCandidateTunnel(candidate: RelayTunnelCandidate, timeoutMs = 5_000): Promise<Duplex> {
+    if (!candidate.addresses.length) throw new Error('Relay candidate has no advertised address');
+    if (!candidate.certificateIdentity || !candidate.certificateFingerprint) {
+      throw new Error('Relay candidate identity is incomplete');
+    }
+    const startedAt = Date.now();
+    let lastError: unknown;
+    for (const address of candidate.addresses) {
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) break;
+      const broker = this.createCandidateBroker(address, candidate);
+      try {
+        const tunnel = await this.openTunnelWithBroker(broker, candidate.grant, remainingMs);
+        tunnel.once('close', () => broker.close());
+        return tunnel;
+      } catch (error) {
+        lastError = error;
+        broker.close();
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Relay candidate is unavailable');
+  }
+
+  async probeCandidate(candidate: RelayTunnelCandidate, timeoutMs = 5_000): Promise<void> {
+    const tunnel = await this.openCandidateTunnel(candidate, timeoutMs);
+    tunnel.destroy();
+  }
+
+  private createCandidateBroker(address: string, candidate: RelayTunnelCandidate): any {
+    const relayV1 = loadRelayV1Proto();
+    const expectedFingerprint = normalizeCertificateFingerprint(candidate.certificateFingerprint);
+    const credentials = grpc.credentials.createSsl(
+      readFileSync(this.options.systemCaPath),
+      readFileSync(this.options.privateKeyPath),
+      readFileSync(this.options.certificatePath),
+      {
+        checkServerIdentity: (_hostname: string, certificate: PeerCertificate) => {
+          const actual = normalizeCertificateFingerprint(certificate.fingerprint256 ?? '');
+          return actual === expectedFingerprint
+            ? undefined
+            : new Error('Relay candidate certificate fingerprint mismatch');
+        },
+      }
+    );
+    const target = `${isIP(address) === 6 ? `[${address}]` : address}:${candidate.port}`;
+    return new relayV1.TunnelBroker(target, credentials, {
+      'grpc.ssl_target_name_override': candidate.certificateIdentity,
+      'grpc.default_authority': candidate.certificateIdentity,
+      'grpc.keepalive_time_ms': 30_000,
+      'grpc.keepalive_timeout_ms': 10_000,
+      'grpc.keepalive_permit_without_calls': 1,
+      'grpc.max_send_message_length': 16 * 1024 * 1024,
+      'grpc.max_receive_message_length': 16 * 1024 * 1024,
+    });
+  }
+
+  private openTunnelWithBroker(broker: any, grant: SignedRelayGrant, timeoutMs: number): Promise<Duplex> {
+    const stream = broker.OpenTunnel() as grpc.ClientDuplexStream<RelayTunnelMessage, RelayTunnelMessage>;
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -322,4 +416,11 @@ export class RelayControlClient {
       this.pendingIdentityCommit = undefined;
     }
   }
+}
+
+function normalizeCertificateFingerprint(value: string): string {
+  return value
+    .replace(/^sha256:/i, '')
+    .replaceAll(':', '')
+    .toLowerCase();
 }

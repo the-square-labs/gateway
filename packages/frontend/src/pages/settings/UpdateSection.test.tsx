@@ -82,9 +82,13 @@ describe("UpdateSection", () => {
     const gatewayButton = await screen.findByRole("button", {
       name: "Update Gateway to v2.6.13",
     });
-    expect(screen.getByRole("button", { name: "Update Relay to v2.6.13" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Update Relay Pool to v2.6.13" })
+    ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Gateway Update Available" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Relay Update Available" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Relay Pool Update Available" })
+    ).toBeInTheDocument();
 
     fireEvent.click(gatewayButton);
     await waitFor(() => expect(api.triggerUpdate).toHaveBeenCalledWith("v2.6.13"));
@@ -99,7 +103,9 @@ describe("UpdateSection", () => {
 
     renderUpdateSection();
 
-    expect(screen.getByRole("button", { name: "Update Relay to v2.6.13" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Update Relay Pool to v2.6.13" })
+    ).toBeInTheDocument();
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Update Gateway to v2.7.0",
@@ -131,16 +137,16 @@ describe("UpdateSection", () => {
 
     renderUpdateSection();
 
-    expect(await screen.findAllByRole("button", { name: "Update Relay to v2.6.13" })).toHaveLength(
-      1
-    );
+    expect(
+      await screen.findAllByRole("button", { name: "Update Relay Pool to v2.6.13" })
+    ).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Release notes" }));
 
     expect(await screen.findByText("Relay-only notes")).toBeInTheDocument();
     expect(api.getAllReleaseNotes).not.toHaveBeenCalled();
   });
 
-  it("warns about the Relay restart and Secure Link interruption in one confirmation", async () => {
+  it("explains rolling and standalone Relay Pool update behavior in one confirmation", async () => {
     const status: UpdateStatus = {
       ...makeStatus("v2.6.12"),
       latestVersion: null,
@@ -158,15 +164,13 @@ describe("UpdateSection", () => {
     useUpdateStore.setState({ status });
 
     renderUpdateSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Update Relay to v2.6.13" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update Relay Pool to v2.6.13" }));
 
     await waitFor(() =>
       expect(confirm).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Update Relay",
-          description: expect.stringContaining(
-            "Relay will restart and active Secure Links may be briefly interrupted."
-          ),
+          title: "Update Relay Pool",
+          description: expect.stringContaining("drain and verify one instance at a time"),
           confirmLabel: "Update",
         })
       )

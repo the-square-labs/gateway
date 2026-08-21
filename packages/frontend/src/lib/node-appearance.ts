@@ -7,6 +7,7 @@ export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   databases: "Databases",
   monitoring: "Monitoring",
   bastion: "Bastion",
+  relay: "Relay",
 };
 
 export function nodeTypeLabel(type: NodeType | string): string {

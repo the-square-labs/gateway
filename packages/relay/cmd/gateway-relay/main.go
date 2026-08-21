@@ -43,7 +43,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	slog.Info("generic Gateway relay listening", "port", cfg.Port, "build_version", buildVersion, "protocol_major", 1)
+	slog.Info("generic Gateway relay listening", "port", cfg.Port, "mode", cfg.Mode, "pool_id", cfg.PoolID, "relay_instance_id", cfg.InstanceID, "build_version", buildVersion, "protocol_major", 1)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()

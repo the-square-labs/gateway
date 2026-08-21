@@ -14,6 +14,14 @@ Object.defineProperty(globalThis, "CustomEvent", {
   value: window.CustomEvent,
 });
 
+// jsdom does not implement pointer capture, while Radix Select calls these
+// methods when a pointer opens or closes the popup.
+Object.defineProperties(window.HTMLElement.prototype, {
+  hasPointerCapture: { configurable: true, value: () => false },
+  setPointerCapture: { configurable: true, value: () => undefined },
+  releasePointerCapture: { configurable: true, value: () => undefined },
+});
+
 class MockResizeObserver {
   observe() {}
   unobserve() {}

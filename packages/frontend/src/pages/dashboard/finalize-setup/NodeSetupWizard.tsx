@@ -41,6 +41,7 @@ const DAEMON_INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   docker: "setup-docker-node.sh",
   databases: "setup-database-node.sh",
   monitoring: "setup-monitoring-node.sh",
+  relay: "setup-relay-node.sh",
 };
 
 type Enrollment = Pick<

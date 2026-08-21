@@ -22,6 +22,9 @@ export const RELAY_GRANT_TTL_MAX_HOURS = 48;
 export const RELAY_DATA_LANES_DEFAULT = 4;
 export const RELAY_DATA_LANES_MIN = 1;
 export const RELAY_DATA_LANES_MAX = 16;
+export const RELAY_ASSIGNMENT_SPREAD_DEFAULT_COUNT = 2;
+export const RELAY_ASSIGNMENT_SPREAD_MIN_COUNT = 1;
+export const RELAY_ASSIGNMENT_SPREAD_MAX_COUNT = 64;
 export const RELAY_READ_CHUNK_BYTES_DEFAULT = 32 * 1024;
 export const RELAY_READ_CHUNK_BYTES_MIN = 4 * 1024;
 export const RELAY_READ_CHUNK_BYTES_MAX = 256 * 1024;
@@ -58,11 +61,14 @@ export interface GeneralSettings {
 export interface GeneralRelaySettings {
   dataLanes: number;
   readChunkBytes: number;
+  assignmentSpread: RelayAssignmentSpread;
   adaptiveAdmissionEnabled: boolean;
   proxyTargetPressurePercent: number;
   databaseReservePercent: number;
   hardPressurePercent: number;
 }
+
+export type RelayAssignmentSpread = { mode: 'fixed'; count: number } | { mode: 'all'; count?: never };
 
 export interface GeneralShutdownSettings {
   userRequestDrainSeconds: number;
@@ -88,6 +94,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   relay: {
     dataLanes: RELAY_DATA_LANES_DEFAULT,
     readChunkBytes: RELAY_READ_CHUNK_BYTES_DEFAULT,
+    assignmentSpread: { mode: 'fixed', count: RELAY_ASSIGNMENT_SPREAD_DEFAULT_COUNT },
     adaptiveAdmissionEnabled: RELAY_ADAPTIVE_ADMISSION_DEFAULT,
     proxyTargetPressurePercent: RELAY_PROXY_TARGET_PRESSURE_DEFAULT_PERCENT,
     databaseReservePercent: RELAY_DATABASE_RESERVE_DEFAULT_PERCENT,
@@ -371,6 +378,7 @@ export class GeneralSettingsService {
       relayRecord.readChunkBytes,
       DEFAULT_GENERAL_SETTINGS.relay.readChunkBytes
     );
+    const relayAssignmentSpread = normalizeRelayAssignmentSpread(relayRecord.assignmentSpread);
     const relayAdaptiveAdmissionEnabled =
       typeof relayRecord.adaptiveAdmissionEnabled === 'boolean'
         ? relayRecord.adaptiveAdmissionEnabled
@@ -459,6 +467,7 @@ export class GeneralSettingsService {
       relay: {
         dataLanes: relayDataLanes,
         readChunkBytes: relayReadChunkBytes,
+        assignmentSpread: relayAssignmentSpread,
         adaptiveAdmissionEnabled: relayAdaptiveAdmissionEnabled,
         proxyTargetPressurePercent: relayProxyTargetPressurePercent,
         databaseReservePercent: relayDatabaseReservePercent,
@@ -484,6 +493,21 @@ export class GeneralSettingsService {
       },
     };
   }
+}
+
+export function normalizeRelayAssignmentSpread(value: unknown): RelayAssignmentSpread {
+  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  if (record.mode === 'all') return { mode: 'all' };
+  const count = numberOrDefault(record.count, RELAY_ASSIGNMENT_SPREAD_DEFAULT_COUNT);
+  if (record.mode !== undefined && record.mode !== 'fixed') {
+    throw new Error('Relay assignment spread mode must be fixed or all');
+  }
+  if (count < RELAY_ASSIGNMENT_SPREAD_MIN_COUNT || count > RELAY_ASSIGNMENT_SPREAD_MAX_COUNT) {
+    throw new Error(
+      `Relay assignment spread must be between ${RELAY_ASSIGNMENT_SPREAD_MIN_COUNT} and ${RELAY_ASSIGNMENT_SPREAD_MAX_COUNT}`
+    );
+  }
+  return { mode: 'fixed', count };
 }
 
 export function normalizeShutdownSettings(value: unknown): GeneralShutdownSettings {

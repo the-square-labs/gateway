@@ -390,6 +390,7 @@ export function SettingsTab({
       <PanelShell
         title="Config Template"
         description="Select a template and configure its variables"
+        dirty={hasTemplateSettingsChanged}
         actions={
           canManage ? (
             <Button
@@ -465,6 +466,7 @@ export function SettingsTab({
       <PanelShell
         title="SSL"
         description="HTTPS termination and transport settings"
+        dirty={hasSslSettingsChanged}
         actions={
           canManage ? (
             <Button onClick={onSaveSsl} disabled={!hasSslSettingsChanged || isSavingSsl}>
@@ -521,6 +523,7 @@ export function SettingsTab({
         <PanelShell
           title="Health Check"
           description="Periodic upstream availability monitoring"
+          dirty={hasHealthCheckSettingsChanged}
           actions={
             canManage ? (
               <Button
@@ -626,6 +629,7 @@ export function SettingsTab({
         <PanelShell
           title="Custom Headers"
           description="Headers added to proxied requests"
+          dirty={hasHeadersChanged}
           actions={
             canManage ? (
               <div className="flex shrink-0 items-center gap-2">
@@ -713,6 +717,7 @@ export function SettingsTab({
         <PanelShell
           title="URL Rewrites"
           description="Rewrite request paths before proxying"
+          dirty={hasRewritesChanged}
           actions={
             canManage ? (
               <div className="flex shrink-0 items-center gap-2">

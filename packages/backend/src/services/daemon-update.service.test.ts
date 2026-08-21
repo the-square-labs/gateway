@@ -21,6 +21,23 @@ describe('DaemonUpdateService update artifact URLs', () => {
     );
   });
 
+  it('publishes the relay worker inside the supervisor package with its own artifact scope', () => {
+    const service = new DaemonUpdateService(
+      {} as DrizzleClient,
+      {
+        GITLAB_API_URL: 'https://gitlab.wiolett.net',
+        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+      } as Env
+    );
+
+    expect(service.getDownloadUrl('relay-worker', 'v2.7.0-relay', 'aarch64')).toBe(
+      'https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/relay-supervisor/v2.7.0-relay/relay-worker-linux-arm64'
+    );
+    expect(service.getManifestUrl('relay-worker', 'v2.7.0-relay', 'arm64')).toBe(
+      'https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/relay-supervisor/v2.7.0-relay/relay-worker-linux-arm64.update.json'
+    );
+  });
+
   it('keeps the update lock until the daemon reconnects on the target version', async () => {
     const metadata = {
       updateInProgress: true,

@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -84,6 +86,11 @@ export const proxyHosts = pgTable(
     dockerContainerPort: integer('docker_container_port'),
     dockerHostPort: integer('docker_host_port'),
     dockerProtocol: varchar('docker_protocol', { length: 8 }),
+    relaySpreadMode: varchar('relay_spread_mode', { length: 16 })
+      .$type<'inherit' | 'fixed' | 'all'>()
+      .notNull()
+      .default('inherit'),
+    relaySpreadCount: integer('relay_spread_count'),
 
     // Internal Proxy Host -> Docker Secure Link runtime state. These fields
     // are control-plane metadata and are not exposed as a selectable upstream.
@@ -177,6 +184,14 @@ export const proxyHosts = pgTable(
     dockerNodeIdx: index('proxy_host_docker_node_idx').on(table.dockerNodeId),
     dockerDeploymentIdx: index('proxy_host_docker_deployment_idx').on(table.dockerDeploymentId),
     systemKindIdx: index('proxy_host_system_kind_idx').on(table.systemKind),
+    relaySpreadModeValid: check(
+      'proxy_hosts_relay_spread_mode_valid',
+      sql`${table.relaySpreadMode} IN ('inherit', 'fixed', 'all')`
+    ),
+    relaySpreadCountValid: check(
+      'proxy_hosts_relay_spread_count_valid',
+      sql`(${table.relaySpreadMode} = 'fixed' AND ${table.relaySpreadCount} BETWEEN 1 AND 64) OR (${table.relaySpreadMode} <> 'fixed' AND ${table.relaySpreadCount} IS NULL)`
+    ),
     slugUnique: unique('proxy_hosts_slug_unique').on(table.slug),
   })
 );

@@ -76,8 +76,8 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   const handleRelayUpdate = async () => {
     if (!updateStatus?.relay?.updateAvailable || !updateStatus.relay.latestVersion) return;
     const ok = await confirm({
-      title: "Update Relay",
-      description: `Update Relay from ${updateStatus.relay.currentVersion} to ${updateStatus.relay.latestVersion}? Relay will restart and active Secure Links may be briefly interrupted.`,
+      title: "Update Relay Pool",
+      description: `Update the Relay Pool from ${updateStatus.relay.currentVersion} to ${updateStatus.relay.latestVersion}? Multi-host pools drain and verify one instance at a time. A single-host pool has a short maintenance interruption.`,
       confirmLabel: "Update",
     });
     if (!ok) return;
@@ -156,8 +156,8 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
       {relayUpdateAvailable && (
         <PanelShell
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
-          title={<span className="text-warning">Relay Update Available</span>}
-          description="A Relay update is ready to install"
+          title={<span className="text-warning">Relay Pool Update Available</span>}
+          description="A signed Relay release is ready for a one-instance-at-a-time rollout"
           className="xl:col-span-2"
           dirty
           actions={
@@ -180,7 +180,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                   onClick={handleRelayUpdate}
                   className="bg-warning text-black hover:bg-warning/90"
                 >
-                  Update Relay to {updateStatus?.relay.latestVersion}
+                  Update Relay Pool to {updateStatus?.relay.latestVersion}
                 </Button>
               )}
             </>
@@ -188,9 +188,19 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
         >
           <div className="divide-y divide-border">
             <DetailRow
-              label="Relay"
+              label="Relay Pool"
               value={`${updateStatus?.relay.currentVersion} → ${updateStatus?.relay.latestVersion}`}
             />
+            {updateStatus?.relay.operation && (
+              <DetailRow
+                label="Rollout"
+                value={
+                  updateStatus.relay.operation.status === "failed"
+                    ? `Paused: ${updateStatus.relay.operation.error ?? "instance update failed"}`
+                    : `Updating to ${updateStatus.relay.operation.targetVersion}`
+                }
+              />
+            )}
           </div>
         </PanelShell>
       )}

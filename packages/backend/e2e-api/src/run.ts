@@ -4,6 +4,17 @@ import { cleanupSeededIdentity, seedApiToken } from './db-token.js';
 import { scenarios } from './scenarios.js';
 import { runTests, type TestContext } from './test-harness.js';
 
+const releaseUpgradeScenarios = new Set([
+  'health endpoint reports dependency status',
+  'OpenAPI is reachable and legacy nginx management routes are absent',
+  'API token is rejected from browser-session-only surfaces',
+  'connected PostgreSQL databases allow safe read-only query checks',
+]);
+
+export function selectScenarios(profile: 'full' | 'release-upgrade') {
+  return profile === 'release-upgrade' ? scenarios.filter(({ name }) => releaseUpgradeScenarios.has(name)) : scenarios;
+}
+
 async function main() {
   const config = loadConfig();
   const { pool, seeded } = await seedApiToken(config.databaseUrl);
@@ -21,7 +32,7 @@ async function main() {
   }
 
   try {
-    await runTests(ctx, scenarios);
+    await runTests(ctx, selectScenarios(config.profile));
   } finally {
     for (const cleanup of ctx.cleanup.reverse()) {
       try {

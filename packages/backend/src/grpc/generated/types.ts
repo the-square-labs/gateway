@@ -16,6 +16,7 @@ export interface EnrollRequest {
   osInfo: string;
   daemonVersion: string;
   daemonType: string;
+  hostIdentityId: string;
 }
 
 export interface EnrollResponse {
@@ -24,6 +25,15 @@ export interface EnrollResponse {
   clientCertificate: Buffer;
   clientKey: Buffer;
   certExpiresAt: string; // int64 as string
+  hostIdentityId: string;
+  relayPoolId: string;
+  relayInstanceId: string;
+  policySigningKeyId: string;
+  policySigningPublicKey: Buffer;
+  policySigningPublicKeyFingerprint: string;
+  relayServerCertificate: Buffer;
+  relayServerKey: Buffer;
+  relayServerIdentity: string;
 }
 
 export interface RenewCertRequest {
@@ -34,6 +44,9 @@ export interface RenewCertResponse {
   clientCertificate: Buffer;
   clientKey: Buffer;
   certExpiresAt: string;
+  relayServerCertificate?: Buffer;
+  relayServerKey?: Buffer;
+  relayServerIdentity?: string;
 }
 
 export interface MaintenanceAccessRedeemRequest {
@@ -56,6 +69,7 @@ export interface DaemonMessage {
   daemonLog?: DaemonLogEntry;
   execOutput?: ExecOutput;
   dockerRuntimeStatus?: DockerRuntimeStatus;
+  relayRuntimeStatus?: RelayRuntimeStatus;
 }
 
 export interface DaemonLogEntry {
@@ -81,6 +95,33 @@ export interface RegisterMessage {
   daemonType: string;
   capabilities: string[];
   dockerRuntimeStatus?: DockerRuntimeStatus;
+  hostIdentityId: string;
+  relayInstanceId: string;
+}
+
+export interface RelayRuntimeStatus {
+  relayInstanceId: string;
+  state: string;
+  buildVersion: string;
+  protocolMajor: number;
+  capabilities: string[];
+  appliedPolicyRevision: string;
+  policyExpiresAtUnix: string;
+  registeredEndpoints: string;
+  activeTunnels: string;
+  pressurePercent: number;
+  draining: boolean;
+  error: string;
+  advertisedAddresses: string[];
+  servicePort: number;
+  assignmentTunnels: RelayAssignmentTunnelCount[];
+  policySigningKeyIds: string[];
+}
+
+export interface RelayAssignmentTunnelCount {
+  endpointId: string;
+  assignmentGeneration: string;
+  activeTunnels: string;
 }
 
 export interface CommandResult {
@@ -216,6 +257,10 @@ export interface GatewayCommand {
   nodeExec?: NodeExecCommand;
   updateDaemon?: UpdateDaemonCommand;
   nodeFile?: NodeFileCommand;
+  syncRelayPolicy?: SyncRelayPolicyCommand;
+  setRelayDrain?: SetRelayDrainCommand;
+  updateRelayWorker?: UpdateRelayWorkerCommand;
+  commitRelaySupervisorUpdate?: CommitRelaySupervisorUpdateCommand;
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
   applyTlsBundle?: ApplyTlsBundleCommand;
@@ -225,6 +270,7 @@ export interface GatewayCommand {
   syncRelayGrants?: SyncRelayGrantsCommand;
   syncProxySecureLinks?: SyncProxySecureLinksCommand;
   probeProxySecureLink?: ProbeProxySecureLinkCommand;
+  probeRelayCandidate?: ProbeRelayCandidateCommand;
   pagesUploadInit?: PagesUploadInitCommand;
   pagesUploadChunk?: PagesUploadChunkCommand;
   pagesUploadFinalize?: PagesUploadFinalizeCommand;
@@ -240,6 +286,28 @@ export interface GatewayCommand {
   pagesStageRuntimeConfig?: PagesStageRuntimeConfigCommand;
   pagesActivateRuntimeConfig?: PagesActivateRuntimeConfigCommand;
   pagesRemoveRuntimeConfig?: PagesRemoveRuntimeConfigCommand;
+}
+
+export interface SyncRelayPolicyCommand {
+  applySnapshotRequest: Buffer;
+  revision: string;
+  expiresAtUnix: string;
+}
+
+export interface SetRelayDrainCommand {
+  enabled: boolean;
+  forceDisconnect: boolean;
+}
+
+export interface UpdateRelayWorkerCommand {
+  downloadUrl: string;
+  targetVersion: string;
+  checksum: string;
+  signedManifest: string;
+}
+
+export interface CommitRelaySupervisorUpdateCommand {
+  targetVersion: string;
 }
 
 export interface PagesUploadInitCommand {
@@ -608,6 +676,30 @@ export interface RelayGrantAssignment {
   routeId?: string;
   targetEndpointId?: string;
   grant: RelaySignedGrant;
+  candidates?: RelayDataCandidate[];
+  schemaVersion?: number;
+}
+
+export interface RelayDataCandidate {
+  poolId: string;
+  relayInstanceId: string;
+  assignmentGeneration: string;
+  addresses: string[];
+  port: number;
+  certificateIdentity: string;
+  certificateFingerprint: string;
+  capabilities: string[];
+  grant: RelaySignedGrant;
+  assignmentState: string;
+}
+
+export interface ProbeRelayCandidateCommand {
+  probeId: string;
+  role: string;
+  endpointId: string;
+  routeId?: string;
+  assignmentGeneration: string;
+  candidate: RelayDataCandidate;
 }
 
 export interface RelaySignedGrant {

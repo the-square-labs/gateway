@@ -8,8 +8,10 @@ verify_file="$repo_root/scripts/fixtures/release-upgrade-verify.sql"
 run_suffix="$(date +%Y%m%d%H%M%S)-$$"
 project="${GATEWAY_RELEASE_E2E_PROJECT:-gateway-release-upgrade-e2e-$run_suffix}"
 workload="${project}-workload"
-old_app_image="${GATEWAY_RELEASE_E2E_OLD_APP_IMAGE:-registry.gitlab.wiolett.net/wiolett/gateway:v2.6.12}"
-old_relay_image="${GATEWAY_RELEASE_E2E_OLD_RELAY_IMAGE:-registry.gitlab.wiolett.net/wiolett/gateway/relay:v2.6.12-relay}"
+old_app_version="${GATEWAY_RELEASE_E2E_OLD_APP_VERSION:-v2.8.0}"
+old_relay_version="${GATEWAY_RELEASE_E2E_OLD_RELAY_VERSION:-v2.7.9}"
+old_app_image="${GATEWAY_RELEASE_E2E_OLD_APP_IMAGE:-registry.gitlab.wiolett.net/wiolett/gateway:${old_app_version}}"
+old_relay_image="${GATEWAY_RELEASE_E2E_OLD_RELAY_IMAGE:-registry.gitlab.wiolett.net/wiolett/gateway/relay:${old_relay_version}-relay}"
 candidate_app_image="${GATEWAY_RELEASE_E2E_CANDIDATE_APP_IMAGE:-gateway:release-e2e-candidate}"
 db_password="release-e2e-db"
 pki_key="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -89,18 +91,18 @@ host_port() {
   compose port "$1" "$2" | awk -F: '{print $NF}'
 }
 
-wait_http_version() {
+wait_app_version() {
   local expected="$1"
   local deadline=$((SECONDS + 90))
-  local body=""
+  local actual=""
   while (( SECONDS < deadline )); do
-    body="$(compose exec -T app wget -qO- http://127.0.0.1:3000/health 2>/dev/null || true)"
-    if [[ "$body" == *"\"version\":\"$expected\""* ]]; then
+    actual="$(compose exec -T app printenv APP_VERSION 2>/dev/null || true)"
+    if [[ "$actual" == "$expected" ]]; then
       return 0
     fi
     sleep 2
   done
-  echo "Candidate health did not report version $expected: $body" >&2
+  echo "Candidate container did not report APP_VERSION=$expected: $actual" >&2
   return 1
 }
 
@@ -141,8 +143,8 @@ if [[ "${GATEWAY_RELEASE_E2E_SKIP_BUILD:-0}" != "1" ]]; then
   BUILDX_CONFIG="$buildx_config" docker buildx build --platform linux/amd64 --load -t "$candidate_app_image" -f Dockerfile .
 fi
 
-echo "Starting isolated v2.6.12 deployment: $project"
-set_images "$old_app_image" "$old_relay_image" "v2.6.12" "v2.6.12-relay"
+echo "Starting isolated ${old_app_version} deployment: $project"
+set_images "$old_app_image" "$old_relay_image" "$old_app_version" "${old_relay_version}-relay"
 compose up -d
 wait_healthy postgres
 wait_healthy redis
@@ -160,7 +162,7 @@ workload_id="$(docker inspect --format '{{.Id}}' "$workload")"
 workload_restart_count="$(docker inspect --format '{{.RestartCount}}' "$workload")"
 
 echo "Applying a Gateway patch upgrade while preserving Relay"
-set_images "$candidate_app_image" "$old_relay_image" "release-e2e-candidate" "v2.6.12-relay"
+set_images "$candidate_app_image" "$old_relay_image" "release-e2e-candidate" "${old_relay_version}-relay"
 compose up -d --no-deps --force-recreate app
 wait_healthy app
 wait_healthy relay
@@ -176,6 +178,7 @@ postgres_port="$(host_port postgres 5432)"
 echo "Running API E2E suite against upgraded candidate"
 DATABASE_URL="postgres://gateway:$db_password@127.0.0.1:$postgres_port/gateway" \
 GATEWAY_E2E_API_URL="http://127.0.0.1:$http_port" \
+GATEWAY_E2E_PROFILE=release-upgrade \
 GATEWAY_E2E_ALLOW_MUTATIONS=1 \
 pnpm --filter backend e2e:api
 
@@ -187,6 +190,6 @@ verify_database
 assert_workload_unchanged
 assert_relay_unchanged
 
-wait_http_version "release-e2e-candidate"
+wait_app_version "release-e2e-candidate"
 
 echo "Release upgrade E2E passed for $project"

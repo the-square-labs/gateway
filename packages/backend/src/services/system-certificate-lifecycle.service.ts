@@ -12,6 +12,7 @@ export type SystemCertificateOwner =
   | { type: 'node'; id: string }
   | { type: 'managed_database'; id: string }
   | { type: 'gateway_listener'; id: 'grpc' | 'web' }
+  | { type: 'relay_node_server'; id: string }
   | { type: 'gateway_service'; id: 'app-internal-server' | 'app-relay-client' | 'relay-app-client' };
 
 export interface SystemCertificateBindingHandle {

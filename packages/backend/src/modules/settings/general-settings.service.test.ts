@@ -145,6 +145,7 @@ describe('GeneralSettingsService feature settings', () => {
     const service = new GeneralSettingsService(db as never);
 
     expect((await service.getConfig()).relay).toMatchObject({
+      assignmentSpread: { mode: 'fixed', count: 2 },
       adaptiveAdmissionEnabled: true,
       proxyTargetPressurePercent: 70,
       databaseReservePercent: 20,
@@ -155,6 +156,12 @@ describe('GeneralSettingsService feature settings', () => {
         relay: { proxyTargetPressurePercent: 80, databaseReservePercent: 15, hardPressurePercent: 95 },
       })
     ).rejects.toThrow('must remain below');
+    await expect(service.updateConfig({ relay: { assignmentSpread: { mode: 'all' } } })).resolves.toMatchObject({
+      relay: { assignmentSpread: { mode: 'all' } },
+    });
+    await expect(service.updateConfig({ relay: { assignmentSpread: { mode: 'fixed', count: 65 } } })).rejects.toThrow(
+      'between 1 and 64'
+    );
   });
 });
 

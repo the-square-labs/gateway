@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,9 @@ type DockerPlugin struct {
 	databaseManager *managedDatabaseManager
 	relayGrants     *relayGrantStore
 	relayTunnelMu   sync.Mutex
-	relayTunnel     *relayTunnelRouter
+	relayTunnels    map[string]*relayTunnelRouter
+	relaySelection  uint64
+	relayListener   net.Listener
 	secureLinks     *dockerSecureLinkManager
 	secureLinkState *securelink.StateStore
 	runtimeManager  *runtimemanager.Manager
@@ -265,9 +268,10 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"managed_database_storage_images_v1",
 				"generic_relay_tunnel_v1",
 				"managed_clickhouse_principals_v1",
+				"relay_pool_v1",
 			}
 		}
-		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "proxy_secure_links_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
+		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
 		if p.getRuntimeStatus().State == runtimemanager.StateHealthy {
 			values = append(values, "docker_runsc_healthy_v1")
 		}

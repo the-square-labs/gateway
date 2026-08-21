@@ -1,8 +1,8 @@
-import { createHash, X509Certificate } from 'node:crypto';
+import { createHash, randomUUID, X509Certificate } from 'node:crypto';
 import type { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import bcrypt from 'bcryptjs';
 import { and, eq, isNull } from 'drizzle-orm';
-import { nodes } from '@/db/schema/index.js';
+import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
@@ -10,6 +10,7 @@ import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '..
 import type { GrpcServerDeps } from '../server.js';
 
 const logger = createChildLogger('GrpcEnrollment');
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function certificateFingerprint(certificatePem: string): string {
   const certificate = new X509Certificate(certificatePem);
@@ -72,6 +73,62 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         }
 
         const nodeId = matchedNode.id;
+        if (matchedNode.type === 'relay' && req.daemonType !== 'relay') {
+          callback({ code: 7, message: 'Relay node enrollment requires relay supervisor identity' });
+          return;
+        }
+        const requestedHostIdentityId = req.hostIdentityId?.trim();
+        if (matchedNode.type === 'relay' && (!requestedHostIdentityId || !UUID_PATTERN.test(requestedHostIdentityId))) {
+          callback({ code: 3, message: 'A valid persisted host identity is required' });
+          return;
+        }
+        if (requestedHostIdentityId && !UUID_PATTERN.test(requestedHostIdentityId)) {
+          callback({ code: 3, message: 'Persisted host identity is invalid' });
+          return;
+        }
+        // Released daemons predate host_identity_id. Preserve backend-first
+        // enrollment compatibility for those roles; once upgraded they report
+        // the installer-persisted shared identity on subsequent installs.
+        const hostIdentityId = requestedHostIdentityId || matchedNode.hostIdentityId || randomUUID();
+
+        let relayBundle:
+          | {
+              instanceId: string;
+              poolId: string;
+              policyKeyId: string;
+              policyPublicKey: Buffer;
+              policyFingerprint: string;
+              serverCertificate: Buffer;
+              serverKey: Buffer;
+              serverIdentity: string;
+              serverFingerprint: string;
+              serverExpiresAt: Date;
+            }
+          | undefined;
+        if (matchedNode.type === 'relay') {
+          const [instance] = await deps.db
+            .select()
+            .from(relayInstances)
+            .where(eq(relayInstances.nodeId, nodeId))
+            .limit(1);
+          if (!instance || !deps.relayPolicy) throw new Error('Relay instance enrollment is not initialized');
+          const [trust, server] = await Promise.all([
+            deps.relayPolicy.getPolicyEnrollmentTrust(),
+            deps.systemCA.issueRelayServerCert(instance.id, instance.advertisedAddresses),
+          ]);
+          relayBundle = {
+            instanceId: instance.id,
+            poolId: instance.poolId,
+            policyKeyId: trust.keyId,
+            policyPublicKey: trust.publicKey,
+            policyFingerprint: trust.fingerprint,
+            serverCertificate: Buffer.from(server.certPem),
+            serverKey: Buffer.from(server.keyPem),
+            serverIdentity: server.identity,
+            serverFingerprint: certificateFingerprint(server.certPem),
+            serverExpiresAt: server.expiresAt,
+          };
+        }
 
         // The node serial update is committed with the system-leaf ownership
         // swap. If this update fails, the prior current certificate remains
@@ -94,9 +151,25 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               certificateSerial: certificate.serialNumber,
               certificateFingerprint: certificateFingerprint(certificate.certificatePem),
               certificateExpiresAt: certificate.notAfter,
+              hostIdentityId,
               updatedAt: new Date(),
             })
             .where(eq(nodes.id, nodeId));
+          if (relayBundle) {
+            await tx
+              .update(relayInstances)
+              .set({
+                faultDomainId: hostIdentityId,
+                state: 'synchronizing',
+                certificateIdentity: relayBundle.serverIdentity,
+                certificateFingerprint: relayBundle.serverFingerprint,
+                certificateExpiresAt: relayBundle.serverExpiresAt,
+                policySigningKeyId: relayBundle.policyKeyId,
+                policyPublicKeyFingerprint: relayBundle.policyFingerprint,
+                updatedAt: new Date(),
+              })
+              .where(eq(relayInstances.id, relayBundle.instanceId));
+          }
         });
 
         await deps.auditService.log({
@@ -114,6 +187,15 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           clientCertificate: Buffer.from(certResult.certPem),
           clientKey: Buffer.from(certResult.keyPem),
           certExpiresAt: String(Math.floor(certResult.expiresAt.getTime() / 1000)),
+          hostIdentityId,
+          relayPoolId: relayBundle?.poolId ?? '',
+          relayInstanceId: relayBundle?.instanceId ?? '',
+          policySigningKeyId: relayBundle?.policyKeyId ?? '',
+          policySigningPublicKey: relayBundle?.policyPublicKey ?? Buffer.alloc(0),
+          policySigningPublicKeyFingerprint: relayBundle?.policyFingerprint ?? '',
+          relayServerCertificate: relayBundle?.serverCertificate ?? Buffer.alloc(0),
+          relayServerKey: relayBundle?.serverKey ?? Buffer.alloc(0),
+          relayServerIdentity: relayBundle?.serverIdentity ?? '',
         });
         await deps.relayPolicy
           ?.refreshNodeIdentity(nodeId, certificateFingerprint(certResult.certPem))
@@ -124,6 +206,10 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             });
           });
       } catch (err) {
+        if ((err as { constraint?: string }).constraint === 'relay_instances_pool_fault_domain_unique') {
+          callback({ code: 6, message: 'This physical host already has a relay instance in the system pool' });
+          return;
+        }
         logger.error('Enrollment failed', { error: (err as Error).message });
         callback({ code: 13, message: `Enrollment failed: ${(err as Error).message}` });
       }

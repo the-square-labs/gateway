@@ -13,7 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { nodeFolders } from './node-folders.js';
 
-export const nodeTypeEnum = pgEnum('node_type', ['nginx', 'bastion', 'monitoring', 'docker', 'databases']);
+export const nodeTypeEnum = pgEnum('node_type', ['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']);
 export const nodeStatusEnum = pgEnum('node_status', ['pending', 'online', 'offline', 'error']);
 
 export interface NodeCapabilities {
@@ -155,6 +155,10 @@ export const nodes = pgTable(
     certificateFingerprint: varchar('certificate_fingerprint', { length: 71 }),
     certificateExpiresAt: timestamp('certificate_expires_at', { withTimezone: true }),
 
+    // Stable opaque identity of the physical host. Colocated daemon roles have
+    // distinct node identities but share this value for fault-domain accounting.
+    hostIdentityId: uuid('host_identity_id'),
+
     // Daemon info
     daemonVersion: varchar('daemon_version', { length: 50 }),
     osInfo: varchar('os_info', { length: 255 }),
@@ -186,6 +190,7 @@ export const nodes = pgTable(
     statusIdx: index('node_status_idx').on(table.status),
     hostnameIdx: index('node_hostname_idx').on(table.hostname),
     enrollmentTokenSelectorIdx: index('node_enrollment_token_selector_idx').on(table.enrollmentTokenSelector),
+    hostIdentityIdx: index('node_host_identity_idx').on(table.hostIdentityId),
     folderIdx: index('node_folder_idx').on(table.folderId),
     slugUnique: unique('nodes_slug_unique').on(table.slug),
   })

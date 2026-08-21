@@ -21,6 +21,7 @@ import type {
 } from '@/services/nginx-certificate-distribution.service.js';
 import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import type { RelayPoolService } from '@/services/relay-pool.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { AdditionalRouteNodeMigration, AdditionalRouteService } from './additional-route.service.js';
 import type { NginxTemplateService } from './nginx-template.service.js';
@@ -138,7 +139,8 @@ export class ProxyService {
     private readonly secureLinks?: ProxySecureLinkService,
     private readonly cache?: CacheService,
     private readonly maintenanceAccess?: ProxyMaintenanceAccessService,
-    private readonly generalSettings?: GeneralSettingsService
+    private readonly generalSettings?: GeneralSettingsService,
+    private readonly relayPool?: RelayPoolService
   ) {}
 
   private eventBus?: EventBusService;
@@ -667,6 +669,19 @@ export class ProxyService {
       where: eq(proxyHosts.id, id),
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
+    const effectiveRelaySpreadMode = input.relaySpreadMode ?? existing.relaySpreadMode;
+    const effectiveRelaySpreadCount =
+      input.relaySpreadMode !== undefined && input.relaySpreadMode !== 'fixed'
+        ? null
+        : input.relaySpreadCount !== undefined
+          ? input.relaySpreadCount
+          : existing.relaySpreadCount;
+    if (effectiveRelaySpreadMode === 'fixed' && effectiveRelaySpreadCount == null) {
+      throw new AppError(400, 'RELAY_SPREAD_COUNT_REQUIRED', 'Relay spread count is required in fixed mode');
+    }
+    if (effectiveRelaySpreadMode !== 'fixed' && effectiveRelaySpreadCount != null) {
+      throw new AppError(400, 'RELAY_SPREAD_COUNT_INVALID', 'Relay spread count is only available in fixed mode');
+    }
     await this.additionalRoutes?.assertHostTemplateMutationAllowed(
       existing,
       input as unknown as Record<string, unknown>
@@ -747,6 +762,7 @@ export class ProxyService {
     const updateData: Record<string, unknown> = {
       ...proxyInput,
       ...upstreamData,
+      ...(input.relaySpreadMode !== undefined && input.relaySpreadMode !== 'fixed' ? { relaySpreadCount: null } : {}),
       updatedAt: new Date(),
     };
 
@@ -1049,6 +1065,18 @@ export class ProxyService {
     // Fire immediate health check if healthcheck was just enabled
     if (input.healthCheckEnabled && !existing.healthCheckEnabled && updated.enabled) {
       this.runImmediateHealthCheck(id);
+    }
+
+    if (
+      updated.relaySpreadMode !== existing.relaySpreadMode ||
+      updated.relaySpreadCount !== existing.relaySpreadCount
+    ) {
+      await this.relayPool?.stageProxyWorkloadRebalance(id, userId).catch((error) => {
+        logger.warn('Failed to stage Relay Pool redistribution after workload spread update', {
+          hostId: id,
+          error,
+        });
+      });
     }
 
     return (await attachDockerUpstreamDisplay(this.db, [updated]))[0]!;

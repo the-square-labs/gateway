@@ -1,0 +1,3 @@
+CREATE UNIQUE INDEX "relay_assignment_generations_one_active_per_endpoint" ON "relay_endpoint_assignment_generations" USING btree ("endpoint_id") WHERE "relay_endpoint_assignment_generations"."state" = 'active';--> statement-breakpoint
+ALTER TABLE "relay_endpoint_assignment_generations" ADD CONSTRAINT "relay_assignment_generations_desired_redundancy_valid" CHECK ("relay_endpoint_assignment_generations"."desired_redundancy" > 0);--> statement-breakpoint
+ALTER TABLE "relay_instances" ADD CONSTRAINT "relay_instances_service_port_valid" CHECK ("relay_instances"."service_port" > 0 AND "relay_instances"."service_port" <= 65535);

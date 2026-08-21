@@ -18,7 +18,7 @@ import (
 // Enroll performs the initial enrollment with a PSK token.
 // The enrollment token is only sent after the Gateway TLS leaf certificate
 // matches the expected SHA-256 fingerprint.
-func Enroll(address, token, expectedGatewayCertSHA256, hostname, nginxVersion, osInfo, daemonVersion, daemonType string) (*pb.EnrollResponse, error) {
+func Enroll(address, token, expectedGatewayCertSHA256, hostname, nginxVersion, osInfo, daemonVersion, daemonType, hostIdentityID string) (*pb.EnrollResponse, error) {
 	expectedFingerprint, err := normalizeExpectedFingerprint(expectedGatewayCertSHA256)
 	if err != nil {
 		return nil, err
@@ -45,12 +45,13 @@ func Enroll(address, token, expectedGatewayCertSHA256, hostname, nginxVersion, o
 	defer cancel()
 
 	resp, err := client.Enroll(ctx, &pb.EnrollRequest{
-		Token:         token,
-		Hostname:      hostname,
-		NginxVersion:  nginxVersion,
-		OsInfo:        osInfo,
-		DaemonVersion: daemonVersion,
-		DaemonType:    daemonType,
+		Token:          token,
+		Hostname:       hostname,
+		NginxVersion:   nginxVersion,
+		OsInfo:         osInfo,
+		DaemonVersion:  daemonVersion,
+		DaemonType:     daemonType,
+		HostIdentityId: hostIdentityID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("enrollment failed: %w", err)

@@ -3,12 +3,6 @@ import { isValidNodeServiceAddress } from './node-service-address.js';
 
 export const NODE_APPEARANCE_COLORS = ['blue', 'red', 'green', 'yellow', 'purple', 'pink', 'orange'] as const;
 
-export const CreateNodeSchema = z.object({
-  type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases']).default('nginx'),
-  hostname: z.string().min(1).max(255),
-  displayName: z.string().max(255).optional(),
-});
-
 const NodeServiceAddressSchema = z
   .string()
   .trim()
@@ -30,6 +24,31 @@ const NodeServiceAddressesSchema = z
         });
       }
       seen.add(address);
+    }
+  });
+
+export const CreateNodeSchema = z
+  .object({
+    type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']).default('nginx'),
+    hostname: z.string().min(1).max(255),
+    displayName: z.string().max(255).optional(),
+    serviceAddresses: NodeServiceAddressesSchema.optional(),
+    servicePort: z.number().int().min(1).max(65535).optional(),
+  })
+  .superRefine((input, context) => {
+    if (input.type === 'relay' && !input.serviceAddresses?.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Relay nodes require at least one advertised service address',
+        path: ['serviceAddresses'],
+      });
+    }
+    if (input.type !== 'relay' && (input.serviceAddresses !== undefined || input.servicePort !== undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Service address and port are accepted during creation only for relay nodes',
+        path: ['serviceAddresses'],
+      });
     }
   });
 
@@ -61,7 +80,7 @@ export const UpdateNodeServiceCreationLockSchema = z.object({
 
 export const NodeListQuerySchema = z.object({
   search: z.string().optional(),
-  type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases']).optional(),
+  type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']).optional(),
   status: z.enum(['pending', 'online', 'offline', 'error']).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),

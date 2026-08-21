@@ -5,6 +5,7 @@ use (
 	./database-connector
 	./monitoring
 	./nginx
+	./relay
 	./secure-link-connector
 	./shared
 )

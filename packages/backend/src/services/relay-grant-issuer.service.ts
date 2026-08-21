@@ -1,7 +1,16 @@
 import { createPrivateKey, randomUUID, sign as signBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { nodes, relayEndpoints, relayGrantSigningKeys, relayPolicyState, relayRoutes } from '@/db/schema/index.js';
+import {
+  nodes,
+  relayEndpointAssignmentGenerations,
+  relayEndpointAssignments,
+  relayEndpoints,
+  relayGrantSigningKeys,
+  relayInstances,
+  relayPolicyState,
+  relayRoutes,
+} from '@/db/schema/index.js';
 import type { SignedRelayGrant } from '@/grpc/relay-control.client.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
@@ -12,7 +21,7 @@ const POLICY_ID = 'current';
 type GrantKind = 'endpoint' | 'connect';
 
 export interface RelayGrantClaims {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   audience: 'wiolett-relay';
   grantId: string;
   gatewayInstanceId: string;
@@ -20,6 +29,9 @@ export interface RelayGrantClaims {
   subjectKind: string;
   subjectId: string;
   certificateSha256: string;
+  poolId?: string;
+  relayInstanceId?: string;
+  assignmentGeneration?: number;
   endpointId?: string;
   endpointGeneration?: number;
   routeId?: string;
@@ -39,6 +51,21 @@ export interface RelayGrantAssignment {
   routeId?: string;
   targetEndpointId?: string;
   grant: SignedRelayGrant;
+  schemaVersion?: number;
+  candidates?: RelayDataCandidate[];
+}
+
+export interface RelayDataCandidate {
+  poolId: string;
+  relayInstanceId: string;
+  assignmentGeneration: string;
+  addresses: string[];
+  port: number;
+  certificateIdentity: string;
+  certificateFingerprint: string;
+  capabilities: string[];
+  grant: SignedRelayGrant;
+  assignmentState: 'active' | 'staging' | 'draining';
 }
 
 export interface RelayGrantBundle {
@@ -99,61 +126,252 @@ export class RelayGrantIssuerService {
       this.requireState(),
       this.db.select().from(relayEndpoints).where(eq(relayEndpoints.subjectId, nodeId)),
       this.db.select().from(relayRoutes).where(eq(relayRoutes.sourceId, nodeId)),
-      this.db.select({ id: relayEndpoints.id, status: relayEndpoints.status }).from(relayEndpoints),
+      this.db.select().from(relayEndpoints),
     ]);
     const activeEndpointIds = new Set(targetEndpoints.filter(({ status }) => status === 'active').map(({ id }) => id));
     const grants: RelayGrantAssignment[] = [];
+    const poolProjection = await this.getPoolProjection();
     for (const endpoint of endpoints.filter(({ status }) => status === 'active')) {
+      const grant = await this.signGrant({
+        kind: 'endpoint',
+        subjectKind: endpoint.subjectKind,
+        subjectId: nodeId,
+        certificateSha256: node.certificateFingerprint,
+        endpointId: endpoint.id,
+        endpointGeneration: endpoint.generation,
+        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
+      });
+      const candidates = await this.issueCandidates(
+        poolProjection.get(endpoint.id) ?? [],
+        'endpoint',
+        nodeId,
+        node.certificateFingerprint,
+        endpoint,
+        undefined,
+        true
+      );
       grants.push({
         role: 'endpoint',
         ownerKind: endpoint.ownerKind,
         ownerId: endpoint.ownerId,
         endpointId: endpoint.id,
-        grant: await this.signGrant({
-          kind: 'endpoint',
-          subjectKind: endpoint.subjectKind,
-          subjectId: nodeId,
-          certificateSha256: node.certificateFingerprint,
-          endpointId: endpoint.id,
-          endpointGeneration: endpoint.generation,
-          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
-        }),
+        grant,
+        schemaVersion: candidates.length ? 2 : 1,
+        candidates,
       });
     }
     for (const route of routes.filter(({ targetEndpointId }) => activeEndpointIds.has(targetEndpointId))) {
+      const grant = await this.signGrant({
+        kind: 'connect',
+        subjectKind: route.sourceKind,
+        subjectId: nodeId,
+        certificateSha256: node.certificateFingerprint,
+        routeId: route.id,
+        routeGeneration: route.generation,
+        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
+        maxFrameBytes: route.maxFrameBytes,
+      });
+      const endpoint = targetEndpoints.find(({ id }) => id === route.targetEndpointId);
+      const candidates = endpoint
+        ? await this.issueCandidates(
+            poolProjection.get(route.targetEndpointId) ?? [],
+            'connect',
+            nodeId,
+            node.certificateFingerprint,
+            endpoint,
+            route,
+            true
+          )
+        : [];
       grants.push({
         role: 'connect',
         ownerKind: route.ownerKind,
         ownerId: route.ownerId,
         routeId: route.id,
         targetEndpointId: route.targetEndpointId,
-        grant: await this.signGrant({
-          kind: 'connect',
-          subjectKind: route.sourceKind,
-          subjectId: nodeId,
-          certificateSha256: node.certificateFingerprint,
-          routeId: route.id,
-          routeGeneration: route.generation,
-          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
-          maxFrameBytes: route.maxFrameBytes,
-        }),
+        grant,
+        schemaVersion: candidates.length ? 2 : 1,
+        candidates,
       });
     }
     this.lastBundleGeneratedAtMs = Math.max(Date.now(), this.lastBundleGeneratedAtMs + 1);
     return { revision: String(state.revision), generatedAtUnixMs: String(this.lastBundleGeneratedAtMs), grants };
   }
 
+  private async getPoolProjection() {
+    const rows = await this.db
+      .select({
+        endpointId: relayEndpointAssignmentGenerations.endpointId,
+        generation: relayEndpointAssignmentGenerations.generation,
+        state: relayEndpointAssignmentGenerations.state,
+        role: relayEndpointAssignments.role,
+        instanceState: relayInstances.state,
+        poolId: relayInstances.poolId,
+        instanceId: relayInstances.id,
+        kind: relayInstances.kind,
+        addresses: relayInstances.advertisedAddresses,
+        port: relayInstances.servicePort,
+        certificateIdentity: relayInstances.certificateIdentity,
+        certificateFingerprint: relayInstances.certificateFingerprint,
+        capabilities: relayInstances.capabilities,
+      })
+      .from(relayEndpointAssignments)
+      .innerJoin(
+        relayEndpointAssignmentGenerations,
+        eq(relayEndpointAssignments.assignmentGenerationId, relayEndpointAssignmentGenerations.id)
+      )
+      .innerJoin(relayInstances, eq(relayEndpointAssignments.relayInstanceId, relayInstances.id))
+      .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining']));
+    rows.sort((left, right) => {
+      const stateOrder = { active: 0, staging: 1, draining: 2, retired: 3, failed: 4 } as const;
+      return (
+        stateOrder[left.state] - stateOrder[right.state] ||
+        left.generation - right.generation ||
+        left.instanceId.localeCompare(right.instanceId)
+      );
+    });
+    const byEndpoint = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const current = byEndpoint.get(row.endpointId) ?? [];
+      current.push(row);
+      byEndpoint.set(row.endpointId, current);
+    }
+    return byEndpoint;
+  }
+
+  private async issueCandidates(
+    assignments: Awaited<ReturnType<RelayGrantIssuerService['getPoolProjection']>> extends Map<string, infer Rows>
+      ? Rows
+      : never,
+    kind: GrantKind,
+    subjectId: string,
+    certificateSha256: string,
+    endpoint: Pick<typeof relayEndpoints.$inferSelect, 'id' | 'generation' | 'subjectKind' | 'maxConcurrentSessions'>,
+    route:
+      | Pick<
+          typeof relayRoutes.$inferSelect,
+          'id' | 'generation' | 'sourceKind' | 'maxConcurrentSessions' | 'maxFrameBytes'
+        >
+      | undefined,
+    includeStaging: boolean,
+    requireSubjectNodeCapability = true
+  ): Promise<RelayDataCandidate[]> {
+    if (
+      !assignments.length ||
+      (requireSubjectNodeCapability && !(await this.nodeSupportsPool(subjectId))) ||
+      !(await this.endpointPathSupportsPool(endpoint.id))
+    )
+      return [];
+    const selected = assignments.filter(({ state }) => includeStaging || state === 'active');
+    if (!selected.length || selected.some((assignment) => !this.instanceSupportsPool(assignment))) return [];
+    const result: RelayDataCandidate[] = [];
+    for (const assignment of selected) {
+      const grant = await this.signGrant({
+        schemaVersion: 2,
+        kind,
+        subjectKind: kind === 'endpoint' ? endpoint.subjectKind : route!.sourceKind,
+        subjectId,
+        certificateSha256,
+        poolId: assignment.poolId,
+        relayInstanceId: assignment.instanceId,
+        assignmentGeneration: assignment.generation,
+        ...(kind === 'endpoint'
+          ? {
+              endpointId: endpoint.id,
+              endpointGeneration: endpoint.generation,
+              maxConcurrentSessions: endpoint.maxConcurrentSessions,
+            }
+          : {
+              routeId: route!.id,
+              routeGeneration: route!.generation,
+              maxConcurrentSessions: route!.maxConcurrentSessions,
+              maxFrameBytes: route!.maxFrameBytes,
+            }),
+      });
+      result.push({
+        poolId: assignment.poolId,
+        relayInstanceId: assignment.instanceId,
+        assignmentGeneration: String(assignment.generation),
+        addresses: assignment.addresses,
+        port: assignment.port,
+        certificateIdentity: assignment.certificateIdentity ?? '',
+        certificateFingerprint: assignment.certificateFingerprint ?? '',
+        capabilities: this.instanceCapabilities(assignment),
+        grant,
+        assignmentState:
+          assignment.instanceState === 'draining'
+            ? 'draining'
+            : (assignment.state as 'active' | 'staging' | 'draining'),
+      });
+    }
+    return result;
+  }
+
+  private async nodeSupportsPool(nodeId: string): Promise<boolean> {
+    const [node] = await this.db
+      .select({ capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    return Array.isArray(node?.capabilities?.capabilities) && node.capabilities.capabilities.includes('relay_pool_v1');
+  }
+
+  private async endpointPathSupportsPool(endpointId: string): Promise<boolean> {
+    const [[endpoint], routes] = await Promise.all([
+      this.db
+        .select({ nodeId: relayEndpoints.subjectId })
+        .from(relayEndpoints)
+        .where(eq(relayEndpoints.id, endpointId))
+        .limit(1),
+      this.db
+        .select({ sourceKind: relayRoutes.sourceKind, sourceId: relayRoutes.sourceId })
+        .from(relayRoutes)
+        .where(eq(relayRoutes.targetEndpointId, endpointId)),
+    ]);
+    if (!endpoint) return false;
+    const nodeIds = [
+      endpoint.nodeId,
+      ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ sourceId }) => sourceId),
+    ];
+    const unique = [...new Set(nodeIds)];
+    const rows = await this.db
+      .select({ id: nodes.id, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(inArray(nodes.id, unique));
+    return (
+      rows.length === unique.length &&
+      rows.every(
+        ({ capabilities }) =>
+          Array.isArray(capabilities?.capabilities) && capabilities.capabilities.includes('relay_pool_v1')
+      )
+    );
+  }
+
+  private instanceCapabilities(instance: { kind: 'local' | 'remote'; capabilities: unknown }): string[] {
+    if (!instance.capabilities || typeof instance.capabilities !== 'object') return [];
+    const features = (instance.capabilities as { features?: unknown }).features;
+    return Array.isArray(features) ? features.filter((value): value is string => typeof value === 'string') : [];
+  }
+
+  private instanceSupportsPool(instance: { kind: 'local' | 'remote'; capabilities: unknown }): boolean {
+    return this.instanceCapabilities(instance).includes('relay_pool_v1');
+  }
+
   async issueGatewayConnectGrant(routeId: string, appCertificateFingerprint: string): Promise<SignedRelayGrant> {
+    return (await this.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)).grant;
+  }
+
+  async issueGatewayConnectAssignment(routeId: string, appCertificateFingerprint: string) {
     const [route] = await this.db.select().from(relayRoutes).where(eq(relayRoutes.id, routeId)).limit(1);
     if (!route || route.sourceKind !== 'gateway' || route.sourceCertificateSha256 !== appCertificateFingerprint)
       throw new Error('Gateway relay route is unavailable');
     const [endpoint] = await this.db
-      .select({ status: relayEndpoints.status })
+      .select()
       .from(relayEndpoints)
       .where(eq(relayEndpoints.id, route.targetEndpointId))
       .limit(1);
     if (endpoint?.status !== 'active') throw new Error('Gateway relay endpoint is unavailable');
-    return this.signGrant({
+    const grant = await this.signGrant({
       kind: 'connect',
       subjectKind: route.sourceKind,
       subjectId: route.sourceId,
@@ -163,13 +381,33 @@ export class RelayGrantIssuerService {
       maxConcurrentSessions: route.maxConcurrentSessions,
       maxFrameBytes: route.maxFrameBytes,
     });
+    const projection = await this.getPoolProjection();
+    const assignments = projection.get(endpoint.id) ?? [];
+    const candidates = await this.issueCandidates(
+      assignments,
+      'connect',
+      route.sourceId,
+      appCertificateFingerprint,
+      endpoint,
+      route,
+      true,
+      false
+    );
+    const kindByInstance = new Map(assignments.map(({ instanceId, kind }) => [instanceId, kind]));
+    return {
+      grant,
+      candidates: candidates.map((candidate) => ({
+        ...candidate,
+        local: kindByInstance.get(candidate.relayInstanceId) === 'local',
+      })),
+    };
   }
 
   private async signGrant(
     input: Omit<
       RelayGrantClaims,
       'schemaVersion' | 'audience' | 'grantId' | 'gatewayInstanceId' | 'issuedAt' | 'notBefore' | 'expiresAt'
-    >
+    > & { schemaVersion?: 1 | 2 }
   ): Promise<SignedRelayGrant> {
     const [state, settings, active] = await Promise.all([
       this.requireState(),
@@ -188,7 +426,7 @@ export class RelayGrantIssuerService {
     }
     const now = Math.floor(Date.now() / 1000);
     const claims: RelayGrantClaims = {
-      schemaVersion: 1,
+      schemaVersion: input.schemaVersion ?? 1,
       audience: 'wiolett-relay',
       grantId: randomUUID(),
       gatewayInstanceId: state.gatewayInstanceId,

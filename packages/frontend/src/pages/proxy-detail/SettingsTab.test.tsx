@@ -245,6 +245,33 @@ describe("proxy detail SettingsTab", () => {
     expect(saveButton.querySelector(".animate-spin")).not.toBeNull();
   });
 
+  it("marks every saveable settings panel with the shared dirty border", () => {
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: { ...host, type: "redirect" },
+          hasTemplateSettingsChanged: true,
+          hasSslSettingsChanged: true,
+          hasHealthCheckSettingsChanged: true,
+          hasHeadersChanged: true,
+          hasRewritesChanged: true,
+        })}
+      />
+    );
+
+    for (const title of [
+      "Config Template",
+      "SSL",
+      "Health Check",
+      "Custom Headers",
+      "URL Rewrites",
+    ]) {
+      expect(screen.getByText(title).closest("div.border")).toHaveStyle({
+        borderColor: "var(--color-warning)",
+      });
+    }
+  });
+
   it("shows inherited request and concurrent connection protection", () => {
     const defaultTemplate = {
       id: "template-default",

@@ -11,6 +11,7 @@ export interface AdvancedTabProps {
   onValidate: () => Promise<boolean>;
   onSaveAdvanced: () => void;
   isSavingAdvanced: boolean;
+  dirty: boolean;
   canManage: boolean;
 }
 
@@ -22,12 +23,14 @@ export function AdvancedTab({
   onValidate,
   onSaveAdvanced,
   isSavingAdvanced,
+  dirty,
   canManage,
 }: AdvancedTabProps) {
   return (
     <PanelShell
       title="Advanced Config"
       description="Additional Nginx directives for this proxy host"
+      dirty={dirty}
       actions={
         canManage ? (
           <div className="flex items-center gap-2">

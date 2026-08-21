@@ -37,44 +37,57 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	state, err := policy.Open(cfg.StateDir)
+	mode := relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED
+	if cfg.Mode == config.ModeRemoteDataOnly {
+		mode = relayv1.RelayMode_RELAY_MODE_REMOTE_DATA_ONLY
+	}
+	state, err := policy.OpenWithOptions(cfg.StateDir, policy.Options{Mode: mode, PoolID: cfg.PoolID, InstanceID: cfg.InstanceID})
 	if err != nil {
 		return nil, fmt.Errorf("open relay state: %w", err)
 	}
-	serverName, err := targetServerName(cfg.AppTarget)
-	if err != nil {
-		state.Close()
-		return nil, err
-	}
-	connectApp := func() (*grpc.ClientConn, error) {
-		return grpc.NewClient(cfg.AppTarget,
-			grpc.WithTransportCredentials(credentials.NewTLS(identityStore.AppTLSConfig(serverName))),
-			grpc.WithDefaultCallOptions(grpc.ForceCodec(codec.Codec{}), grpc.MaxCallRecvMsgSize(maxGatewayMessageBytes), grpc.MaxCallSendMsgSize(maxGatewayMessageBytes)),
-		)
-	}
-	app, err := connectApp()
-	if err != nil {
-		state.Close()
-		return nil, fmt.Errorf("create app client: %w", err)
-	}
 	tunnelBroker := broker.New(state)
-	proxyHandler := proxy.New(app, connectApp)
-	grpcServer := grpc.NewServer(
+	var app *grpc.ClientConn
+	var proxyHandler *proxy.Handler
+	reloadUpstream := func() error { return nil }
+	serverOptions := []grpc.ServerOption{
 		grpc.Creds(credentials.NewTLS(identityStore.ServerTLSConfig())),
 		grpc.ForceServerCodec(codec.Codec{}),
-		grpc.UnknownServiceHandler(proxyHandler.Handle),
 		grpc.MaxRecvMsgSize(maxGatewayMessageBytes), grpc.MaxSendMsgSize(maxGatewayMessageBytes),
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             clientKeepaliveMinTime,
 			PermitWithoutStream: true,
 		}),
-	)
+	}
+	if cfg.Mode == config.ModeLocalCombined {
+		serverName, targetErr := targetServerName(cfg.AppTarget)
+		if targetErr != nil {
+			state.Close()
+			return nil, targetErr
+		}
+		connectApp := func() (*grpc.ClientConn, error) {
+			return grpc.NewClient(cfg.AppTarget,
+				grpc.WithTransportCredentials(credentials.NewTLS(identityStore.AppTLSConfig(serverName))),
+				grpc.WithDefaultCallOptions(grpc.ForceCodec(codec.Codec{}), grpc.MaxCallRecvMsgSize(maxGatewayMessageBytes), grpc.MaxCallSendMsgSize(maxGatewayMessageBytes)),
+			)
+		}
+		app, err = connectApp()
+		if err != nil {
+			state.Close()
+			return nil, fmt.Errorf("create app client: %w", err)
+		}
+		proxyHandler = proxy.New(app, connectApp)
+		reloadUpstream = proxyHandler.ReloadUpstream
+		serverOptions = append(serverOptions, grpc.UnknownServiceHandler(proxyHandler.Handle))
+	}
+	grpcServer := grpc.NewServer(serverOptions...)
 	relayv1.RegisterTunnelBrokerServer(grpcServer, tunnelBroker)
-	relayv1.RegisterRelayAdminServer(grpcServer, admin.New(state, tunnelBroker, identityStore, proxyHandler.ReloadUpstream, buildVersion))
+	relayv1.RegisterRelayAdminServer(grpcServer, admin.New(state, tunnelBroker, identityStore, reloadUpstream, buildVersion))
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", cfg.Port))
 	if err != nil {
-		app.Close()
+		if app != nil {
+			app.Close()
+		}
 		state.Close()
 		return nil, err
 	}
@@ -85,7 +98,9 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 
 func (r *Runtime) Stop() {
 	r.GRPCStop()
-	_ = r.Proxy.Close()
+	if r.Proxy != nil {
+		_ = r.Proxy.Close()
+	}
 	_ = r.State.Close()
 }
 

@@ -32,6 +32,37 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    async rebalanceRelayPool(): Promise<unknown> {
+      return this.unwrapData(
+        this.request<{ data: unknown }>("/system/relay/rebalance", { method: "POST" })
+      );
+    }
+
+    async setRelayInstanceDrain(
+      instanceId: string,
+      enabled: boolean
+    ): Promise<DashboardRelaySnapshot> {
+      const action = enabled ? "drain" : "resume";
+      return this.unwrapData(
+        this.request<{ data: DashboardRelaySnapshot }>(
+          `/system/relay/instances/${instanceId}/${action}`,
+          {
+            method: "POST",
+            ...(enabled ? { body: JSON.stringify({ confirm: true }) } : {}),
+          }
+        )
+      );
+    }
+
+    async forceDisconnectRelayInstance(instanceId: string): Promise<DashboardRelaySnapshot> {
+      return this.unwrapData(
+        this.request<{ data: DashboardRelaySnapshot }>(
+          `/system/relay/instances/${instanceId}/force-disconnect`,
+          { method: "POST", body: JSON.stringify({ confirm: true }) }
+        )
+      );
+    }
+
     async checkForUpdates(): Promise<UpdateStatus> {
       return this.unwrapData(
         this.request<{ data: UpdateStatus }>("/system/check-update", { method: "POST" })

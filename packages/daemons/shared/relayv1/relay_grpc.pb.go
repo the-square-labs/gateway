@@ -188,8 +188,10 @@ const (
 	RelayAdmin_GetHealth_FullMethodName              = "/relay.v1.RelayAdmin/GetHealth"
 	RelayAdmin_GetRouteRuntime_FullMethodName        = "/relay.v1.RelayAdmin/GetRouteRuntime"
 	RelayAdmin_ApplySnapshot_FullMethodName          = "/relay.v1.RelayAdmin/ApplySnapshot"
+	RelayAdmin_BootstrapPolicyTrust_FullMethodName   = "/relay.v1.RelayAdmin/BootstrapPolicyTrust"
 	RelayAdmin_ReloadIdentity_FullMethodName         = "/relay.v1.RelayAdmin/ReloadIdentity"
 	RelayAdmin_CommitIdentityRotation_FullMethodName = "/relay.v1.RelayAdmin/CommitIdentityRotation"
+	RelayAdmin_SetDrain_FullMethodName               = "/relay.v1.RelayAdmin/SetDrain"
 )
 
 // RelayAdminClient is the client API for RelayAdmin service.
@@ -202,8 +204,10 @@ type RelayAdminClient interface {
 	GetHealth(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 	GetRouteRuntime(ctx context.Context, in *RouteRuntimeRequest, opts ...grpc.CallOption) (*RouteRuntimeResponse, error)
 	ApplySnapshot(ctx context.Context, in *ApplySnapshotRequest, opts ...grpc.CallOption) (*ApplySnapshotResponse, error)
+	BootstrapPolicyTrust(ctx context.Context, in *BootstrapPolicyTrustRequest, opts ...grpc.CallOption) (*BootstrapPolicyTrustResponse, error)
 	ReloadIdentity(ctx context.Context, in *ReloadIdentityRequest, opts ...grpc.CallOption) (*ReloadIdentityResponse, error)
 	CommitIdentityRotation(ctx context.Context, in *CommitIdentityRotationRequest, opts ...grpc.CallOption) (*CommitIdentityRotationResponse, error)
+	SetDrain(ctx context.Context, in *SetDrainRequest, opts ...grpc.CallOption) (*SetDrainResponse, error)
 }
 
 type relayAdminClient struct {
@@ -244,6 +248,16 @@ func (c *relayAdminClient) ApplySnapshot(ctx context.Context, in *ApplySnapshotR
 	return out, nil
 }
 
+func (c *relayAdminClient) BootstrapPolicyTrust(ctx context.Context, in *BootstrapPolicyTrustRequest, opts ...grpc.CallOption) (*BootstrapPolicyTrustResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BootstrapPolicyTrustResponse)
+	err := c.cc.Invoke(ctx, RelayAdmin_BootstrapPolicyTrust_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *relayAdminClient) ReloadIdentity(ctx context.Context, in *ReloadIdentityRequest, opts ...grpc.CallOption) (*ReloadIdentityResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReloadIdentityResponse)
@@ -264,6 +278,16 @@ func (c *relayAdminClient) CommitIdentityRotation(ctx context.Context, in *Commi
 	return out, nil
 }
 
+func (c *relayAdminClient) SetDrain(ctx context.Context, in *SetDrainRequest, opts ...grpc.CallOption) (*SetDrainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetDrainResponse)
+	err := c.cc.Invoke(ctx, RelayAdmin_SetDrain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RelayAdminServer is the server API for RelayAdmin service.
 // All implementations must embed UnimplementedRelayAdminServer
 // for forward compatibility.
@@ -274,8 +298,10 @@ type RelayAdminServer interface {
 	GetHealth(context.Context, *HealthRequest) (*HealthResponse, error)
 	GetRouteRuntime(context.Context, *RouteRuntimeRequest) (*RouteRuntimeResponse, error)
 	ApplySnapshot(context.Context, *ApplySnapshotRequest) (*ApplySnapshotResponse, error)
+	BootstrapPolicyTrust(context.Context, *BootstrapPolicyTrustRequest) (*BootstrapPolicyTrustResponse, error)
 	ReloadIdentity(context.Context, *ReloadIdentityRequest) (*ReloadIdentityResponse, error)
 	CommitIdentityRotation(context.Context, *CommitIdentityRotationRequest) (*CommitIdentityRotationResponse, error)
+	SetDrain(context.Context, *SetDrainRequest) (*SetDrainResponse, error)
 	mustEmbedUnimplementedRelayAdminServer()
 }
 
@@ -295,11 +321,17 @@ func (UnimplementedRelayAdminServer) GetRouteRuntime(context.Context, *RouteRunt
 func (UnimplementedRelayAdminServer) ApplySnapshot(context.Context, *ApplySnapshotRequest) (*ApplySnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplySnapshot not implemented")
 }
+func (UnimplementedRelayAdminServer) BootstrapPolicyTrust(context.Context, *BootstrapPolicyTrustRequest) (*BootstrapPolicyTrustResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BootstrapPolicyTrust not implemented")
+}
 func (UnimplementedRelayAdminServer) ReloadIdentity(context.Context, *ReloadIdentityRequest) (*ReloadIdentityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReloadIdentity not implemented")
 }
 func (UnimplementedRelayAdminServer) CommitIdentityRotation(context.Context, *CommitIdentityRotationRequest) (*CommitIdentityRotationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CommitIdentityRotation not implemented")
+}
+func (UnimplementedRelayAdminServer) SetDrain(context.Context, *SetDrainRequest) (*SetDrainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetDrain not implemented")
 }
 func (UnimplementedRelayAdminServer) mustEmbedUnimplementedRelayAdminServer() {}
 func (UnimplementedRelayAdminServer) testEmbeddedByValue()                    {}
@@ -376,6 +408,24 @@ func _RelayAdmin_ApplySnapshot_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RelayAdmin_BootstrapPolicyTrust_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BootstrapPolicyTrustRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RelayAdminServer).BootstrapPolicyTrust(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RelayAdmin_BootstrapPolicyTrust_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RelayAdminServer).BootstrapPolicyTrust(ctx, req.(*BootstrapPolicyTrustRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RelayAdmin_ReloadIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReloadIdentityRequest)
 	if err := dec(in); err != nil {
@@ -412,6 +462,24 @@ func _RelayAdmin_CommitIdentityRotation_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RelayAdmin_SetDrain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDrainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RelayAdminServer).SetDrain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RelayAdmin_SetDrain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RelayAdminServer).SetDrain(ctx, req.(*SetDrainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RelayAdmin_ServiceDesc is the grpc.ServiceDesc for RelayAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -432,12 +500,20 @@ var RelayAdmin_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _RelayAdmin_ApplySnapshot_Handler,
 		},
 		{
+			MethodName: "BootstrapPolicyTrust",
+			Handler:    _RelayAdmin_BootstrapPolicyTrust_Handler,
+		},
+		{
 			MethodName: "ReloadIdentity",
 			Handler:    _RelayAdmin_ReloadIdentity_Handler,
 		},
 		{
 			MethodName: "CommitIdentityRotation",
 			Handler:    _RelayAdmin_CommitIdentityRotation_Handler,
+		},
+		{
+			MethodName: "SetDrain",
+			Handler:    _RelayAdmin_SetDrain_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -18,20 +18,32 @@ import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
 const logger = createChildLogger('DaemonUpdateService');
 
-export type DaemonType = 'nginx' | 'docker' | 'monitoring';
+export type DaemonType = 'nginx' | 'docker' | 'monitoring' | 'relay' | 'relay-worker';
 
-const DAEMON_TYPES: DaemonType[] = ['nginx', 'docker', 'monitoring'];
+const DAEMON_TYPES: DaemonType[] = ['nginx', 'docker', 'monitoring', 'relay'];
 
 const TAG_SUFFIX_MAP: Record<DaemonType, string> = {
   nginx: '-nginx',
   docker: '-docker',
   monitoring: '-monitoring',
+  relay: '-relay',
+  'relay-worker': '-relay',
 };
 
-const DAEMON_NAME_MAP: Record<DaemonType, string> = {
+const DAEMON_PACKAGE_MAP: Record<DaemonType, string> = {
   nginx: 'nginx-daemon',
   docker: 'docker-daemon',
   monitoring: 'monitoring-daemon',
+  relay: 'relay-supervisor',
+  'relay-worker': 'relay-supervisor',
+};
+
+const DAEMON_BINARY_MAP: Record<DaemonType, string> = {
+  nginx: 'nginx-daemon',
+  docker: 'docker-daemon',
+  monitoring: 'monitoring-daemon',
+  relay: 'relay-supervisor',
+  'relay-worker': 'relay-worker',
 };
 
 /** Maps node.type values to daemon types */
@@ -41,6 +53,7 @@ export const NODE_TYPE_MAP: Record<string, DaemonType> = {
   // Database nodes run the same docker-daemon binary in its database-only profile.
   databases: 'docker',
   monitoring: 'monitoring',
+  relay: 'relay',
 };
 
 export function daemonTypeForNodeType(nodeType: string): DaemonType | null {
@@ -293,7 +306,7 @@ export class DaemonUpdateService {
   }
 
   getDownloadUrl(daemonType: DaemonType, tag: string, arch: string): string {
-    const daemonName = DAEMON_NAME_MAP[daemonType];
+    const daemonName = DAEMON_PACKAGE_MAP[daemonType];
     const encodedPath = encodeURIComponent(this.env.GITLAB_PROJECT_PATH);
     return `${this.gitlabApiUrl}/api/v4/projects/${encodedPath}/packages/generic/${daemonName}/${tag}/${this.getBinaryName(daemonType, arch)}`;
   }
@@ -344,13 +357,13 @@ export class DaemonUpdateService {
   }
 
   getManifestUrl(daemonType: DaemonType, tag: string, arch: string): string {
-    const daemonName = DAEMON_NAME_MAP[daemonType];
+    const daemonName = DAEMON_PACKAGE_MAP[daemonType];
     const encodedPath = encodeURIComponent(this.env.GITLAB_PROJECT_PATH);
     return `${this.gitlabApiUrl}/api/v4/projects/${encodedPath}/packages/generic/${daemonName}/${tag}/${this.getBinaryName(daemonType, arch)}.update.json`;
   }
 
   getBinaryName(daemonType: DaemonType, arch: string): string {
-    const daemonName = DAEMON_NAME_MAP[daemonType];
+    const daemonName = DAEMON_BINARY_MAP[daemonType];
     return `${daemonName}-linux-${this.normalizePackageArch(arch)}`;
   }
 

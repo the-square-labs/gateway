@@ -126,6 +126,8 @@ Gateway 作为 Docker stack 运行在 control-plane server 上。Managed hosts �
 
 Relay 是一个独立的 long-lived container，也是 `9443/tcp` 唯一的公开监听方。普通 app-only 更新会保留 relay container 和已建立的 managed-database binding streams；更新 relay 仍然是一个单独的 data-plane maintenance event。
 
+可以在 **Settings > Relay** 中把本地 relay 扩展为一个逻辑 Relay Pool。额外的 relay 节点由专用 supervisor 管理，控制连接仍然只需 outbound 到 Gateway，并且只向参与的 managed hosts 暴露配置的 relay data endpoint（默认 TCP `9443`）。Gateway 不修改 firewall、不提供 NAT traversal，也不创建 overlay network。添加节点不会自动迁移流量；管理员明确执行 Rebalance 后，新连接会分散到 workload 预先验证的 active relay 集合中，而用户仍然看到一个逻辑 Secure Link。
+
 节点不需要入站 management 端口。你对外提供服务时仍然需要 public traffic ports，例如 nginx nodes 上的 `80` 和 `443`。
 
 ## Security Model

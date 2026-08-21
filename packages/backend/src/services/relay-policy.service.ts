@@ -1,10 +1,14 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   managedDatabaseInstances,
+  relayEndpointAssignmentGenerations,
+  relayEndpointAssignments,
   relayEndpoints,
   relayGrantSigningKeys,
+  relayInstances,
   relayPolicyState,
+  relayPools,
   relayRoutes,
 } from '@/db/schema/index.js';
 import {
@@ -12,6 +16,7 @@ import {
   type RelayControlClient,
   type RelayPolicySnapshot,
 } from '@/grpc/relay-control.client.js';
+import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
@@ -25,6 +30,7 @@ import {
   reconcileManagedDatabaseRelayPolicy,
   updateManagedDatabaseRelayStatus,
 } from './relay-policy-reconciler.js';
+import { RelayPolicySigningKeyService } from './relay-policy-signing-key.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
@@ -47,11 +53,15 @@ export interface ProxyRouteRuntime {
 const logger = createChildLogger('RelayPolicyService');
 
 export class RelayPolicyService {
-  private dispatch?: Pick<NodeDispatchService, 'sendRelayGrantBundle'>;
+  private dispatch?: Pick<
+    NodeDispatchService,
+    'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate'
+  >;
   private lastGrantRefreshAt = 0;
   private lastGrantRefreshRevision = 0;
   private readonly grantIssuer: RelayGrantIssuerService;
   private readonly grantKeys: RelayGrantKeyService;
+  private readonly policyKeys: RelayPolicySigningKeyService;
   private relaySettingsSync: Promise<void> = Promise.resolve();
 
   constructor(
@@ -62,9 +72,15 @@ export class RelayPolicyService {
   ) {
     this.grantIssuer = new RelayGrantIssuerService(db, cryptoService, settings);
     this.grantKeys = new RelayGrantKeyService(db, cryptoService);
+    this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
   }
 
-  setNodeDispatch(dispatch: Pick<NodeDispatchService, 'sendRelayGrantBundle'>): void {
+  setNodeDispatch(
+    dispatch: Pick<
+      NodeDispatchService,
+      'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate'
+    >
+  ): void {
     this.dispatch = dispatch;
   }
 
@@ -120,6 +136,7 @@ export class RelayPolicyService {
   async ensureInitialized(): Promise<void> {
     await backfillRelayNodeFingerprints(this.db);
     await this.grantKeys.ensureInitialized();
+    await this.policyKeys.ensureInitialized();
     await reconcileManagedDatabaseRelayPolicy(this.db);
     await this.syncSnapshot().catch((error) => {
       logger.warn('Initial relay policy sync deferred until relay is reachable', {
@@ -128,7 +145,66 @@ export class RelayPolicyService {
     });
   }
 
+  async getPolicyEnrollmentTrust() {
+    return this.policyKeys.getEnrollmentTrust();
+  }
+
+  async syncRemoteInstancePolicy(nodeId: string): Promise<number> {
+    if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
+    const [instance] = await this.db
+      .select({ id: relayInstances.id })
+      .from(relayInstances)
+      .where(and(eq(relayInstances.nodeId, nodeId), eq(relayInstances.kind, 'remote')))
+      .limit(1);
+    if (!instance) throw new Error('Remote relay instance is unavailable');
+    const snapshot = await this.buildInstanceSnapshot(instance.id);
+    const result = await this.dispatch.sendRelayPolicy(
+      nodeId,
+      snapshot.encodedRequest,
+      String(snapshot.revision),
+      String(snapshot.expiresAtUnix)
+    );
+    if (!result.success) throw new Error(result.error || 'Remote relay rejected policy snapshot');
+    return snapshot.revision;
+  }
+
+  async setRemoteInstanceDrain(nodeId: string, enabled: boolean, forceDisconnect = false): Promise<void> {
+    if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
+    const result = await this.dispatch.setRelayDrain(nodeId, enabled, forceDisconnect);
+    if (!result.success) throw new Error(result.error || 'Remote relay drain command failed');
+  }
+
+  async probeRelayCandidate(
+    nodeId: string,
+    input: Parameters<NodeDispatchService['probeRelayCandidate']>[1]
+  ): Promise<void> {
+    if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
+    const result = await this.dispatch.probeRelayCandidate(nodeId, input);
+    if (!result.success) throw new Error(result.error || 'Relay candidate probe failed');
+  }
+
   async syncSnapshot(): Promise<number> {
+    const health = await this.relay.getHealth?.().catch(() => null);
+    if (health?.poolId === 'system' && health.capabilities?.includes('relay_pool_v1')) {
+      const [local] = await this.db
+        .select({ id: relayInstances.id })
+        .from(relayInstances)
+        .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.kind, 'local')))
+        .limit(1);
+      if (!local || health.relayInstanceId !== local.id) {
+        throw new Error('Local Relay Pool identity does not match persisted instance identity');
+      }
+      const trust = await this.policyKeys.getEnrollmentTrust();
+      await this.relay.bootstrapPolicyTrust(trust.keyId, trust.publicKey, trust.fingerprint);
+      const signed = await this.buildInstanceSnapshot(local.id);
+      const response = await this.relay.applyEncodedSnapshot(signed.encodedRequest);
+      const applied = Number(response.appliedRevision);
+      if (!Number.isSafeInteger(applied) || applied !== signed.revision) {
+        throw new Error(`Relay acknowledged revision ${response.appliedRevision}, expected ${signed.revision}`);
+      }
+      this.grantIssuer.acknowledgeRevision(applied);
+      return applied;
+    }
     const snapshot = await this.buildSnapshot();
     const response = await this.relay.applySnapshot(snapshot);
     const applied = Number(response.appliedRevision);
@@ -152,11 +228,40 @@ export class RelayPolicyService {
   }
 
   async rotateIfDue(now = new Date()): Promise<boolean> {
-    return this.grantKeys.rotateIfDue(
+    const grantRotated = await this.grantKeys.rotateIfDue(
       now,
       () => this.syncSnapshot(),
       () => this.refreshAllNodeGrantsIfDue(true)
     );
+    const pendingPolicyKey = await this.policyKeys.beginRotationIfDue(now);
+    if (pendingPolicyKey) await this.syncAllRemoteInstancePolicies();
+    const policyChanged = await this.finalizePolicySigningKeyRotation(now);
+    return grantRotated || Boolean(pendingPolicyKey) || policyChanged;
+  }
+
+  async finalizePolicySigningKeyRotation(now = new Date()): Promise<boolean> {
+    const promoted = await this.policyKeys.promoteAcknowledgedPending(now);
+    const retired = await this.policyKeys.retireExpiredVerificationKeys(now);
+    if (promoted || retired) await this.syncAllRemoteInstancePolicies();
+    return promoted || retired;
+  }
+
+  private async syncAllRemoteInstancePolicies(): Promise<void> {
+    const instances = await this.db
+      .select({ nodeId: relayInstances.nodeId })
+      .from(relayInstances)
+      .where(
+        and(
+          eq(relayInstances.poolId, 'system'),
+          eq(relayInstances.kind, 'remote'),
+          inArray(relayInstances.state, ['synchronizing', 'ready', 'draining'])
+        )
+      );
+    const results = await Promise.allSettled(
+      instances.flatMap(({ nodeId }) => (nodeId ? [this.syncRemoteInstancePolicy(nodeId)] : []))
+    );
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected?.status === 'rejected') throw rejected.reason;
   }
 
   async ensureManagedDatabaseEndpoint(managedDatabaseId: string, nodeId: string): Promise<string> {
@@ -204,6 +309,7 @@ export class RelayPolicyService {
       return { id: current.id, active: current.status === 'active' };
     });
     if (!endpoint.active) throw new Error('Managed database relay endpoint is awaiting lifecycle reconciliation');
+    await this.ensureLegacyCompatibleAssignment(endpoint.id);
     await this.syncSnapshot();
     return endpoint.id;
   }
@@ -267,6 +373,7 @@ export class RelayPolicyService {
       }
       return current.id;
     });
+    await this.ensureLegacyCompatibleAssignment(endpointId);
     const routeId = await this.ensureRoute(
       'proxy_host_secure_link',
       linkId,
@@ -337,7 +444,39 @@ export class RelayPolicyService {
       throw new Error('Managed database is unavailable');
     }
     const routeId = await this.ensureGatewayRoute(managedDatabaseId, database.nodeId, appCertificateFingerprint);
-    return this.relay.openTunnel(await this.grantIssuer.issueGatewayConnectGrant(routeId, appCertificateFingerprint));
+    const assignment = await this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint);
+    const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
+    let lastError: unknown;
+    for (const candidate of activeCandidates) {
+      try {
+        return candidate.local
+          ? await this.relay.openTunnel(candidate.grant)
+          : await this.relay.openCandidateTunnel(candidate);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!activeCandidates.length) return this.relay.openTunnel(assignment.grant);
+    throw lastError instanceof Error ? lastError : new Error('Relay pool is unavailable');
+  }
+
+  async probeGatewayRelayCandidate(
+    routeId: string,
+    appCertificateFingerprint: string,
+    relayInstanceId: string,
+    assignmentGeneration: string
+  ): Promise<void> {
+    const assignment = await this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint);
+    const candidate = assignment.candidates.find(
+      (item) => item.relayInstanceId === relayInstanceId && item.assignmentGeneration === assignmentGeneration
+    );
+    if (!candidate) throw new Error('Gateway relay candidate grant is unavailable');
+    if (candidate.local) {
+      const tunnel = await this.relay.openTunnel(candidate.grant);
+      tunnel.destroy();
+      return;
+    }
+    await this.relay.probeCandidate(candidate);
   }
 
   async revokeOwner(
@@ -583,6 +722,170 @@ export class RelayPolicyService {
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' }
     );
+  }
+
+  private async ensureLegacyCompatibleAssignment(endpointId: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`relay-endpoint-assignment:${endpointId}`}))`);
+      const [existing] = await tx
+        .select({ id: relayEndpointAssignmentGenerations.id })
+        .from(relayEndpointAssignmentGenerations)
+        .where(
+          and(
+            eq(relayEndpointAssignmentGenerations.endpointId, endpointId),
+            eq(relayEndpointAssignmentGenerations.state, 'active')
+          )
+        )
+        .limit(1);
+      if (existing) return;
+      const [local] = await tx
+        .select({ id: relayInstances.id })
+        .from(relayInstances)
+        .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.kind, 'local')))
+        .limit(1);
+      if (!local) throw new Error('Local relay instance is unavailable');
+      const [generation] = await tx
+        .insert(relayEndpointAssignmentGenerations)
+        .values({ endpointId, generation: 1, state: 'active', desiredRedundancy: 1, activatedAt: new Date() })
+        .returning({ id: relayEndpointAssignmentGenerations.id });
+      await tx.insert(relayEndpointAssignments).values({
+        assignmentGenerationId: generation.id,
+        relayInstanceId: local.id,
+        role: 'active',
+        targetRegistrationState: 'ready',
+        targetRegisteredAt: new Date(),
+      });
+    });
+  }
+
+  private async buildInstanceSnapshot(instanceId: string): Promise<{
+    encodedRequest: Buffer;
+    revision: number;
+    expiresAtUnix: number;
+  }> {
+    const relaySettings = (await this.settings.getConfig()).relay;
+    const publishedPolicyKeys = await this.policyKeys.listPublishedKeys();
+    const issuedAt = new Date();
+    const expiresAtUnix = Math.floor((issuedAt.getTime() + 15 * 60 * 1000) / 1000);
+    const projection = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-remote-policy-revision'))`);
+      const [[instance], [state], grantKeys] = await Promise.all([
+        tx.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1),
+        tx.select().from(relayPolicyState).where(eq(relayPolicyState.id, 'current')).limit(1),
+        tx
+          .select()
+          .from(relayGrantSigningKeys)
+          .where(inArray(relayGrantSigningKeys.status, ['pending', 'active', 'verification_only'])),
+      ]);
+      if (!instance || !state) throw new Error('Relay instance or policy state is unavailable');
+
+      // The assignment query above cannot reference the separately selected
+      // instance alias portably across Drizzle drivers, so constrain it here
+      // through an explicit second query with the concrete instance id.
+      const selectedAssignments = await tx
+        .select({
+          endpointId: relayEndpointAssignmentGenerations.endpointId,
+          assignmentGeneration: relayEndpointAssignmentGenerations.generation,
+          generationState: relayEndpointAssignmentGenerations.state,
+        })
+        .from(relayEndpointAssignments)
+        .innerJoin(
+          relayEndpointAssignmentGenerations,
+          eq(relayEndpointAssignments.assignmentGenerationId, relayEndpointAssignmentGenerations.id)
+        )
+        .where(
+          and(
+            eq(relayEndpointAssignments.relayInstanceId, instance.id),
+            inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])
+          )
+        );
+      const endpointIds = [...new Set(selectedAssignments.map(({ endpointId }) => endpointId))];
+      const endpoints = endpointIds.length
+        ? await tx.select().from(relayEndpoints).where(inArray(relayEndpoints.id, endpointIds))
+        : [];
+      const routes = endpointIds.length
+        ? await tx.select().from(relayRoutes).where(inArray(relayRoutes.targetEndpointId, endpointIds))
+        : [];
+      const [poolRevision] = await tx
+        .update(relayPools)
+        .set({ desiredPolicyRevision: sql`${relayPools.desiredPolicyRevision} + 1`, updatedAt: issuedAt })
+        .where(eq(relayPools.id, instance.poolId))
+        .returning({ revision: relayPools.desiredPolicyRevision });
+      if (!poolRevision) throw new Error('Relay pool is unavailable');
+      return { instance, state, grantKeys, selectedAssignments, endpoints, routes, revision: poolRevision.revision };
+    });
+
+    const endpointById = new Map(projection.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    const payload = encodeRelayV1Message('PolicyEnvelopePayload', {
+      schemaVersion: 2,
+      gatewayInstanceId: projection.state.gatewayInstanceId,
+      poolId: projection.instance.poolId,
+      relayInstanceId: projection.instance.id,
+      revision: String(projection.revision),
+      issuedAtUnix: String(Math.floor(issuedAt.getTime() / 1000)),
+      expiresAtUnix: String(expiresAtUnix),
+      grantPublicKeys: projection.grantKeys.map((key) => ({
+        keyId: key.keyId,
+        publicKey: Buffer.from(key.publicKey, 'base64'),
+      })),
+      endpoints: projection.selectedAssignments.flatMap((assignment) => {
+        const endpoint = endpointById.get(assignment.endpointId);
+        if (!endpoint) return [];
+        return [
+          {
+            endpointId: endpoint.id,
+            generation: String(endpoint.generation),
+            subjectKind: endpoint.subjectKind,
+            subjectId: endpoint.subjectId,
+            certificateSha256: endpoint.certificateSha256,
+            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
+            poolId: projection.instance.poolId,
+            relayInstanceId: projection.instance.id,
+            assignmentGeneration: String(assignment.assignmentGeneration),
+          },
+        ];
+      }),
+      routes: projection.selectedAssignments.flatMap((assignment) =>
+        projection.routes
+          .filter(({ targetEndpointId }) => targetEndpointId === assignment.endpointId)
+          .map((route) => ({
+            routeId: route.id,
+            generation: String(route.generation),
+            sourceKind: route.sourceKind,
+            sourceId: route.sourceId,
+            sourceCertificateSha256: route.sourceCertificateSha256,
+            targetEndpointId: route.targetEndpointId,
+            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
+            maxFrameBytes: route.maxFrameBytes,
+            disableIdleTimeout: route.ownerKind === 'proxy_host_secure_link',
+            trafficClass: route.ownerKind === 'proxy_host_secure_link' ? 'proxy' : 'database',
+            assignmentGeneration: String(assignment.assignmentGeneration),
+          }))
+      ),
+      admissionPolicy: {
+        enabled: relaySettings.adaptiveAdmissionEnabled,
+        proxyTargetPressurePercent: relaySettings.proxyTargetPressurePercent,
+        databaseReservePercent: relaySettings.databaseReservePercent,
+        hardPressurePercent: relaySettings.hardPressurePercent,
+      },
+      capabilities: ['relay_pool_v1'],
+      policySigningKeys: publishedPolicyKeys.map((key) => ({
+        keyId: key.keyId,
+        publicKey: key.publicKey,
+        publicKeyFingerprint: key.fingerprint,
+        status: key.status === 'pending' ? 'active' : key.status,
+        validFromUnix: String(key.activatedAt ? Math.floor(key.activatedAt.getTime() / 1000) : 0),
+        verifyUntilUnix: String(key.verifyUntil ? Math.floor(key.verifyUntil.getTime() / 1000) : 0),
+      })),
+    });
+    const signed = await this.policyKeys.signPayload(payload);
+    return {
+      encodedRequest: encodeRelayV1Message('ApplySnapshotRequest', {
+        signedEnvelope: { signingKeyId: signed.signingKeyId, payload, signature: signed.signature },
+      }),
+      revision: projection.revision,
+      expiresAtUnix,
+    };
   }
 
   private async updateManagedDatabaseStatus(managedDatabaseId: string, databaseStatus: string): Promise<void> {

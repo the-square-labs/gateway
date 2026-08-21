@@ -141,6 +141,7 @@ export interface AuthProvisioningSettings {
     relay?: {
       dataLanes: number;
       readChunkBytes: number;
+      assignmentSpread: { mode: "fixed"; count: number } | { mode: "all" };
       adaptiveAdmissionEnabled: boolean;
       proxyTargetPressurePercent: number;
       databaseReservePercent: number;

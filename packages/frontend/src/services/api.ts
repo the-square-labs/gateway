@@ -828,6 +828,8 @@ class ApiClient extends withInferenceCoreApi(
     type?: string;
     hostname: string;
     displayName?: string;
+    serviceAddresses?: string[];
+    servicePort?: number;
   }): Promise<import("@/types").CreateNodeResponse> {
     return this.unwrapData(
       this.request("/nodes", {

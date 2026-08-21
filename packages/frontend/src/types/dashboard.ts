@@ -39,7 +39,10 @@ export type RelayLifecycleState =
   | "suspect"
   | "degraded"
   | "recovering"
-  | "critical";
+  | "critical"
+  | "unavailable"
+  | "rebalancing"
+  | "rebalance_available";
 
 export interface DashboardRelaySnapshot {
   state: RelayLifecycleState;
@@ -77,6 +80,37 @@ export interface DashboardRelaySnapshot {
   expectedImage?: string | null;
   expectedVersion?: string | null;
   canRetry?: boolean;
+  poolId?: string;
+  rebalanceAvailable?: boolean;
+  worstPressurePercent?: number;
+  endpointCount?: number;
+  instances?: DashboardRelayInstance[];
+  staging?: Array<{ id: string; endpointId: string; generation: number; state: string }>;
+  update?: { state: string; targetVersion: string; error: string | null } | null;
+  local?: DashboardRelaySnapshot | null;
+}
+
+export interface DashboardRelayInstance {
+  id: string;
+  kind: "local" | "remote";
+  nodeId: string | null;
+  faultDomainId: string;
+  displayName: string;
+  advertisedAddresses: string[];
+  servicePort: number;
+  state: "joining" | "synchronizing" | "ready" | "draining" | "offline" | "error";
+  buildVersion: string | null;
+  protocolMajor: number | null;
+  appliedPolicyRevision: number;
+  policyExpiresAt: string | null;
+  lastSeenAt: string | null;
+  activeAssignments: number;
+  updateStep?: { state: string; error: string | null } | null;
+  health?: {
+    activeTunnels?: number;
+    registeredEndpoints?: number;
+    pressurePercent?: number;
+  } | null;
 }
 
 export interface DashboardPinnedDockerResourceRequest {

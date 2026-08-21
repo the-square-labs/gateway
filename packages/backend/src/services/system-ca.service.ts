@@ -444,6 +444,35 @@ export class SystemCAService {
     };
   }
 
+  /** Issue the server leaf used by a remote relay data-plane listener. */
+  async issueRelayServerCert(
+    relayInstanceId: string,
+    advertisedAddresses: string[]
+  ): Promise<{ certPem: string; keyPem: string; serial: string; expiresAt: Date; identity: string }> {
+    const caId = await this.getSystemCAId();
+    const identity = `relay-${relayInstanceId}`;
+    const sans = [...new Set([identity, ...advertisedAddresses].map(normalizeGrpcServerSan).filter(Boolean))];
+    const result = await this.requireSystemCertificateLifecycle().issueCurrent(
+      {
+        caId,
+        type: 'tls-server',
+        commonName: identity,
+        sans,
+        keyAlgorithm: 'ecdsa-p256',
+        validityDays: 365,
+      },
+      SYSTEM_USER_ID,
+      { type: 'relay_node_server', id: relayInstanceId }
+    );
+    return {
+      certPem: result.certificate.certificatePem,
+      keyPem: result.privateKeyPem,
+      serial: result.certificate.serialNumber,
+      expiresAt: result.certificate.notAfter,
+      identity,
+    };
+  }
+
   private requireSystemCertificateLifecycle(): SystemCertificateLifecycleService {
     if (!this.systemCertificateLifecycle) {
       throw new Error('System certificate lifecycle service is required before issuing system leaves');

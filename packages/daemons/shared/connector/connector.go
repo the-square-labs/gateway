@@ -2,6 +2,9 @@ package connector
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math"
@@ -39,12 +42,47 @@ func NewConnector(address string, tlsMgr *auth.TLSManager, logger *slog.Logger) 
 
 // Connect creates a gRPC client connection configured for mTLS.
 func (c *Connector) Connect(ctx context.Context) (*grpc.ClientConn, error) {
+	return c.connect(ctx, c.Address, "")
+}
+
+func (c *Connector) ConnectTarget(ctx context.Context, address, serverName, certificateFingerprint string) (*grpc.ClientConn, error) {
+	return c.connectTarget(ctx, address, serverName, certificateFingerprint)
+}
+
+func (c *Connector) connectTarget(ctx context.Context, address, serverName, certificateFingerprint string) (*grpc.ClientConn, error) {
+	tlsCfg, err := c.TLSMgr.ClientTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg.ServerName = serverName
+	tlsCfg.VerifyConnection = func(state tls.ConnectionState) error {
+		if len(state.PeerCertificates) == 0 {
+			return fmt.Errorf("relay target did not present a certificate")
+		}
+		digest := sha256.Sum256(state.PeerCertificates[0].Raw)
+		actual := "sha256:" + hex.EncodeToString(digest[:])
+		if actual != certificateFingerprint {
+			return fmt.Errorf("relay target certificate fingerprint mismatch")
+		}
+		return nil
+	}
+	return grpc.NewClient(address,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time: 30 * time.Second, Timeout: 10 * time.Second, PermitWithoutStream: true,
+		}),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxMessageBytes), grpc.MaxCallSendMsgSize(MaxMessageBytes)),
+	)
+}
+
+func (c *Connector) connect(ctx context.Context, address, serverName string) (*grpc.ClientConn, error) {
 	tlsCfg, err := c.TLSMgr.ClientTLSConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := grpc.NewClient(c.Address,
+	tlsCfg.ServerName = serverName
+	conn, err := grpc.NewClient(address,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
@@ -60,6 +98,27 @@ func (c *Connector) Connect(ctx context.Context) (*grpc.ClientConn, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+func (c *Connector) ConnectTargetAttempt(ctx context.Context, addresses []string, serverName, certificateFingerprint string) (*grpc.ClientConn, error) {
+	var lastErr error
+	for _, address := range addresses {
+		conn, err := c.ConnectTarget(ctx, address, serverName, certificateFingerprint)
+		if err == nil {
+			attemptCtx, cancel := context.WithTimeout(ctx, ConnectAttemptTimeout)
+			err = waitUntilReady(attemptCtx, conn)
+			cancel()
+			if err == nil {
+				return conn, nil
+			}
+			_ = conn.Close()
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("relay target has no addresses")
+	}
+	return nil, lastErr
 }
 
 // ConnectWithRetry retries connection with exponential backoff + jitter.

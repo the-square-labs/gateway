@@ -548,6 +548,8 @@ function relayServiceBlock(): string[] {
     '      RELAY_IDENTITY_DIR: /var/lib/gateway-relay/identity',
     '      RELAY_STATE_DIR: /var/lib/gateway-relay/state',
     '      RELAY_APP_GRPC_TARGET: app:9443',
+    '      RELAY_POOL_ID: system',
+    '      RELAY_INSTANCE_ID: 00000000-0000-4000-8000-000000000001',
     '    ports:',
     '      - "9443:9443"',
     '    volumes:',

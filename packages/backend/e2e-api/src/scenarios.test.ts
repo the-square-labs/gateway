@@ -6,7 +6,7 @@ const scenarioContract = [
   ['health endpoint reports dependency status', false],
   ['OpenAPI is reachable and legacy nginx management routes are absent', false],
   ['API token is rejected from browser-session-only surfaces', false],
-  ['all no-parameter OpenAPI GET routes that support API tokens are reachable', false],
+  ['all no-parameter OpenAPI GET routes are API-accessible or explicitly session-only', false],
   ['core resource list APIs are reachable', false],
   ['resource detail APIs work for existing visible rows', false],
   ['Docker node read APIs work for existing docker nodes', false],
@@ -34,6 +34,7 @@ function contextWithFlags(flags: Partial<TestContext['config']>): TestContext {
       allowRuntimeMutations: false,
       allowUnhealthy: false,
       keepToken: false,
+      profile: 'full',
       ...flags,
     },
   };

@@ -18,8 +18,10 @@ service RelayAdmin {
   rpc GetHealth(HealthRequest) returns (HealthResponse);
   rpc GetRouteRuntime(RouteRuntimeRequest) returns (RouteRuntimeResponse);
   rpc ApplySnapshot(ApplySnapshotRequest) returns (ApplySnapshotResponse);
+  rpc BootstrapPolicyTrust(BootstrapPolicyTrustRequest) returns (BootstrapPolicyTrustResponse);
   rpc ReloadIdentity(ReloadIdentityRequest) returns (ReloadIdentityResponse);
   rpc CommitIdentityRotation(CommitIdentityRotationRequest) returns (CommitIdentityRotationResponse);
+  rpc SetDrain(SetDrainRequest) returns (SetDrainResponse);
 }
 
 message SignedGrant {
@@ -78,6 +80,21 @@ message PublicKey {
   bytes public_key = 2;
 }
 
+enum RelayMode {
+  RELAY_MODE_UNSPECIFIED = 0;
+  RELAY_MODE_LOCAL_COMBINED = 1;
+  RELAY_MODE_REMOTE_DATA_ONLY = 2;
+}
+
+message PolicySigningKey {
+  string key_id = 1;
+  bytes public_key = 2;
+  string public_key_fingerprint = 3;
+  string status = 4; // "active" or "verification_only"
+  int64 valid_from_unix = 5;
+  int64 verify_until_unix = 6;
+}
+
 message EndpointPolicy {
   string endpoint_id = 1;
   uint64 generation = 2;
@@ -85,6 +102,9 @@ message EndpointPolicy {
   string subject_id = 4;
   string certificate_sha256 = 5;
   uint32 max_concurrent_sessions = 6;
+  string pool_id = 7;
+  string relay_instance_id = 8;
+  uint64 assignment_generation = 9;
 }
 
 message RoutePolicy {
@@ -102,6 +122,7 @@ message RoutePolicy {
   // Product classification used only for overload admission and reporting.
   // The relay remains unaware of concrete Gateway resource identifiers.
   string traffic_class = 10;
+  uint64 assignment_generation = 11;
 }
 
 message AdmissionPolicy {
@@ -111,6 +132,28 @@ message AdmissionPolicy {
   uint32 hard_pressure_percent = 4;
 }
 
+message PolicyEnvelopePayload {
+  uint32 schema_version = 1;
+  string gateway_instance_id = 2;
+  string pool_id = 3;
+  string relay_instance_id = 4;
+  uint64 revision = 5;
+  int64 issued_at_unix = 6;
+  int64 expires_at_unix = 7;
+  repeated PublicKey grant_public_keys = 8;
+  repeated EndpointPolicy endpoints = 9;
+  repeated RoutePolicy routes = 10;
+  AdmissionPolicy admission_policy = 11;
+  repeated string capabilities = 12;
+  repeated PolicySigningKey policy_signing_keys = 13;
+}
+
+message SignedPolicyEnvelope {
+  string signing_key_id = 1;
+  bytes payload = 2;
+  bytes signature = 3;
+}
+
 message ApplySnapshotRequest {
   uint64 revision = 1;
   string gateway_instance_id = 2;
@@ -118,11 +161,28 @@ message ApplySnapshotRequest {
   repeated EndpointPolicy endpoints = 4;
   repeated RoutePolicy routes = 5;
   AdmissionPolicy admission_policy = 6;
+  // Pool-aware relays consume this signed envelope. Legacy local callers keep
+  // fields 1-6 byte-for-field compatible until capability negotiation succeeds.
+  SignedPolicyEnvelope signed_envelope = 7;
 }
 
 message ApplySnapshotResponse {
   uint64 applied_revision = 1;
   bool unchanged = 2;
+  string pool_id = 3;
+  string relay_instance_id = 4;
+  int64 policy_expires_at_unix = 5;
+}
+
+message BootstrapPolicyTrustRequest {
+  string key_id = 1;
+  bytes public_key = 2;
+  string public_key_fingerprint = 3;
+}
+message BootstrapPolicyTrustResponse {
+  string key_id = 1;
+  string public_key_fingerprint = 2;
+  bool unchanged = 3;
 }
 
 message HealthRequest {}
@@ -150,6 +210,20 @@ message HealthResponse {
   uint64 memory_limit_bytes = 21;
   uint64 open_file_descriptors = 22;
   uint64 file_descriptor_limit = 23;
+  string pool_id = 24;
+  string relay_instance_id = 25;
+  RelayMode mode = 26;
+  int64 policy_expires_at_unix = 27;
+  repeated string capabilities = 28;
+  bool draining = 29;
+  repeated AssignmentTunnelCount assignment_tunnels = 30;
+  repeated string policy_key_ids = 31;
+}
+
+message AssignmentTunnelCount {
+  string endpoint_id = 1;
+  uint64 assignment_generation = 2;
+  uint64 active_tunnels = 3;
 }
 
 message RouteRuntimeRequest { string route_id = 1; }
@@ -172,3 +246,12 @@ message ReloadIdentityRequest { string operation_id = 1; }
 message ReloadIdentityResponse { bool reloaded = 1; }
 message CommitIdentityRotationRequest { string operation_id = 1; }
 message CommitIdentityRotationResponse { bool committed = 1; }
+message SetDrainRequest {
+  bool draining = 1;
+  string operation_id = 2;
+  bool force_disconnect = 3;
+}
+message SetDrainResponse {
+  bool draining = 1;
+  uint64 disconnected_tunnels = 2;
+}

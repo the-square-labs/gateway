@@ -8,6 +8,8 @@ import {
   isValidGatewayHostPortTarget,
   isValidGatewayIpPortTarget,
   normalizePublicUrl,
+  RELAY_ASSIGNMENT_SPREAD_MAX_COUNT,
+  RELAY_ASSIGNMENT_SPREAD_MIN_COUNT,
   RELAY_DATA_LANES_MAX,
   RELAY_DATA_LANES_MIN,
   RELAY_DATABASE_RESERVE_MAX_PERCENT,
@@ -172,6 +174,15 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .object({
           dataLanes: z.number().int().min(RELAY_DATA_LANES_MIN).max(RELAY_DATA_LANES_MAX).optional(),
           readChunkBytes: z.number().int().min(RELAY_READ_CHUNK_BYTES_MIN).max(RELAY_READ_CHUNK_BYTES_MAX).optional(),
+          assignmentSpread: z
+            .discriminatedUnion('mode', [
+              z.object({
+                mode: z.literal('fixed'),
+                count: z.number().int().min(RELAY_ASSIGNMENT_SPREAD_MIN_COUNT).max(RELAY_ASSIGNMENT_SPREAD_MAX_COUNT),
+              }),
+              z.object({ mode: z.literal('all') }),
+            ])
+            .optional(),
           adaptiveAdmissionEnabled: z.boolean().optional(),
           proxyTargetPressurePercent: z
             .number()
