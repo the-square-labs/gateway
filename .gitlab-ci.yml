@@ -558,6 +558,42 @@ release-relay:
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay/${CI_COMMIT_TAG}/relay-image.update.json"
           filepath: /relay-image.update.json
           link_type: other
+        - name: relay-supervisor-linux-amd64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-amd64"
+          filepath: /relay-supervisor-linux-amd64
+          link_type: package
+        - name: relay-supervisor-linux-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-arm64"
+          filepath: /relay-supervisor-linux-arm64
+          link_type: package
+        - name: relay-worker-linux-amd64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-amd64"
+          filepath: /relay-worker-linux-amd64
+          link_type: package
+        - name: relay-worker-linux-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-arm64"
+          filepath: /relay-worker-linux-arm64
+          link_type: package
+        - name: relay-supervisor-linux-amd64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-amd64.update.json"
+          filepath: /relay-supervisor-linux-amd64.update.json
+          link_type: other
+        - name: relay-supervisor-linux-arm64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-arm64.update.json"
+          filepath: /relay-supervisor-linux-arm64.update.json
+          link_type: other
+        - name: relay-worker-linux-amd64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-amd64.update.json"
+          filepath: /relay-worker-linux-amd64.update.json
+          link_type: other
+        - name: relay-worker-linux-arm64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-arm64.update.json"
+          filepath: /relay-worker-linux-arm64.update.json
+          link_type: other
+        - name: relay-supervisor-checksums.txt
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/checksums.txt"
+          filepath: /relay-supervisor-checksums.txt
+          link_type: other
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
 
@@ -824,58 +860,6 @@ build-relay-supervisor:
     DAEMON_NAME: relay-supervisor
     DAEMON_SUFFIX: relay
     LDFLAGS_VERSION_PKG: main
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
-
-release-relay-supervisor:
-  extends: .release-daemon
-  needs:
-    - build-relay-supervisor
-  variables:
-    DAEMON_NAME: relay-supervisor
-    DAEMON_LABEL: "Relay Supervisor"
-  release:
-    tag_name: $CI_COMMIT_TAG
-    name: "Relay Supervisor ${CI_COMMIT_TAG}"
-    description: ./release-notes.md
-    assets:
-      links:
-        - name: relay-supervisor-linux-amd64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-amd64"
-          filepath: /relay-supervisor-linux-amd64
-          link_type: package
-        - name: relay-supervisor-linux-arm64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-arm64"
-          filepath: /relay-supervisor-linux-arm64
-          link_type: package
-        - name: relay-worker-linux-amd64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-amd64"
-          filepath: /relay-worker-linux-amd64
-          link_type: package
-        - name: relay-worker-linux-arm64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-arm64"
-          filepath: /relay-worker-linux-arm64
-          link_type: package
-        - name: relay-supervisor-linux-amd64.update.json
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-amd64.update.json"
-          filepath: /relay-supervisor-linux-amd64.update.json
-          link_type: other
-        - name: relay-supervisor-linux-arm64.update.json
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-arm64.update.json"
-          filepath: /relay-supervisor-linux-arm64.update.json
-          link_type: other
-        - name: relay-worker-linux-amd64.update.json
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-amd64.update.json"
-          filepath: /relay-worker-linux-amd64.update.json
-          link_type: other
-        - name: relay-worker-linux-arm64.update.json
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-arm64.update.json"
-          filepath: /relay-worker-linux-arm64.update.json
-          link_type: other
-        - name: checksums.txt
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/checksums.txt"
-          filepath: /checksums.txt
-          link_type: other
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
 
