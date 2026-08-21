@@ -5,6 +5,8 @@ import { __testOnly } from './inference-model.service.js';
 describe('inference model publication validation', () => {
   it('normalizes stable public IDs and validates compaction limits', () => {
     expect(__testOnly.normalizePublicId(' GPT-5.6/SOL ')).toBe('gpt-5.6/sol');
+    expect(__testOnly.normalizePublicId(' ~Google/Gemini-Flash-Latest ')).toBe('~google/gemini-flash-latest');
+    expect(() => __testOnly.normalizePublicId('google/~gemini')).toThrow(/unsupported characters/);
     expect(() => __testOnly.normalizePublicId('../model')).toThrow(/unsupported characters/);
     expect(() =>
       __testOnly.validateModelInput({

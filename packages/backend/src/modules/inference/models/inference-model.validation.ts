@@ -24,7 +24,7 @@ export function validateModelInput(input: InferenceModelInput) {
 
 export function normalizePublicId(value: string): string {
   const normalized = value.trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._:/-]{0,254}$/.test(normalized)) {
+  if (!/^(?:[a-z0-9][a-z0-9._:/-]{0,254}|~[a-z0-9][a-z0-9._:/-]{0,253})$/.test(normalized)) {
     throw new AppError(400, 'INFERENCE_MODEL_ID_INVALID', 'Public model ID contains unsupported characters');
   }
   return normalized;
