@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 
 const USER = { id: '11111111-1111-4111-8111-111111111111', isBlocked: false };
@@ -43,17 +43,18 @@ const SOURCE_2 = {
 const CONNECTION_2 = { ...CONNECTION, id: 'conn-2', routingOrder: 1 };
 
 function selectChain(rows: unknown[]) {
-  const chain: Record<string, unknown> = {
-    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-  };
+  const chain = Promise.resolve(rows) as Promise<unknown[]> & Record<string, unknown>;
   for (const method of ['from', 'where', 'orderBy', 'innerJoin', 'leftJoin', 'limit', 'groupBy']) {
     chain[method] = vi.fn().mockReturnValue(chain);
   }
   return chain;
 }
 
-function createContext(body: string | FormData | null, headers: Record<string, string> = {}, query: Record<string, string> = {}) {
+function createContext(
+  body: string | FormData | null,
+  headers: Record<string, string> = {},
+  query: Record<string, string> = {}
+) {
   const url = new URL('http://gateway.test/api/inference/v1/responses');
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
   const raw = new Request(url, { method: 'POST', body, headers });
@@ -74,12 +75,9 @@ function createContext(body: string | FormData | null, headers: Record<string, s
   } as never;
 }
 
-function createService(options: {
-  coreResponse?: Response;
-  coreError?: unknown;
-  sources?: unknown[];
-  pricing?: unknown;
-} = {}) {
+function createService(
+  options: { coreResponse?: Response; coreError?: unknown; sources?: unknown[]; pricing?: unknown } = {}
+) {
   const db = {
     select: vi.fn().mockReturnValue(selectChain(options.sources ?? [{ source: SOURCE, connection: CONNECTION }])),
     query: {
@@ -102,7 +100,11 @@ function createService(options: {
   const routing = { select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }) };
   const bridge = options.coreError
     ? { dataPlaneTarget: vi.fn().mockRejectedValue(options.coreError) }
-    : { dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data cred' }) };
+    : {
+        dataPlaneTarget: vi
+          .fn()
+          .mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data cred' }),
+      };
   const coreAccounting = {
     createCoreRequest: vi.fn().mockResolvedValue({ requestId: '3fa85f64-5717-4562-b3fc-2c963f66afa6' }),
     retargetCoreRequest: vi.fn().mockResolvedValue(undefined),
@@ -118,10 +120,11 @@ function createService(options: {
     legacyAccounting as never
   );
   const fetchStub = vi.fn().mockResolvedValue(
-    options.coreResponse ?? new Response('data: {"type":"response.completed"}\n\n', {
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-    })
+    options.coreResponse ??
+      new Response('data: {"type":"response.completed"}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
   );
   vi.stubGlobal('fetch', fetchStub);
   return { service, models, routing, bridge, coreAccounting, fetchStub };
@@ -149,8 +152,8 @@ describe('inference core proxy', () => {
     expect(sentHeaders['x-wiolett-contract']).toBe('wiolett-core/v1');
     expect(sentHeaders['x-wiolett-context']).toBeTruthy();
     expect(sentHeaders['x-wiolett-signature']).toBeTruthy();
-    expect(sentHeaders['authorization']).toBeUndefined();
-    expect(sentHeaders['origin']).toBeUndefined();
+    expect(sentHeaders.authorization).toBeUndefined();
+    expect(sentHeaders.origin).toBeUndefined();
     const claims = JSON.parse(Buffer.from(sentHeaders['x-wiolett-context'], 'base64url').toString('utf8'));
     expect(claims).toMatchObject({
       contractId: 'wiolett-core/v1',
@@ -206,7 +209,9 @@ describe('inference core proxy', () => {
       .mockResolvedValueOnce(
         Response.json({ error: { code: 'provider_rate_limited', message: 'busy' } }, { status: 429 })
       )
-      .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }));
+      .mockResolvedValueOnce(
+        new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } })
+      );
 
     const response = await service.proxy(
       createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }), { 'content-type': 'application/json' }),

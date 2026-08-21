@@ -17,10 +17,6 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 
 import { createApp } from '@/app.js';
-import {
-  INFERENCE_CORE_INTERNAL_PORT,
-} from '@/modules/inference/core/inference-core-runtime.service.js';
-import { inferenceCoreInternalRoutes } from '@/modules/inference/core/inference-core-internal.routes.js';
 import { container, initializeContainer } from '@/bootstrap.js';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
@@ -36,6 +32,8 @@ import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
 import { InferenceReservationReconciler } from '@/modules/inference/accounting/inference-reservation-reconciler.js';
+import { inferenceCoreInternalRoutes } from '@/modules/inference/core/inference-core-internal.routes.js';
+import { INFERENCE_CORE_INTERNAL_PORT } from '@/modules/inference/core/inference-core-runtime.service.js';
 import { InferenceProviderService } from '@/modules/inference/providers/inference-provider.service.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingMetadataService } from '@/modules/logging/logging-metadata.service.js';

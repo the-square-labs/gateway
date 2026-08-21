@@ -36,7 +36,13 @@ const SOURCE = {
   coreAccountId: 'core-conn-1',
   coreModelId: 'core-conn-1/gpt-5.5',
 };
-const CONNECTION = { id: 'conn-1', providerId: 'openai-apikey', enabled: true, deletedAt: null, apiMonthlyLimitMicrodollars: null };
+const CONNECTION = {
+  id: 'conn-1',
+  providerId: 'openai-apikey',
+  enabled: true,
+  deletedAt: null,
+  apiMonthlyLimitMicrodollars: null,
+};
 const ATTEMPT = {
   id: 'a1',
   requestId: REQUEST.id,
@@ -71,14 +77,16 @@ const ADMISSION = {
   occurredAt: new Date().toISOString(),
 };
 
-function createHarness(options: {
-  request?: unknown;
-  attempt?: unknown;
-  attemptLookups?: unknown[];
-  limits?: Record<string, unknown>;
-  reserveError?: unknown;
-  claimEmpty?: boolean;
-} = {}) {
+function createHarness(
+  options: {
+    request?: unknown;
+    attempt?: unknown;
+    attemptLookups?: unknown[];
+    limits?: Record<string, unknown>;
+    reserveError?: unknown;
+    claimEmpty?: boolean;
+  } = {}
+) {
   const insertedAttempts: unknown[] = [];
   const ledgerRows: unknown[] = [];
   const requestUpdates: unknown[] = [];
@@ -86,7 +94,10 @@ function createHarness(options: {
     query: {
       inferenceRequestAttempts: {
         findFirst: options.attemptLookups
-          ? vi.fn().mockResolvedValueOnce(options.attemptLookups[0] ?? null).mockResolvedValueOnce(options.attemptLookups[1] ?? null)
+          ? vi
+              .fn()
+              .mockResolvedValueOnce(options.attemptLookups[0] ?? null)
+              .mockResolvedValueOnce(options.attemptLookups[1] ?? null)
           : vi.fn().mockResolvedValue(options.attempt ?? null),
       },
       inferenceModels: { findFirst: vi.fn().mockResolvedValue(MODEL) },
@@ -113,10 +124,7 @@ function createHarness(options: {
     })),
     select: vi.fn(() => {
       const rows: unknown[] = [];
-      const chain: Record<string, unknown> = {
-        then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-          Promise.resolve(rows).then(resolve, reject),
-      };
+      const chain = Promise.resolve(rows) as Promise<unknown[]> & Record<string, unknown>;
       for (const method of ['from', 'where', 'orderBy', 'innerJoin', 'limit', 'groupBy']) {
         chain[method] = vi.fn().mockReturnValue(chain);
       }
@@ -344,7 +352,14 @@ describe('inference core accounting', () => {
 
   it('rejects a redelivered settlement whose payload differs', async () => {
     const { service } = createHarness({
-      attempt: { ...ATTEMPT, status: 'completed', upstreamStatus: 200, outputTokens: 10, uncachedInputTokens: 5, cachedInputTokens: 0 },
+      attempt: {
+        ...ATTEMPT,
+        status: 'completed',
+        upstreamStatus: 200,
+        outputTokens: 10,
+        uncachedInputTokens: 5,
+        cachedInputTokens: 0,
+      },
     });
     await expect(
       service.settleCoreAttempt({
@@ -480,7 +495,13 @@ describe('inference core accounting', () => {
         sourceType: 'subscription',
         upstreamStatus: 503,
         errorCode: 'provider_unavailable',
-        usage: { uncachedInputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 },
+        usage: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+        },
         usageEstimated: true,
         emittedOutput: false,
         startedAt: new Date(Date.now() - 1000).toISOString(),

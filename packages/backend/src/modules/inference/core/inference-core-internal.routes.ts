@@ -4,14 +4,14 @@ import { container } from '@/container.js';
 import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
-import { InferenceCoreBridgeService } from './inference-core-bridge.service.js';
 import {
   INFERENCE_CORE_CALLBACK_HEADERS,
   INFERENCE_CORE_CALLBACK_PATHS,
-  WIOLETT_CORE_CONTRACT_ID,
   inferenceCoreAdmissionRequestSchema,
   inferenceCoreSettlementSchema,
+  WIOLETT_CORE_CONTRACT_ID,
 } from './inference-core.contract.js';
+import { InferenceCoreBridgeService } from './inference-core-bridge.service.js';
 
 /** Freshness bound for callback signatures; outbox replays re-sign at send time. */
 const CALLBACK_TIMESTAMP_SKEW_SECONDS = 60;

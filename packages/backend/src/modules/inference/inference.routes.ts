@@ -2,7 +2,6 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
-import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceUsageService } from './accounting/inference-usage.service.js';
 import {

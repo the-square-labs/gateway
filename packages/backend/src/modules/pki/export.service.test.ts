@@ -131,7 +131,9 @@ describe('ExportService', () => {
     it('exports an ECDSA certificate and private key', async () => {
       const { certificatePem, privateKeyPem } = await createEcdsaCertificatePair();
 
-      const archive = await exportService.exportPKCS12(certificatePem, privateKeyPem, 'test-passphrase', [certificatePem]);
+      const archive = await exportService.exportPKCS12(certificatePem, privateKeyPem, 'test-passphrase', [
+        certificatePem,
+      ]);
 
       expect(archive.subarray(0, 2).toString('hex')).toBe('3082');
       expect(archive.length).toBeGreaterThan(512);

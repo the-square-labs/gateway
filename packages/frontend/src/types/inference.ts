@@ -62,6 +62,8 @@ export interface InferenceQuotaWindow {
   modelBucket?: string | null;
   status: string;
   remainingFraction?: number | null;
+  remainingValue?: string | null;
+  limitValue?: string | null;
   resetAt?: string | null;
   fetchedAt?: string;
   stale?: boolean;

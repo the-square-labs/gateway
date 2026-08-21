@@ -7,23 +7,11 @@ import { InferenceProviderService } from './inference-provider.service.js';
 
 /** Awaitable drizzle query chain: every combinator returns the same chain. */
 function selectChain(rows: unknown[]) {
-  const chain = {
-    from: vi.fn(),
-    where: vi.fn(),
-    orderBy: vi.fn(),
-    innerJoin: vi.fn(),
-    leftJoin: vi.fn(),
-    groupBy: vi.fn(),
-    limit: vi.fn().mockResolvedValue(rows),
-    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-  };
-  chain.from.mockReturnValue(chain);
-  chain.where.mockReturnValue(chain);
-  chain.orderBy.mockReturnValue(chain);
-  chain.innerJoin.mockReturnValue(chain);
-  chain.leftJoin.mockReturnValue(chain);
-  chain.groupBy.mockReturnValue(chain);
+  const chain = Promise.resolve(rows) as Promise<unknown[]> & Record<string, ReturnType<typeof vi.fn>>;
+  for (const method of ['from', 'where', 'orderBy', 'innerJoin', 'leftJoin', 'groupBy']) {
+    chain[method] = vi.fn().mockReturnValue(chain);
+  }
+  chain.limit = vi.fn().mockResolvedValue(rows);
   return chain;
 }
 
@@ -80,7 +68,19 @@ function createService(options: {
     setCoreOauthPoolStrategy: vi.fn().mockResolvedValue(undefined),
     listCoreProviders: vi.fn().mockResolvedValue([{ name: 'core-conn-1', hasApiKey: true }]),
     listCoreModels: vi.fn().mockResolvedValue([
-      { provider: 'core-conn-1', id: 'gpt-5.5', namespaced: 'core-conn-1/gpt-5.5', contextWindow: 400_000 },
+      {
+        provider: 'core-conn-1',
+        id: 'gpt-5.5',
+        namespaced: 'core-conn-1/gpt-5.5',
+        contextWindow: 400_000,
+        pricing: {
+          inputUsdPerMillion: 5,
+          outputUsdPerMillion: 30,
+          cachedInputUsdPerMillion: 0.5,
+          cacheWriteUsdPerMillion: 6.25,
+          source: 'opencodex-catalog',
+        },
+      },
       { provider: 'core-conn-1', id: 'static-only', namespaced: 'core-conn-1/static-only' },
       { provider: 'other', id: 'ignored', namespaced: 'other/ignored' },
     ]),
@@ -165,11 +165,13 @@ describe('inference provider service — core-managed delegation', () => {
   });
 
   it('removes the gateway row when the core rejects a new provider', async () => {
-    const { service, db, client } = createService({
+    const { service, db } = createService({
       client: { createCoreProvider: vi.fn().mockRejectedValue(new InferenceCoreClientError('bad base url', 400)) },
     });
     db.select.mockReturnValueOnce(selectChain([]));
-    db.insert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([CORE_CONNECTION]) }) });
+    db.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([CORE_CONNECTION]) }),
+    });
     const where = vi.fn().mockResolvedValue(undefined);
     db.delete.mockReturnValue({ where });
 
@@ -193,7 +195,14 @@ describe('inference provider service — core-managed delegation', () => {
       expect.objectContaining({
         id: 'gpt-5.5',
         contextWindow: 400_000,
-        metadata: expect.objectContaining({ coreModelId: 'core-conn-1/gpt-5.5' }),
+        pricing: expect.objectContaining({
+          inputMicrodollarsPerMillion: 5_000_000,
+          outputMicrodollarsPerMillion: 30_000_000,
+        }),
+        metadata: expect.objectContaining({
+          coreModelId: 'core-conn-1/gpt-5.5',
+          gatewayPricing: expect.objectContaining({ source: 'provider' }),
+        }),
       }),
     ]);
     expect(persistQuota).toHaveBeenCalledWith('conn-1', [
@@ -230,9 +239,7 @@ describe('inference provider service — core-managed delegation', () => {
 
     await service.syncConnection('conn-1', true);
 
-    expect(chain.set).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: 'unavailable', syncStatus: 'error' })
-    );
+    expect(chain.set).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'unavailable', syncStatus: 'error' }));
   });
 
   it('mirrors enable/disable to the core provider entry before updating the row', async () => {

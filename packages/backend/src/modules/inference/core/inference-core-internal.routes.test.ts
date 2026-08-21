@@ -5,11 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
+import { INFERENCE_CORE_CALLBACK_HEADERS, WIOLETT_CORE_CONTRACT_ID } from './inference-core.contract.js';
 import { InferenceCoreBridgeService } from './inference-core-bridge.service.js';
-import {
-  INFERENCE_CORE_CALLBACK_HEADERS,
-  WIOLETT_CORE_CONTRACT_ID,
-} from './inference-core.contract.js';
 import { inferenceCoreInternalRoutes } from './inference-core-internal.routes.js';
 
 const CREDENTIAL = 'ocx_callbackcred0123456789abcdef0123456789ab';
@@ -24,7 +21,11 @@ function createApp() {
   return app;
 }
 
-function callbackRequest(path: string, body: unknown, options: { credential?: string; timestamp?: string; signature?: string; contract?: string } = {}) {
+function callbackRequest(
+  path: string,
+  body: unknown,
+  options: { credential?: string; timestamp?: string; signature?: string; contract?: string } = {}
+) {
   const raw = typeof body === 'string' ? body : JSON.stringify(body);
   const timestamp = options.timestamp ?? Math.floor(Date.now() / 1000).toString();
   return new Request(`http://internal${path}`, {
@@ -91,7 +92,9 @@ describe('inference core internal callbacks', () => {
   it('rejects callbacks with an invalid signature', async () => {
     registerServices();
     const response = await createApp().fetch(
-      callbackRequest('/api/internal/inference-core/admission', ADMISSION, { credential: 'ocx_wrong6789abcdef0123456789abcdef01' })
+      callbackRequest('/api/internal/inference-core/admission', ADMISSION, {
+        credential: 'ocx_wrong6789abcdef0123456789abcdef01',
+      })
     );
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ code: 'callback_signature_invalid' });
@@ -117,16 +120,16 @@ describe('inference core internal callbacks', () => {
 
   it('rejects malformed admission payloads', async () => {
     registerServices();
-    const response = await createApp().fetch(
-      callbackRequest('/api/internal/inference-core/admission', { nope: true })
-    );
+    const response = await createApp().fetch(callbackRequest('/api/internal/inference-core/admission', { nope: true }));
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: 'callback_malformed' });
   });
 
   it('admits attempts and returns the gateway decision', async () => {
     const accounting = registerServices({
-      admitCoreAttempt: vi.fn().mockResolvedValue({ decision: 'deny', reason: 'budget_exceeded', retryAfterSeconds: 30 }),
+      admitCoreAttempt: vi
+        .fn()
+        .mockResolvedValue({ decision: 'deny', reason: 'budget_exceeded', retryAfterSeconds: 30 }),
     });
     const response = await createApp().fetch(callbackRequest('/api/internal/inference-core/admission', ADMISSION));
     expect(response.status).toBe(200);

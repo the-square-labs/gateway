@@ -1,15 +1,15 @@
+import { createHash } from 'node:crypto';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import type { AppEnv } from '@/types.js';
-import { createHash } from 'node:crypto';
 import { inferenceAdapterDiscovery } from './inference-setup.contract.js';
-import { InferenceModelService } from './models/inference-model.service.js';
 import { inferenceSetupAuthMiddleware } from './inference-setup-auth.middleware.js';
 import type { InferenceSetupEvent } from './inference-setup-events.service.js';
 import { InferenceSetupEventsService } from './inference-setup-events.service.js';
 import { InferenceTokenService } from './inference-token.service.js';
+import { InferenceModelService } from './models/inference-model.service.js';
 
 const ManagedTokenInputSchema = z.object({
   harness: z.enum(['codex', 'claude-code']),

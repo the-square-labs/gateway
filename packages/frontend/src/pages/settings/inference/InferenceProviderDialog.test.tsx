@@ -145,6 +145,37 @@ describe("InferenceProviderDialog", () => {
     );
     expect(api.updateInferenceProvider).not.toHaveBeenCalled();
   });
+
+  it("shows an API provider's synchronized monetary balance", () => {
+    render(
+      <InferenceProviderDialog
+        open
+        connection={{
+          ...connection,
+          providerId: "openrouter",
+          name: "OpenRouter",
+          authType: "api_key",
+          quota: [
+            {
+              dimension: "subscription",
+              status: "fresh",
+              remainingFraction: 0.9989,
+              remainingValue: "49.945472",
+              limitValue: "50",
+            },
+          ],
+        }}
+        provider={{ ...provider, id: "openrouter", label: "OpenRouter", subscription: false }}
+        canManage
+        onOpenChange={vi.fn()}
+        onChanged={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.getByText("Provider balance")).toBeInTheDocument();
+    expect(screen.getByText("$49.95 of $50.00 remaining")).toBeInTheDocument();
+    expect(screen.getByText("100% remaining")).toBeInTheDocument();
+  });
 });
 
 const provider: InferenceProviderCatalogItem = {

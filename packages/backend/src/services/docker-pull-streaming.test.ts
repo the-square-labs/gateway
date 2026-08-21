@@ -131,9 +131,9 @@ describe('pullImageRefStreaming', () => {
     await new Promise((resolve) => server!.on('listening', resolve));
     const docker = new DockerService(join(socketDir, 'docker.sock'), '');
 
-    await expect(
-      docker.pullImageRefStreaming('registry.test/core@sha256:abc', () => {})
-    ).rejects.toThrow('no matching manifest for linux/arm64/v8');
+    await expect(docker.pullImageRefStreaming('registry.test/core@sha256:abc', () => {})).rejects.toThrow(
+      'no matching manifest for linux/arm64/v8'
+    );
   });
 
   it('handles a trailing line without a newline', async () => {

@@ -5,10 +5,10 @@ process.env.DATABASE_URL = 'http://localhost/db';
 process.env.REDIS_URL = 'redis://localhost:6379';
 process.env.PKI_MASTER_KEY = '0'.repeat(64);
 
-import { Hono } from 'hono';
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import Anthropic from '@anthropic-ai/sdk';
+import { Hono } from 'hono';
 import OpenAI from 'openai7';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceCoreProxyService } from './core/inference-core-proxy.service.js';
@@ -70,10 +70,7 @@ const CONNECTION = {
 };
 
 function selectChain(rows: unknown[]) {
-  const chain: Record<string, unknown> = {
-    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-  };
+  const chain = Promise.resolve(rows) as Promise<unknown[]> & Record<string, unknown>;
   for (const method of ['from', 'where', 'orderBy', 'innerJoin', 'leftJoin', 'limit', 'groupBy']) {
     chain[method] = vi.fn().mockReturnValue(chain);
   }
@@ -229,7 +226,7 @@ describe('official client adapters against the core proxy data plane', () => {
       messages: [{ role: 'user', content: 'hi' }],
     });
     expect(completion.choices[0]?.message.content).toBe('Hi');
-    const chatCoreBody = JSON.parse((coreFetch.mock.calls[0]?.[1] as RequestInit)?.body as string ?? '{}');
+    const chatCoreBody = JSON.parse(((coreFetch.mock.calls[0]?.[1] as RequestInit)?.body as string) ?? '{}');
     void chatCoreBody;
 
     const stream = await client.responses.create({ model: 'gateway-model', input: 'hi', stream: true });

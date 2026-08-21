@@ -337,8 +337,7 @@ export class DockerService {
       const layersCompleted = all.filter((layer) => layer.done).length;
       const downloadable = all.filter((layer) => !layer.cached);
       const downloadedBytes = downloadable.reduce((sum, layer) => sum + layer.current, 0);
-      const everySizeKnown =
-        downloadable.length > 0 && downloadable.every((layer) => layer.total > 0);
+      const everySizeKnown = downloadable.length > 0 && downloadable.every((layer) => layer.total > 0);
       const progress: DockerPullProgress = { layersCompleted, layersTotal };
       if (everySizeKnown) {
         progress.downloadedBytes = downloadedBytes;

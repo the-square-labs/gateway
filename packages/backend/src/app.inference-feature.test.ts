@@ -28,5 +28,4 @@ describe('inference feature guard', () => {
     expect(isFeatureEnabled).toHaveBeenNthCalledWith(1, 'inferenceEnabled');
     expect(isFeatureEnabled).toHaveBeenNthCalledWith(2, 'inferenceEnabled');
   });
-
 });

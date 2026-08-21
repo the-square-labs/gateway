@@ -421,9 +421,7 @@ export class InferenceModelService {
     return {
       modelIds: filterModelIdsByApiBudget(
         availableModelIds,
-        availableSources
-          .filter((source) => source.sourceType === 'subscription')
-          .map((source) => source.modelId),
+        availableSources.filter((source) => source.sourceType === 'subscription').map((source) => source.modelId),
         limits.apiMonthlyMicrodollars
       ),
       apiUsageEnabled: false,

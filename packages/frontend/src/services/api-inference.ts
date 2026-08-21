@@ -124,7 +124,10 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
       return this.request(`/inference/providers/connections/${id}`, { method: "DELETE" });
     }
 
-    updateInferenceRouting(providerId: string, routingStrategy: "even" | "balanced" | "sequential") {
+    updateInferenceRouting(
+      providerId: string,
+      routingStrategy: "even" | "balanced" | "sequential"
+    ) {
       return this.request(`/inference/providers/${providerId}/routing`, {
         method: "PATCH",
         body: JSON.stringify({ routingStrategy }),

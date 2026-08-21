@@ -1,8 +1,8 @@
 import { injectable } from 'tsyringe';
 import type { DrizzleClient } from '@/db/client.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
-import type { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import { latestPricing, stringExtension, unitCharge } from '../accounting/inference-accounting.helpers.js';
+import type { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import { normalizeServiceTier } from '../accounting/inference-service-tier.js';
 import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
@@ -128,7 +128,7 @@ export class InferenceCoreExecutor implements InferenceExecutor {
             signal: context.signal,
             duplex: 'half',
           });
-        } catch (error) {
+        } catch (_error) {
           if (!context.signal.aborted && resolved.candidateConnectionIds.length > 1) {
             excludedConnectionIds.push(resolved.selected.connection.id);
             continue;
@@ -182,10 +182,7 @@ export class InferenceCoreExecutor implements InferenceExecutor {
     }
   }
 
-  private async fixedApiCharge(
-    sourceId: string,
-    context: InferenceExecutionContext
-  ): Promise<number> {
+  private async fixedApiCharge(sourceId: string, context: InferenceExecutionContext): Promise<number> {
     if (!context.apiUnitCharge) return 0;
     const pricing = await latestPricing(this.db, sourceId);
     const amount = unitCharge(pricing, context.apiUnitCharge.priceKey, context.apiUnitCharge.units);

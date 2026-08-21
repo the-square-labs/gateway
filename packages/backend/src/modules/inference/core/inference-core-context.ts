@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import {
   INFERENCE_CORE_CONTEXT_HEADERS,
-  WIOLETT_CORE_CONTRACT_ID,
   type InferenceCoreRequestContext,
+  WIOLETT_CORE_CONTRACT_ID,
 } from './inference-core.contract.js';
 
 /** Bounded lifetime for a signed data-plane context (core enforces ≤120s). */

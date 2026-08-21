@@ -191,9 +191,7 @@ describe('AI internal docs registry', () => {
       'Claude Desktop and the Claude Code VS Code extension'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('/api/inference/v1');
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
-      '/api/inference/v1/messages'
-    );
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('/api/inference/v1/messages');
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'Profile > Authorizations > Inference API tokens'
     );

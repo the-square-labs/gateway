@@ -10,8 +10,8 @@ vi.mock('@/modules/auth/live-session-user.js', () => ({
   resolveLiveUser: vi.fn().mockResolvedValue({ id: 'user-1', isBlocked: false }),
 }));
 
-import { InferenceCoreExecutor } from './inference-core-executor.service.js';
 import type { InferenceRequest } from '../protocol/inference-protocol.types.js';
+import { InferenceCoreExecutor } from './inference-core-executor.service.js';
 
 const MODEL = {
   id: 'model-1',
@@ -69,17 +69,19 @@ function createExecutor(options: { coreResponse?: Response; coreError?: unknown 
   const executor = new InferenceCoreExecutor({} as never, proxy as never, accounting as never);
   const fetchStub = options.coreError
     ? vi.fn().mockRejectedValue(options.coreError)
-    : vi.fn().mockResolvedValue(
-        options.coreResponse ??
-          new Response(
-            [
-              'data: {"type":"response.output_text.delta","item_id":"i1","delta":"Hi"}',
-              'data: {"type":"response.completed","response":{"id":"resp_9","model":"core-conn-1/gpt-5.5","status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}',
-              '',
-            ].join('\n\n'),
-            { status: 200, headers: { 'content-type': 'text/event-stream' } }
-          )
-      );
+    : vi
+        .fn()
+        .mockResolvedValue(
+          options.coreResponse ??
+            new Response(
+              [
+                'data: {"type":"response.output_text.delta","item_id":"i1","delta":"Hi"}',
+                'data: {"type":"response.completed","response":{"id":"resp_9","model":"core-conn-1/gpt-5.5","status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}',
+                '',
+              ].join('\n\n'),
+              { status: 200, headers: { 'content-type': 'text/event-stream' } }
+            )
+        );
   vi.stubGlobal('fetch', fetchStub);
   return { executor, proxy, accounting, fetchStub };
 }
@@ -201,10 +203,7 @@ describe('inference core executor', () => {
     expect(secondContext.rootRequestId).toBe(firstContext.rootRequestId);
     expect(secondContext.coreAccountId).toBe('core-conn-2');
     expect(accounting.createCoreRequest).toHaveBeenCalledTimes(1);
-    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
-      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-      'completed'
-    );
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
   });
 
   it('maps core error envelopes to stable gateway errors', async () => {

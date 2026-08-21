@@ -1,16 +1,16 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { injectable } from 'tsyringe';
+import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
   type InferenceProtocol,
-  inferenceModels,
   inferenceModelSources,
+  inferenceModels,
   inferencePricingSnapshots,
   inferenceProviderConnections,
   inferenceRequestAttempts,
   inferenceRequests,
   inferenceUsageLedger,
 } from '@/db/schema/index.js';
-import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
@@ -24,12 +24,13 @@ import type { InferenceUsage } from '../protocol/inference-protocol.types.js';
 import {
   capSubscriptionEstimateToBudget,
   errorCode,
-  hasSpendableSubscriptionBudget,
   hash,
+  hasSpendableSubscriptionBudget,
   latestPricing,
   latestQuota,
   reservationAmounts,
 } from './inference-accounting.helpers.js';
+import type { InferenceBudgetLockService } from './inference-budget-lock.service.js';
 import {
   apiMicrodollars,
   dynamicBurnMultiplier,
@@ -37,7 +38,6 @@ import {
   type InferenceBudgetPolicyService,
   subscriptionCredits,
 } from './inference-budget-policy.js';
-import type { InferenceBudgetLockService } from './inference-budget-lock.service.js';
 import type { InferenceBudgetReservationService } from './inference-budget-reservation.service.js';
 import { assertProviderApiBudget } from './inference-provider-budget.js';
 import { normalizeServiceTier, serviceTierCreditMultiplier } from './inference-service-tier.js';
@@ -131,9 +131,7 @@ export class InferenceCoreAccountingService {
     fixedApiMicrodollars?: number;
     isCompaction?: boolean;
   }): Promise<{ requestId: string }> {
-    const idempotencyKeyHash = input.idempotencyKey
-      ? hash(`${input.userId}:${input.idempotencyKey}`)
-      : null;
+    const idempotencyKeyHash = input.idempotencyKey ? hash(`${input.userId}:${input.idempotencyKey}`) : null;
     if (idempotencyKeyHash) {
       const existing = await this.db.query.inferenceRequests.findFirst({
         where: and(
@@ -214,11 +212,16 @@ export class InferenceCoreAccountingService {
         if (existing.requestId !== request.id) {
           throw new AppError(409, 'core_attempt_conflict', 'The attempt belongs to another root request');
         }
-        if (existing.attemptKind !== input.attemptKind || (existing.parentCoreAttemptId ?? null) !== input.parentAttemptId) {
+        if (
+          existing.attemptKind !== input.attemptKind ||
+          (existing.parentCoreAttemptId ?? null) !== input.parentAttemptId
+        ) {
           throw new AppError(409, 'core_attempt_conflict', 'The admission payload differs from the recorded attempt');
         }
         const existingSource = existing.sourceId
-          ? await database.query.inferenceModelSources.findFirst({ where: eq(inferenceModelSources.id, existing.sourceId) })
+          ? await database.query.inferenceModelSources.findFirst({
+              where: eq(inferenceModelSources.id, existing.sourceId),
+            })
           : null;
         const existingConnection = existing.connectionId
           ? await database.query.inferenceProviderConnections.findFirst({
@@ -362,9 +365,7 @@ export class InferenceCoreAccountingService {
           outputTokens: estimatedUsage.outputTokens,
           reasoningTokens: estimatedUsage.reasoningTokens,
         })
-        .where(
-          and(eq(inferenceRequests.id, request.id), inArray(inferenceRequests.status, ['reserved', 'running']))
-        )
+        .where(and(eq(inferenceRequests.id, request.id), inArray(inferenceRequests.status, ['reserved', 'running'])))
         .returning({ id: inferenceRequests.id });
       if (!claimed.length) {
         throw new AppError(409, 'core_request_finalized', 'The root request is already finalized');
@@ -418,13 +419,22 @@ export class InferenceCoreAccountingService {
       });
       if (!attempt) throw new AppError(404, 'core_attempt_not_found', 'The attempt is unknown to Gateway');
       if (attempt.requestId !== request.id) {
-        throw new AppError(409, 'core_attempt_root_mismatch', 'The attempt does not belong to the supplied root request');
+        throw new AppError(
+          409,
+          'core_attempt_root_mismatch',
+          'The attempt does not belong to the supplied root request'
+        );
       }
-      if (attempt.attemptKind !== input.attemptKind || (attempt.parentCoreAttemptId ?? null) !== input.parentAttemptId) {
+      if (
+        attempt.attemptKind !== input.attemptKind ||
+        (attempt.parentCoreAttemptId ?? null) !== input.parentAttemptId
+      ) {
         throw new AppError(409, 'core_attempt_lineage_mismatch', 'The settlement lineage differs from admission');
       }
       const attemptSource = attempt.sourceId
-        ? await database.query.inferenceModelSources.findFirst({ where: eq(inferenceModelSources.id, attempt.sourceId) })
+        ? await database.query.inferenceModelSources.findFirst({
+            where: eq(inferenceModelSources.id, attempt.sourceId),
+          })
         : null;
       const attemptConnection = attempt.connectionId
         ? await database.query.inferenceProviderConnections.findFirst({
@@ -556,9 +566,7 @@ export class InferenceCoreAccountingService {
           ...(outcome !== 'completed' && !priorAttempt ? { idempotencyKeyHash: null } : {}),
           completedAt: new Date(),
         })
-        .where(
-          and(eq(inferenceRequests.id, requestId), inArray(inferenceRequests.status, ['reserved', 'running']))
-        )
+        .where(and(eq(inferenceRequests.id, requestId), inArray(inferenceRequests.status, ['reserved', 'running'])))
         .returning({ id: inferenceRequests.id });
       if (!claimed) return;
       await this.refreshRequestAggregates(database, requestId);
@@ -602,9 +610,7 @@ export class InferenceCoreAccountingService {
         apiMicrodollars: sql<number>`coalesce(sum(${inferenceUsageLedger.apiMicrodollars}), 0)`,
       })
       .from(inferenceUsageLedger)
-      .where(
-        and(eq(inferenceUsageLedger.requestId, requestId), eq(inferenceUsageLedger.entryType, 'settlement'))
-      );
+      .where(and(eq(inferenceUsageLedger.requestId, requestId), eq(inferenceUsageLedger.entryType, 'settlement')));
     await database
       .update(inferenceRequests)
       .set({
@@ -634,11 +640,7 @@ function assertPinnedRoute(
   // subscription plans (for example Alibaba Token Plan). The persisted source
   // owns accounting classification; the core only has to preserve the exact
   // Gateway-selected account and model route.
-  if (
-    !expectedAccountId ||
-    input.coreAccountId !== expectedAccountId ||
-    input.coreModelId !== source.coreModelId
-  ) {
+  if (!expectedAccountId || input.coreAccountId !== expectedAccountId || input.coreModelId !== source.coreModelId) {
     throw new AppError(409, 'core_route_mismatch', 'The core attempted a route not selected by Gateway');
   }
 }

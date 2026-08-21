@@ -164,7 +164,9 @@ export class InferenceCoreClient {
     return {
       activeAccountId: typeof body.activeAccountId === 'string' ? body.activeAccountId : null,
       accounts: Array.isArray(body.accounts)
-        ? body.accounts.filter((account): account is Record<string, unknown> => Boolean(account) && typeof account === 'object')
+        ? body.accounts.filter(
+            (account): account is Record<string, unknown> => Boolean(account) && typeof account === 'object'
+          )
         : [],
     };
   }
@@ -285,7 +287,9 @@ export class InferenceCoreClient {
     if (!response) throw new InferenceCoreClientError(`Core is unreachable during ${action}`);
     if (response.status < 200 || response.status >= 300) {
       const message =
-        response.body && typeof response.body === 'object' && typeof (response.body as { error?: unknown }).error === 'string'
+        response.body &&
+        typeof response.body === 'object' &&
+        typeof (response.body as { error?: unknown }).error === 'string'
           ? (response.body as { error: string }).error
           : `core ${action} failed with status ${response.status}`;
       throw new InferenceCoreClientError(message, response.status);

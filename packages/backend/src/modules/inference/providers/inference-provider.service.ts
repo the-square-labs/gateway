@@ -15,15 +15,16 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { providerApiMonthlySpend } from '../accounting/inference-provider-budget.js';
-import type { InferenceCoreBridgeService } from '../core/inference-core-bridge.service.js';
 import { InferenceCoreClientError } from '../core/inference-core.client.js';
+import type { InferenceCoreBridgeService } from '../core/inference-core-bridge.service.js';
 import {
-  CORE_ACCOUNT_METADATA_KEY,
-  CORE_MODEL_METADATA_KEY,
-  CORE_MANAGED_METADATA_KEY,
   buildCoreProviderConfig,
-  coreModelCapabilities,
+  CORE_ACCOUNT_METADATA_KEY,
+  CORE_MANAGED_METADATA_KEY,
+  CORE_MODEL_METADATA_KEY,
   coreKeyProviderName,
+  coreModelCapabilities,
+  coreModelPricing,
   coreOAuthTarget,
   coreProviderRef,
   coreQuotaToWindows,
@@ -180,11 +181,7 @@ export class InferenceProviderService {
     );
     await this.destinations.assertAllowed(baseUrl, input.allowPrivateNetwork === true);
     if (!(await this.coreReady())) {
-      throw new AppError(
-        409,
-        'INFERENCE_CORE_NOT_READY',
-        'Install the inference core before connecting providers'
-      );
+      throw new AppError(409, 'INFERENCE_CORE_NOT_READY', 'Install the inference core before connecting providers');
     }
     return this.createCoreKeyConnection(userId, provider, input, authType, baseUrl);
   }
@@ -272,11 +269,7 @@ export class InferenceProviderService {
     return this.getConnection(connectionId);
   }
 
-  async setRoutingStrategy(
-    userId: string,
-    providerId: string,
-    routingStrategy: 'even' | 'balanced' | 'sequential'
-  ) {
+  async setRoutingStrategy(userId: string, providerId: string, routingStrategy: 'even' | 'balanced' | 'sequential') {
     this.registry.require(providerId);
     await this.db
       .insert(inferenceProviderSettings)
@@ -462,6 +455,7 @@ export class InferenceProviderService {
         connectionId,
         models.map((row) => {
           const modalities = row.inputModalities ?? ['text'];
+          const pricing = coreModelPricing(row);
           return {
             // Gateway owns the provider/account selection. Keep the upstream
             // model id account-agnostic so identical models from multiple
@@ -474,14 +468,14 @@ export class InferenceProviderService {
             modalities,
             capabilities: coreModelCapabilities(row),
             reasoningEfforts: row.reasoningEfforts ?? [],
+            ...(pricing ? { pricing } : {}),
             metadata: {
               source: 'opencodex',
               [CORE_MODEL_METADATA_KEY]: row.namespaced,
               input_modalities: modalities,
               capabilities: row.capabilities ?? [],
-              ...(row.defaultReasoningEffort
-                ? { default_reasoning_effort: row.defaultReasoningEffort }
-                : {}),
+              ...(pricing ? { gatewayPricing: pricing } : {}),
+              ...(row.defaultReasoningEffort ? { default_reasoning_effort: row.defaultReasoningEffort } : {}),
               ...(row.supportsReasoningSummaries !== undefined
                 ? { supports_reasoning_summaries: row.supportsReasoningSummaries }
                 : {}),
@@ -574,11 +568,9 @@ export class InferenceProviderService {
       if (connection.providerId === 'openai') {
         const accountId = connection.metadata[CORE_ACCOUNT_METADATA_KEY];
         if (typeof accountId === 'string' && accountId) {
-          await client
-            .setCoreCodexAccountPaused(accountId, !enabled)
-            .catch((error) => {
-              throw asCoreManagementError(error, 'Core rejected the account pause update');
-            });
+          await client.setCoreCodexAccountPaused(accountId, !enabled).catch((error) => {
+            throw asCoreManagementError(error, 'Core rejected the account pause update');
+          });
         }
       }
       return;
