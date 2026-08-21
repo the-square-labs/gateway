@@ -20,6 +20,8 @@ message EnrollRequest {
   string os_info = 4;
   string daemon_version = 5;
   string daemon_type = 6;     // "nginx", "monitoring", etc.
+  // Opaque, installer-persisted physical host identity shared by colocated roles.
+  string host_identity_id = 7;
 }
 
 message EnrollResponse {
@@ -28,6 +30,15 @@ message EnrollResponse {
   bytes client_certificate = 3;
   bytes client_key = 4;
   int64 cert_expires_at = 5;
+  string host_identity_id = 6;
+  string relay_pool_id = 7;
+  string relay_instance_id = 8;
+  string policy_signing_key_id = 9;
+  bytes policy_signing_public_key = 10;
+  string policy_signing_public_key_fingerprint = 11;
+  bytes relay_server_certificate = 12;
+  bytes relay_server_key = 13;
+  string relay_server_identity = 14;
 }
 
 message RenewCertRequest {
@@ -38,6 +49,9 @@ message RenewCertResponse {
   bytes client_certificate = 1;
   bytes client_key = 2;
   int64 cert_expires_at = 3;
+  bytes relay_server_certificate = 4;
+  bytes relay_server_key = 5;
+  string relay_server_identity = 6;
 }
 
 // ─── Main Control Channel ───────────────────────────────────────────
@@ -80,6 +94,7 @@ message DaemonMessage {
     DaemonLogEntry daemon_log = 5;
     ExecOutput exec_output = 6;
     DockerRuntimeStatus docker_runtime_status = 7;
+    RelayRuntimeStatus relay_runtime_status = 8;
   }
 }
 
@@ -108,6 +123,8 @@ message RegisterMessage {
   string daemon_type = 12;       // "nginx", "monitoring", etc.
   repeated string capabilities = 13;
   DockerRuntimeStatus docker_runtime_status = 14;
+  string host_identity_id = 15;
+  string relay_instance_id = 16;
 }
 
 message CommandResult {
@@ -268,7 +285,65 @@ message GatewayCommand {
     PagesStageRuntimeConfigCommand pages_stage_runtime_config = 54;
     PagesActivateRuntimeConfigCommand pages_activate_runtime_config = 55;
     PagesRemoveRuntimeConfigCommand pages_remove_runtime_config = 56;
+    // Capability-gated pre-activation reachability check for one staged relay
+    // assignment candidate. The daemon returns its acknowledgement through the
+    // existing CommandResult envelope.
+    ProbeRelayCandidateCommand probe_relay_candidate = 57;
+    SyncRelayPolicyCommand sync_relay_policy = 58;
+    SetRelayDrainCommand set_relay_drain = 59;
+    UpdateRelayWorkerCommand update_relay_worker = 60;
+    CommitRelaySupervisorUpdateCommand commit_relay_supervisor_update = 61;
   }
+}
+
+// A serialized relay.v1.ApplySnapshotRequest. Keeping the policy as opaque
+// bytes makes the supervisor a transport/process boundary; the worker remains
+// the only component that parses and authorizes signed relay policy.
+message SyncRelayPolicyCommand {
+  bytes apply_snapshot_request = 1;
+  uint64 revision = 2;
+  int64 expires_at_unix = 3;
+}
+
+message SetRelayDrainCommand {
+  bool enabled = 1;
+  bool force_disconnect = 2;
+}
+
+message UpdateRelayWorkerCommand {
+  string download_url = 1;
+  string target_version = 2;
+  string checksum = 3;
+  string signed_manifest = 4;
+}
+
+message CommitRelaySupervisorUpdateCommand {
+  string target_version = 1;
+}
+
+message RelayRuntimeStatus {
+  string relay_instance_id = 1;
+  string state = 2;
+  string build_version = 3;
+  uint32 protocol_major = 4;
+  repeated string capabilities = 5;
+  uint64 applied_policy_revision = 6;
+  int64 policy_expires_at_unix = 7;
+  uint64 registered_endpoints = 8;
+  uint64 active_tunnels = 9;
+  uint32 pressure_percent = 10;
+  bool draining = 11;
+  string error = 12;
+  repeated string advertised_addresses = 13;
+  uint32 service_port = 14;
+  repeated RelayAssignmentTunnelCount assignment_tunnels = 15;
+  repeated string policy_signing_key_ids = 16;
+}
+
+message RelayAssignmentTunnelCount {
+  string endpoint_id = 1;
+  uint64 assignment_generation = 2;
+  uint64 active_tunnels = 3;
 }
 
 // Gateway Pages v1 commands intentionally expose no operator-controlled
@@ -410,12 +485,36 @@ message RelayGrantAssignment {
   string route_id = 5;
   string target_endpoint_id = 6;
   RelaySignedGrant grant = 7;
+  repeated RelayDataCandidate candidates = 8;
+  uint32 schema_version = 9;
 }
 
 message RelaySignedGrant {
   string key_id = 1;
   bytes payload = 2;
   bytes signature = 3;
+}
+
+message RelayDataCandidate {
+  string pool_id = 1;
+  string relay_instance_id = 2;
+  uint64 assignment_generation = 3;
+  repeated string addresses = 4;
+  uint32 port = 5;
+  string certificate_identity = 6;
+  string certificate_fingerprint = 7;
+  repeated string capabilities = 8;
+  RelaySignedGrant grant = 9;
+  string assignment_state = 10; // "active", "staging", or "draining"
+}
+
+message ProbeRelayCandidateCommand {
+  string probe_id = 1;
+  string role = 2; // "source" or "target"
+  string endpoint_id = 3;
+  string route_id = 4;
+  uint64 assignment_generation = 5;
+  RelayDataCandidate candidate = 6;
 }
 
 message SyncProxySecureLinksCommand {

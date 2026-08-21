@@ -54,7 +54,7 @@ const CreateNodeResponseSchema = dataResponseSchema(
     node: z
       .object({
         id: z.string().uuid(),
-        type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases']),
+        type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']),
         hostname: z.string(),
         status: z.enum(['pending', 'online', 'offline', 'error']),
       })

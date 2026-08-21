@@ -17,6 +17,7 @@ export interface RawConfigTabProps {
   onValidate: () => Promise<boolean>;
   onSaveRaw: () => void;
   onRefreshRendered: () => void;
+  dirty: boolean;
   canManage: boolean;
 }
 
@@ -32,6 +33,7 @@ export function RawConfigTab({
   onValidate,
   onSaveRaw,
   onRefreshRendered,
+  dirty,
   canManage,
 }: RawConfigTabProps) {
   if (isRawMode) {
@@ -39,6 +41,7 @@ export function RawConfigTab({
       <PanelShell
         title="Raw Config"
         description="Full custom Nginx config for this proxy host"
+        dirty={dirty}
         actions={
           canManage ? (
             <div className="flex items-center gap-2">

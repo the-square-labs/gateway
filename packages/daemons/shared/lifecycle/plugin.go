@@ -65,6 +65,18 @@ type DaemonPlugin interface {
 	SetLogger(logger *slog.Logger)
 }
 
+// EnrollmentBundlePlugin receives daemon-type-specific material carried by the
+// System-CA-authenticated enrollment response before the daemon is marked
+// enrolled. Relay supervisors use it to atomically pin policy trust and stage
+// the worker server identity.
+type EnrollmentBundlePlugin interface {
+	PersistEnrollmentBundle(response *pb.EnrollResponse) error
+}
+
+type ShutdownPlugin interface {
+	Shutdown()
+}
+
 // LogStreamPlugin is implemented by plugins that maintain a separate
 // bidirectional log stream beside the command stream.
 type LogStreamPlugin interface {
@@ -90,6 +102,27 @@ type RelayTunnelPlugin interface {
 type RelayTunnelRuntimePlugin interface {
 	RelayTunnelLaneCount() int
 	RelayTunnelRuntimeChanged() <-chan struct{}
+}
+
+type RelayTunnelTarget struct {
+	ID                     string
+	Addresses              []string
+	CertificateIdentity    string
+	CertificateFingerprint string
+}
+
+// RelayPoolTunnelPlugin separates the canonical Gateway control target from
+// the relay instances used for payload lanes. Targets are complete desired
+// state and every configured lane is opened independently per target.
+type RelayPoolTunnelPlugin interface {
+	RelayTunnelPlugin
+	RelayTunnelRuntimePlugin
+	RelayTunnelTargets() []RelayTunnelTarget
+	RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, nodeID, relayInstanceID string)
+}
+
+type RelayCandidateProbePlugin interface {
+	ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand) (detail string, err error)
 }
 
 // ProxySecureLinkPlugin is implemented by nginx and general Docker daemons.

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "relay_pool_update_runs_one_active_per_pool" ON "relay_pool_update_runs" USING btree ("pool_id") WHERE "relay_pool_update_runs"."state" in ('preflight', 'draining', 'updating', 'verifying', 'paused', 'rolling_back');

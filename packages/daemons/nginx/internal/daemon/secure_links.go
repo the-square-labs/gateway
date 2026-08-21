@@ -19,6 +19,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -34,9 +35,10 @@ const (
 var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 type nginxRelayTunnel struct {
-	ctx    context.Context
-	client relayv1.TunnelBrokerClient
-	active atomic.Int64
+	ctx      context.Context
+	client   relayv1.TunnelBrokerClient
+	targetID string
+	active   atomic.Int64
 }
 
 type sourceLinkManager struct {
@@ -303,6 +305,18 @@ func (p *NginxPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
 	return p.relayGrants.changed
 }
 
+func (p *NginxPlugin) RelayTunnelTargets() []lifecycle.RelayTunnelTarget {
+	targets := relaybridge.RequiredTargets(p.relayGrants.get())
+	result := make([]lifecycle.RelayTunnelTarget, 0, len(targets))
+	for _, target := range targets {
+		result = append(result, lifecycle.RelayTunnelTarget{
+			ID: target.ID, Addresses: relaybridge.TargetAddresses(target), CertificateIdentity: target.CertificateIdentity,
+			CertificateFingerprint: target.CertificateFingerprint,
+		})
+	}
+	return result
+}
+
 func (p *NginxPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksCommand) (string, error) {
 	if p.secureLinks == nil {
 		return "", errors.New("proxy secure-link manager is unavailable")
@@ -400,7 +414,11 @@ func (p *NginxPlugin) ProbeProxySecureLink(command *pb.ProbeProxySecureLinkComma
 }
 
 func (p *NginxPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, _ string) {
-	tunnel := &nginxRelayTunnel{ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn)}
+	p.RunRelayTargetTunnels(ctx, conn, "", relaybridge.LegacyTargetID)
+}
+
+func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, _ string, relayInstanceID string) {
+	tunnel := &nginxRelayTunnel{ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID}
 	p.relayTunnelMu.Lock()
 	p.relayTunnels = append(p.relayTunnels, tunnel)
 	p.relayTunnelMu.Unlock()
@@ -423,48 +441,168 @@ func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
 		p.logger.Warn("proxy secure-link connection rejected", "link_id", linkID, "stage", "grant")
 		return
 	}
-	p.relayTunnelMu.Lock()
-	var tunnel *nginxRelayTunnel
-	for _, candidate := range p.relayTunnels {
-		if tunnel == nil || candidate.active.Load() < tunnel.active.Load() {
-			tunnel = candidate
+	candidates := relaybridge.PoolCandidates(assignment, false)
+	if len(candidates) == 0 {
+		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
+	}
+	candidates = p.orderRelayCandidates(candidates)
+	for index, candidate := range candidates {
+		tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
+		if tunnel == nil {
+			continue
+		}
+		grant := relaybridge.GrantForCandidate(candidate)
+		if grant == nil {
+			continue
+		}
+		if p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant) {
+			return
+		}
+		if index+1 < len(candidates) {
+			time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 		}
 	}
-	if tunnel != nil {
-		tunnel.active.Add(1)
+	p.logger.Warn("proxy secure-link connection failed on all relay candidates", "link_id", linkID)
+}
+
+func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
+	ordered := append([]*pb.RelayDataCandidate(nil), candidates...)
+	if len(ordered) < 2 {
+		return ordered
 	}
+	p.relayTunnelMu.Lock()
+	loads := make(map[string]int64, len(ordered))
+	available := make(map[string]bool, len(ordered))
+	for _, tunnel := range p.relayTunnels {
+		available[tunnel.targetID] = true
+		loads[tunnel.targetID] += tunnel.active.Load()
+	}
+	start := int(p.relaySelection % uint64(len(ordered)))
+	p.relaySelection++
 	p.relayTunnelMu.Unlock()
-	if tunnel == nil {
-		p.logger.Warn("proxy secure-link connection rejected", "link_id", linkID, "stage", "relay")
-		return
+	rank := make(map[string]int, len(ordered))
+	for offset := range ordered {
+		candidate := ordered[(start+offset)%len(ordered)]
+		rank[candidate.GetRelayInstanceId()] = offset
 	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftID, rightID := ordered[i].GetRelayInstanceId(), ordered[j].GetRelayInstanceId()
+		if available[leftID] != available[rightID] {
+			return available[leftID]
+		}
+		if loads[leftID] != loads[rightID] {
+			return loads[leftID] < loads[rightID]
+		}
+		return rank[leftID] < rank[rightID]
+	})
+	return ordered
+}
+
+func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
+	p.relayTunnelMu.Lock()
+	defer p.relayTunnelMu.Unlock()
+	var selected *nginxRelayTunnel
+	for _, tunnel := range p.relayTunnels {
+		if tunnel.targetID != targetID {
+			continue
+		}
+		if selected == nil || tunnel.active.Load() < selected.active.Load() {
+			selected = tunnel
+		}
+	}
+	if selected != nil {
+		selected.active.Add(1)
+	}
+	return selected
+}
+
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant) bool {
 	defer tunnel.active.Add(-1)
 	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, proxySecureLinkSetupTimeout)
 	defer cancel()
 	stream, err := tunnel.client.OpenTunnel(ctx)
 	if err != nil {
-		p.logger.Warn("proxy secure-link connection failed", "link_id", linkID, "stage", "open", "error", err)
-		return
+		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "open", "error", err)
+		return false
 	}
-	grant := assignment.Grant
-	if grant == nil {
-		return
-	}
-	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: &relayv1.SignedGrant{KeyId: grant.KeyId, Payload: grant.Payload, Signature: grant.Signature}}}}); err != nil {
-		p.logger.Warn("proxy secure-link connection failed", "link_id", linkID, "stage", "authorize", "error", err)
-		return
+	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}}); err != nil {
+		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "send", "error", err)
+		return false
 	}
 	first, err := stream.Recv()
-	if err != nil || first.GetReady() == nil {
-		p.logger.Warn("proxy secure-link connection failed", "link_id", linkID, "stage", "ready", "error", err)
-		return
+	if err != nil {
+		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "ready", "error", err)
+		return false
+	}
+	if first.GetReady() == nil {
+		code := "unexpected_frame"
+		if relayError := first.GetError(); relayError != nil {
+			code = relayError.GetCode()
+		}
+		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "ready", "error", code)
+		return false
 	}
 	if !finishSetup() {
-		return
+		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "deadline", "error", "setup timeout")
+		return false
 	}
 	readChunk := int(p.relayGrants.get().GetReadChunkBytes())
 	if readChunk == 0 {
 		readChunk = relaybridge.DefaultChunkBytes
 	}
 	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
+	return true
+}
+
+func (p *NginxPlugin) ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand) (string, error) {
+	if command == nil || command.GetRole() != "source" || command.GetCandidate() == nil ||
+		command.GetAssignmentGeneration() != command.GetCandidate().GetAssignmentGeneration() {
+		return "", errors.New("invalid relay source probe")
+	}
+	grant := relaybridge.GrantForCandidate(command.GetCandidate())
+	if grant == nil {
+		return "", errors.New("relay candidate probe grant is missing")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		tunnel := p.selectRelayTunnel(command.GetCandidate().GetRelayInstanceId())
+		if tunnel == nil {
+			lastErr = errors.New("relay candidate lane is unavailable")
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(tunnel.ctx, 2*time.Second)
+		stream, err := tunnel.client.OpenTunnel(ctx)
+		if err == nil {
+			err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}})
+		}
+		if err == nil {
+			var first *relayv1.TunnelFrame
+			first, err = stream.Recv()
+			if err == nil && first.GetReady() == nil {
+				err = errors.New("relay candidate did not acknowledge tunnel")
+			}
+		}
+		cancel()
+		tunnel.active.Add(-1)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	detail, err := json.Marshal(map[string]any{"probeId": command.GetProbeId(), "ready": true})
+	return string(detail), err
+}
+
+func relayGrant(grant *pb.RelaySignedGrant) *relayv1.SignedGrant {
+	if grant == nil {
+		return nil
+	}
+	return &relayv1.SignedGrant{KeyId: grant.KeyId, Payload: grant.Payload, Signature: grant.Signature}
 }

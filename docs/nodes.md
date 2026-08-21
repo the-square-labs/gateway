@@ -194,9 +194,16 @@ The token is only needed for enrollment. Long-term daemon authentication uses mT
 | Direction | Port | Purpose |
 |-----------|------|---------|
 | Node to Gateway | `9443/tcp` | gRPC control plane. |
+| Managed node to remote relay | `9443/tcp` by default | mTLS relay data plane; required only for configured Relay Pool members. |
 | Internet to nginx node | `80/tcp`, `443/tcp` | Public HTTP/HTTPS traffic served by nginx. |
 
 Managed nodes do not need inbound management ports for Gateway.
+
+## Relay Nodes
+
+Create relay nodes from **Settings > Relay > Add relay node**. The generated command installs a signed `relay-supervisor` and its separately signed worker, pins the Gateway certificate before sending the one-time enrollment token, and persists a physical host identity used as the Relay Pool fault domain. Two relay processes on the same physical host do not count as redundant.
+
+The supervisor connects outbound to Gateway. The worker listens on the advertised address and port (TCP `9443` by default), which must be reachable from participating Docker, nginx, database, and Gateway hosts. Gateway does not open that port, alter firewall rules, create an overlay, or traverse NAT. Adding a healthy relay does not remap existing endpoints; use explicit **Rebalance** after confirming reachability.
 
 If Gateway is behind Cloudflare for the UI/API, configure Gateway's public gRPC target as a direct `9443/tcp` endpoint. A Cloudflare-proxied web hostname must not be selected unless it explicitly routes the Gateway gRPC port. Generated commands use the configured target, so normal enrollment does not require replacing the address by hand.
 

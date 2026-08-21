@@ -193,6 +193,7 @@ import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.
 import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
+import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
@@ -614,6 +615,11 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(NodeDispatchService, nodeDispatch);
   relayPolicyService?.setNodeDispatch(nodeDispatch);
   relayPolicyService?.setEventBus(eventBus);
+  const relayPoolService = relayPolicyService
+    ? new RelayPoolService(db, relayPolicyService, eventBus, auditService, generalSettingsService)
+    : undefined;
+  if (relayPoolService) container.registerInstance(RelayPoolService, relayPoolService);
+  relayPoolService?.startReconciliation();
 
   const nginxCertificateDistribution = new NginxCertificateDistributionService(
     db,
@@ -833,7 +839,8 @@ export async function initializeContainer(): Promise<void> {
     proxySecureLinkService,
     cacheService,
     proxyMaintenanceAccessService,
-    generalSettingsService
+    generalSettingsService,
+    relayPoolService
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
@@ -1285,6 +1292,46 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DaemonUpdateService, daemonUpdateService);
   nodeDispatch.setDaemonUpdateService(daemonUpdateService);
   nodesService.setDaemonUpdateService(daemonUpdateService);
+  if (relayPoolService) {
+    updateService.setRelayPoolUpdateRuntime({
+      drainInstance: (instanceId, userId, enabled) => relayPoolService.drainInstance(instanceId, userId, enabled),
+      prepareWorkerUpdate: (version, arch) =>
+        daemonUpdateService.prepareTrustedDaemonUpdate('relay-worker', `${version}-relay`, version, arch),
+      dispatchWorkerUpdate: async (nodeId, artifact) => {
+        const result = await nodeDispatch.sendRelayWorkerUpdate(
+          nodeId,
+          artifact.downloadUrl,
+          artifact.payload.version,
+          artifact.checksum,
+          artifact.signedManifest
+        );
+        if (!result.success) throw new Error(result.error || result.detail || 'Relay worker update failed');
+      },
+      prepareSupervisorUpdate: (version, arch) =>
+        daemonUpdateService.prepareTrustedDaemonUpdate('relay', `${version}-relay`, version, arch),
+      dispatchSupervisorUpdate: async (nodeId, artifact) => {
+        await daemonUpdateService.markNodeUpdateInProgress(nodeId, artifact.payload.version);
+        try {
+          const command = await nodeDispatch.sendUpdateDaemonCommand(
+            nodeId,
+            artifact.downloadUrl,
+            artifact.payload.version,
+            artifact.checksum,
+            artifact.signedManifest
+          );
+          daemonUpdateService.trackNodeUpdateCompletion(nodeId, command.result);
+          await command.accepted;
+        } catch (error) {
+          await daemonUpdateService.clearNodeUpdateInProgress(nodeId);
+          throw error;
+        }
+      },
+      commitSupervisorUpdate: async (nodeId, targetVersion) => {
+        const result = await nodeDispatch.commitRelaySupervisorUpdate(nodeId, targetVersion);
+        if (!result.success) throw new Error(result.error || result.detail || 'Relay supervisor update commit failed');
+      },
+    });
+  }
 
   // Housekeeping service
   const housekeepingService = new HousekeepingService(db, dockerService, nodeDispatch, env);
@@ -1430,6 +1477,9 @@ export async function initializeContainer(): Promise<void> {
     );
     scheduler.registerInterval('relay-signing-key-rotation', 60 * 60 * 1000, () =>
       relayPolicyService!.rotateIfDue().then(() => undefined)
+    );
+    scheduler.registerInterval('relay-pool-policy-lease-refresh', 5 * 60 * 1000, () =>
+      relayPoolService!.refreshRemotePolicies()
     );
     // Same baseline cadence as ordinary node monitoring. Link Runtime pages
     // add focused 2s samples, but history does not depend on a page being open.

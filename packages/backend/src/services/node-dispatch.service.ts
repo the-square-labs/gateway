@@ -374,11 +374,75 @@ export class NodeDispatchService {
             routeId: assignment.routeId,
             targetEndpointId: assignment.targetEndpointId,
             grant: assignment.grant,
+            schemaVersion: assignment.schemaVersion,
+            candidates: assignment.candidates,
           })),
         },
       },
       timeoutMs
     );
+  }
+
+  async sendRelayPolicy(
+    nodeId: string,
+    applySnapshotRequest: Buffer,
+    revision: string,
+    expiresAtUnix: string,
+    timeoutMs = 30_000
+  ): Promise<CommandResult> {
+    await this.assertRelaySupervisorNode(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { syncRelayPolicy: { applySnapshotRequest, revision, expiresAtUnix } },
+      timeoutMs
+    );
+  }
+
+  async setRelayDrain(
+    nodeId: string,
+    enabled: boolean,
+    forceDisconnect = false,
+    timeoutMs = 30_000
+  ): Promise<CommandResult> {
+    await this.assertRelaySupervisorNode(nodeId);
+    return this.registry.sendCommand(nodeId, { setRelayDrain: { enabled, forceDisconnect } }, timeoutMs);
+  }
+
+  async sendRelayWorkerUpdate(
+    nodeId: string,
+    downloadUrl: string,
+    targetVersion: string,
+    checksum: string,
+    signedManifest: string
+  ): Promise<CommandResult> {
+    await this.assertRelaySupervisorNode(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { updateRelayWorker: { downloadUrl, targetVersion, checksum, signedManifest } },
+      daemonUpdateCommandTimeoutMs
+    );
+  }
+
+  async commitRelaySupervisorUpdate(nodeId: string, targetVersion: string): Promise<CommandResult> {
+    await this.assertRelaySupervisorNode(nodeId);
+    return this.registry.sendCommand(nodeId, { commitRelaySupervisorUpdate: { targetVersion } }, 30_000);
+  }
+
+  async probeRelayCandidate(
+    nodeId: string,
+    input: {
+      probeId: string;
+      role: 'source' | 'target';
+      endpointId: string;
+      routeId?: string;
+      assignmentGeneration: string;
+      candidate: NonNullable<RelayGrantBundle['grants'][number]['candidates']>[number];
+    },
+    timeoutMs = 15_000
+  ): Promise<CommandResult> {
+    await this.assertGenericRelayNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(nodeId, { probeRelayCandidate: input }, timeoutMs);
   }
 
   async sendProxySecureLinks(
@@ -473,6 +537,19 @@ export class NodeDispatchService {
     const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
     if (!Array.isArray(reported) || !reported.includes('generic_relay_tunnel_v1')) {
       throw new AppError(409, 'NODE_CAPABILITY_MISMATCH', 'Node daemon does not support generic relay grants');
+    }
+  }
+
+  private async assertRelaySupervisorNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (node.type !== 'relay' || !Array.isArray(reported) || !reported.includes('relay_pool_v1')) {
+      throw new AppError(409, 'NODE_CAPABILITY_MISMATCH', 'Node is not a pool-capable relay supervisor');
     }
   }
 

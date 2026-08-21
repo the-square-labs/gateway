@@ -1,0 +1,27 @@
+{
+  "name": "relay-supervisor",
+  "root": "packages/daemons/relay",
+  "sourceRoot": "packages/daemons/relay",
+  "targets": {
+    "build": {
+      "command": "mkdir -p packages/daemons/relay/bin && cd packages/daemons/relay && CGO_ENABLED=0 go build -o bin/relay-supervisor ./cmd/relay-supervisor",
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum",
+        "{workspaceRoot}/packages/daemons/shared/**/*",
+        "{workspaceRoot}/config/update-trust/**/*"
+      ],
+      "outputs": ["{projectRoot}/bin/relay-supervisor"],
+      "cache": true
+    },
+    "test": {
+      "command": "scripts/sync-update-trust-anchor.sh && cd packages/daemons/relay && CGO_ENABLED=0 go test ./...",
+      "cache": true
+    },
+    "lint": {
+      "command": "scripts/sync-update-trust-anchor.sh && cd packages/daemons/relay && CGO_ENABLED=0 go vet ./...",
+      "cache": true
+    }
+  }
+}

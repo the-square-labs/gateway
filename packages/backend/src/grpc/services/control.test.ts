@@ -601,6 +601,67 @@ describe('CommandStream daemon certificate identity', () => {
     expect(deps.registry.register).not.toHaveBeenCalled();
   });
 
+  it('does not close a relay stream when its initial runtime status races registration', async () => {
+    let resolveNode!: (rows: any[]) => void;
+    const nodeRows = new Promise<any[]>((resolve) => {
+      resolveNode = resolve;
+    });
+    let selectCount = 0;
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => {
+              selectCount += 1;
+              if (selectCount === 1) return nodeRows;
+              return Promise.resolve([
+                { id: '22222222-2222-4222-8222-222222222222', faultDomainId: 'host-relay-1' },
+              ]);
+            }),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+      })),
+    } as any;
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'relay-1',
+        configVersionHash: '',
+        daemonVersion: 'dev',
+        daemonType: 'relay',
+        capabilities: ['relay_pool_v1'],
+        relayInstanceId: '22222222-2222-4222-8222-222222222222',
+        hostIdentityId: 'host-relay-1',
+      },
+    });
+    stream.emit('data', {
+      relayRuntimeStatus: {
+        relayInstanceId: '22222222-2222-4222-8222-222222222222',
+        state: 'ready',
+      },
+    });
+    resolveNode([
+      {
+        type: 'relay',
+        configVersionHash: null,
+        certificateSerial: 'aa01',
+        certificateFingerprint: null,
+        hostIdentityId: 'host-relay-1',
+        status: 'offline',
+      },
+    ]);
+
+    await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(1));
+    expect(stream.end).not.toHaveBeenCalled();
+  });
+
   it('does not let an older pending registration replace a newer command stream', async () => {
     const queued = makeQueuedDbNode({ certificateSerial: 'aa01' });
     const deps = makeDeps(queued.db);

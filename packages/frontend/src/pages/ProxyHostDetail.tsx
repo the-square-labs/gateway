@@ -1252,6 +1252,7 @@ export function ProxyHostDetail({
                 onValidate={handleValidate}
                 onSaveAdvanced={handleSaveAdvanced}
                 isSavingAdvanced={isSavingAdvanced}
+                dirty={hasAdvancedConfigChanged}
                 canManage={!!id && hasScope(`proxy:advanced:${id}`)}
               />
             </TabsContent>
@@ -1278,6 +1279,7 @@ export function ProxyHostDetail({
                 onValidate={handleValidate}
                 onSaveRaw={handleSaveRaw}
                 onRefreshRendered={loadRenderedConfig}
+                dirty={hasRawConfigChanged}
                 canManage={canWriteRawConfig}
               />
             </TabsContent>

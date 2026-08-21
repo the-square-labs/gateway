@@ -141,6 +141,20 @@ variables:
         - config/update-trust/**/*
         - scripts/sync-update-trust-anchor.sh
 
+.daemon-relay-rules: &daemon-relay-rules
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - proto/**/*
+        - packages/relay/**/*
+        - packages/daemons/go.work
+        - packages/daemons/relay/**/*
+        - packages/daemons/shared/**/*
+        - config/update-trust/**/*
+        - scripts/setup-relay-node.sh
+        - scripts/sync-update-trust-anchor.sh
+
 .daemon-monitoring-rules: &daemon-monitoring-rules
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring$/
@@ -228,6 +242,14 @@ test-docker-daemon:
   script:
     - go test ./docker/... ./shared/...
   <<: *daemon-docker-rules
+
+test-relay-supervisor:
+  stage: test
+  extends: .go-job
+  script:
+    - go test ./relay/... ./shared/...
+    - go vet ./relay/... ./shared/...
+  <<: *daemon-relay-rules
 
 test-monitoring-daemon:
   stage: test
@@ -596,6 +618,14 @@ publish-gateway-inference:
           -o ../../../${DAEMON_NAME}-linux-${GOARCH} \
           ./cmd/${DAEMON_NAME}
       done
+      if [ "${DAEMON_NAME}" = "relay-supervisor" ]; then
+        for GOARCH in amd64 arm64; do
+          (cd ../../relay && CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build \
+            -ldflags "-s -w -X main.buildVersion=${VERSION}" \
+            -o ../../relay-worker-linux-${GOARCH} \
+            ./cmd/gateway-relay)
+        done
+      fi
       HOST_ARCH=$(go env GOHOSTARCH)
       case "${HOST_ARCH}" in
         amd64|arm64)
@@ -612,6 +642,9 @@ publish-gateway-inference:
       for GOARCH in amd64 arm64; do
         sha256sum "${DAEMON_NAME}-linux-${GOARCH}" >> checksums.txt
       done
+      if [ "${DAEMON_NAME}" = "relay-supervisor" ]; then
+        for GOARCH in amd64 arm64; do sha256sum "relay-worker-linux-${GOARCH}" >> checksums.txt; done
+      fi
       VERSION=$(echo "${CI_COMMIT_TAG}" | sed "s/-${DAEMON_SUFFIX}$//")
       ENCODED_PROJECT_PATH=$(printf '%s' "$CI_PROJECT_PATH" | sed 's#/#%2F#g')
       for GOARCH in amd64 arm64; do
@@ -630,6 +663,24 @@ publish-gateway-inference:
           --git-pipeline-id "$CI_PIPELINE_ID" \
           --out "../../${ARTIFACT}.update.json")
       done
+      if [ "${DAEMON_NAME}" = "relay-supervisor" ]; then
+        for GOARCH in amd64 arm64; do
+          ARTIFACT="relay-worker-linux-${GOARCH}"
+          SHA=$(sha256sum "${ARTIFACT}" | awk '{print $1}')
+          (cd packages/daemons && go run ./shared/cmd/update-trust sign \
+            --kind daemon-binary \
+            --version "$VERSION" \
+            --tag "$CI_COMMIT_TAG" \
+            --daemon-type relay-worker \
+            --arch "$GOARCH" \
+            --artifact-name "$ARTIFACT" \
+            --download-url "${CI_API_V4_URL}/projects/${ENCODED_PROJECT_PATH}/packages/generic/${DAEMON_NAME}/${CI_COMMIT_TAG}/${ARTIFACT}" \
+            --sha256 "$SHA" \
+            --git-commit-sha "$CI_COMMIT_SHA" \
+            --git-pipeline-id "$CI_PIPELINE_ID" \
+            --out "../../${ARTIFACT}.update.json")
+        done
+      fi
       unset UPDATE_SIGNING_PRIVATE_KEY_PEM_B64
     - |
       for GOARCH in amd64 arm64; do
@@ -639,6 +690,15 @@ publish-gateway-inference:
           --upload-file "${DAEMON_NAME}-linux-${GOARCH}" \
           "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${DAEMON_NAME}/${CI_COMMIT_TAG}/${DAEMON_NAME}-linux-${GOARCH}"
       done
+      if [ "${DAEMON_NAME}" = "relay-supervisor" ]; then
+        for GOARCH in amd64 arm64; do
+          ARTIFACT="relay-worker-linux-${GOARCH}"
+          curl --fail --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${ARTIFACT}" \
+            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${DAEMON_NAME}/${CI_COMMIT_TAG}/${ARTIFACT}"
+          curl --fail --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${ARTIFACT}.update.json" \
+            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${DAEMON_NAME}/${CI_COMMIT_TAG}/${ARTIFACT}.update.json"
+        done
+      fi
       curl --fail --show-error \
         --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
         --upload-file checksums.txt \
@@ -661,6 +721,10 @@ publish-gateway-inference:
     paths:
       - checksums.txt
       - "*-daemon-linux-*.update.json"
+      - "relay-supervisor-linux-*"
+      - "relay-supervisor-linux-*.update.json"
+      - "relay-worker-linux-*"
+      - "relay-worker-linux-*.update.json"
     expire_in: 1 hour
 
 .release-daemon:
@@ -748,6 +812,72 @@ release-docker-daemon:
     DAEMON_LABEL: "Docker Daemon"
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker$/
+
+# ── relay-supervisor ─────────────────────────────────────────────
+
+build-relay-supervisor:
+  extends: .build-daemon
+  needs:
+    - test-relay-supervisor
+  variables:
+    DAEMON_DIR: relay
+    DAEMON_NAME: relay-supervisor
+    DAEMON_SUFFIX: relay
+    LDFLAGS_VERSION_PKG: main
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
+
+release-relay-supervisor:
+  extends: .release-daemon
+  needs:
+    - build-relay-supervisor
+  variables:
+    DAEMON_NAME: relay-supervisor
+    DAEMON_LABEL: "Relay Supervisor"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Relay Supervisor ${CI_COMMIT_TAG}"
+    description: ./release-notes.md
+    assets:
+      links:
+        - name: relay-supervisor-linux-amd64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-amd64"
+          filepath: /relay-supervisor-linux-amd64
+          link_type: package
+        - name: relay-supervisor-linux-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-arm64"
+          filepath: /relay-supervisor-linux-arm64
+          link_type: package
+        - name: relay-worker-linux-amd64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-amd64"
+          filepath: /relay-worker-linux-amd64
+          link_type: package
+        - name: relay-worker-linux-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-arm64"
+          filepath: /relay-worker-linux-arm64
+          link_type: package
+        - name: relay-supervisor-linux-amd64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-amd64.update.json"
+          filepath: /relay-supervisor-linux-amd64.update.json
+          link_type: other
+        - name: relay-supervisor-linux-arm64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-supervisor-linux-arm64.update.json"
+          filepath: /relay-supervisor-linux-arm64.update.json
+          link_type: other
+        - name: relay-worker-linux-amd64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-amd64.update.json"
+          filepath: /relay-worker-linux-amd64.update.json
+          link_type: other
+        - name: relay-worker-linux-arm64.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/relay-worker-linux-arm64.update.json"
+          filepath: /relay-worker-linux-arm64.update.json
+          link_type: other
+        - name: checksums.txt
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay-supervisor/${CI_COMMIT_TAG}/checksums.txt"
+          filepath: /checksums.txt
+          link_type: other
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
 
 # ── monitoring-daemon ─────────────────────────────────────────────
 

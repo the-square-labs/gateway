@@ -10,6 +10,7 @@ import { LoggingFeatureService } from '@/modules/logging/logging-feature.service
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
+import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
@@ -73,9 +74,49 @@ systemRoutes.post('/relay/recovery', sessionOnly, requireScope('admin:system'), 
 });
 
 systemRoutes.get('/relay', requireScope('settings:gateway:view'), async (c) => {
-  const data = container.resolve(RelaySupervisorService).getSnapshot(true);
+  const local = container.resolve(RelaySupervisorService).getSnapshot(true);
+  const pool = container.isRegistered(RelayPoolService)
+    ? await container.resolve(RelayPoolService).getSnapshot()
+    : null;
+  const data = pool ? { ...local, ...pool, local } : local;
   return c.json({ data });
 });
+
+systemRoutes.post('/relay/rebalance', sessionOnly, requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const data = await container.resolve(RelayPoolService).stageRebalance(user.id);
+  return c.json({ data }, 202);
+});
+
+systemRoutes.post('/relay/instances/:instanceId/drain', sessionOnly, requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
+  const body = z.object({ confirm: z.literal(true) }).parse(await c.req.json());
+  void body;
+  await container.resolve(RelayPoolService).drainInstance(instanceId, user.id, true);
+  return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
+});
+
+systemRoutes.post('/relay/instances/:instanceId/resume', sessionOnly, requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
+  await container.resolve(RelayPoolService).drainInstance(instanceId, user.id, false);
+  return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
+});
+
+systemRoutes.post(
+  '/relay/instances/:instanceId/force-disconnect',
+  sessionOnly,
+  requireScope('admin:system'),
+  async (c) => {
+    const user = c.get('user')!;
+    const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
+    const body = z.object({ confirm: z.literal(true) }).parse(await c.req.json());
+    void body;
+    await container.resolve(RelayPoolService).forceDisconnectInstance(instanceId, user.id);
+    return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
+  }
+);
 
 // POST /check-update — manual check against GitLab (admin only)
 systemRoutes.openapi({ ...checkSystemUpdateRoute, middleware: sessionOnly }, async (c) => {
@@ -150,11 +191,12 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
     );
   }
   const artifact = await updateService.prepareRelayUpdate(version);
+  const userId = c.get('user')!.id;
   updateService.startRelayUpdate(version);
   eventBus.publish('system.update.changed', { updating: true, component: 'relay', targetVersion: version });
   setTimeout(() => {
     updateService
-      .performRelayUpdate(version, artifact)
+      .performRelayUpdate(version, artifact, userId)
       .then(() => updateService.completeRelayUpdate())
       .then(() => updateService.checkForUpdates())
       .then(() => {

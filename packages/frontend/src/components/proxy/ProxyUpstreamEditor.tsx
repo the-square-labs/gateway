@@ -1,5 +1,5 @@
 import { Loader2, Save } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -505,8 +505,22 @@ export function ProxyUpstreamPanel({
   onUpdated: (host: ProxyHost) => void;
 }) {
   const [selection, setSelection] = useState(() => proxyUpstreamFromHost(host));
+  const [relaySpreadMode, setRelaySpreadMode] = useState<"inherit" | "fixed" | "all">(
+    host.relaySpreadMode ?? "inherit"
+  );
+  const [relaySpreadCount, setRelaySpreadCount] = useState(host.relaySpreadCount ?? 2);
   const [containers, setContainers] = useState<DockerContainer[]>([]);
   const [saving, setSaving] = useState(false);
+  const persistedDraft = useMemo(
+    () => ({
+      hostId: host.id,
+      selection: proxyUpstreamFromHost(host),
+      relaySpreadMode: host.relaySpreadMode ?? ("inherit" as const),
+      relaySpreadCount: host.relaySpreadCount ?? 2,
+    }),
+    [host]
+  );
+  const lastPersistedDraft = useRef(persistedDraft);
 
   const loadContainers = useCallback(() => {
     void api
@@ -515,7 +529,20 @@ export function ProxyUpstreamPanel({
       .catch(() => setContainers([]));
   }, []);
 
-  useEffect(() => setSelection(proxyUpstreamFromHost(host)), [host]);
+  useEffect(() => {
+    const previous = lastPersistedDraft.current;
+    const hasLocalChanges =
+      JSON.stringify(proxyUpstreamRequest(selection)) !==
+        JSON.stringify(proxyUpstreamRequest(previous.selection)) ||
+      relaySpreadMode !== previous.relaySpreadMode ||
+      (relaySpreadMode === "fixed" && relaySpreadCount !== previous.relaySpreadCount);
+    lastPersistedDraft.current = persistedDraft;
+    if (persistedDraft.hostId !== previous.hostId || !hasLocalChanges) {
+      setSelection(persistedDraft.selection);
+      setRelaySpreadMode(persistedDraft.relaySpreadMode);
+      setRelaySpreadCount(persistedDraft.relaySpreadCount);
+    }
+  }, [persistedDraft, relaySpreadCount, relaySpreadMode, selection]);
   useEffect(loadContainers, [loadContainers]);
   useRealtime("docker.snapshot.changed", loadContainers);
   useRealtime("docker.deployment.changed", loadContainers);
@@ -523,15 +550,24 @@ export function ProxyUpstreamPanel({
   const changed = useMemo(
     () =>
       JSON.stringify(proxyUpstreamRequest(selection)) !==
-      JSON.stringify(proxyUpstreamRequest(proxyUpstreamFromHost(host))),
-    [host, selection]
+        JSON.stringify(proxyUpstreamRequest(persistedDraft.selection)) ||
+      relaySpreadMode !== persistedDraft.relaySpreadMode ||
+      (relaySpreadMode === "fixed" && relaySpreadCount !== persistedDraft.relaySpreadCount),
+    [persistedDraft, relaySpreadCount, relaySpreadMode, selection]
   );
 
+  const relaySpreadValid =
+    relaySpreadMode !== "fixed" || (relaySpreadCount >= 1 && relaySpreadCount <= 64);
+
   const save = async () => {
-    if (!canManage || !isProxyUpstreamValid(selection)) return;
+    if (!canManage || !isProxyUpstreamValid(selection) || !relaySpreadValid) return;
     setSaving(true);
     try {
-      const updated = await api.updateProxyHost(host.id, proxyUpstreamRequest(selection));
+      const updated = await api.updateProxyHost(host.id, {
+        ...proxyUpstreamRequest(selection),
+        relaySpreadMode,
+        relaySpreadCount: relaySpreadMode === "fixed" ? relaySpreadCount : null,
+      });
       onUpdated(updated);
       toast.success("Upstream updated");
     } catch (error) {
@@ -546,12 +582,13 @@ export function ProxyUpstreamPanel({
       title="Upstream"
       description="Route traffic manually, to Docker, or Pages"
       className="overflow-visible"
+      dirty={changed}
       actions={
         canManage ? (
           <Button
             className="w-fit"
             onClick={save}
-            disabled={!changed || !isProxyUpstreamValid(selection) || saving}
+            disabled={!changed || !isProxyUpstreamValid(selection) || !relaySpreadValid || saving}
           >
             {saving ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -570,6 +607,39 @@ export function ProxyUpstreamPanel({
         containers={containers}
         disabled={!canManage}
       />
+      <SettingsControlRow
+        title="Relay spread"
+        description="Relay capacity used by this workload and all its Secure Links; existing connections stay pinned"
+        controlsClassName="sm:w-96 sm:min-w-96 sm:max-w-96"
+      >
+        <div className="flex w-full items-center gap-2">
+          <Select
+            value={relaySpreadMode}
+            onValueChange={(value) => setRelaySpreadMode(value as "inherit" | "fixed" | "all")}
+            disabled={!canManage || saving}
+          >
+            <SelectTrigger className="min-w-0 flex-1" aria-label="Workload relay spread mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">Use pool default</SelectItem>
+              <SelectItem value="fixed">Fixed count</SelectItem>
+              <SelectItem value="all">All ready relays</SelectItem>
+            </SelectContent>
+          </Select>
+          {relaySpreadMode === "fixed" && (
+            <NumericInput
+              value={relaySpreadCount}
+              onChange={setRelaySpreadCount}
+              min={1}
+              max={64}
+              disabled={!canManage || saving}
+              aria-label="Workload relay count"
+              className="w-24 shrink-0"
+            />
+          )}
+        </div>
+      </SettingsControlRow>
     </PanelShell>
   );
 }

@@ -19,7 +19,12 @@ export function resolveRelayV1ProtoPath(cwd = process.cwd()): string {
 }
 
 export function loadRelayV1Proto(): any {
-  const definition = protoLoader.loadSync(resolveRelayV1ProtoPath(), {
+  const definition = loadRelayV1Definition();
+  return (grpc.loadPackageDefinition(definition) as any).relay.v1;
+}
+
+function loadRelayV1Definition(): protoLoader.PackageDefinition {
+  return protoLoader.loadSync(resolveRelayV1ProtoPath(), {
     keepCase: false,
     longs: String,
     enums: String,
@@ -27,5 +32,18 @@ export function loadRelayV1Proto(): any {
     defaults: true,
     oneofs: true,
   });
-  return (grpc.loadPackageDefinition(definition) as any).relay.v1;
+}
+
+export function encodeRelayV1Message(typeName: string, value: unknown): Buffer {
+  const definition = loadRelayV1Definition();
+  const message = definition[`relay.v1.${typeName}`] as any;
+  if (!message || !('serialize' in message)) throw new Error(`Relay protobuf message ${typeName} is unavailable`);
+  return Buffer.from(message.serialize(value));
+}
+
+export function decodeRelayV1Message(typeName: string, value: Buffer): unknown {
+  const definition = loadRelayV1Definition();
+  const message = definition[`relay.v1.${typeName}`] as any;
+  if (!message || !('deserialize' in message)) throw new Error(`Relay protobuf message ${typeName} is unavailable`);
+  return message.deserialize(value);
 }

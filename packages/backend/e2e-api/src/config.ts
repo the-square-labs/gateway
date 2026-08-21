@@ -6,6 +6,7 @@ export type E2EConfig = {
   allowUnhealthy: boolean;
   keepToken: boolean;
   dockerImage?: string;
+  profile: 'full' | 'release-upgrade';
 };
 
 export function loadConfig(): E2EConfig {
@@ -17,6 +18,7 @@ export function loadConfig(): E2EConfig {
     allowUnhealthy: process.env.GATEWAY_E2E_ALLOW_UNHEALTHY === '1',
     keepToken: process.env.GATEWAY_E2E_KEEP_TOKEN === '1',
     dockerImage: process.env.GATEWAY_E2E_DOCKER_IMAGE,
+    profile: process.env.GATEWAY_E2E_PROFILE === 'release-upgrade' ? 'release-upgrade' : 'full',
   };
 }
 

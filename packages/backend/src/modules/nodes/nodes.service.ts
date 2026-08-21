@@ -1,8 +1,18 @@
 import { isIP } from 'node:net';
 import bcrypt from 'bcryptjs';
-import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
-import { dockerDeployments, domains, managedDatabaseInstances, nodes, proxyHosts } from '@/db/schema/index.js';
+import {
+  dockerDeployments,
+  domains,
+  managedDatabaseInstances,
+  nodes,
+  proxyHosts,
+  relayAssignmentSourceProbes,
+  relayEndpointAssignmentGenerations,
+  relayEndpointAssignments,
+  relayInstances,
+} from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -312,8 +322,24 @@ export class NodesService {
               enrollmentTokenSelector: enrollmentToken.selector,
               enrollmentTokenHash: tokenHash,
               status: 'pending',
+              serviceAddresses: input.type === 'relay' ? input.serviceAddresses : [],
             })
             .returning();
+          if (input.type === 'relay') {
+            await executor.insert(relayInstances).values({
+              poolId: 'system',
+              kind: 'remote',
+              nodeId: created.id,
+              // Enrollment replaces this provisional value with the persisted
+              // physical-host identity and lets the pool uniqueness constraint
+              // reject a second relay on the same host.
+              faultDomainId: created.id,
+              displayName: input.displayName?.trim() || input.hostname,
+              advertisedAddresses: input.serviceAddresses ?? [],
+              servicePort: input.servicePort ?? 9443,
+              state: 'joining',
+            });
+          }
           return created;
         },
       });
@@ -570,6 +596,40 @@ export class NodesService {
       throw new AppError(404, 'NOT_FOUND', 'Node not found');
     }
 
+    let relayInstance: typeof relayInstances.$inferSelect | undefined;
+    if (node.type === 'relay') {
+      [relayInstance] = await this.db.select().from(relayInstances).where(eq(relayInstances.nodeId, id)).limit(1);
+      if (relayInstance) {
+        const activeAssignments = await this.db
+          .select({ id: relayEndpointAssignments.id })
+          .from(relayEndpointAssignments)
+          .innerJoin(
+            relayEndpointAssignmentGenerations,
+            eq(relayEndpointAssignments.assignmentGenerationId, relayEndpointAssignmentGenerations.id)
+          )
+          .where(
+            and(
+              eq(relayEndpointAssignments.relayInstanceId, relayInstance.id),
+              inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])
+            )
+          );
+        if (activeAssignments.length) {
+          throw new AppError(
+            409,
+            'RELAY_INSTANCE_ASSIGNED',
+            'Rebalance relay endpoints away from this instance before removal'
+          );
+        }
+        const disconnectedOfflineRelay = node.status === 'offline' && !this.registry.getNode(id);
+        if (!disconnectedOfflineRelay && !['draining', 'offline', 'error'].includes(relayInstance.state)) {
+          throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINED', 'Drain the relay instance before removal');
+        }
+        if ((relayInstance.health?.activeTunnels ?? 0) > 0) {
+          throw new AppError(409, 'RELAY_INSTANCE_HAS_ACTIVE_TUNNELS', 'Relay instance still has active tunnels');
+        }
+      }
+    }
+
     const assignedHosts = await this.db.select({ id: proxyHosts.id }).from(proxyHosts).where(eq(proxyHosts.nodeId, id));
     const cascadeOfflineProxyHosts = options.cascadeOfflineProxyHosts === true;
     if (assignedHosts.length > 0) {
@@ -653,6 +713,20 @@ export class NodesService {
     await this.db.transaction(async (tx) => {
       if (this.systemCertificateLifecycle) {
         await this.systemCertificateLifecycle.retireOwner({ type: 'node', id }, 'cessationOfOperation', tx);
+        if (relayInstance) {
+          await this.systemCertificateLifecycle.retireOwner(
+            { type: 'relay_node_server', id: relayInstance.id },
+            'cessationOfOperation',
+            tx
+          );
+        }
+      }
+      if (relayInstance) {
+        await tx
+          .delete(relayAssignmentSourceProbes)
+          .where(eq(relayAssignmentSourceProbes.relayInstanceId, relayInstance.id));
+        await tx.delete(relayEndpointAssignments).where(eq(relayEndpointAssignments.relayInstanceId, relayInstance.id));
+        await tx.delete(relayInstances).where(eq(relayInstances.id, relayInstance.id));
       }
       await tx.delete(nodes).where(eq(nodes.id, id));
     });

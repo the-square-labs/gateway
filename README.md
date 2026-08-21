@@ -126,6 +126,8 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
 
 The relay is a separate long-lived container and is the only public owner of `9443/tcp`. Ordinary app-only updates keep the relay container and established managed-database binding streams running; a relay update remains an explicit data-plane maintenance event.
 
+Gateway can extend that local relay into one logical Relay Pool from **Settings > Relay**. Additional relay nodes are enrolled with a dedicated supervisor, keep management outbound-only to Gateway, and expose only their configured relay data endpoint (TCP `9443` by default) to participating managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network. Adding a node does not move traffic until an administrator explicitly rebalances; new connections then spread across the workload's pre-verified active relay set while the UI continues to show one logical Secure Link.
+
 Nodes do not need inbound management ports. Public traffic ports, such as `80` and `443` on nginx nodes, are still required for the services you expose.
 
 ## Security Model

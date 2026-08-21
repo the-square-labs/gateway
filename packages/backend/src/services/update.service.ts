@@ -1,10 +1,12 @@
-import { inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
+import { nodes, relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
 import { settings } from '@/db/schema/settings.js';
 import { DEFAULT_SANDBOX_WORKSPACE_DIR } from '@/foundation/foundation-migrator.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
+import type { TrustedDaemonUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
   normalizeGitLabApiUrl,
   type TrustedGatewayUpdateArtifact,
@@ -66,6 +68,15 @@ export interface RelayUpdateRuntime {
   probeNow(): Promise<void>;
 }
 
+export interface RelayPoolUpdateRuntime {
+  drainInstance(instanceId: string, userId: string, enabled: boolean): Promise<void>;
+  prepareWorkerUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
+  dispatchWorkerUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
+  prepareSupervisorUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
+  dispatchSupervisorUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
+  commitSupervisorUpdate(nodeId: string, targetVersion: string): Promise<void>;
+}
+
 export function isGatewayReleaseTag(tag: string): boolean {
   return /^v?\d+\.\d+\.\d+$/.test(tag);
 }
@@ -122,6 +133,7 @@ export class UpdateService {
   private readonly encodedProjectPath: string;
   private readonly gitlabApiUrl: string;
   private relayUpdateOperation: RelayUpdateOperation | null = null;
+  private relayPoolRuntime?: RelayPoolUpdateRuntime;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -132,6 +144,10 @@ export class UpdateService {
     this.gitlabApiUrl = normalizeGitLabApiUrl(this.env.GITLAB_API_URL);
     this.encodedProjectPath = encodeURIComponent(this.env.GITLAB_PROJECT_PATH);
     this.gitlabReleasesUrl = `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/releases?per_page=100`;
+  }
+
+  setRelayPoolUpdateRuntime(runtime: RelayPoolUpdateRuntime): void {
+    this.relayPoolRuntime = runtime;
   }
 
   getCurrentVersion(): string {
@@ -192,6 +208,7 @@ export class UpdateService {
       latestVersion != null &&
       !isRelayTooOldForGatewayUpdate(currentRelayVersion, latestVersion);
 
+    const durableOperation = await this.getDurableRelayOperation();
     return {
       currentVersion,
       latestVersion,
@@ -205,7 +222,7 @@ export class UpdateService {
         updateAvailable: relayUpdateAvailable,
         releaseNotes: map.get(SETTINGS_KEYS.relayReleaseNotes) ?? null,
         releaseUrl: map.get(SETTINGS_KEYS.relayReleaseUrl) ?? null,
-        operation: this.relayUpdateOperation,
+        operation: durableOperation ?? this.relayUpdateOperation,
       },
     };
   }
@@ -640,7 +657,103 @@ exit 1`,
     logger.info('Update sidecar launched — container will be replaced shortly');
   }
 
-  async performRelayUpdate(targetVersion: string, artifact: TrustedRelayUpdateArtifact): Promise<void> {
+  async performRelayUpdate(
+    targetVersion: string,
+    artifact: TrustedRelayUpdateArtifact,
+    userId = 'system'
+  ): Promise<void> {
+    if (!this.relayPoolRuntime) {
+      await this.performLocalRelayUpdate(targetVersion, artifact, true);
+      return;
+    }
+    const run = await this.ensureRelayPoolUpdateRun(targetVersion, artifact);
+    let currentStepId: string | null = null;
+    try {
+      await this.db
+        .update(relayPoolUpdateRuns)
+        .set({ state: 'updating', terminalError: null, updatedAt: new Date() })
+        .where(eq(relayPoolUpdateRuns.id, run.id));
+      const steps = await this.db
+        .select()
+        .from(relayPoolUpdateSteps)
+        .where(eq(relayPoolUpdateSteps.runId, run.id))
+        .orderBy(relayPoolUpdateSteps.sequence);
+      for (const step of steps.filter(({ state }) => !['ready', 'rolled_back'].includes(state))) {
+        currentStepId = step.id;
+        const [instance] = await this.db
+          .select()
+          .from(relayInstances)
+          .where(eq(relayInstances.id, step.relayInstanceId))
+          .limit(1);
+        if (!instance) throw new Error(`Relay instance ${step.relayInstanceId} is unavailable`);
+        if (instance.kind === 'local') {
+          await this.updatePoolStep(step.id, 'updating');
+          await this.performLocalRelayUpdate(targetVersion, artifact, false);
+          await this.updatePoolStep(step.id, 'ready', true);
+          currentStepId = null;
+          continue;
+        }
+        if (!instance.nodeId) throw new Error(`Relay instance ${instance.id} is not enrolled`);
+        await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + 30 * 60 * 1000));
+        await this.relayPoolRuntime.drainInstance(instance.id, userId, true);
+        const drained = await this.waitForRelayInstanceDrain(instance.id, 30 * 60 * 1000);
+        if (!drained) {
+          await this.db
+            .update(relayPoolUpdateRuns)
+            .set({ state: 'paused', terminalError: 'Relay drain is waiting for active streams', updatedAt: new Date() })
+            .where(eq(relayPoolUpdateRuns.id, run.id));
+          throw new Error(`Relay ${instance.displayName} still has active streams; rollout paused`);
+        }
+        await this.updatePoolStep(step.id, 'updating');
+        const architecture = this.relayInstanceArchitecture(instance);
+        const normalizedVersion = normalizeVersionTag(targetVersion);
+        const workerArtifact = await this.relayPoolRuntime.prepareWorkerUpdate(normalizedVersion, architecture);
+        await this.relayPoolRuntime.dispatchWorkerUpdate(instance.nodeId, workerArtifact);
+        const supervisorArtifact = await this.relayPoolRuntime.prepareSupervisorUpdate(normalizedVersion, architecture);
+        await this.relayPoolRuntime.dispatchSupervisorUpdate(instance.nodeId, supervisorArtifact);
+        await this.updatePoolStep(step.id, 'verifying');
+        await Promise.all([
+          this.waitForRelayInstanceVersion(instance.id, normalizedVersion),
+          this.waitForRelaySupervisorVersion(instance.nodeId, normalizedVersion),
+        ]);
+        await this.relayPoolRuntime.commitSupervisorUpdate(instance.nodeId, normalizedVersion);
+        await this.relayPoolRuntime.drainInstance(instance.id, userId, false);
+        await this.updatePoolStep(step.id, 'ready', true);
+        currentStepId = null;
+      }
+      this.promoteRelayConnectorImages(artifact);
+      await this.db
+        .update(relayPoolUpdateRuns)
+        .set({ state: 'complete', completedAt: new Date(), terminalError: null, updatedAt: new Date() })
+        .where(eq(relayPoolUpdateRuns.id, run.id));
+    } catch (error) {
+      const message = formatError(error);
+      const [current] = await this.db
+        .select({ state: relayPoolUpdateRuns.state })
+        .from(relayPoolUpdateRuns)
+        .where(eq(relayPoolUpdateRuns.id, run.id))
+        .limit(1);
+      if (current?.state !== 'paused') {
+        if (currentStepId) {
+          await this.db
+            .update(relayPoolUpdateSteps)
+            .set({ state: 'failed', error: message, completedAt: new Date(), updatedAt: new Date() })
+            .where(eq(relayPoolUpdateSteps.id, currentStepId));
+        }
+        await this.db
+          .update(relayPoolUpdateRuns)
+          .set({ state: 'failed', terminalError: message, updatedAt: new Date() })
+          .where(eq(relayPoolUpdateRuns.id, run.id));
+      }
+      throw error;
+    }
+  }
+
+  private async performLocalRelayUpdate(
+    targetVersion: string,
+    artifact: TrustedRelayUpdateArtifact,
+    promoteConnectors: boolean
+  ): Promise<void> {
     const version = normalizeVersionTag(targetVersion);
     const selfInfo = await this.dockerService.inspectSelf();
     const labels = selfInfo.Config.Labels;
@@ -744,16 +857,190 @@ exit 1`,
         GATEWAY_RELAY_IMAGE_REF: artifact.imageRef,
         GATEWAY_RELAY_BUILD_VERSION: artifact.buildVersion,
         GATEWAY_RELAY_PROTOCOL_MAJOR: artifact.protocolMajor,
-        DATABASE_CONNECTOR_IMAGE: artifact.databaseConnectorImage,
-        SECURE_LINK_CONNECTOR_IMAGE: artifact.secureLinkConnectorImage,
       });
       this.relayRuntime?.setExpectedArtifact(artifact.imageRef, artifact.buildVersion, artifact.protocolMajor);
-      this.relayRuntime?.updateDatabaseConnectorImage(artifact.databaseConnectorImage);
-      await this.relayRuntime?.updateSecureLinkConnectorImage(artifact.secureLinkConnectorImage);
+      if (promoteConnectors) await this.promoteRelayConnectorImages(artifact);
     } finally {
       await this.relayRuntime?.setMaintenance(false);
     }
     await this.relayRuntime?.probeNow();
+  }
+
+  private async promoteRelayConnectorImages(artifact: TrustedRelayUpdateArtifact): Promise<void> {
+    Object.assign(this.env, {
+      DATABASE_CONNECTOR_IMAGE: artifact.databaseConnectorImage,
+      SECURE_LINK_CONNECTOR_IMAGE: artifact.secureLinkConnectorImage,
+    });
+    this.relayRuntime?.updateDatabaseConnectorImage(artifact.databaseConnectorImage);
+    await this.relayRuntime?.updateSecureLinkConnectorImage(artifact.secureLinkConnectorImage);
+  }
+
+  private async ensureRelayPoolUpdateRun(targetVersion: string, artifact: TrustedRelayUpdateArtifact) {
+    const [existing] = await this.db
+      .select()
+      .from(relayPoolUpdateRuns)
+      .where(
+        and(
+          eq(relayPoolUpdateRuns.poolId, 'system'),
+          inArray(relayPoolUpdateRuns.state, [
+            'preflight',
+            'draining',
+            'updating',
+            'verifying',
+            'paused',
+            'rolling_back',
+          ])
+        )
+      )
+      .orderBy(desc(relayPoolUpdateRuns.startedAt))
+      .limit(1);
+    if (existing) {
+      if (existing.targetArtifact.version !== normalizeVersionTag(targetVersion)) {
+        throw new AppError(409, 'UPDATE_IN_PROGRESS', 'Another Relay Pool update is already in progress');
+      }
+      return existing;
+    }
+    const instances = await this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'));
+    if (!instances.length) throw new Error('Relay Pool has no instances');
+    const readyFaultDomains = new Set(
+      instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)
+    );
+    if (instances.length > 1 && readyFaultDomains.size < 2) {
+      throw new AppError(409, 'RELAY_UPDATE_CAPACITY_UNAVAILABLE', 'Two ready relay fault domains are required');
+    }
+    const [run] = await this.db
+      .insert(relayPoolUpdateRuns)
+      .values({
+        poolId: 'system',
+        state: 'preflight',
+        targetArtifact: {
+          version: normalizeVersionTag(targetVersion),
+          digest: artifact.digest,
+          image: artifact.imageRef,
+        },
+        compatibility: { protocolMajor: artifact.protocolMajor, maxUnavailable: 1, parallelism: 1 },
+      })
+      .returning();
+    const ordered = [...instances].sort(
+      (left, right) => Number(left.kind === 'local') - Number(right.kind === 'local')
+    );
+    await this.db.insert(relayPoolUpdateSteps).values(
+      ordered.map((instance, sequence) => ({
+        runId: run.id,
+        relayInstanceId: instance.id,
+        sequence,
+        previousArtifact: instance.buildVersion
+          ? { version: instance.buildVersion, digest: '', architecture: this.relayInstanceArchitecture(instance) }
+          : null,
+        targetArtifact: {
+          version: normalizeVersionTag(targetVersion),
+          digest: artifact.digest,
+          image: artifact.imageRef,
+          architecture: this.relayInstanceArchitecture(instance),
+        },
+      }))
+    );
+    return run;
+  }
+
+  private async updatePoolStep(
+    stepId: string,
+    state: 'draining' | 'updating' | 'verifying' | 'ready',
+    completed = false,
+    drainDeadlineAt?: Date
+  ): Promise<void> {
+    await this.db
+      .update(relayPoolUpdateSteps)
+      .set({
+        state,
+        startedAt: new Date(),
+        ...(drainDeadlineAt ? { drainDeadlineAt } : {}),
+        ...(completed ? { completedAt: new Date() } : {}),
+        error: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(relayPoolUpdateSteps.id, stepId));
+  }
+
+  private relayInstanceArchitecture(instance: typeof relayInstances.$inferSelect): string {
+    return instance.capabilities?.architecture || 'amd64';
+  }
+
+  private async waitForRelayInstanceDrain(instanceId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const [instance] = await this.db
+        .select({ activeTunnels: relayInstances.health })
+        .from(relayInstances)
+        .where(eq(relayInstances.id, instanceId))
+        .limit(1);
+      if (!instance) throw new Error(`Relay instance ${instanceId} disappeared while draining`);
+      if (Number(instance.activeTunnels?.activeTunnels ?? 0) === 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    return false;
+  }
+
+  private async waitForRelayInstanceVersion(instanceId: string, targetVersion: string): Promise<void> {
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const [instance] = await this.db
+        .select({
+          state: relayInstances.state,
+          buildVersion: relayInstances.buildVersion,
+          lastSeenAt: relayInstances.lastSeenAt,
+        })
+        .from(relayInstances)
+        .where(eq(relayInstances.id, instanceId))
+        .limit(1);
+      if (instance?.state === 'ready' && instance.buildVersion === targetVersion && instance.lastSeenAt) return;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error(`Relay instance ${instanceId} did not become ready after update`);
+  }
+
+  private async waitForRelaySupervisorVersion(nodeId: string, targetVersion: string): Promise<void> {
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const [node] = await this.db
+        .select({ status: nodes.status, daemonVersion: nodes.daemonVersion, lastSeenAt: nodes.lastSeenAt })
+        .from(nodes)
+        .where(eq(nodes.id, nodeId))
+        .limit(1);
+      if (node?.status === 'online' && node.daemonVersion === targetVersion && node.lastSeenAt) return;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error(`Relay supervisor node ${nodeId} did not reconnect after update`);
+  }
+
+  private async getDurableRelayOperation(): Promise<RelayUpdateOperation | null> {
+    if (!this.relayPoolRuntime) return null;
+    const [run] = await this.db
+      .select()
+      .from(relayPoolUpdateRuns)
+      .where(
+        and(
+          eq(relayPoolUpdateRuns.poolId, 'system'),
+          inArray(relayPoolUpdateRuns.state, [
+            'preflight',
+            'draining',
+            'updating',
+            'verifying',
+            'paused',
+            'rolling_back',
+            'failed',
+          ])
+        )
+      )
+      .orderBy(desc(relayPoolUpdateRuns.startedAt))
+      .limit(1);
+    if (!run) return null;
+    return {
+      status: run.state === 'failed' || run.state === 'paused' ? 'failed' : 'updating',
+      targetVersion: run.targetArtifact.version,
+      startedAt: run.startedAt.toISOString(),
+      error: run.terminalError,
+    };
   }
 
   private async rollbackFoundationMigration(

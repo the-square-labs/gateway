@@ -217,6 +217,22 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				return result
 			})
 			continue
+		case *pb.GatewayCommand_ProbeRelayCandidate:
+			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
+				result := &pb.CommandResult{CommandId: c.CommandId, Success: true}
+				probePlugin, ok := d.plugin.(RelayCandidateProbePlugin)
+				if !ok {
+					result.Success = false
+					result.Error = "daemon does not support relay candidate probes"
+				} else if detail, err := probePlugin.ProbeRelayCandidate(c.GetProbeRelayCandidate()); err != nil {
+					result.Success = false
+					result.Error = err.Error()
+				} else {
+					result.Detail = detail
+				}
+				return result
+			})
+			continue
 		case *pb.GatewayCommand_UpdateDaemon:
 			// Self-update: download new binary, replace it on disk, acknowledge the
 			// command to the gateway, then exit so systemd restarts the daemon.

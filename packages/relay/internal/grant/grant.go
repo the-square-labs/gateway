@@ -28,6 +28,9 @@ type Claims struct {
 	SubjectKind           string `json:"subjectKind"`
 	SubjectID             string `json:"subjectId"`
 	CertificateSHA256     string `json:"certificateSha256"`
+	PoolID                string `json:"poolId,omitempty"`
+	RelayInstanceID       string `json:"relayInstanceId,omitempty"`
+	AssignmentGeneration  uint64 `json:"assignmentGeneration,omitempty"`
 	EndpointID            string `json:"endpointId,omitempty"`
 	EndpointGeneration    uint64 `json:"endpointGeneration,omitempty"`
 	RouteID               string `json:"routeId,omitempty"`
@@ -49,6 +52,13 @@ func (v Verifier) Verify(envelope *relayv1.SignedGrant, wantKind string, identit
 		return Claims{}, fmt.Errorf("signed grant is incomplete")
 	}
 	snapshot := v.Store.Current()
+	now := time.Now()
+	if v.Now != nil {
+		now = v.Now()
+	}
+	if err := v.Store.AdmissionError(now); err != nil {
+		return Claims{}, err
+	}
 	key, ok := snapshot.PublicKeys[envelope.KeyId]
 	if !ok || !ed25519.Verify(key, envelope.Payload, envelope.Signature) {
 		return Claims{}, fmt.Errorf("grant signature is invalid")
@@ -62,8 +72,14 @@ func (v Verifier) Verify(envelope *relayv1.SignedGrant, wantKind string, identit
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Claims{}, fmt.Errorf("grant payload contains trailing data")
 	}
-	if claims.SchemaVersion != 1 || claims.Audience != Audience || claims.GrantID == "" || claims.GatewayInstanceID != snapshot.GatewayInstanceID {
+	if (claims.SchemaVersion != 1 && claims.SchemaVersion != 2) || claims.Audience != Audience || claims.GrantID == "" || claims.GatewayInstanceID != snapshot.GatewayInstanceID {
 		return Claims{}, fmt.Errorf("grant scope is invalid")
+	}
+	if claims.SchemaVersion == 1 && snapshot.Mode == relayv1.RelayMode_RELAY_MODE_REMOTE_DATA_ONLY {
+		return Claims{}, fmt.Errorf("remote relay rejects legacy grants")
+	}
+	if claims.SchemaVersion == 2 && (claims.PoolID != snapshot.PoolID || claims.RelayInstanceID != snapshot.RelayInstanceID || claims.AssignmentGeneration == 0) {
+		return Claims{}, fmt.Errorf("grant relay assignment scope is invalid")
 	}
 	if claims.Kind != wantKind || claims.SubjectKind == "" || claims.CertificateSHA256 != identity.CertificateFingerprint {
 		return Claims{}, fmt.Errorf("grant subject is invalid")
@@ -77,10 +93,6 @@ func (v Verifier) Verify(envelope *relayv1.SignedGrant, wantKind string, identit
 	issuedAt, notBefore, expiresAt := time.Unix(claims.IssuedAt, 0), time.Unix(claims.NotBefore, 0), time.Unix(claims.ExpiresAt, 0)
 	if notBefore.Before(issuedAt) || !expiresAt.After(notBefore) || expiresAt.Sub(issuedAt) > MaxTTL {
 		return Claims{}, fmt.Errorf("grant lifetime is invalid")
-	}
-	now := time.Now()
-	if v.Now != nil {
-		now = v.Now()
 	}
 	if now.Add(ClockSkew).Before(issuedAt) || now.Add(ClockSkew).Before(notBefore) || now.Add(-ClockSkew).After(expiresAt) {
 		return Claims{}, fmt.Errorf("grant is not currently valid")
@@ -97,14 +109,20 @@ func (v Verifier) Verify(envelope *relayv1.SignedGrant, wantKind string, identit
 func ValidatePolicy(claims Claims, wantKind string, snapshot *policy.Snapshot) error {
 	switch wantKind {
 	case "endpoint":
-		endpoint := snapshot.Endpoints[claims.EndpointID]
+		endpoint := snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)
 		if endpoint == nil || endpoint.Generation != claims.EndpointGeneration || endpoint.SubjectKind != claims.SubjectKind || endpoint.SubjectId != claims.SubjectID || endpoint.CertificateSha256 != claims.CertificateSHA256 {
 			return fmt.Errorf("endpoint grant does not match policy")
 		}
+		if claims.SchemaVersion == 2 && (endpoint.PoolId != claims.PoolID || endpoint.RelayInstanceId != claims.RelayInstanceID || endpoint.AssignmentGeneration != claims.AssignmentGeneration) {
+			return fmt.Errorf("endpoint grant assignment does not match policy")
+		}
 	case "connect":
-		route := snapshot.Routes[claims.RouteID]
+		route := snapshot.Route(claims.RouteID, claims.AssignmentGeneration)
 		if route == nil || route.Generation != claims.RouteGeneration || route.SourceKind != claims.SubjectKind || route.SourceId != claims.SubjectID || route.SourceCertificateSha256 != claims.CertificateSHA256 {
 			return fmt.Errorf("connect grant does not match policy")
+		}
+		if claims.SchemaVersion == 2 && route.AssignmentGeneration != claims.AssignmentGeneration {
+			return fmt.Errorf("connect grant assignment does not match policy")
 		}
 	default:
 		return fmt.Errorf("unsupported grant kind")

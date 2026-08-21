@@ -155,6 +155,8 @@ Managed instances are private by default. Gateway binds applications through a p
 
 The managed-database tunnel terminates in a dedicated long-lived relay container on the existing Gateway `9443/tcp` endpoint. Ordinary application updates do not recreate this relay, so established binding sessions and new opens for already-ready bindings can continue while the app is restarting. Relay updates are explicit data-plane maintenance and may interrupt tunnel sessions.
 
+The same logical tunnel can use a Relay Pool without exposing pool topology to the workload. Operators may enroll remote relay supervisors, explicitly rebalance assignments across distinct physical fault domains, drain instances, and roll signed relay updates one member at a time. A global fixed-count or all-ready-relays spread can be overridden per workload. Daemons balance each new connection across the pre-registered active set and exclude draining members without interrupting existing streams; Gateway remains the control plane and does not forward payload bytes.
+
 TCP publication and its host port are fixed at provisioning time because Docker cannot safely change live port bindings; recreate the managed instance to change that endpoint.
 
 Each binding creates a dedicated Postgres role, Redis ACL user, or ClickHouse user; deleting the binding revokes that principal. For normal containers Gateway attaches a private binding network and recreates the workload with the selected connection variables. For blue/green deployments it adds the private network and encrypted variables to the desired configuration, then rolls a slot so future blue and green containers receive the same connector endpoint.

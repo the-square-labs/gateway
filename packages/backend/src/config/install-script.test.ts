@@ -10,6 +10,23 @@ const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
 const monitoringNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-monitoring-node.sh', import.meta.url));
 const daemonInstaller = fileURLToPath(new URL('../../../../scripts/setup-daemon.sh', import.meta.url));
+const relayNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-relay-node.sh', import.meta.url));
+
+describe('setup-relay-node.sh', () => {
+  it('verifies separately scoped supervisor and worker artifacts and installs rollback supervision', () => {
+    const syntax = spawnSync('bash', ['-n', relayNodeInstaller], { encoding: 'utf8' });
+    expect(syntax.status, syntax.stderr).toBe(0);
+
+    const source = readFileSync(relayNodeInstaller, 'utf8');
+    expect(source).toContain('fetch_verified "$SUPERVISOR" relay');
+    expect(source).toContain('fetch_verified "$WORKER" relay-worker');
+    expect(source).toContain('openssl pkeyutl -verify');
+    expect(source).toContain('run-supervisor');
+    expect(source).toContain('.update-pending');
+    expect(source).toContain('mv -f "$previous" "$binary"');
+    expect(source).toContain('ExecStart=/usr/local/lib/gateway-relay/run-supervisor');
+  });
+});
 
 describe('install.sh managed browser bootstrap', () => {
   it('is valid shell and still works when piped to bash', () => {

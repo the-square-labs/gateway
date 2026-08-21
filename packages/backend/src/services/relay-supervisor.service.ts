@@ -1,6 +1,7 @@
 import * as grpc from '@grpc/grpc-js';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import { relayInstances } from '@/db/schema/index.js';
 import type { RelayControlClient, RelayHealthResponse } from '@/grpc/relay-control.client.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -265,6 +266,11 @@ export class RelaySupervisorService {
           openFileDescriptors: Number(result.response.openFileDescriptors) || 0,
           fileDescriptorLimit: Number(result.response.fileDescriptorLimit) || 0,
         };
+        await this.recordLocalInstance(result.response).catch((error) => {
+          logger.warn('Failed to persist local Relay Pool health', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
         if (this.state.state === 'healthy') {
           this.state = { ...this.state, ...healthyUpdate };
           return;
@@ -508,6 +514,42 @@ export class RelaySupervisorService {
       }
       return { healthy: false, reason: 'unreachable' };
     }
+  }
+
+  private async recordLocalInstance(response: RelayHealthResponse): Promise<void> {
+    if (!response.relayInstanceId || response.poolId !== 'system') return;
+    const expiresAtUnix = Number(response.policyExpiresAtUnix || 0);
+    await this.db
+      .update(relayInstances)
+      .set({
+        state: response.draining ? 'draining' : 'ready',
+        buildVersion: response.buildVersion,
+        protocolMajor: response.protocolMajor,
+        capabilities: {
+          protocolMajor: response.protocolMajor,
+          features: response.capabilities ?? [],
+        },
+        appliedPolicyRevision: Number(response.appliedRevision || 0),
+        policyExpiresAt: expiresAtUnix > 0 ? new Date(expiresAtUnix * 1000) : null,
+        lastSeenAt: new Date(),
+        health: {
+          activeTunnels: Number(response.activeTunnels || 0),
+          registeredEndpoints: Number(response.registeredEndpoints || 0),
+          pressurePercent: Number(response.pressurePercent || 0),
+          cpuPressurePercent: Number(response.cpuPressurePercent || 0),
+          memoryPressurePercent: Number(response.memoryPressurePercent || 0),
+          fdPressurePercent: Number(response.fdPressurePercent || 0),
+          admissionState: response.admissionState,
+          policySigningKeyIds: response.policyKeyIds ?? [],
+          assignmentTunnels: (response.assignmentTunnels ?? []).map((count) => ({
+            endpointId: count.endpointId,
+            assignmentGeneration: Number(count.assignmentGeneration),
+            activeTunnels: Number(count.activeTunnels),
+          })),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(relayInstances.id, response.relayInstanceId));
   }
 
   private isRecoverable(reason: RelayHealthReason): boolean {

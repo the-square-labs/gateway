@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -94,10 +96,14 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	if err != nil {
 		return err
 	}
+	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||
+		!reflect.DeepEqual(relaybridge.RequiredTargets(s.current), relaybridge.RequiredTargets(command))
 	s.current = proto.Clone(command).(*pb.SyncRelayGrantsCommand)
-	select {
-	case s.changed <- struct{}{}:
-	default:
+	if runtimeChanged {
+		select {
+		case s.changed <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }
@@ -115,6 +121,7 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 	if err := p.relayGrants.sync(command); err != nil {
 		return "", err
 	}
+	p.reconcileRelayRegistrations()
 	if p.cfg.Docker.Mode == "databases" {
 		return "", nil
 	}

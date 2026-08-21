@@ -30,7 +30,7 @@ export interface DaemonUpdateManifestPayload {
   kind: 'daemon-binary';
   version: string;
   tag: string;
-  daemonType: 'nginx' | 'docker' | 'monitoring';
+  daemonType: 'nginx' | 'docker' | 'monitoring' | 'relay' | 'relay-worker';
   arch: string;
   artifactName: string;
   downloadUrl: string;

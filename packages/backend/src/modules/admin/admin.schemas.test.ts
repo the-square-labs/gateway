@@ -88,6 +88,21 @@ describe('UpdateAuthProvisioningSettingsSchema', () => {
         generalSettings: { relay: { proxyTargetPressurePercent: 90 } },
       }).success
     ).toBe(false);
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: { relay: { assignmentSpread: { mode: 'fixed', count: 10 } } },
+      }).success
+    ).toBe(true);
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: { relay: { assignmentSpread: { mode: 'all' } } },
+      }).success
+    ).toBe(true);
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: { relay: { assignmentSpread: { mode: 'fixed', count: 0 } } },
+      }).success
+    ).toBe(false);
   });
 
   it('accepts bounded graceful shutdown settings and rejects an excessive total', () => {

@@ -104,6 +104,28 @@ type acceptStream struct {
 	first *relayv1.TunnelFrame
 }
 
+type openStream struct {
+	relayv1.TunnelBroker_OpenTunnelServer
+	ctx   context.Context
+	first *relayv1.TunnelFrame
+}
+
+func (s *openStream) Context() context.Context { return s.ctx }
+func (s *openStream) Recv() (*relayv1.TunnelFrame, error) {
+	if s.first == nil {
+		return nil, io.EOF
+	}
+	frame := s.first
+	s.first = nil
+	return frame, nil
+}
+func (s *openStream) Send(*relayv1.TunnelFrame) error { return nil }
+func (s *openStream) SetHeader(metadata.MD) error     { return nil }
+func (s *openStream) SendHeader(metadata.MD) error    { return nil }
+func (s *openStream) SetTrailer(metadata.MD)          {}
+func (s *openStream) SendMsg(any) error               { return nil }
+func (s *openStream) RecvMsg(any) error               { return nil }
+
 func (s *acceptStream) Context() context.Context { return s.ctx }
 func (s *acceptStream) Recv() (*relayv1.TunnelFrame, error) {
 	frame := s.first
@@ -182,6 +204,84 @@ func TestEndpointDisconnectClosesActiveSessions(t *testing.T) {
 	case <-session.stop:
 	default:
 		t.Fatal("endpoint disconnect did not close its session")
+	}
+}
+
+func TestDrainRejectsNewTunnelWithoutClosingActiveSession(t *testing.T) {
+	store, err := policy.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := New(store)
+	active := &activeTunnel{stop: make(chan struct{})}
+	b.active["existing"] = active
+	b.SetDraining(true)
+	if !b.RuntimeSnapshot().Draining {
+		t.Fatal("drain state was not reported")
+	}
+	select {
+	case <-active.stop:
+		t.Fatal("drain closed an established session")
+	default:
+	}
+	stream := &openStream{
+		ctx:   authenticatedContext("node-source", []byte("source")),
+		first: &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{}}},
+	}
+	if code := status.Code(b.OpenTunnel(stream)); code != codes.Unavailable {
+		t.Fatalf("draining open status = %v", code)
+	}
+}
+
+func TestForceDisconnectRequiresDrainAndClosesActiveSessions(t *testing.T) {
+	store, err := policy.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := New(store)
+	active := &activeTunnel{stop: make(chan struct{})}
+	b.active["existing"] = active
+	if disconnected := b.ForceDisconnect(); disconnected != 0 {
+		t.Fatalf("force disconnect outside drain = %d", disconnected)
+	}
+	select {
+	case <-active.stop:
+		t.Fatal("force disconnect outside drain closed a session")
+	default:
+	}
+	b.SetDraining(true)
+	if disconnected := b.ForceDisconnect(); disconnected != 1 {
+		t.Fatalf("force disconnect count = %d", disconnected)
+	}
+	select {
+	case <-active.stop:
+	default:
+		t.Fatal("force disconnect did not close an active session")
+	}
+}
+
+func TestRuntimeSnapshotGroupsActiveTunnelsByAssignmentGeneration(t *testing.T) {
+	store, err := policy.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := New(store)
+	b.active["one"] = &activeTunnel{endpointID: "endpoint-b", assignmentGeneration: 2, stop: make(chan struct{})}
+	b.active["two"] = &activeTunnel{endpointID: "endpoint-a", assignmentGeneration: 3, stop: make(chan struct{})}
+	b.active["three"] = &activeTunnel{endpointID: "endpoint-a", assignmentGeneration: 3, stop: make(chan struct{})}
+
+	counts := b.RuntimeSnapshot().AssignmentTunnels
+	if len(counts) != 2 {
+		t.Fatalf("assignment tunnel groups = %d", len(counts))
+	}
+	if counts[0].EndpointID != "endpoint-a" || counts[0].AssignmentGeneration != 3 || counts[0].ActiveTunnels != 2 {
+		t.Fatalf("first assignment tunnel group = %+v", counts[0])
+	}
+	if counts[1].EndpointID != "endpoint-b" || counts[1].AssignmentGeneration != 2 || counts[1].ActiveTunnels != 1 {
+		t.Fatalf("second assignment tunnel group = %+v", counts[1])
 	}
 }
 

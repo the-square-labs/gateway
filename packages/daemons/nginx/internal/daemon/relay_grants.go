@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -62,9 +64,10 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 		_ = os.Remove(temporary)
 		return err
 	}
-	laneCountChanged := command.GetDataLanes() != s.current.GetDataLanes()
+	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||
+		!reflect.DeepEqual(relaybridge.RequiredTargets(s.current), relaybridge.RequiredTargets(command))
 	s.current = proto.Clone(command).(*pb.SyncRelayGrantsCommand)
-	if laneCountChanged {
+	if runtimeChanged {
 		select {
 		case s.changed <- struct{}{}:
 		default:

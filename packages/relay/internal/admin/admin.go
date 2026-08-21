@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/broker"
@@ -47,10 +48,18 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 	}
 	current := s.store.Current()
 	runtime := s.broker.RuntimeSnapshot()
-	ready := current.Revision > 0 && len(current.PublicKeys) > 0
+	var policyExpiresAtUnix int64
+	if !current.ExpiresAt.IsZero() {
+		policyExpiresAtUnix = current.ExpiresAt.Unix()
+	}
+	ready := s.store.Ready(time.Now()) && len(current.PublicKeys) > 0
 	reason := ""
 	if !ready {
-		reason = "policy_snapshot_required"
+		if err := s.store.AdmissionError(time.Now()); err != nil {
+			reason = err.Error()
+		} else {
+			reason = "grant_public_keys_required"
+		}
 	}
 	return &relayv1.HealthResponse{
 		BuildVersion: s.buildVersion, ProtocolMajor: 1, AppliedRevision: current.Revision,
@@ -70,6 +79,19 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 		OpenFileDescriptors:    runtime.Admission.OpenFileDescriptors,
 		FileDescriptorLimit:    runtime.Admission.FileDescriptorLimit,
 		Liveness:               true, Readiness: ready, Reason: reason,
+		PoolId: current.PoolID, RelayInstanceId: current.RelayInstanceID, Mode: current.Mode,
+		PolicyExpiresAtUnix: policyExpiresAtUnix, Capabilities: []string{policy.PoolCapability, "signed_policy_envelope_v1"},
+		Draining: runtime.Draining,
+		PolicyKeyIds: s.store.PolicyKeyIDs(),
+		AssignmentTunnels: func() []*relayv1.AssignmentTunnelCount {
+			result := make([]*relayv1.AssignmentTunnelCount, 0, len(runtime.AssignmentTunnels))
+			for _, count := range runtime.AssignmentTunnels {
+				result = append(result, &relayv1.AssignmentTunnelCount{
+					EndpointId: count.EndpointID, AssignmentGeneration: count.AssignmentGeneration, ActiveTunnels: count.ActiveTunnels,
+				})
+			}
+			return result
+		}(),
 	}, nil
 }
 
@@ -108,7 +130,42 @@ func (s *Service) ApplySnapshot(ctx context.Context, request *relayv1.ApplySnaps
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	return &relayv1.ApplySnapshotResponse{AppliedRevision: next.Revision, Unchanged: unchanged}, nil
+	var policyExpiresAtUnix int64
+	if !next.ExpiresAt.IsZero() {
+		policyExpiresAtUnix = next.ExpiresAt.Unix()
+	}
+	return &relayv1.ApplySnapshotResponse{
+		AppliedRevision: next.Revision, Unchanged: unchanged, PoolId: next.PoolID,
+		RelayInstanceId: next.RelayInstanceID, PolicyExpiresAtUnix: policyExpiresAtUnix,
+	}, nil
+}
+
+func (s *Service) BootstrapPolicyTrust(ctx context.Context, request *relayv1.BootstrapPolicyTrustRequest) (*relayv1.BootstrapPolicyTrustResponse, error) {
+	if err := s.authorize(ctx); err != nil {
+		return nil, err
+	}
+	unchanged, err := s.store.BootstrapPolicyTrust(request.KeyId, request.PublicKey, request.PublicKeyFingerprint)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &relayv1.BootstrapPolicyTrustResponse{
+		KeyId: request.KeyId, PublicKeyFingerprint: request.PublicKeyFingerprint, Unchanged: unchanged,
+	}, nil
+}
+
+func (s *Service) SetDrain(ctx context.Context, request *relayv1.SetDrainRequest) (*relayv1.SetDrainResponse, error) {
+	if err := s.authorize(ctx); err != nil {
+		return nil, err
+	}
+	s.broker.SetDraining(request.Draining)
+	var disconnected uint64
+	if request.GetForceDisconnect() {
+		if !request.GetDraining() {
+			return nil, status.Error(codes.FailedPrecondition, "force disconnect requires drain mode")
+		}
+		disconnected = s.broker.ForceDisconnect()
+	}
+	return &relayv1.SetDrainResponse{Draining: s.broker.Draining(), DisconnectedTunnels: disconnected}, nil
 }
 
 func (s *Service) ReloadIdentity(ctx context.Context, request *relayv1.ReloadIdentityRequest) (*relayv1.ReloadIdentityResponse, error) {

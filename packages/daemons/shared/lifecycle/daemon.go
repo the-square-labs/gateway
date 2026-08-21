@@ -63,6 +63,9 @@ func NewDaemonBase(cfg *BaseConfig, cfgPath string, plugin DaemonPlugin, logger 
 
 // Run starts the daemon lifecycle: enroll, connect, session loop.
 func (d *DaemonBase) Run(ctx context.Context) error {
+	if shutdown, ok := d.plugin.(ShutdownPlugin); ok {
+		defer shutdown.Shutdown()
+	}
 	// Step 1: Enroll if not yet enrolled
 	if !d.cfg.IsEnrolled() {
 		if err := d.enroll(); err != nil {
@@ -81,14 +84,18 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 		// The tunnel owns one process-lifetime ClientConn. It is intentionally
 		// outside runSessionCycle: control reconnects must not cancel tunnel
 		// streams or the TCP sessions multiplexed through them.
-		go runProcessRelayTunnel(
-			ctx,
-			d.connector.ConnectWithRetry,
-			relayTunnel,
-			d.state.NodeID,
-			d.tunnelIdentityChanged,
-			d.logger,
-		)
+		if poolTunnel, poolCapable := relayTunnel.(RelayPoolTunnelPlugin); poolCapable {
+			go runProcessRelayPool(ctx, d.connector, poolTunnel, d.state.NodeID, d.tunnelIdentityChanged, d.logger)
+		} else {
+			go runProcessRelayTunnel(
+				ctx,
+				d.connector.ConnectWithRetry,
+				relayTunnel,
+				d.state.NodeID,
+				d.tunnelIdentityChanged,
+				d.logger,
+			)
+		}
 	}
 
 	// Step 4: Connect and run (with reconnection loop)
@@ -114,6 +121,107 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 		// rate here to avoid a CPU and log storm during normal Gateway updates.
 		if !waitForControlSessionReconnect(ctx) {
 			return nil
+		}
+	}
+}
+
+func runProcessRelayPool(
+	ctx context.Context,
+	connector *connector.Connector,
+	plugin RelayPoolTunnelPlugin,
+	nodeID string,
+	identityChanged <-chan struct{},
+	logger *slog.Logger,
+) {
+	for ctx.Err() == nil {
+		laneCount := plugin.RelayTunnelLaneCount()
+		if laneCount < 1 {
+			laneCount = 1
+		}
+		if laneCount > 16 {
+			laneCount = 16
+		}
+		targets := plugin.RelayTunnelTargets()
+		if len(targets) == 0 {
+			targets = []RelayTunnelTarget{{ID: "local"}}
+		}
+		generationCtx, cancelGeneration := context.WithCancel(ctx)
+		ended := make(chan struct{}, len(targets))
+		for _, target := range targets {
+			target := target
+			go func() {
+				runRelayPoolTarget(generationCtx, connector, plugin, nodeID, target, laneCount, logger)
+				ended <- struct{}{}
+			}()
+		}
+		select {
+		case <-ctx.Done():
+		case <-identityChanged:
+			logger.Info("relay tunnel identity changed, reconnecting pool lanes")
+		case <-plugin.RelayTunnelRuntimeChanged():
+			logger.Info("relay tunnel targets changed, reconciling pool lanes")
+		}
+		cancelGeneration()
+		for range targets {
+			select {
+			case <-ended:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func runRelayPoolTarget(
+	ctx context.Context,
+	connector *connector.Connector,
+	plugin RelayPoolTunnelPlugin,
+	nodeID string,
+	target RelayTunnelTarget,
+	laneCount int,
+	logger *slog.Logger,
+) {
+	for ctx.Err() == nil {
+		connections := make([]*grpc.ClientConn, 0, laneCount)
+		for len(connections) < laneCount && ctx.Err() == nil {
+			var conn *grpc.ClientConn
+			var err error
+			if len(target.Addresses) == 0 {
+				conn, err = connector.ConnectWithRetry(ctx)
+			} else {
+				conn, err = connector.ConnectTargetAttempt(ctx, target.Addresses, target.CertificateIdentity, target.CertificateFingerprint)
+			}
+			if err != nil {
+				logger.Warn("relay target lane connection failed", "relay_instance_id", target.ID, "error", err)
+				break
+			}
+			connections = append(connections, conn)
+		}
+		if len(connections) == 0 {
+			if !waitForControlSessionReconnect(ctx) {
+				return
+			}
+			continue
+		}
+		targetCtx, cancelTarget := context.WithCancel(ctx)
+		laneEnded := make(chan struct{}, len(connections))
+		for _, conn := range connections {
+			conn := conn
+			go func() {
+				plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
+				laneEnded <- struct{}{}
+			}()
+		}
+		select {
+		case <-ctx.Done():
+		case <-laneEnded:
+		}
+		cancelTarget()
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+		if ctx.Err() == nil && !waitForControlSessionReconnect(ctx) {
+			return
 		}
 	}
 }
@@ -248,6 +356,10 @@ func (d *DaemonBase) enroll() error {
 
 	hostname, _ := os.Hostname()
 	osInfo := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	hostIdentityID, err := loadOrCreateHostIdentity(d.cfg.HostIdentityPath)
+	if err != nil {
+		return err
+	}
 
 	resp, err := enrollment.Enroll(
 		d.cfg.Gateway.Address,
@@ -258,14 +370,23 @@ func (d *DaemonBase) enroll() error {
 		osInfo,
 		Version,
 		d.plugin.Type(),
+		hostIdentityID,
 	)
 	if err != nil {
 		return err
+	}
+	if resp.HostIdentityId != "" && resp.HostIdentityId != hostIdentityID {
+		return fmt.Errorf("gateway returned a conflicting host identity")
 	}
 
 	// Save credentials
 	if err := d.saveCertificates(resp.CaCertificate, resp.ClientCertificate, resp.ClientKey); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
+	}
+	if enrollmentPlugin, ok := d.plugin.(EnrollmentBundlePlugin); ok {
+		if err := enrollmentPlugin.PersistEnrollmentBundle(resp); err != nil {
+			return fmt.Errorf("persist enrollment bundle: %w", err)
+		}
 	}
 
 	d.state.SetEnrolled(resp.NodeId)

@@ -6,10 +6,34 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 )
+
+func TestAssignmentsForRelayTargetPreservesActiveAndStagingGenerations(t *testing.T) {
+	assignment := &pb.RelayGrantAssignment{
+		EndpointId:    "22222222-2222-4222-8222-222222222222",
+		SchemaVersion: 2,
+		Candidates: []*pb.RelayDataCandidate{
+			{
+				RelayInstanceId: "relay-1", AssignmentGeneration: 3, AssignmentState: "active",
+				Capabilities: []string{relaybridge.PoolCapability}, Grant: &pb.RelaySignedGrant{KeyId: "active"},
+			},
+			{
+				RelayInstanceId: "relay-1", AssignmentGeneration: 4, AssignmentState: "staging",
+				Capabilities: []string{relaybridge.PoolCapability}, Grant: &pb.RelaySignedGrant{KeyId: "staging"},
+			},
+		},
+	}
+	projected := assignmentsForRelayTarget(assignment, "relay-1")
+	if len(projected) != 2 {
+		t.Fatalf("projected assignments = %d", len(projected))
+	}
+	if relayRegistrationKey(projected[0]) != assignment.EndpointId+":3" || relayRegistrationKey(projected[1]) != assignment.EndpointId+":4" {
+		t.Fatalf("projected registration keys = %q, %q", relayRegistrationKey(projected[0]), relayRegistrationKey(projected[1]))
+	}
+}
 
 func TestRelayConnectorHandshake(t *testing.T) {
 	bindingID := "11111111-1111-4111-8111-111111111111"
@@ -25,7 +49,7 @@ func TestRelayConnectorHandshake(t *testing.T) {
 	}
 }
 
-func TestRelayGrantStoreSignalsEndpointGrantChanges(t *testing.T) {
+func TestRelayGrantStoreDoesNotRestartLanesForEndpointGrantChanges(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newRelayGrantStore(dir)
 	if err != nil {
@@ -53,8 +77,8 @@ func TestRelayGrantStoreSignalsEndpointGrantChanges(t *testing.T) {
 	}
 	select {
 	case <-store.changed:
-	case <-time.After(time.Second):
-		t.Fatal("endpoint grant change did not wake relay registration reconciliation")
+		t.Fatal("endpoint-only grant change restarted relay lanes")
+	default:
 	}
 }
 
