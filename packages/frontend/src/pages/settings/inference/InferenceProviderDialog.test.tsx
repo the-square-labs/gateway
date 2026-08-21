@@ -95,6 +95,46 @@ describe("InferenceProviderDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("preserves an unsaved provider draft during a realtime connection refresh", () => {
+    const props = {
+      open: true,
+      provider,
+      canManage: true,
+      onOpenChange: vi.fn(),
+      onChanged: vi.fn().mockResolvedValue(undefined),
+    };
+    const { rerender } = render(<InferenceProviderDialog {...props} connection={connection} />);
+
+    fireEvent.change(screen.getByLabelText("Connection name"), {
+      target: { value: "Unsaved account name" },
+    });
+    const reserve = screen.getByRole("spinbutton", {
+      name: "Minimum remaining percentage",
+    });
+    fireEvent.change(reserve, { target: { value: "" } });
+
+    expect(reserve).toHaveValue(null);
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled();
+
+    rerender(
+      <InferenceProviderDialog
+        {...props}
+        connection={{
+          ...connection,
+          lastSyncedAt: "2026-07-27T12:05:00.000Z",
+          quota: [{ dimension: "5h", status: "fresh", remainingFraction: 0.7 }],
+        }}
+      />
+    );
+
+    expect(screen.getByLabelText("Connection name")).toHaveValue("Unsaved account name");
+    expect(reserve).toHaveValue(null);
+
+    fireEvent.change(reserve, { target: { value: "25" } });
+    expect(reserve).toHaveValue(25);
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeEnabled();
+  });
+
   it("exposes provider-scoped routing strategy next to connection settings", () => {
     render(
       <InferenceProviderDialog

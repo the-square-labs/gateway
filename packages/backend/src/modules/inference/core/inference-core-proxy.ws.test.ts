@@ -12,7 +12,7 @@ const upstreamInstances: Array<{
   url: string;
   options: { headers: Record<string, string> };
   sent: string[];
-  handlers: Record<string, (arg?: unknown) => void>;
+  handlers: Record<string, (...args: unknown[]) => void>;
   readyState: number;
   close: () => void;
 }> = [];
@@ -23,14 +23,14 @@ vi.mock('ws', () => {
     url: string;
     options: { headers: Record<string, string> };
     sent: string[] = [];
-    handlers: Record<string, (arg?: unknown) => void> = {};
+    handlers: Record<string, (...args: unknown[]) => void> = {};
     readyState = 1;
     constructor(url: string, options: { headers: Record<string, string> }) {
       this.url = url;
       this.options = options;
       upstreamInstances.push(this as never);
     }
-    on(event: string, handler: (arg?: unknown) => void) {
+    on(event: string, handler: (...args: unknown[]) => void) {
       this.handlers[event] = handler;
     }
     send(frame: string) {
@@ -253,6 +253,51 @@ describe('core responses websocket proxy', () => {
     second.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_2' } }));
     await vi.waitFor(() =>
       expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed')
+    );
+  });
+
+  it('reports a rejected core upgrade without rotating provider connections', async () => {
+    const { proxy, accounting } = registerCommon();
+    proxy.resolveTarget.mockResolvedValueOnce({
+      model: { id: 'model-1', publicId: 'gpt-5.5', reasoningEfforts: [], defaultReasoningEffort: null },
+      selected: {
+        source: {
+          id: 'source-1',
+          reasoningEffortMap: {},
+          coreAccountId: 'core-conn-1',
+          coreModelId: 'core-conn-1/gpt-5.5',
+        },
+        connection: { id: 'conn-1' },
+      },
+      upstreamModel: 'core-conn-1/gpt-5.5',
+      coreAccountId: 'core-conn-1',
+      candidateConnectionIds: ['conn-1', 'conn-2'],
+    });
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
+    );
+
+    upstreamInstances[0]!.handlers['unexpected-response']?.({}, { statusCode: 426, resume: vi.fn() });
+
+    await vi.waitFor(() => expect(accounting.finalizeCoreRequest).toHaveBeenCalled());
+    expect(upstreamInstances).toHaveLength(1);
+    expect(proxy.resolveTarget).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(ws.send.mock.calls[0]![0] as string)).toMatchObject({
+      type: 'error',
+      status: 502,
+      error: {
+        code: 'inference_core_unavailable',
+        message: 'Inference core rejected the WebSocket upgrade with status 426',
+      },
+    });
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+      'failed',
+      expect.objectContaining({ statusCode: 426 })
     );
   });
 });

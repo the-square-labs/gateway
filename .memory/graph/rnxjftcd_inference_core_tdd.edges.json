@@ -1,0 +1,35 @@
+{
+  "file_name": "rnxjftcd_inference_core_tdd",
+  "edges": [
+    {
+      "from_id": "rnxjftcd",
+      "to_id": "ifp3c48s",
+      "relation": "same_workflow",
+      "weight": 0.84,
+      "reason": "Both document the wiolett inference-core workflow, including provider behavior, proxying, accounting, and verification lessons.",
+      "source": "auto",
+      "created_at": 1787354231379,
+      "updated_at": 1787354231379
+    },
+    {
+      "from_id": "rnxjftcd",
+      "to_id": "dcfkgqwx",
+      "relation": "same_area",
+      "weight": 0.7,
+      "reason": "Both define Gateway inference provider contracts, accounting, feature controls, and testable runtime behavior.",
+      "source": "auto",
+      "created_at": 1787354231379,
+      "updated_at": 1787354231379
+    },
+    {
+      "from_id": "rnxjftcd",
+      "to_id": "qme9z5oh",
+      "relation": "same_area",
+      "weight": 0.52,
+      "reason": "Both address provider-backed AI runtime behavior and production verification concerns.",
+      "source": "auto",
+      "created_at": 1787354231379,
+      "updated_at": 1787354231379
+    }
+  ]
+}

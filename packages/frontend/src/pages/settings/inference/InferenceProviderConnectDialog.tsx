@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, Check, ExternalLink, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -71,6 +71,7 @@ export function InferenceProviderConnectDialog({
   const [oauth, setOAuth] = useState<InferenceOAuthSession | null>(null);
   const [callback, setCallback] = useState("");
   const [saving, setSaving] = useState(false);
+  const initializedDraftRef = useRef<string | null>(null);
   const selected = catalog.find((provider) => provider.id === providerId);
   const oauthProvider = oauth
     ? catalog.find((provider) => provider.id === oauth.providerId)
@@ -82,7 +83,14 @@ export function InferenceProviderConnectDialog({
   const contentKey = oauth ? `oauth-${oauth.completionMode}` : `setup-${providerId}-${authType}`;
 
   useEffect(() => {
-    if (!open || !initial) return;
+    if (!open) {
+      initializedDraftRef.current = null;
+      return;
+    }
+    if (!initial) return;
+    const draftKey = initialProviderId ?? "default";
+    if (initializedDraftRef.current === draftKey) return;
+    initializedDraftRef.current = draftKey;
     setProviderId(initial.id);
     setAuthType(
       initial.authTypes.includes("oauth") ? "oauth" : (initial.authTypes[0] ?? "api_key")
@@ -93,7 +101,7 @@ export function InferenceProviderConnectDialog({
     setAllowPrivateNetwork(false);
     setOAuth(null);
     setCallback("");
-  }, [initial, open]);
+  }, [initial, initialProviderId, open]);
 
   const selectProvider = (id: string) => {
     const provider = catalog.find((item) => item.id === id);
