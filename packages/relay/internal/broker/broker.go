@@ -804,7 +804,26 @@ func bridgeWithTimeouts(left, right tunnelStream, maxFrame int, stopped <-chan s
 		case <-idle:
 			return status.Error(codes.DeadlineExceeded, "tunnel idle timeout reached")
 		case <-halfCloseDeadline:
-			return status.Error(codes.DeadlineExceeded, "tunnel half-close timeout reached")
+			// Activity and the deadline can become ready in the same scheduler turn.
+			// Prefer already-observed traffic over reaping the bridge so a busy
+			// half-closed connection is not terminated just because the event loop
+			// was briefly descheduled at the deadline boundary.
+			select {
+			case <-activity:
+				halfCloseTimer.Reset(halfCloseTimeout)
+				if timer != nil {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(idleTimeout)
+				}
+				continue
+			default:
+				return status.Error(codes.DeadlineExceeded, "tunnel half-close timeout reached")
+			}
 		case <-stopped:
 			return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
 		}

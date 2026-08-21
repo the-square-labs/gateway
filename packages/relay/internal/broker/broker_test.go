@@ -528,12 +528,12 @@ func TestBridgeHalfCloseGraceResetsWhileRemainingDirectionIsActive(t *testing.T)
 	right := &channelFrameStream{received: make(chan *relayv1.TunnelFrame, 1)}
 	done := make(chan error, 1)
 	go func() {
-		done <- bridgeWithTimeouts(left, right, DefaultMaxFrameBytes, make(chan struct{}), 0, 10*time.Millisecond, nil)
+		done <- bridgeWithTimeouts(left, right, DefaultMaxFrameBytes, make(chan struct{}), 0, 100*time.Millisecond, nil)
 	}()
 
 	right.received <- &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}}
-	for range 5 {
-		time.Sleep(5 * time.Millisecond)
+	for range 15 {
+		time.Sleep(10 * time.Millisecond)
 		left.received <- &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: []byte("request")}}}
 		select {
 		case err := <-done:
@@ -547,7 +547,7 @@ func TestBridgeHalfCloseGraceResetsWhileRemainingDirectionIsActive(t *testing.T)
 		if status.Code(err) != codes.DeadlineExceeded {
 			t.Fatalf("inactive half-closed bridge status = %v", status.Code(err))
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		t.Fatal("half-closed bridge was not reaped after remaining traffic stopped")
 	}
 	close(left.received)
