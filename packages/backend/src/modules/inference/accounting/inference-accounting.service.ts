@@ -31,7 +31,7 @@ import {
   apiMicrodollars,
   dynamicBurnMultiplier,
   type InferenceBudgetPolicyService,
-  subscriptionCredits,
+  subscriptionCreditsForUsage,
 } from './inference-budget-policy.js';
 import type {
   BudgetReservation,
@@ -413,8 +413,8 @@ export class InferenceAccountingService {
     const latencyMs = Math.max(0, Date.now() - admission.startedAtMs);
     const credits =
       admission.budgetType === 'subscription'
-        ? subscriptionCredits(
-            usage.totalTokens,
+        ? subscriptionCreditsForUsage(
+            usage,
             admission.modelMultiplier,
             admission.burnMultiplier,
             admission.serviceTierMultiplier
@@ -434,7 +434,7 @@ export class InferenceAccountingService {
           estimatedUsage: usage.estimated,
           creditsCharged: String(credits),
           apiMicrodollarsCharged: cost,
-          uncachedInputTokens: Math.max(0, usage.inputTokens - usage.cachedInputTokens),
+          uncachedInputTokens: Math.max(0, usage.inputTokens - usage.cachedInputTokens - usage.cacheWriteTokens),
           cachedInputTokens: usage.cachedInputTokens,
           cacheWriteTokens: usage.cacheWriteTokens,
           outputTokens: usage.outputTokens,

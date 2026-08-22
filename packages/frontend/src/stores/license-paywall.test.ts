@@ -4,6 +4,7 @@ import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import {
   handleLicenseApiError,
   requireLicenseFeature,
+  requireMinimumLicensePlan,
   useLicensePaywallStore,
 } from "./license-paywall";
 
@@ -57,6 +58,21 @@ describe("license paywall store", () => {
     setLicense("business", ["pages"]);
     useLicensePaywallStore.setState({ request: null });
     expect(requireLicenseFeature("pages", "Pages")).toBe(true);
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+  });
+
+  it("enforces a minimum plan through the shared dialog without a feature entitlement", () => {
+    setLicense("community", []);
+    expect(requireMinimumLicensePlan("personal", "Disk image volumes")).toBe(false);
+    expect(useLicensePaywallStore.getState().request).toEqual({
+      capability: "Disk image volumes",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+
+    setLicense("business", []);
+    useLicensePaywallStore.setState({ request: null });
+    expect(requireMinimumLicensePlan("personal", "Disk image volumes")).toBe(true);
     expect(useLicensePaywallStore.getState().request).toBeNull();
   });
 

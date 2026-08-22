@@ -67,6 +67,22 @@ describe('LicensePolicyService', () => {
     expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('pages');
   });
 
+  it('requires Personal or higher without changing signed feature entitlements', async () => {
+    const communityPolicy = new LicensePolicyService({ getStatus: vi.fn(async () => baseStatus()) } as never);
+    await expect(communityPolicy.requireMinimumPlan('personal')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      details: { requiredPlan: 'personal', currentPlan: 'community', licenseStatus: 'community' },
+    });
+
+    const business = baseStatus();
+    business.plan = 'business';
+    business.status = 'valid';
+    business.entitlements = LICENSE_PLAN_ENTITLEMENTS.business;
+    const businessPolicy = new LicensePolicyService({ getStatus: vi.fn(async () => business) } as never);
+    await expect(businessPolicy.requireMinimumPlan('personal')).resolves.toBeUndefined();
+  });
+
   it('returns the structured quota error at the effective limit', async () => {
     const policy = new LicensePolicyService({ getStatus: vi.fn(async () => baseStatus()) } as never);
 

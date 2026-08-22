@@ -1115,7 +1115,7 @@ Never weaken callback, network, or webhook restrictions without explaining the r
 - \`manage_license({ operation: "activate", licenseKey })\` activates a key. Treat the key as a secret and never repeat it in chat.
 - \`manage_license({ operation: "check" })\` refreshes the current state.
 - \`manage_license({ operation: "clear" })\` removes the active key and is destructive.
-- Current license tiers are informational and do not gate product features. Read the live status instead of inferring a tier from available UI.
+- Read the live license status instead of inferring access from visible UI. Disk-image volume creation requires Personal or higher; other protected capabilities are governed by their advertised entitlements and quotas.
 
 ## Gateway And Daemon Updates
 - Use \`manage_system_updates({ operation: "get_gateway_status" })\` or \`manage_system_updates({ operation: "check_gateway" })\` before proposing an update.

@@ -226,13 +226,16 @@ export function codexCatalogFromModels(models: GatewayInferenceModel[]): CodexCa
         ),
         experimental_supported_tools: [],
         input_modalities: model.input_modalities.filter((value) => ['audio', 'image', 'text'].includes(value)),
-        supports_search_tool: model.capabilities.search === true,
+        // Routed tool-capable models must use Codex's deferred code-mode catalog.
+        // Advertising this as false makes the harness inline its full tool surface
+        // into the first request before Gateway can route it to the real provider.
+        supports_search_tool: model.capabilities.tools !== false,
         // Responses Lite is an internal Codex-backend transport. Gateway terminates
         // and re-encodes Responses requests, so advertising it makes Codex send a
         // compact tool protocol that cannot be preserved end-to-end.
         use_responses_lite: false,
         auto_review_model_override: null,
-        tool_mode: null,
+        tool_mode: model.capabilities.tools === false ? null : 'code_mode_only',
         multi_agent_version: null,
       };
     }),

@@ -137,6 +137,37 @@ describe('API token pricing', () => {
       )
     ).toBe(126_801);
   });
+
+  it('does not charge cache writes again as ordinary input', () => {
+    expect(
+      __testOnly.apiMicrodollars(
+        { inputTokens: 1000, cachedInputTokens: 700, cacheWriteTokens: 200, outputTokens: 0, reasoningTokens: 0 },
+        gpt56LunaPricing
+      )
+    ).toBe(84);
+  });
+});
+
+describe('subscription token pricing', () => {
+  it('weights cache reads and writes independently from ordinary tokens', () => {
+    expect(
+      __testOnly.subscriptionCreditsForUsage(
+        { inputTokens: 1000, cachedInputTokens: 800, cacheWriteTokens: 100, outputTokens: 100, reasoningTokens: 50 },
+        2,
+        1
+      )
+    ).toBeCloseTo(0.91);
+  });
+
+  it('falls back to charging all input normally when a provider reports an invalid cache split', () => {
+    expect(
+      __testOnly.subscriptionCreditsForUsage(
+        { inputTokens: 100, cachedInputTokens: 80, cacheWriteTokens: 30, outputTokens: 0, reasoningTokens: 0 },
+        1,
+        1
+      )
+    ).toBeCloseTo(0.1);
+  });
 });
 
 function policy(overrides: Partial<InferenceLimitPolicy>): InferenceLimitPolicy {

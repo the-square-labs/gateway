@@ -93,6 +93,16 @@ describe('Codex catalog synchronization', () => {
     expect(catalog.models[0].default_reasoning_level).toBe('low');
   });
 
+  it('advertises deferred code-mode tools for tool-capable routed models', () => {
+    const [enabled] = codexCatalogFromModels([MODELS.data[0]]).models;
+    const [disabled] = codexCatalogFromModels([
+      { ...MODELS.data[0], capabilities: { ...MODELS.data[0].capabilities, tools: false } },
+    ]).models;
+
+    expect(enabled).toMatchObject({ supports_search_tool: true, tool_mode: 'code_mode_only' });
+    expect(disabled).toMatchObject({ supports_search_tool: false, tool_mode: null });
+  });
+
   it('downloads the standard model list, converts it, and then uses If-None-Match', async () => {
     const files = await fixture();
     const calls: Request[] = [];

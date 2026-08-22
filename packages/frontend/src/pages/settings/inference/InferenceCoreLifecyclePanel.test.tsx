@@ -173,6 +173,7 @@ describe("InferenceCoreLifecyclePanel", () => {
     const user = userEvent.setup();
 
     expect(screen.getByText("Update available")).toBeInTheDocument();
+    expect(screen.getByLabelText("Inference core status")).toHaveClass("border-warning");
     expect(screen.getByText(/2\.26\.0-wiolett\.1 → 2\.27\.0-wiolett\.1/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Update to 2\.27\.0-wiolett\.1/ }));
 
@@ -184,6 +185,19 @@ describe("InferenceCoreLifecyclePanel", () => {
     await user.click(screen.getByRole("button", { name: "Update" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith("2.27.0-wiolett.1"));
+  });
+
+  it("uses the info border while the core is updating", () => {
+    renderPanel({
+      status: makeStatus({
+        ...readyStatus,
+        state: "updating",
+        operation: { ...runningOperation, kind: "update", phase: "updating" },
+      }),
+    });
+
+    expect(screen.getByText("Updating")).toBeInTheDocument();
+    expect(screen.getByLabelText("Inference core status")).toHaveClass("border-blue-500");
   });
 
   it("reports an installed current release as up to date", async () => {

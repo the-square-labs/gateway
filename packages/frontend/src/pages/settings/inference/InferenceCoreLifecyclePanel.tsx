@@ -354,6 +354,7 @@ export function InferenceCoreLifecyclePanel({
 
   const operationActive = status.operation?.status === "running";
   const incompatible = status.installed !== null && status.compatibility === "update_required";
+  const updateAvailable = status.state === "update_available" || incompatible;
   const failed = status.state === "failed" || status.state === "degraded";
 
   const run = async (key: string, action: () => Promise<unknown>) => {
@@ -465,6 +466,14 @@ export function InferenceCoreLifecyclePanel({
   return (
     <>
       <PanelShell
+        aria-label="Inference core status"
+        className={
+          status.state === "updating"
+            ? "border-blue-500"
+            : updateAvailable
+              ? "border-warning"
+              : undefined
+        }
         title={
           <span className="inline-flex items-center gap-2 whitespace-nowrap">
             Inference core {stateBadge(status)}

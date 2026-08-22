@@ -887,6 +887,7 @@ export const createVolumeRoute = appRoute({
   path: '/nodes/{nodeId}/volumes',
   tags: ['Docker Volumes'],
   summary: 'Create a volume',
+  description: 'Creates a regular Docker volume. Disk-image volume creation requires the Personal plan or higher.',
   request: { params: nodeParams, ...jsonBody(VolumeCreateSchema) },
   responses: createdJson(UnknownDataResponseSchema),
 });

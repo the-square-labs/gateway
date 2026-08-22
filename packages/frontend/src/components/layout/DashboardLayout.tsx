@@ -68,7 +68,11 @@ export function resolveAIWorkspaceEntry(
 
 function ApplicationShellSkeleton(_props: { scopes: readonly string[]; pathname: string }) {
   return (
-    <div className="h-screen bg-background" aria-busy="true" aria-label="Loading application" />
+    <div
+      className="fixed inset-0 bg-background"
+      aria-busy="true"
+      aria-label="Loading application"
+    />
   );
 }
 
@@ -655,7 +659,11 @@ export function DashboardLayout() {
   const isAIHome = location.pathname === "/" || isAIConversationRoute;
   if (canUseAI && isAIHome && !interfacePreferenceLoaded) {
     return (
-      <div className="h-screen bg-background" aria-busy="true" aria-label="Loading workspace" />
+      <div
+        className="fixed inset-0 bg-background"
+        aria-busy="true"
+        aria-label="Loading workspace"
+      />
     );
   }
 
@@ -665,7 +673,7 @@ export function DashboardLayout() {
   if (isMobile && useLiteMode && isAIHome) {
     return (
       <TooltipProvider>
-        <div className="flex h-screen flex-col bg-background">
+        <div className="fixed inset-0 flex flex-col overflow-hidden bg-background">
           <PageTransition>
             <AILitePanel onOpenMobileMenu={() => setMobileMenuOpen(true)} />
           </PageTransition>
@@ -689,7 +697,7 @@ export function DashboardLayout() {
   if (isMobile) {
     return (
       <TooltipProvider>
-        <div className="flex h-screen flex-col bg-background">
+        <div className="fixed inset-0 flex flex-col overflow-hidden bg-background">
           <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-2">
             <div className="flex items-center">
               <Button
@@ -742,7 +750,7 @@ export function DashboardLayout() {
   if (useLiteMode) {
     return (
       <TooltipProvider>
-        <div className="flex h-screen bg-background dashboard-scrollbar">
+        <div className="fixed inset-0 flex overflow-hidden bg-background dashboard-scrollbar">
           <div className="ai-chat-content-fade-in flex h-full shrink-0">
             <AILiteSidebar
               sidebarWidth={sidebarWidth}
@@ -772,7 +780,7 @@ export function DashboardLayout() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-screen min-w-0 overflow-hidden bg-background dashboard-scrollbar">
+      <div className="fixed inset-0 flex min-w-0 overflow-hidden bg-background dashboard-scrollbar">
         <SidebarContent
           sidebarWidth={sidebarWidth}
           onSidebarWidthChange={handleSidebarResize}

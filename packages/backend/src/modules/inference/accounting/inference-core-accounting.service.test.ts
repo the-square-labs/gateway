@@ -85,6 +85,7 @@ function createHarness(
     limits?: Record<string, unknown>;
     reserveError?: unknown;
     claimEmpty?: boolean;
+    selectRows?: unknown[][];
   } = {}
 ) {
   const insertedAttempts: unknown[] = [];
@@ -123,7 +124,7 @@ function createHarness(
       }),
     })),
     select: vi.fn(() => {
-      const rows: unknown[] = [];
+      const rows: unknown[] = options.selectRows?.shift() ?? [];
       const chain = Promise.resolve(rows) as Promise<unknown[]> & Record<string, unknown>;
       for (const method of ['from', 'where', 'orderBy', 'innerJoin', 'limit', 'groupBy']) {
         chain[method] = vi.fn().mockReturnValue(chain);
@@ -279,8 +280,20 @@ describe('inference core accounting', () => {
   });
 
   it('settles a completed attempt with a ledger row and publishes usage', async () => {
-    const { service, ledgerRows, eventBus, reservations } = createHarness({
+    const { service, ledgerRows, eventBus, reservations, requestUpdates } = createHarness({
       attempt: ATTEMPT,
+      selectRows: [
+        [
+          {
+            uncachedInputTokens: 800,
+            cachedInputTokens: 100,
+            cacheWriteTokens: 100,
+            outputTokens: 400,
+            reasoningTokens: 50,
+          },
+        ],
+        [{ credits: '1.385', apiMicrodollars: 0, estimatedUsage: false }],
+      ],
     });
     await service.settleCoreAttempt({
       contractId: 'wiolett-core/v1',
@@ -295,9 +308,9 @@ describe('inference core accounting', () => {
       upstreamStatus: 200,
       errorCode: null,
       usage: {
-        uncachedInputTokens: 900,
+        uncachedInputTokens: 800,
         cachedInputTokens: 100,
-        cacheWriteTokens: 0,
+        cacheWriteTokens: 100,
         outputTokens: 400,
         reasoningTokens: 50,
       },
@@ -313,8 +326,10 @@ describe('inference core accounting', () => {
       userId: 'user-1',
       entryType: 'settlement',
       outputTokens: 400,
+      credits: '1.385',
       snapshot: expect.objectContaining({ coreAttemptId: 'att_1', attemptKind: 'root' }),
     });
+    expect(requestUpdates).toContainEqual(expect.objectContaining({ estimatedUsage: false }));
     expect(eventBus.publish).toHaveBeenCalled();
     expect(reservations.release).toHaveBeenCalledWith({ id: `${REQUEST.id}:att_1`, userId: 'user-1' });
   });

@@ -2,6 +2,7 @@ import { Database, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -36,6 +37,7 @@ import { createReturnNavigationState } from "@/lib/return-navigation";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { handleLicenseApiError, requireMinimumLicensePlan } from "@/stores/license-paywall";
 import type { DockerVolume, Node, NodeAppearanceColor } from "@/types";
 
 interface DockerVolumeListItem extends DockerVolume {
@@ -78,9 +80,9 @@ export function DockerVolumes({
   const [createOpen, setCreateOpen] = useState(false);
   const [createNodeId, setCreateNodeId] = useState<string>("");
   const openCreate = useCallback(() => {
-    setCreateNodeId(selectedNodeId || "");
+    setCreateNodeId(fixedNodeId || selectedNodeId || "");
     setCreateOpen(true);
-  }, [selectedNodeId]);
+  }, [fixedNodeId, selectedNodeId]);
   useEffect(() => {
     onCreateRef?.(() => openCreate());
   }, [onCreateRef, openCreate]);
@@ -174,6 +176,12 @@ export function DockerVolumes({
 
   const handleCreate = async () => {
     if (!createNodeId || !createName.trim()) return;
+    if (
+      createStorageKind === "disk-image" &&
+      !requireMinimumLicensePlan("personal", "Disk image volumes")
+    ) {
+      return;
+    }
     setCreating(true);
     try {
       await api.createVolume(createNodeId, {
@@ -187,7 +195,9 @@ export function DockerVolumes({
       closeCreate();
       fetchVolumes(undefined, search);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create volume");
+      if (!handleLicenseApiError(err, "Disk image volumes")) {
+        toast.error(err instanceof Error ? err.message : "Failed to create volume");
+      }
     } finally {
       setCreating(false);
     }
@@ -232,6 +242,12 @@ export function DockerVolumes({
   const parsedCreateCapacityGb = Number(createCapacityGb);
   const createCapacityValid =
     Number.isInteger(parsedCreateCapacityGb) && parsedCreateCapacityGb >= 1;
+
+  useEffect(() => {
+    if (createOpen && !createNodeId && createNodes.length === 1) {
+      setCreateNodeId(createNodes[0].id);
+    }
+  }, [createNodeId, createNodes, createOpen]);
 
   useEffect(() => {
     if (createStorageKind === "disk-image" && !supportsDiskImages) {
@@ -539,84 +555,89 @@ export function DockerVolumes({
               {selectedNode?.displayName || selectedNode?.hostname || "the selected node"}.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">
-                Node <span className="text-destructive">*</span>
-              </label>
-              <Select value={createNodeId} onValueChange={setCreateNodeId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a node" />
-                </SelectTrigger>
-                <SelectContent>
-                  {createNodes.map((n) => (
-                    <SelectItem key={n.id} value={n.id}>
-                      {n.displayName || n.hostname}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Volume type</label>
-              <Select
-                value={createStorageKind}
-                onValueChange={(value) => setCreateStorageKind(value as "regular" | "disk-image")}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="regular">
-                    <div className="flex flex-col items-start">
-                      <span>Regular volume</span>
-                      <span className="text-xs text-muted-foreground">
-                        Standard Docker storage using shared node capacity.
-                      </span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="disk-image" disabled={!supportsDiskImages}>
-                    <div className="flex flex-col items-start">
-                      <span>Disk image</span>
-                      <span className="text-xs text-muted-foreground">
-                        {supportsDiskImages
-                          ? "Fixed-capacity ext4 storage that can be expanded later."
-                          : "Not supported by the selected node."}
-                      </span>
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {createStorageKind === "disk-image" && (
+          <AnimatedHeight>
+            <div className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="volume-capacity-gb">
-                  Capacity, GB <span className="text-destructive">*</span>
+                <label className="text-sm font-medium">
+                  Node <span className="text-destructive">*</span>
+                </label>
+                <Select value={createNodeId} onValueChange={setCreateNodeId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a node" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {createNodes.map((n) => (
+                      <SelectItem key={n.id} value={n.id}>
+                        {n.displayName || n.hostname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Volume type</label>
+                <Select
+                  value={createStorageKind}
+                  onValueChange={(value) => setCreateStorageKind(value as "regular" | "disk-image")}
+                >
+                  <SelectTrigger>
+                    <SelectValue>
+                      {createStorageKind === "disk-image" ? "Disk image" : "Regular volume"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      value="regular"
+                      description="Standard Docker storage using shared node capacity."
+                    >
+                      Regular volume
+                    </SelectItem>
+                    <SelectItem
+                      value="disk-image"
+                      disabled={!supportsDiskImages}
+                      description={
+                        !selectedNode
+                          ? "Select a node to check support."
+                          : supportsDiskImages
+                            ? "Fixed-capacity ext4 storage that can be expanded later."
+                            : "The selected node did not advertise disk-image support."
+                      }
+                    >
+                      Disk image
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {createStorageKind === "disk-image" && (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="volume-capacity-gb">
+                    Capacity, GB <span className="text-destructive">*</span>
+                  </label>
+                  <Input
+                    id="volume-capacity-gb"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={createCapacityGb}
+                    onChange={(event) => setCreateCapacityGb(event.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Allocated as a fixed-size ext4 disk image.
+                  </p>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">
+                  Name <span className="text-destructive">*</span>
                 </label>
                 <Input
-                  id="volume-capacity-gb"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={createCapacityGb}
-                  onChange={(event) => setCreateCapacityGb(event.target.value)}
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="my-volume"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Allocated as a fixed-size ext4 disk image.
-                </p>
               </div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">
-                Name <span className="text-destructive">*</span>
-              </label>
-              <Input
-                value={createName}
-                onChange={(e) => setCreateName(e.target.value)}
-                placeholder="my-volume"
-              />
             </div>
-          </div>
+          </AnimatedHeight>
           <DialogFooter>
             <Button variant="outline" onClick={closeCreate}>
               Cancel

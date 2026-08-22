@@ -18,16 +18,16 @@ export function Switch({
       aria-pressed={checked}
       disabled={disabled}
       className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center transition-colors border border-border",
-        checked ? "bg-primary" : "bg-muted-foreground/20",
-        disabled && "opacity-50 cursor-not-allowed"
+        "relative inline-flex h-5 w-9 shrink-0 appearance-none items-center justify-start border border-border p-0 transition-colors",
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+        checked ? "bg-primary" : "bg-muted-foreground/20"
       )}
       onClick={() => !disabled && onChange(!checked)}
     >
       <span
         className={cn(
-          "inline-block h-4 w-4 bg-background transition-transform",
-          checked ? "translate-x-[17px]" : "translate-x-px"
+          "absolute top-px inline-block h-4 w-4 bg-background transition-[left]",
+          checked ? "left-[17px]" : "left-px"
         )}
       />
     </button>

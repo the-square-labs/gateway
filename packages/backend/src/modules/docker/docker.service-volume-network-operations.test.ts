@@ -78,6 +78,20 @@ describe('DockerManagementService volume and network operations', () => {
     });
   });
 
+  it('requires Personal or higher before creating a disk-image volume', async () => {
+    const dispatch = { sendDockerVolumeCommand: vi.fn() };
+    const { service } = createService(dispatch);
+    const denial = new Error('Personal plan required');
+    const requireMinimumPlan = vi.fn().mockRejectedValue(denial);
+    service.setLicensePolicyService({ requireMinimumPlan } as never);
+
+    await expect(
+      service.createVolume('node-1', { name: 'bounded', storageKind: 'disk-image', capacityBytes: 1024 ** 3 }, 'user-1')
+    ).rejects.toBe(denial);
+    expect(requireMinimumPlan).toHaveBeenCalledWith('personal');
+    expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalled();
+  });
+
   it('removes volumes with force flag, audit, and change events', async () => {
     const dispatch = {
       sendDockerVolumeCommand: vi.fn().mockResolvedValue({ success: true }),

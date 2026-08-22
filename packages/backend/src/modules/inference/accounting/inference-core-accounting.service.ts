@@ -36,7 +36,7 @@ import {
   dynamicBurnMultiplier,
   type EffectiveInferenceLimits,
   type InferenceBudgetPolicyService,
-  subscriptionCredits,
+  subscriptionCreditsForUsage,
 } from './inference-budget-policy.js';
 import type { InferenceBudgetReservationService } from './inference-budget-reservation.service.js';
 import { assertProviderApiBudget } from './inference-provider-budget.js';
@@ -81,13 +81,14 @@ function coreEstimateUsage(estimate: InferenceCoreAdmissionRequest['estimate']):
 }
 
 function coreSettlementUsage(input: InferenceCoreSettlement['usage'], estimated: boolean): InferenceUsage {
+  const inputTokens = input.uncachedInputTokens + input.cachedInputTokens + input.cacheWriteTokens;
   return {
-    inputTokens: input.uncachedInputTokens + input.cachedInputTokens,
+    inputTokens,
     cachedInputTokens: input.cachedInputTokens,
     cacheWriteTokens: input.cacheWriteTokens,
     outputTokens: input.outputTokens,
     reasoningTokens: input.reasoningTokens,
-    totalTokens: input.uncachedInputTokens + input.cachedInputTokens + input.outputTokens,
+    totalTokens: inputTokens + input.outputTokens + input.reasoningTokens,
     estimated,
   };
 }
@@ -469,8 +470,8 @@ export class InferenceCoreAccountingService {
       const fixedApiMicrodollars = budgetType === 'api' ? Number(attempt.fixedApiMicrodollars ?? 0) : 0;
       const credits =
         budgetType === 'subscription'
-          ? subscriptionCredits(
-              usage.totalTokens,
+          ? subscriptionCreditsForUsage(
+              usage,
               Number(attempt.modelMultiplier ?? 1),
               Number(attempt.burnMultiplier ?? 1),
               Number(attempt.serviceTierMultiplier ?? 1)
@@ -608,6 +609,7 @@ export class InferenceCoreAccountingService {
       .select({
         credits: sql<string>`coalesce(sum(${inferenceUsageLedger.credits}::numeric), 0)::text`,
         apiMicrodollars: sql<number>`coalesce(sum(${inferenceUsageLedger.apiMicrodollars}), 0)`,
+        estimatedUsage: sql<boolean>`coalesce(bool_or(${inferenceUsageLedger.reason} = 'estimated_terminal_usage'), false)`,
       })
       .from(inferenceUsageLedger)
       .where(and(eq(inferenceUsageLedger.requestId, requestId), eq(inferenceUsageLedger.entryType, 'settlement')));
@@ -621,6 +623,7 @@ export class InferenceCoreAccountingService {
         reasoningTokens: Number(attemptTotals?.reasoningTokens ?? 0),
         creditsCharged: String(chargeTotals?.credits ?? '0'),
         apiMicrodollarsCharged: Number(chargeTotals?.apiMicrodollars ?? 0),
+        estimatedUsage: Boolean(chargeTotals?.estimatedUsage),
       })
       .where(eq(inferenceRequests.id, requestId));
   }

@@ -1242,6 +1242,9 @@ export class DockerManagementService {
     config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number },
     userId: string
   ) {
+    if (config.storageKind === 'disk-image') {
+      await requireConfiguredLicensePolicy(this.licensePolicy).requireMinimumPlan('personal');
+    }
     await this.validateDockerNode(nodeId);
     return createDockerVolume(this.volumeNetworkOperationContext(), nodeId, config, userId);
   }

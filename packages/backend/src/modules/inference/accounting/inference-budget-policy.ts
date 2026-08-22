@@ -203,6 +203,49 @@ export function subscriptionCredits(
   return (Math.max(0, totalTokens) / 1000) * modelMultiplier * burnMultiplier * serviceTierMultiplier;
 }
 
+const SUBSCRIPTION_CACHE_READ_WEIGHT = 0.1;
+const SUBSCRIPTION_CACHE_WRITE_WEIGHT = 1.25;
+
+function inputTokenClasses(usage: { inputTokens: number; cachedInputTokens: number; cacheWriteTokens: number }): {
+  uncachedInputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+} {
+  const inputTokens = Math.max(0, usage.inputTokens);
+  const cachedInputTokens = Math.max(0, usage.cachedInputTokens);
+  const cacheWriteTokens = Math.max(0, usage.cacheWriteTokens);
+  if (cachedInputTokens + cacheWriteTokens > inputTokens) {
+    return { uncachedInputTokens: inputTokens, cachedInputTokens: 0, cacheWriteTokens: 0 };
+  }
+  return {
+    uncachedInputTokens: inputTokens - cachedInputTokens - cacheWriteTokens,
+    cachedInputTokens,
+    cacheWriteTokens,
+  };
+}
+
+export function subscriptionCreditsForUsage(
+  usage: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+  },
+  modelMultiplier: number,
+  burnMultiplier: number,
+  serviceTierMultiplier = 1
+): number {
+  const input = inputTokenClasses(usage);
+  const weightedTokens =
+    input.uncachedInputTokens +
+    input.cachedInputTokens * SUBSCRIPTION_CACHE_READ_WEIGHT +
+    input.cacheWriteTokens * SUBSCRIPTION_CACHE_WRITE_WEIGHT +
+    Math.max(0, usage.outputTokens) +
+    Math.max(0, usage.reasoningTokens);
+  return subscriptionCredits(weightedTokens, modelMultiplier, burnMultiplier, serviceTierMultiplier);
+}
+
 export function apiMicrodollars(
   usage: {
     inputTokens: number;
@@ -224,12 +267,12 @@ export function apiMicrodollars(
   if (effectivePricing.inputMicrodollarsPerMillion === null || effectivePricing.outputMicrodollarsPerMillion === null) {
     throw new InferenceProtocolError(503, 'pricing_unavailable', 'API pricing is unavailable');
   }
-  const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
+  const input = inputTokenClasses(usage);
   const cost =
-    uncachedInput * effectivePricing.inputMicrodollarsPerMillion +
-    usage.cachedInputTokens *
+    input.uncachedInputTokens * effectivePricing.inputMicrodollarsPerMillion +
+    input.cachedInputTokens *
       (effectivePricing.cachedInputMicrodollarsPerMillion ?? effectivePricing.inputMicrodollarsPerMillion) +
-    usage.cacheWriteTokens *
+    input.cacheWriteTokens *
       (effectivePricing.cacheWriteMicrodollarsPerMillion ?? effectivePricing.inputMicrodollarsPerMillion) +
     usage.outputTokens * effectivePricing.outputMicrodollarsPerMillion +
     usage.reasoningTokens *
@@ -285,4 +328,4 @@ function zonedDateToUtc(year: number, month: number, day: number, timezone: stri
   return candidate;
 }
 
-export const __testOnly = { effectiveLimits, apiMicrodollars };
+export const __testOnly = { effectiveLimits, apiMicrodollars, subscriptionCreditsForUsage };

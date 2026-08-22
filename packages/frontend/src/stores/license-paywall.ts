@@ -21,6 +21,13 @@ export const LICENSE_FEATURE_PLANS = {
 export type LicenseFeature = keyof typeof LICENSE_FEATURE_PLANS;
 export type PaidLicensePlan = Exclude<LicensePlan, "community">;
 
+const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
+  community: 0,
+  personal: 1,
+  business: 2,
+  enterprise: 3,
+};
+
 export interface LicensePaywallRequest {
   capability: string;
   requiredPlan: PaidLicensePlan;
@@ -61,6 +68,21 @@ export function requireLicenseFeature(feature: LicenseFeature, capability: strin
     capability,
     requiredPlan: LICENSE_FEATURE_PLANS[feature],
     currentPlan: currentPlan(),
+  });
+  return false;
+}
+
+export function requireMinimumLicensePlan(
+  requiredPlan: PaidLicensePlan,
+  capability: string
+): boolean {
+  const license = useUIBootstrapStore.getState().snapshot?.license;
+  if (!license) return true;
+  if (LICENSE_PLAN_RANK[license.plan] >= LICENSE_PLAN_RANK[requiredPlan]) return true;
+  useLicensePaywallStore.getState().open({
+    capability,
+    requiredPlan,
+    currentPlan: license.plan,
   });
   return false;
 }

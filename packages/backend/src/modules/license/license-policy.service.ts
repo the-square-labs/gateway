@@ -29,6 +29,14 @@ export const LICENSE_FEATURE_PLANS = {
 
 export type LicenseFeature = keyof typeof LICENSE_FEATURE_PLANS;
 export type LicenseQuotaResource = 'managedNodes' | 'users' | 'customPermissionGroups';
+export type PaidLicensePlan = Exclude<LicensePlan, 'community'>;
+
+const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
+  community: 0,
+  personal: 1,
+  business: 2,
+  enterprise: 3,
+};
 
 export interface SafeLicenseSummary {
   status: LicenseStatus;
@@ -100,6 +108,17 @@ export class LicensePolicyService {
     throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
       feature,
       requiredPlan: LICENSE_FEATURE_PLANS[feature],
+      currentPlan: status.plan,
+      licenseStatus: status.status,
+    });
+  }
+
+  async requireMinimumPlan(requiredPlan: PaidLicensePlan): Promise<void> {
+    const status = await this.requireValidPolicyState();
+    if (LICENSE_PLAN_RANK[status.plan] >= LICENSE_PLAN_RANK[requiredPlan]) return;
+
+    throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
+      requiredPlan,
       currentPlan: status.plan,
       licenseStatus: status.status,
     });
