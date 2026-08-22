@@ -34,6 +34,47 @@ describe("InferenceModelDialog", () => {
     expect(accessTab).toHaveAttribute("data-state", "active");
   });
 
+  it("preserves an unsaved model draft when realtime catalog data refreshes", async () => {
+    const kimi = connection("kimi-a");
+    const kimiProvider = provider("kimi", "Kimi subscription", true);
+    const props = {
+      open: true,
+      editing: null,
+      groups: [],
+      users: [],
+      onOpenChange: vi.fn(),
+      onSaved: vi.fn().mockResolvedValue(undefined),
+    };
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <InferenceModelDialog {...props} connections={[kimi]} catalog={[kimiProvider]} />
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("button", { name: "Kimi subscription" }));
+    await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    await user.click(screen.getByRole("button", { name: "K3" }));
+    const displayName = screen.getByLabelText("Display name");
+    await user.clear(displayName);
+    await user.type(displayName, "Unsaved model name");
+
+    rerender(
+      <InferenceModelDialog
+        {...props}
+        connections={[
+          {
+            ...kimi,
+            lastSyncedAt: "2026-07-27T12:05:00.000Z",
+            discoveredModels: kimi.discoveredModels.map((model) => ({ ...model })),
+          },
+        ]}
+        catalog={[{ ...kimiProvider, label: "Kimi refreshed" }]}
+      />
+    );
+
+    expect(displayName).toHaveValue("Unsaved model name");
+  });
+
   it("shows upstream ids only when display names collide", async () => {
     const openAi = connection("openai-key", "openai-apikey");
     const base = openAi.discoveredModels[0]!;

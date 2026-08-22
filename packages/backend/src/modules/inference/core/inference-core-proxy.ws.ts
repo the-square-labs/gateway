@@ -1,6 +1,7 @@
 import type { WSContext, WSEvents } from 'hono/ws';
 import type WebSocketType from 'ws';
 import { container } from '@/container.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
@@ -17,6 +18,18 @@ import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 // emitted module keeps loading the package while retaining its TypeScript type.
 const webSocketPackage = ['w', 's'].join('');
 const WebSocket = (await import(webSocketPackage)).default as typeof WebSocketType;
+const logger = createChildLogger('InferenceCoreWebSocketProxy');
+
+class CoreWebSocketUpgradeError extends Error {
+  constructor(readonly statusCode: number | null) {
+    super(
+      statusCode === null
+        ? 'Inference core rejected the WebSocket upgrade'
+        : `Inference core rejected the WebSocket upgrade with status ${statusCode}`
+    );
+    this.name = 'CoreWebSocketUpgradeError';
+  }
+}
 
 export interface InferenceCoreWebSocketAuth {
   user: User;
@@ -308,11 +321,11 @@ async function connectTurnAttempt(input: {
   input.turn.upstream = upstream;
   let ended = false;
 
-  const retryOrFail = (error?: unknown) => {
+  const retryOrFail = (error?: unknown, allowConnectionFailover = true) => {
     if (ended) return;
     ended = true;
     if (input.state.active !== input.turn || input.turn.cancelled || input.turn.finalized) return;
-    if (!input.turn.clientEventSent && resolved.candidateConnectionIds.length > 1) {
+    if (allowConnectionFailover && !input.turn.clientEventSent && resolved.candidateConnectionIds.length > 1) {
       void connectTurnAttempt({
         ...input,
         resolved,
@@ -324,6 +337,17 @@ async function connectTurnAttempt(input: {
   };
 
   upstream.on('open', () => upstreamSend(upstream, JSON.stringify(rewritten)));
+  upstream.on('unexpected-response', (_request, response) => {
+    const error = new CoreWebSocketUpgradeError(response.statusCode ?? null);
+    response.resume();
+    logger.error('Inference core WebSocket upgrade was rejected', {
+      requestId: input.turn.requestId,
+      statusCode: error.statusCode,
+    });
+    // This is a core transport failure, not a provider failure. Rotating across
+    // provider connections only repeats the same rejected core handshake.
+    retryOrFail(error, false);
+  });
   upstream.on('message', (data) => {
     if (ended || input.state.active !== input.turn) return;
     const text = String(data);
@@ -388,7 +412,9 @@ function failTurn(
 ): void {
   if (state.active === turn) state.active = null;
   if (!turn.terminalSent) {
-    sendError(ws, 502, 'inference_core_unavailable', 'The inference core connection ended before output');
+    const message =
+      error instanceof CoreWebSocketUpgradeError ? error.message : 'The inference core connection ended before output';
+    sendError(ws, 502, 'inference_core_unavailable', message);
     turn.terminalSent = true;
   }
   finalizeTurn(accounting, turn, 'failed', error);

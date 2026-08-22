@@ -1,5 +1,5 @@
 import { Loader2, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -59,29 +59,41 @@ export function InferenceProviderDialog({
   const [routingStrategy, setRoutingStrategy] = useState<"even" | "balanced" | "sequential">(
     "balanced"
   );
-  const [minimumRemainingPercent, setMinimumRemainingPercent] = useState(0);
+  const [minimumRemainingPercent, setMinimumRemainingPercent] = useState("0");
   const [apiMonthlyLimitUsd, setApiMonthlyLimitUsd] = useState("");
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [retainedConnection, setRetainedConnection] = useState(connection);
   const [retainedProvider, setRetainedProvider] = useState(provider);
+  const initializedDraftRef = useRef<string | null>(null);
   const displayedConnection = connection ?? retainedConnection;
   const displayedProvider = provider ?? retainedProvider;
 
   useEffect(() => {
-    if (!open || !connection) return;
+    if (!connection) return;
     setRetainedConnection(connection);
     setRetainedProvider(provider);
+  }, [connection, provider]);
+
+  useEffect(() => {
+    if (!open) {
+      initializedDraftRef.current = null;
+      return;
+    }
+    if (!connection || initializedDraftRef.current === connection.id) return;
+    initializedDraftRef.current = connection.id;
     setName(connection.name);
     setEnabled(connection.enabled);
     setRoutingStrategy(connection.routingStrategy);
-    setMinimumRemainingPercent(connection.minimumRemainingPercent);
+    setMinimumRemainingPercent(String(connection.minimumRemainingPercent));
     setApiMonthlyLimitUsd(formatUsdInput(connection.apiMonthlyLimitMicrodollars));
-  }, [connection, open, provider]);
+  }, [connection, open]);
 
   if (!displayedConnection) return null;
 
   const subscription = displayedProvider?.subscription === true;
+  const parsedMinimumRemainingPercent = parseMinimumRemainingPercent(minimumRemainingPercent);
+  const minimumRemainingPercentValid = !subscription || parsedMinimumRemainingPercent !== undefined;
   const apiMonthlyLimitMicrodollars = parseUsdLimit(apiMonthlyLimitUsd);
   const apiMonthlyLimitValid = subscription || apiMonthlyLimitMicrodollars !== undefined;
   const reportedQuotaWindows = QUOTA_WINDOWS.flatMap(({ dimension, label }) => {
@@ -95,7 +107,9 @@ export function InferenceProviderDialog({
     name.trim() !== displayedConnection.name ||
     enabled !== displayedConnection.enabled ||
     routingStrategy !== displayedConnection.routingStrategy ||
-    (subscription && minimumRemainingPercent !== displayedConnection.minimumRemainingPercent) ||
+    (subscription &&
+      minimumRemainingPercentValid &&
+      parsedMinimumRemainingPercent !== displayedConnection.minimumRemainingPercent) ||
     (!subscription &&
       apiMonthlyLimitValid &&
       apiMonthlyLimitMicrodollars !== displayedConnection.apiMonthlyLimitMicrodollars);
@@ -106,8 +120,10 @@ export function InferenceProviderDialog({
       const connectionChanges = {
         ...(name.trim() !== displayedConnection.name ? { name: name.trim() } : {}),
         ...(enabled !== displayedConnection.enabled ? { enabled } : {}),
-        ...(subscription && minimumRemainingPercent !== displayedConnection.minimumRemainingPercent
-          ? { minimumRemainingPercent }
+        ...(subscription &&
+        parsedMinimumRemainingPercent !== undefined &&
+        parsedMinimumRemainingPercent !== displayedConnection.minimumRemainingPercent
+          ? { minimumRemainingPercent: parsedMinimumRemainingPercent }
           : {}),
         ...(!subscription &&
         apiMonthlyLimitMicrodollars !== displayedConnection.apiMonthlyLimitMicrodollars
@@ -278,11 +294,7 @@ export function InferenceProviderDialog({
                   max="100"
                   step="1"
                   value={minimumRemainingPercent}
-                  onChange={(event) =>
-                    setMinimumRemainingPercent(
-                      Math.min(100, Math.max(0, Math.round(Number(event.target.value))))
-                    )
-                  }
+                  onChange={(event) => setMinimumRemainingPercent(event.target.value)}
                   aria-label="Minimum remaining percentage"
                   className="w-24"
                   disabled={!canManage}
@@ -335,7 +347,14 @@ export function InferenceProviderDialog({
               </Button>
               <Button
                 onClick={() => void save()}
-                disabled={!dirty || !name.trim() || !apiMonthlyLimitValid || saving || syncing}
+                disabled={
+                  !dirty ||
+                  !name.trim() ||
+                  !minimumRemainingPercentValid ||
+                  !apiMonthlyLimitValid ||
+                  saving ||
+                  syncing
+                }
               >
                 {saving && <Loader2 className="animate-spin" />}
                 Save settings
@@ -346,6 +365,13 @@ export function InferenceProviderDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function parseMinimumRemainingPercent(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const percent = Number(value);
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100) return undefined;
+  return percent;
 }
 
 function parseUsdLimit(value: string): number | null | undefined {

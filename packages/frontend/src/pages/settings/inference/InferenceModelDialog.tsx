@@ -77,17 +77,18 @@ export function InferenceModelDialog({
   const [accessMode, setAccessMode] = useState<"everyone" | "selected" | "disabled">("everyone");
   const [accessSubjects, setAccessSubjects] = useState<InferenceAccessSubject[]>([]);
   const [saving, setSaving] = useState(false);
-  const initializedForOpen = useRef(false);
+  const initializedDraftRef = useRef<string | null>(null);
   const selected =
     options.find((option) => option.key === providerModelKey(providerId, remoteModelId)) ?? null;
 
   useEffect(() => {
     if (!open) {
-      initializedForOpen.current = false;
+      initializedDraftRef.current = null;
       return;
     }
-    if (initializedForOpen.current) return;
-    initializedForOpen.current = true;
+    const draftKey = editing?.id ?? "new";
+    if (initializedDraftRef.current === draftKey) return;
+    initializedDraftRef.current = draftKey;
     const firstSource = editing?.sources[0];
     const nextProviderId = firstSource?.providerId ?? "";
     const nextRemoteModelId = firstSource?.upstreamModelId ?? "";

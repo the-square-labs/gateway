@@ -315,6 +315,26 @@ describe("InferenceProviderConnectDialog", () => {
     expect(screen.getByPlaceholderText("Team account")).toBe(nameInput);
   });
 
+  it("preserves an unsaved connection draft when the provider catalog refreshes", () => {
+    const { rerender } = renderConnectDialog();
+    const name = screen.getByPlaceholderText("Team account");
+    fireEvent.change(name, { target: { value: "Unsaved team" } });
+
+    rerender(
+      <>
+        <InferenceProviderConnectDialog
+          open
+          catalog={[{ ...XAI, label: "xAI refreshed" }]}
+          onOpenChange={vi.fn()}
+          onConnected={vi.fn()}
+        />
+        <ConfirmDialog />
+      </>
+    );
+
+    expect(name).toHaveValue("Unsaved team");
+  });
+
   it("labels a pasted callback flow with the selected provider and waits for confirmation", async () => {
     const onOpenChange = vi.fn<(open: boolean) => void>();
     const onConnected = vi.fn<() => void>();

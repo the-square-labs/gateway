@@ -73,7 +73,7 @@ export function InferenceProviderConnectDialog({
   const [oauth, setOAuth] = useState<InferenceOAuthSession | null>(null);
   const [callback, setCallback] = useState("");
   const [saving, setSaving] = useState(false);
-  const initializedForOpen = useRef(false);
+  const initializedDraftRef = useRef<string | null>(null);
   const callbackAttempt = useRef(0);
   const onOpenChangeRef = useRef(onOpenChange);
   const onConnectedRef = useRef(onConnected);
@@ -91,11 +91,13 @@ export function InferenceProviderConnectDialog({
 
   useEffect(() => {
     if (!open) {
-      initializedForOpen.current = false;
+      initializedDraftRef.current = null;
       return;
     }
-    if (!initial || initializedForOpen.current) return;
-    initializedForOpen.current = true;
+    if (!initial) return;
+    const draftKey = initialProviderId ?? "default";
+    if (initializedDraftRef.current === draftKey) return;
+    initializedDraftRef.current = draftKey;
     setProviderId(initial.id);
     setAuthType(
       initial.authTypes.includes("oauth") ? "oauth" : (initial.authTypes[0] ?? "api_key")
@@ -106,7 +108,7 @@ export function InferenceProviderConnectDialog({
     setAllowPrivateNetwork(false);
     setOAuth(null);
     setCallback("");
-  }, [initial, open]);
+  }, [initial, initialProviderId, open]);
 
   const selectProvider = (id: string) => {
     const provider = catalog.find((item) => item.id === id);
