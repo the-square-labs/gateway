@@ -75,8 +75,9 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     hideCloseButton?: boolean;
     unstyled?: boolean;
+    clipOverflow?: boolean;
   }
->(({ className, children, hideCloseButton, unstyled, ...props }, ref) => {
+>(({ className, children, hideCloseButton, unstyled, clipOverflow, ...props }, ref) => {
   const [bodyScrolled, setBodyScrolled] = React.useState(false);
   const contentClassName = stripOuterOverflowClasses(className);
   const childArray = React.Children.toArray(children);
@@ -136,6 +137,7 @@ const DialogContent = React.forwardRef<
             "max-h-[85dvh]",
             "sm:mx-auto sm:my-auto sm:max-h-none sm:max-w-lg",
             contentClassName,
+            clipOverflow && "sm:overflow-clip",
             "max-sm:flex max-sm:max-h-[85dvh] max-sm:flex-col max-sm:gap-0 max-sm:overflow-hidden max-sm:p-0"
           )}
           {...props}

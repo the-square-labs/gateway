@@ -5,12 +5,19 @@ import { ConfigureAIWorkspaceWizard } from "./ConfigureAIWorkspaceWizard";
 
 const mocks = vi.hoisted(() => ({
   getAIConfig: vi.fn(),
+  listInferenceLimits: vi.fn(),
   refreshProviderStatus: vi.fn(),
+  setInferenceDefaultLimits: vi.fn(),
   updateAIConfig: vi.fn(),
 }));
 
 vi.mock("@/services/api", () => ({
-  api: { getAIConfig: mocks.getAIConfig, updateAIConfig: mocks.updateAIConfig },
+  api: {
+    getAIConfig: mocks.getAIConfig,
+    listInferenceLimits: mocks.listInferenceLimits,
+    setInferenceDefaultLimits: mocks.setInferenceDefaultLimits,
+    updateAIConfig: mocks.updateAIConfig,
+  },
 }));
 
 vi.mock("@/stores/ai", () => ({
@@ -39,7 +46,9 @@ vi.mock("./InferenceSetupWizard", () => ({
 describe("ConfigureAIWorkspaceWizard", () => {
   beforeEach(() => {
     mocks.getAIConfig.mockReset().mockResolvedValue({ gatewayInferenceModels: [] });
+    mocks.listInferenceLimits.mockReset().mockResolvedValue([]);
     mocks.refreshProviderStatus.mockReset().mockResolvedValue(undefined);
+    mocks.setInferenceDefaultLimits.mockReset().mockResolvedValue([]);
     mocks.updateAIConfig.mockReset().mockResolvedValue(undefined);
   });
 
@@ -126,7 +135,41 @@ describe("ConfigureAIWorkspaceWizard", () => {
       gatewayInferenceModel: "gateway-model",
       gatewayInferenceAllowUserModelSelection: true,
     });
+    expect(mocks.setInferenceDefaultLimits).toHaveBeenCalledWith({
+      enabled: true,
+      credits5hEnabled: false,
+      credits5h: 0,
+      credits7dEnabled: false,
+      credits7d: 0,
+      credits30dEnabled: false,
+      credits30d: 0,
+      apiMonthlyMicrodollars: 0,
+      billingTimezone: "UTC",
+    });
     expect(screen.queryByText("Enable users in Gateway Inference")).not.toBeInTheDocument();
+  });
+
+  it("keeps an existing default inference access policy", async () => {
+    mocks.getAIConfig.mockResolvedValue({
+      gatewayInferenceModels: [{ id: "gateway-model", displayName: "Gateway Model" }],
+    });
+    mocks.listInferenceLimits.mockResolvedValue([{ policyType: "default", enabled: true }]);
+    const user = userEvent.setup();
+
+    render(
+      <ConfigureAIWorkspaceWizard
+        open
+        onBack={vi.fn()}
+        onConfigured={vi.fn()}
+        onSkipped={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Gateway Inference Use centrally/ }));
+    await user.click(await screen.findByRole("button", { name: "Save AI Workspace" }));
+
+    expect(mocks.listInferenceLimits).toHaveBeenCalledOnce();
+    expect(mocks.setInferenceDefaultLimits).not.toHaveBeenCalled();
   });
 
   it("finishes AI Workspace directly after nested Inference setup", async () => {

@@ -169,7 +169,7 @@ export function ModelGeneralFields({
               title="Provider model metadata"
               description={`${selected.bindings.length} of ${selected.totalAccounts} enabled account${selected.totalAccounts === 1 ? "" : "s"} can serve this model`}
               wrapHeader
-              headerActionsClassName="w-full min-w-0 shrink flex-wrap justify-start sm:justify-end"
+              headerActionsClassName="w-full min-w-0 shrink flex-wrap justify-start"
               actions={Object.entries(selected.capabilities).map(([capability, enabled]) => (
                 <Badge key={capability} variant={enabled ? "success" : "secondary"}>
                   {capability}

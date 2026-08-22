@@ -16,7 +16,7 @@ import {
   SquarePen,
   TerminalSquare,
 } from "lucide-react";
-import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ComponentType, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -66,6 +66,7 @@ interface ArtifactAttachment {
 type ArtifactPreviewKind = "image" | "text" | null;
 
 const COMMENT_WORD_REVEAL_DELAY_MS = 55;
+const RESPONSE_WORD_REVEAL_DELAY_MS = 24;
 
 function useAnimatedCommentContent(
   messageId: string,
@@ -116,6 +117,83 @@ function useAnimatedCommentContent(
     content: tokens.slice(0, revealed).join(""),
     chunk: enabled ? tokens.slice(batchStart, revealed).join("") : "",
   };
+}
+
+function useSmoothedAssistantContent(
+  messageId: string,
+  content: string,
+  enabled: boolean
+): { content: string; chunk: string } {
+  const tokens = useMemo(() => content.match(/\S+\s*/gu) ?? (content ? [content] : []), [content]);
+  const targetTokenCount = useRef(tokens.length);
+  targetTokenCount.current = tokens.length;
+  const [reveal, setReveal] = useState(() => ({
+    messageId,
+    revealed: enabled ? 0 : tokens.length,
+    batchStart: 0,
+  }));
+
+  useEffect(() => {
+    setReveal((current) => {
+      if (current.messageId !== messageId) {
+        return {
+          messageId,
+          revealed: enabled ? 0 : tokens.length,
+          batchStart: enabled ? 0 : tokens.length,
+        };
+      }
+      if (
+        !enabled &&
+        (current.revealed !== tokens.length || current.batchStart !== tokens.length)
+      ) {
+        return { messageId, revealed: tokens.length, batchStart: tokens.length };
+      }
+      return current;
+    });
+  }, [enabled, messageId, tokens.length]);
+
+  const revealed = enabled
+    ? reveal.messageId === messageId
+      ? Math.min(reveal.revealed, tokens.length)
+      : 0
+    : tokens.length;
+  const needsReveal = enabled && revealed < tokens.length;
+
+  // Keep the interval stable while more upstream text arrives; the ref always
+  // exposes the latest target without resetting the reveal cadence.
+  useEffect(() => {
+    if (!needsReveal) return;
+    const timer = window.setInterval(() => {
+      setReveal((current) => {
+        if (current.messageId !== messageId) {
+          return { messageId, revealed: 0, batchStart: 0 };
+        }
+        const target = targetTokenCount.current;
+        if (current.revealed >= target) return current;
+        const backlog = target - current.revealed;
+        const batchSize = backlog > 64 ? 8 : backlog > 24 ? 5 : backlog > 8 ? 3 : 1;
+        return {
+          messageId,
+          batchStart: current.revealed,
+          revealed: Math.min(target, current.revealed + batchSize),
+        };
+      });
+    }, RESPONSE_WORD_REVEAL_DELAY_MS);
+    return () => window.clearInterval(timer);
+  }, [messageId, needsReveal]);
+
+  const batchStart = enabled ? Math.min(reveal.batchStart, revealed) : revealed;
+  return {
+    content: tokens.slice(0, revealed).join(""),
+    chunk: enabled ? tokens.slice(batchStart, revealed).join("") : "",
+  };
+}
+
+function stabilizeStreamingHeadings(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => line.replace(/^( {0,3})(#{1,6})[\t ]*$/u, "$1\\$2 "))
+    .join("\n");
 }
 
 function AITimelineDivider({
@@ -192,10 +270,25 @@ export function AIMessage({
 }: AIMessageProps) {
   const prefersReducedMotion = useReducedMotion();
   const content = typeof message.content === "string" ? message.content : "";
+  const animatedCommentEnabled = Boolean(
+    message.id?.includes(":comment:") && message.streamingChunk && !prefersReducedMotion
+  );
   const animatedComment = useAnimatedCommentContent(
     message.id ?? "",
     content,
-    Boolean(message.id?.includes(":comment:") && message.streamingChunk && !prefersReducedMotion)
+    animatedCommentEnabled
+  );
+  const smoothedAssistantEnabled = Boolean(
+    !animatedCommentEnabled &&
+      message.role === "assistant" &&
+      message.isStreaming &&
+      message.streamingChunk &&
+      !prefersReducedMotion
+  );
+  const smoothedAssistant = useSmoothedAssistantContent(
+    message.id ?? "",
+    content,
+    smoothedAssistantEnabled
   );
   const visibleToolCalls = message.toolCalls?.filter(
     (toolCall) => toolCall.name !== "send_comment"
@@ -204,10 +297,18 @@ export function AIMessage({
   const hasCompactContextTool =
     visibleToolCalls?.some((tc) => tc.name === "compact_context") ?? false;
   const visibleContent =
-    message.compactMarker && hasCompactContextTool ? "" : animatedComment.content;
+    message.compactMarker && hasCompactContextTool
+      ? ""
+      : animatedCommentEnabled
+        ? animatedComment.content
+        : smoothedAssistant.content;
+  const markdownContent = message.isStreaming
+    ? stabilizeStreamingHeadings(visibleContent)
+    : visibleContent;
   const streamingChunk =
     animatedComment.chunk ||
-    (message.isStreaming &&
+    (!smoothedAssistantEnabled &&
+    message.isStreaming &&
     message.streamingChunk &&
     visibleContent.endsWith(message.streamingChunk)
       ? message.streamingChunk
@@ -215,9 +316,9 @@ export function AIMessage({
   const streamingRehypePlugins = useMemo(
     () =>
       streamingChunk
-        ? [createStreamingChunkRehypePlugin(visibleContent.length - streamingChunk.length)]
+        ? [createStreamingChunkRehypePlugin(markdownContent.length - streamingChunk.length)]
         : [],
-    [streamingChunk, visibleContent.length]
+    [markdownContent.length, streamingChunk]
   );
   const errorMessage = extractErrorMessage(visibleContent);
   const compactSummary = message.compactMarker ? content : undefined;
@@ -463,7 +564,7 @@ export function AIMessage({
               rehypePlugins={streamingRehypePlugins}
               components={assistantMarkdownComponents}
             >
-              {resourceAwareMarkdown(visibleContent, availableResourceReferences)}
+              {resourceAwareMarkdown(markdownContent, availableResourceReferences)}
             </Markdown>
           </div>
         )}

@@ -55,6 +55,17 @@ export function resolveInterfaceTransition(
   return { path: null, aiPanelOpen: null };
 }
 
+export function resolveAIWorkspaceEntry(
+  configured: boolean,
+  canUse: boolean,
+  canConfigure: boolean,
+  enabled: boolean | null
+): "open" | AIWorkspaceAvailability {
+  if (configured && canUse && enabled !== false) return "open";
+  if (configured && !canUse) return "no_access";
+  return canConfigure ? "needs_configuration" : "not_configured";
+}
+
 function ApplicationShellSkeleton(_props: { scopes: readonly string[]; pathname: string }) {
   return (
     <div className="h-screen bg-background" aria-busy="true" aria-label="Loading application" />
@@ -181,17 +192,18 @@ export function DashboardLayout() {
 
   useEffect(() => {
     const openAIWorkspace = () => {
-      if (aiWorkspaceConfigured && canUseAIWorkspace) {
+      const entry = resolveAIWorkspaceEntry(
+        aiWorkspaceConfigured,
+        canUseAIWorkspace,
+        canConfigureAIWorkspace,
+        aiEnabled
+      );
+      if (entry === "open") {
         void savePreferredInterface("ai_workspace");
         return;
       }
-      if (aiWorkspaceConfigured) {
-        setAIWorkspaceAvailability("no_access");
-        return;
-      }
-      setAIWorkspaceAvailability(
-        canConfigureAIWorkspace ? "needs_configuration" : "not_configured"
-      );
+      if (entry === "needs_configuration") useUIStore.getState().setAILiteMode(false);
+      setAIWorkspaceAvailability(entry);
     };
     const openOperationsConsole = () => {
       void savePreferredInterface("operations_console", true);
@@ -202,7 +214,13 @@ export function DashboardLayout() {
       window.removeEventListener("gateway:open-ai-workspace", openAIWorkspace);
       window.removeEventListener("gateway:open-operations-console", openOperationsConsole);
     };
-  }, [aiWorkspaceConfigured, canConfigureAIWorkspace, canUseAIWorkspace, savePreferredInterface]);
+  }, [
+    aiEnabled,
+    aiWorkspaceConfigured,
+    canConfigureAIWorkspace,
+    canUseAIWorkspace,
+    savePreferredInterface,
+  ]);
 
   useEffect(() => {
     if (systemConfigLoaded) setSystemConfigReady(true);
@@ -604,7 +622,7 @@ export function DashboardLayout() {
         allowGatewayInference={canConfigureGatewayInference}
         initialStepCanSkip={interfaceSetupOrigin !== "interface_choice"}
         completionActionLabel={
-          interfaceSetupOrigin === "interface_choice" ? "Enable AI Workspace" : undefined
+          interfaceSetupOrigin === "interface_choice" ? "Enable AI Workspace" : "Open AI Workspace"
         }
         onBack={() => setInterfaceSetupOrigin(null)}
         onConfigured={() => finishInterfaceSetup()}

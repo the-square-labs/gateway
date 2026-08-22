@@ -82,6 +82,7 @@ function createService(options: { client?: Record<string, unknown>; session?: un
     coreCodexLoginStatus: vi.fn().mockResolvedValue({ status: 'pending' }),
     coreCodexLoginCode: vi.fn().mockResolvedValue(undefined),
     coreCodexLoginCancel: vi.fn().mockResolvedValue(undefined),
+    listCoreCodexAccounts: vi.fn().mockResolvedValue([]),
     coreOauthLoginStart: vi.fn().mockResolvedValue({
       url: 'https://auth.kimi.com/device?code=KIMI-1',
       instructions: 'Enter code: KIMI-1',
@@ -215,6 +216,43 @@ describe('inference oauth service — core-backed sessions', () => {
 
     expect(result.connectionId).toBe('conn-existing');
     expect(tx.delete).toHaveBeenCalled();
+  });
+
+  it('adopts an orphaned codex account that the core already added to its pool', async () => {
+    const { service, db, client } = createService({
+      client: {
+        coreCodexLoginStatus: vi.fn().mockResolvedValue({
+          status: 'error',
+          error: 'Account is already in the pool (chatgpt-orphan-1).',
+        }),
+        listCoreCodexAccounts: vi.fn().mockResolvedValue([{ id: 'chatgpt-orphan-1', email: 'o***@example.com' }]),
+      },
+    });
+    const inserted: unknown[] = [];
+    const tx = {
+      query: { inferenceProviderConnections: { findFirst: vi.fn().mockResolvedValue(null) } },
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi
+            .fn()
+            .mockReturnValue({ orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }),
+        }),
+      }),
+      insert: vi.fn().mockReturnValue(insertChain([{ id: 'conn-adopted' }], inserted)),
+      delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
+    };
+    db.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx));
+    db.update.mockReturnValue(updateChain([{ ...SESSION, status: 'complete' }]));
+
+    const result = await service.status('user-1', 'session-1');
+
+    expect(client.listCoreCodexAccounts).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: 'complete', connectionId: 'conn-adopted' });
+    expect(inserted[0]).toMatchObject({
+      accountExternalId: 'chatgpt-orphan-1',
+      accountLabel: 'o***@example.com',
+      metadata: { coreManaged: true, coreAccountId: 'chatgpt-orphan-1' },
+    });
   });
 
   it('marks the session failed when the core reports a login error', async () => {

@@ -102,9 +102,10 @@ describe("InferenceModelDialog", () => {
     const modelDropdown = modelOption.closest<HTMLElement>(".dropdown-content");
     expect(modelDropdown).toHaveClass("overflow-y-auto");
     expect(modelDropdown?.className).toContain("max-h-[min(16rem");
-    expect(screen.getByRole("dialog", { name: "Add inference model" })).not.toContainElement(
-      modelDropdown
-    );
+    const dialog = screen.getByRole("dialog", { name: "Add inference model" });
+    expect(dialog).toHaveClass("sm:overflow-clip");
+    expect(dialog.className).not.toContain("overflow-y-auto");
+    expect(dialog).not.toContainElement(modelDropdown);
     await user.click(modelOption);
 
     expect(screen.getByText("2 of 2 enabled accounts can serve this model")).toBeInTheDocument();
@@ -155,6 +156,50 @@ describe("InferenceModelDialog", () => {
       });
     }
     expect(configuration.access).toEqual({ mode: "everyone", subjects: [] });
+  });
+
+  it("preserves model selections and edits across inference realtime refreshes", async () => {
+    const initialConnection = connection("kimi-a");
+    const initialCatalog = [provider("kimi", "Kimi subscription", true)];
+    const user = userEvent.setup();
+    const view = render(
+      <InferenceModelDialog
+        open
+        editing={null}
+        connections={[initialConnection]}
+        catalog={initialCatalog}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("button", { name: "Kimi subscription" }));
+    await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    await user.click(screen.getByRole("button", { name: "K3" }));
+    const publicId = screen.getByPlaceholderText("kimi-k3");
+    await user.clear(publicId);
+    await user.type(publicId, "custom-kimi");
+
+    view.rerender(
+      <InferenceModelDialog
+        open
+        editing={null}
+        connections={[
+          { ...initialConnection, discoveredModels: [...initialConnection.discoveredModels] },
+        ]}
+        catalog={[{ ...initialCatalog[0]! }]}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.getByText("Provider model metadata")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("kimi-k3")).toHaveValue("custom-kimi");
   });
 
   it("shows detected OpenAI parameters and uses managed pricing without a manual payload", async () => {

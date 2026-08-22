@@ -1430,6 +1430,64 @@ describe("AI backend runtime store", () => {
     ]);
   });
 
+  it("keeps the optimistic user message mounted when a generated title snapshot arrives", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      messages: [
+        {
+          id: "starting:command-1:user",
+          role: "user",
+          content: "Hello",
+          clientCommandId: "command-1",
+          localOnly: true,
+        },
+      ],
+    });
+
+    socket.emit({
+      type: "conversation.snapshot",
+      conversationId: "conversation-1",
+      snapshot: {
+        conversation: {
+          id: "conversation-1",
+          title: "Generated title",
+          createdAt: "2026-06-26T10:00:00.000Z",
+          updatedAt: "2026-06-26T10:00:01.000Z",
+          lastContext: null,
+          discoveredToolsets: [],
+          checkpoint: null,
+        },
+        messages: [
+          {
+            id: "persisted-user-1",
+            role: "user",
+            content: "Hello",
+            clientCommandId: "command-1",
+          },
+        ],
+        runtime: {
+          activeRun: { ...runtimeRun("running"), clientCommandId: "command-1" },
+          assistantDraftContent: null,
+          assistantDraftVersion: null,
+          pendingApprovals: [],
+          pendingQuestion: null,
+          pendingQuestions: [],
+          toolCalls: [],
+        },
+      },
+    });
+
+    expect(useAIStore.getState().savedName).toBe("Generated title");
+    expect(useAIStore.getState().messages[0]).toMatchObject({
+      id: "starting:command-1:user",
+      role: "user",
+      content: "Hello",
+      clientCommandId: "command-1",
+      localOnly: false,
+    });
+  });
+
   it("streams assistant deltas without REST refetches and ignores stale draft snapshots", async () => {
     const socket = await connectAI();
     vi.useFakeTimers();

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
+import type { InferenceLimitInput } from "@/types/inference";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
 
@@ -29,6 +30,18 @@ export const EMPTY_ASSISTANT_SETUP_DRAFT: AssistantSetupDraft = {
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "",
+};
+
+const AI_WORKSPACE_DEFAULT_LIMITS: InferenceLimitInput = {
+  enabled: true,
+  credits5hEnabled: false,
+  credits5h: 0,
+  credits7dEnabled: false,
+  credits7d: 0,
+  credits30dEnabled: false,
+  credits30d: 0,
+  apiMonthlyMicrodollars: 0,
+  billingTimezone: "UTC",
 };
 
 type InferenceModelOption = { id: string; displayName: string };
@@ -109,6 +122,12 @@ export function AssistantSetupWizard({
       return;
     setSaving(true);
     try {
+      if (draft.source === "inference") {
+        const policies = await api.listInferenceLimits();
+        if (!policies.some((policy) => policy.policyType === "default")) {
+          await api.setInferenceDefaultLimits(AI_WORKSPACE_DEFAULT_LIMITS);
+        }
+      }
       await api.updateAIConfig(
         draft.source === "external"
           ? {

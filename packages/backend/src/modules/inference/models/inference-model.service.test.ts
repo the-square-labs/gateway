@@ -168,6 +168,16 @@ describe('inference model publication validation', () => {
     expect(__testOnly.supportsFastServiceTier([eligible])).toBe(true);
     expect(
       __testOnly.supportsFastServiceTier([
+        sourceRow({
+          providerId: 'openai',
+          sourceType: 'subscription',
+          capabilities: { serviceTier: true },
+          metadata: { source: 'opencodex' },
+        }),
+      ])
+    ).toBe(true);
+    expect(
+      __testOnly.supportsFastServiceTier([
         eligible,
         sourceRow({ providerId: 'openai', sourceType: 'subscription', metadata: {} }),
       ])
@@ -206,6 +216,7 @@ describe('inference model publication validation', () => {
 function sourceRow(input: {
   providerId: string;
   sourceType: 'subscription' | 'api';
+  capabilities?: Record<string, boolean>;
   metadata: Record<string, unknown>;
 }) {
   return {
@@ -215,6 +226,6 @@ function sourceRow(input: {
       metadata: { composition: { role: 'primary' } },
     },
     connection: { providerId: input.providerId },
-    discovered: { metadata: input.metadata },
+    discovered: { capabilities: input.capabilities ?? {}, metadata: input.metadata },
   } as never;
 }

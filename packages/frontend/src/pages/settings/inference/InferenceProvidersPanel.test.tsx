@@ -145,6 +145,44 @@ describe("InferenceProvidersPanel", () => {
     await act(async () => resolveRefresh?.(connections));
   });
 
+  it("closes the connect dialog before refreshing providers after success", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["inference:providers:manage"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const catalog = [provider("openrouter", "OpenRouter")];
+    let resolveRefresh: ((value: InferenceProviderConnection[]) => void) | undefined;
+    vi.spyOn(api, "listInferenceProviderCatalog").mockResolvedValue(catalog);
+    vi.spyOn(api, "listInferenceProviderConnections")
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+    const create = vi
+      .spyOn(api, "createInferenceProviderConnection")
+      .mockResolvedValue(connection("router-key", "openrouter"));
+    const user = userEvent.setup();
+
+    render(<InferenceProvidersPanel />);
+    await user.click(await screen.findByRole("button", { name: "Connect provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect inference provider" });
+    await user.type(within(dialog).getByPlaceholderText("Team account"), "Router key");
+    const apiKey = dialog.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(apiKey).not.toBeNull();
+    await user.type(apiKey!, "sk-test");
+    await user.click(within(dialog).getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("dialog", { name: "Connect inference provider" })
+    ).not.toBeInTheDocument();
+    await act(async () => resolveRefresh?.([connection("router-key", "openrouter")]));
+  });
+
   it("renders cached connections while the background refresh is pending", () => {
     api.setCache("req:/api/inference/providers/catalog", [provider("kimi", "Kimi subscription")]);
     api.setCache("req:/api/inference/providers/connections", [connection("cached-account")]);

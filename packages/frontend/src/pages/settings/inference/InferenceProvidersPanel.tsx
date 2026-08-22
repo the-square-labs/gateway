@@ -128,6 +128,14 @@ export function InferenceProvidersPanel({
     onConnectionsChanged?.();
   };
 
+  const connected = async () => {
+    // The settings page owns the controlled dialog state. Close it before the
+    // background catalog refresh so a successful connection cannot leave the
+    // reset form visible while provider data is reloaded.
+    setConnectOpen(false);
+    await changed();
+  };
+
   const syncConnection = async (connection: InferenceProviderConnection) => {
     setSyncingId(connection.id);
     try {
@@ -310,7 +318,7 @@ export function InferenceProvidersPanel({
         open={connectOpen}
         catalog={catalog}
         onOpenChange={setConnectOpen}
-        onConnected={changed}
+        onConnected={connected}
       />
       <InferenceProviderDialog
         open={selectedConnection !== null}

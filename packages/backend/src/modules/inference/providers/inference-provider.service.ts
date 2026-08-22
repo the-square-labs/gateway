@@ -52,6 +52,7 @@ import type {
   InferenceProviderDefinition,
   InferenceQuotaWindow,
 } from './inference-provider.types.js';
+import { knownProviderModel } from './inference-provider-model-catalog.js';
 
 const SYNC_FRESH_MS = 5 * 60_000;
 const LAST_GOOD_MS = 30 * 60_000;
@@ -302,6 +303,7 @@ export class InferenceProviderService {
       await this.removeCoreConnectionArtifacts(connection);
     }
     await this.db.transaction(async (tx) => {
+      await tx.delete(inferenceModelSources).where(eq(inferenceModelSources.connectionId, connectionId));
       await tx.delete(inferenceProviderCredentials).where(eq(inferenceProviderCredentials.connectionId, connectionId));
       await tx
         .update(inferenceProviderConnections)
@@ -462,7 +464,17 @@ export class InferenceProviderService {
       await this.persistModels(
         connectionId,
         models.map((row) => {
-          const modalities = row.inputModalities ?? ['text'];
+          const known = knownProviderModel(connection.providerId, row.id);
+          const modalities = row.inputModalities ?? known?.modalities ?? ['text'];
+          const reportedCapabilities = coreModelCapabilities(row);
+          const capabilities = {
+            ...reportedCapabilities,
+            ...(row.capabilities === undefined && known ? { tools: known.capabilities.tools === true } : {}),
+            ...(row.reasoningEfforts === undefined && known
+              ? { reasoning: known.capabilities.reasoning === true }
+              : {}),
+            ...(row.inputModalities === undefined && known ? { vision: known.capabilities.vision === true } : {}),
+          };
           const pricing = coreModelPricing(row);
           return {
             // Gateway owns the provider/account selection. Keep the upstream
@@ -474,14 +486,14 @@ export class InferenceProviderService {
             ...(row.maxInputTokens !== undefined ? { maxInputTokens: row.maxInputTokens } : {}),
             ...(row.maxOutputTokens !== undefined ? { maxOutputTokens: row.maxOutputTokens } : {}),
             modalities,
-            capabilities: coreModelCapabilities(row),
-            reasoningEfforts: row.reasoningEfforts ?? [],
+            capabilities,
+            reasoningEfforts: row.reasoningEfforts ?? known?.reasoningEfforts ?? [],
             ...(pricing ? { pricing } : {}),
             metadata: {
               source: 'opencodex',
               [CORE_MODEL_METADATA_KEY]: row.namespaced,
-              input_modalities: modalities,
-              capabilities: row.capabilities ?? [],
+              ...(row.inputModalities !== undefined ? { input_modalities: row.inputModalities } : {}),
+              ...(row.capabilities !== undefined ? { capabilities: row.capabilities } : {}),
               ...(pricing ? { gatewayPricing: pricing } : {}),
               ...(row.defaultReasoningEffort ? { default_reasoning_effort: row.defaultReasoningEffort } : {}),
               ...(row.supportsReasoningSummaries !== undefined
@@ -501,7 +513,7 @@ export class InferenceProviderService {
       await this.db
         .update(inferenceProviderConnections)
         .set({
-          status: classifyStatus(windows),
+          status: classifyStatus(windows, connection.minimumRemainingPercent / 100),
           healthReason: null,
           syncStatus: 'success',
           syncLastError: null,
@@ -617,11 +629,47 @@ export class InferenceProviderService {
   }
 
   private async persistModels(connectionId: string, models: DiscoveredInferenceModel[]) {
+    const connection = await this.requireConnection(connectionId);
+    const provider = this.registry.require(connection.providerId);
     await this.db.transaction(async (tx) => {
       await tx
         .update(inferenceDiscoveredModels)
         .set({ available: false, updatedAt: new Date() })
         .where(eq(inferenceDiscoveredModels.connectionId, connectionId));
+      const poolSourcesByUpstreamModel = new Map<string, Map<string, typeof inferenceModelSources.$inferSelect>>();
+      if (provider.subscription && connection.enabled) {
+        const existingPoolSources = await tx
+          .select({ source: inferenceModelSources })
+          .from(inferenceModelSources)
+          .innerJoin(
+            inferenceProviderConnections,
+            eq(inferenceModelSources.connectionId, inferenceProviderConnections.id)
+          )
+          .where(
+            and(
+              eq(inferenceProviderConnections.providerId, connection.providerId),
+              eq(inferenceProviderConnections.enabled, true),
+              isNull(inferenceProviderConnections.deletedAt),
+              ne(inferenceModelSources.connectionId, connectionId),
+              eq(inferenceModelSources.sourceType, 'subscription'),
+              eq(inferenceModelSources.enabled, true)
+            )
+          );
+        for (const { source } of existingPoolSources) {
+          const composition = source.metadata.composition;
+          if (
+            composition &&
+            typeof composition === 'object' &&
+            !Array.isArray(composition) &&
+            (composition as { role?: unknown }).role !== 'primary'
+          ) {
+            continue;
+          }
+          const sourcesForUpstream = poolSourcesByUpstreamModel.get(source.upstreamModelId) ?? new Map();
+          sourcesForUpstream.set(source.modelId, source);
+          poolSourcesByUpstreamModel.set(source.upstreamModelId, sourcesForUpstream);
+        }
+      }
       for (const model of models) {
         const [persisted] = await tx
           .insert(inferenceDiscoveredModels)
@@ -673,6 +721,37 @@ export class InferenceProviderService {
                 eq(inferenceModelSources.upstreamModelId, coreModelId)
               )
             );
+        }
+        const sourceByModel = poolSourcesByUpstreamModel.get(model.id);
+        if (sourceByModel?.size) {
+          const providerRef = coreProviderRef(connection);
+          const discoveredCoreModelId = model.metadata[CORE_MODEL_METADATA_KEY];
+          const pooledCoreModelId =
+            typeof discoveredCoreModelId === 'string' && discoveredCoreModelId.trim()
+              ? discoveredCoreModelId.trim()
+              : connection.authType === 'oauth' || model.id.startsWith(`${providerRef}/`)
+                ? model.id
+                : `${providerRef}/${model.id}`;
+          await tx
+            .insert(inferenceModelSources)
+            .values(
+              [...sourceByModel.values()].map((source) => ({
+                modelId: source.modelId,
+                connectionId,
+                discoveredModelId: persisted.id,
+                upstreamModelId: model.id,
+                coreAccountId: providerRef,
+                coreModelId: pooledCoreModelId,
+                sourceType: 'subscription' as const,
+                enabled: true,
+                priority: source.priority,
+                subscriptionMultiplierOverride: source.subscriptionMultiplierOverride,
+                reasoningEffortMap: source.reasoningEffortMap,
+                capabilitiesOverride: source.capabilitiesOverride,
+                metadata: { ...source.metadata, origin: 'discovery' },
+              }))
+            )
+            .onConflictDoNothing();
         }
         if (!model.pricing) continue;
         const sources = await tx

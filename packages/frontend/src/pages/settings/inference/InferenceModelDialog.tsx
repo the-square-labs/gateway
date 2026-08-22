@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Button } from "@/components/ui/button";
@@ -77,11 +77,17 @@ export function InferenceModelDialog({
   const [accessMode, setAccessMode] = useState<"everyone" | "selected" | "disabled">("everyone");
   const [accessSubjects, setAccessSubjects] = useState<InferenceAccessSubject[]>([]);
   const [saving, setSaving] = useState(false);
+  const initializedForOpen = useRef(false);
   const selected =
     options.find((option) => option.key === providerModelKey(providerId, remoteModelId)) ?? null;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      initializedForOpen.current = false;
+      return;
+    }
+    if (initializedForOpen.current) return;
+    initializedForOpen.current = true;
     const firstSource = editing?.sources[0];
     const nextProviderId = firstSource?.providerId ?? "";
     const nextRemoteModelId = firstSource?.upstreamModelId ?? "";
@@ -204,7 +210,7 @@ export function InferenceModelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent clipOverflow className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{editing ? "Edit inference model" : "Add inference model"}</DialogTitle>
           <DialogDescription>

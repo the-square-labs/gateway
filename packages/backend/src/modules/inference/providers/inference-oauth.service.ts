@@ -613,6 +613,17 @@ export class InferenceOAuthService {
         return serializeOAuthSession(expired ?? session);
       }
       if (status.status === 'error') {
+        const existingAccountId = codexPoolAccountId(status.error);
+        if (existingAccountId) {
+          const accounts = await client.listCoreCodexAccounts().catch(() => null);
+          const existingAccount = accounts
+            ?.filter((account): account is Record<string, unknown> => Boolean(account) && typeof account === 'object')
+            .find((account) => account.id === existingAccountId);
+          return this.finalizeCoreSession(session, provider, {
+            accountId: existingAccountId,
+            ...(typeof existingAccount?.email === 'string' ? { email: existingAccount.email } : {}),
+          });
+        }
         return this.failCoreSession(session, 'oauth_exchange_failed', status.error ?? 'Core login failed');
       }
       if (status.status === 'done' && status.accountId) {
@@ -757,6 +768,11 @@ export class InferenceOAuthService {
 
 function hashState(state: string): string {
   return createHash('sha256').update(state).digest('hex');
+}
+
+function codexPoolAccountId(error?: string): string | null {
+  const match = error?.match(/account is already in the pool\s*\(([^)]+)\)/i);
+  return match?.[1]?.trim() || null;
 }
 
 /** Core management rejections surface their message; transport failures stay generic. */

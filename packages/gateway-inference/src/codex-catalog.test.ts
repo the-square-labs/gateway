@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { syncCodexCatalog, withFileLock } from './codex-catalog.js';
+import { codexCatalogFromModels, syncCodexCatalog, withFileLock } from './codex-catalog.js';
 
 const MODELS = {
   object: 'list',
@@ -55,6 +55,16 @@ async function fixture() {
 }
 
 describe('Codex catalog synchronization', () => {
+  it('advertises Gateway Fast mode using the Codex priority service tier', () => {
+    const [model] = codexCatalogFromModels([{ ...MODELS.data[0], supported_service_tiers: ['priority'] }]).models;
+
+    expect(model).toMatchObject({
+      service_tiers: [{ id: 'priority', name: 'Fast' }],
+      additional_speed_tiers: ['fast'],
+      default_service_tier: null,
+    });
+  });
+
   it('downloads the standard model list, converts it, and then uses If-None-Match', async () => {
     const files = await fixture();
     const calls: Request[] = [];

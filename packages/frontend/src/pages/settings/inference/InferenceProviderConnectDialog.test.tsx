@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
@@ -98,6 +98,122 @@ describe("InferenceProviderConnectDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("does not reset an active OAuth flow when realtime refresh replaces the catalog objects", async () => {
+    vi.mocked(api.startInferenceOAuth).mockResolvedValue({
+      id: "session-refresh",
+      providerId: "xai",
+      status: "pending",
+      authorizationUrl: "https://auth.x.ai/device",
+      completionMode: "device_poll",
+      userCode: "KEEP-FLOW",
+      pollIntervalSeconds: 30,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const onOpenChange = vi.fn();
+    const onConnected = vi.fn();
+    const view = renderConnectDialog({ onOpenChange, onConnected });
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "Grok team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+    expect(await screen.findByText("KEEP-FLOW")).toBeInTheDocument();
+
+    view.rerender(
+      <>
+        <InferenceProviderConnectDialog
+          open
+          catalog={[{ ...XAI }]}
+          onOpenChange={onOpenChange}
+          onConnected={onConnected}
+        />
+        <ConfirmDialog />
+      </>
+    );
+
+    expect(screen.getByText("KEEP-FLOW")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Team account")).not.toBeInTheDocument();
+  });
+
+  it("does not discard an in-flight complete response when realtime refresh replaces callbacks", async () => {
+    let resolveStatus:
+      | ((session: Awaited<ReturnType<typeof api.getInferenceOAuthStatus>>) => void)
+      | undefined;
+    vi.mocked(api.startInferenceOAuth).mockResolvedValue({
+      id: "session-in-flight",
+      providerId: "xai",
+      status: "pending",
+      authorizationUrl: "https://auth.x.ai/device",
+      completionMode: "device_poll",
+      userCode: "IN-FLIGHT",
+      pollIntervalSeconds: 1,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    vi.mocked(api.getInferenceOAuthStatus).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStatus = resolve;
+        })
+    );
+    const firstOpenChange = vi.fn();
+    const firstConnected = vi.fn();
+    const view = renderConnectDialog({
+      onOpenChange: firstOpenChange,
+      onConnected: firstConnected,
+    });
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "Grok team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+    await screen.findByText("IN-FLIGHT");
+    await waitFor(() => expect(api.getInferenceOAuthStatus).toHaveBeenCalled(), { timeout: 2_000 });
+
+    const refreshedOpenChange = vi.fn();
+    const refreshedConnected = vi.fn();
+    view.rerender(
+      <>
+        <InferenceProviderConnectDialog
+          open
+          catalog={[{ ...XAI }]}
+          onOpenChange={refreshedOpenChange}
+          onConnected={refreshedConnected}
+        />
+        <ConfirmDialog />
+      </>
+    );
+    await act(async () =>
+      resolveStatus?.({
+        id: "session-in-flight",
+        providerId: "xai",
+        status: "complete",
+        authorizationUrl: "https://auth.x.ai/device",
+        completionMode: "device_poll",
+        connectionId: "connection-in-flight",
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      })
+    );
+
+    await waitFor(() => expect(refreshedOpenChange).toHaveBeenCalledWith(false));
+    expect(refreshedConnected).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the terms confirmation open with a loading confirm button while authorization starts", async () => {
+    vi.mocked(api.startInferenceOAuth).mockImplementation(() => new Promise(() => {}));
+    renderConnectDialog();
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "Grok team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+
+    const terms = screen.getByRole("dialog", { name: "Review provider terms" });
+    const confirmButton = within(terms).getByRole("button", { name: "Continue to authorization" });
+    expect(confirmButton).toBeDisabled();
+    expect(confirmButton.querySelector(".animate-spin")).not.toBeNull();
+    expect(screen.queryByText("Starting provider authorization…")).not.toBeInTheDocument();
+  });
+
   it("cancels a pending server session when the dialog is closed", async () => {
     vi.mocked(api.startInferenceOAuth).mockResolvedValue({
       id: "session-2",
@@ -189,6 +305,16 @@ describe("InferenceProviderConnectDialog", () => {
     expect(screen.getByRole("dialog", { name: "Connect inference provider" })).toBeInTheDocument();
   });
 
+  it("keeps the setup form mounted while switching providers", () => {
+    renderConnectDialog({ catalog: [XAI, CHATGPT] });
+    const nameInput = screen.getByPlaceholderText("Team account");
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "ChatGPT subscription" }));
+
+    expect(screen.getByPlaceholderText("Team account")).toBe(nameInput);
+  });
+
   it("labels a pasted callback flow with the selected provider and waits for confirmation", async () => {
     const onOpenChange = vi.fn<(open: boolean) => void>();
     const onConnected = vi.fn<() => void>();
@@ -238,6 +364,55 @@ describe("InferenceProviderConnectDialog", () => {
       )
     );
     await waitFor(() => expect(onConnected).toHaveBeenCalled());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the callback submit loading and polls until the core finishes authorization", async () => {
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    const onConnected = vi.fn<() => void>();
+    const pendingSession = {
+      id: "session-callback-pending",
+      providerId: "openai",
+      status: "pending" as const,
+      authorizationUrl: "https://auth.openai.com/authorize",
+      completionMode: "paste_callback" as const,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    };
+    vi.mocked(api.startInferenceOAuth).mockResolvedValue(pendingSession);
+    vi.mocked(api.completeInferenceOAuth).mockResolvedValue(pendingSession);
+    vi.mocked(api.getInferenceOAuthStatus).mockResolvedValue({
+      ...pendingSession,
+      status: "complete",
+      connectionId: "connection-callback-pending",
+    });
+
+    renderConnectDialog({ catalog: [CHATGPT], onOpenChange, onConnected });
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "ChatGPT team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+    await screen.findByPlaceholderText("Paste code#state or callback URL");
+    fireEvent.change(screen.getByPlaceholderText("Paste code#state or callback URL"), {
+      target: { value: "authorization-code#oauth-state" },
+    });
+    const completeButton = screen.getByRole("button", {
+      name: "Complete ChatGPT authorization",
+    });
+    fireEvent.click(completeButton);
+
+    await waitFor(() => expect(api.completeInferenceOAuth).toHaveBeenCalledOnce());
+    expect(completeButton).toBeDisabled();
+    expect(completeButton.querySelector(".animate-spin")).not.toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    await waitFor(
+      () => expect(api.getInferenceOAuthStatus).toHaveBeenCalledWith(pendingSession.id),
+      {
+        timeout: 2_000,
+      }
+    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
+    expect(api.completeInferenceOAuth).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

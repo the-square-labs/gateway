@@ -1,9 +1,9 @@
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { ArrowLeft, Check, ExternalLink, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
-import { confirm } from "@/components/common/ConfirmDialog";
+import { confirmAction } from "@/components/common/ConfirmDialog";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,8 @@ const STEP_ANIMATION = {
   exit: { opacity: 0, y: -4 },
   transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
 };
+
+const CALLBACK_STATUS_POLL_MS = 500;
 
 export function InferenceProviderConnectDialog({
   open,
@@ -71,6 +73,12 @@ export function InferenceProviderConnectDialog({
   const [oauth, setOAuth] = useState<InferenceOAuthSession | null>(null);
   const [callback, setCallback] = useState("");
   const [saving, setSaving] = useState(false);
+  const initializedForOpen = useRef(false);
+  const callbackAttempt = useRef(0);
+  const onOpenChangeRef = useRef(onOpenChange);
+  const onConnectedRef = useRef(onConnected);
+  onOpenChangeRef.current = onOpenChange;
+  onConnectedRef.current = onConnected;
   const selected = catalog.find((provider) => provider.id === providerId);
   const oauthProvider = oauth
     ? catalog.find((provider) => provider.id === oauth.providerId)
@@ -79,10 +87,15 @@ export function InferenceProviderConnectDialog({
     /\s+subscription$/i,
     ""
   );
-  const contentKey = oauth ? `oauth-${oauth.completionMode}` : `setup-${providerId}-${authType}`;
+  const contentKey = oauth ? `oauth-${oauth.completionMode}` : "setup";
 
   useEffect(() => {
-    if (!open || !initial) return;
+    if (!open) {
+      initializedForOpen.current = false;
+      return;
+    }
+    if (!initial || initializedForOpen.current) return;
+    initializedForOpen.current = true;
     setProviderId(initial.id);
     setAuthType(
       initial.authTypes.includes("oauth") ? "oauth" : (initial.authTypes[0] ?? "api_key")
@@ -129,10 +142,10 @@ export function InferenceProviderConnectDialog({
       setOauthState(session);
       if (session.status !== "complete") return;
       toast.success("Provider connected");
-      onOpenChange(false);
-      await onConnected();
+      onOpenChangeRef.current(false);
+      await onConnectedRef.current();
     },
-    [onConnected, onOpenChange, setOauthState]
+    [setOauthState]
   );
 
   useEffect(() => {
@@ -186,34 +199,28 @@ export function InferenceProviderConnectDialog({
       saving
     )
       return;
+    const attempt = ++callbackAttempt.current;
     setSaving(true);
     try {
-      await finish(await api.completeInferenceOAuth(oauth.id, value));
+      let session = await api.completeInferenceOAuth(oauth.id, value);
+      while (session.status === "pending" && callbackAttempt.current === attempt) {
+        await new Promise((resolve) => window.setTimeout(resolve, CALLBACK_STATUS_POLL_MS));
+        if (callbackAttempt.current !== attempt) return;
+        session = await api.getInferenceOAuthStatus(oauth.id);
+      }
+      if (callbackAttempt.current === attempt) await finish(session);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Authorization failed");
+      if (callbackAttempt.current === attempt)
+        toast.error(error instanceof Error ? error.message : "Authorization failed");
     } finally {
-      setSaving(false);
+      if (callbackAttempt.current === attempt) setSaving(false);
     }
   };
 
   const connect = async () => {
     if (!selected || !name.trim()) return;
-    if (
-      authType === "oauth" &&
-      selected.subscription &&
-      !(await confirm({
-        title: "Review provider terms",
-        description:
-          "The provider may not permit third-party subscription connectors and may restrict or block your account. Review the provider's current Terms of Service before continuing. Continue only if you accept this risk.",
-        confirmLabel: "Continue to authorization",
-        cancelLabel: "Go back",
-        variant: "default",
-      }))
-    )
-      return;
-    setSaving(true);
-    try {
-      if (authType === "oauth") {
+    const startOAuth = async () => {
+      try {
         const session = await api.startInferenceOAuth({
           providerId: selected.id,
           connectionName: name.trim(),
@@ -221,6 +228,30 @@ export function InferenceProviderConnectDialog({
           termsVersion: selected.termsVersion,
         });
         setOauthState(session);
+        return true;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to connect provider");
+        return false;
+      }
+    };
+    if (authType === "oauth" && selected.subscription) {
+      await confirmAction(
+        {
+          title: "Review provider terms",
+          description:
+            "The provider may not permit third-party subscription connectors and may restrict or block your account. Review the provider's current Terms of Service before continuing. Continue only if you accept this risk.",
+          confirmLabel: "Continue to authorization",
+          cancelLabel: "Go back",
+          variant: "default",
+        },
+        startOAuth
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      if (authType === "oauth") {
+        await startOAuth();
       } else {
         await api.createInferenceProviderConnection({
           providerId: selected.id,
@@ -242,8 +273,11 @@ export function InferenceProviderConnectDialog({
   };
 
   const close = (nextOpen: boolean) => {
-    if (!nextOpen && oauth?.status === "pending")
-      void api.cancelInferenceOAuth(oauth.id).catch(() => {});
+    if (!nextOpen) {
+      callbackAttempt.current += 1;
+      setSaving(false);
+      if (oauth?.status === "pending") void api.cancelInferenceOAuth(oauth.id).catch(() => {});
+    }
     onOpenChange(nextOpen);
   };
 
@@ -272,175 +306,173 @@ export function InferenceProviderConnectDialog({
           </div>
         </DialogDescription>
         <AnimatedHeight>
-          <AnimatePresence initial={false} mode="popLayout">
-            <motion.div key={contentKey} {...STEP_ANIMATION}>
-              {!oauth && (
-                <div className="border border-border">
-                  <SettingsControlRow title="Provider">
+          <motion.div key={contentKey} {...STEP_ANIMATION}>
+            {!oauth && (
+              <div className="border border-border">
+                <SettingsControlRow title="Provider">
+                  <Select
+                    value={providerId}
+                    onValueChange={selectProvider}
+                    disabled={Boolean(initialProviderId)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {catalog.map((provider) => (
+                        <SelectItem key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </SettingsControlRow>
+                <SettingsControlRow title="Connection name">
+                  <Input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Team account"
+                  />
+                </SettingsControlRow>
+                {selected && selected.authTypes.length > 1 && (
+                  <SettingsControlRow title="Authentication">
                     <Select
-                      value={providerId}
-                      onValueChange={selectProvider}
-                      disabled={Boolean(initialProviderId)}
+                      value={authType}
+                      onValueChange={(value) => setAuthType(value as AuthType)}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select provider" />
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {catalog.map((provider) => (
-                          <SelectItem key={provider.id} value={provider.id}>
-                            {provider.label}
+                        {selected.authTypes.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type.replace("_", " ")}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </SettingsControlRow>
-                  <SettingsControlRow title="Connection name">
+                )}
+                {authType === "api_key" && (
+                  <SettingsControlRow title="API key">
                     <Input
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      placeholder="Team account"
+                      type="password"
+                      value={apiKey}
+                      onChange={(event) => setApiKey(event.target.value)}
+                      autoComplete="off"
                     />
                   </SettingsControlRow>
-                  {selected && selected.authTypes.length > 1 && (
-                    <SettingsControlRow title="Authentication">
-                      <Select
-                        value={authType}
-                        onValueChange={(value) => setAuthType(value as AuthType)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {selected.authTypes.map((type) => (
-                            <SelectItem key={type} value={type}>
-                              {type.replace("_", " ")}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </SettingsControlRow>
-                  )}
-                  {authType === "api_key" && (
-                    <SettingsControlRow title="API key">
-                      <Input
-                        type="password"
-                        value={apiKey}
-                        onChange={(event) => setApiKey(event.target.value)}
-                        autoComplete="off"
+                )}
+                {(selected?.allowBaseUrlOverride || !selected?.baseUrl) && (
+                  <SettingsControlRow title="Base URL">
+                    <Input
+                      value={baseUrl}
+                      onChange={(event) => setBaseUrl(event.target.value)}
+                      placeholder="https://provider.example/v1"
+                    />
+                  </SettingsControlRow>
+                )}
+                {(selected?.allowBaseUrlOverride || authType === "local") && (
+                  <SettingsControlRow
+                    title="Allow private network"
+                    description="Only for an explicitly trusted private endpoint"
+                  >
+                    <Switch
+                      checked={allowPrivateNetwork}
+                      onChange={setAllowPrivateNetwork}
+                      ariaLabel="Allow private network"
+                    />
+                  </SettingsControlRow>
+                )}
+              </div>
+            )}
+            {oauth && (
+              <div className="space-y-3 border border-border p-4">
+                {oauth.completionMode === "device_poll" ? (
+                  <>
+                    <p className="text-sm">
+                      Complete authorization in the provider window. Gateway checks the status
+                      automatically.
+                    </p>
+                    {oauth.userCode && (
+                      <CopyValueField
+                        label="Authorization code"
+                        value={oauth.userCode}
+                        valueClassName="font-mono"
+                        actions={
+                          <Button
+                            variant="ghost"
+                            className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() =>
+                              window.open(oauth.authorizationUrl, "_blank", "noopener,noreferrer")
+                            }
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open
+                          </Button>
+                        }
                       />
-                    </SettingsControlRow>
-                  )}
-                  {(selected?.allowBaseUrlOverride || !selected?.baseUrl) && (
-                    <SettingsControlRow title="Base URL">
-                      <Input
-                        value={baseUrl}
-                        onChange={(event) => setBaseUrl(event.target.value)}
-                        placeholder="https://provider.example/v1"
-                      />
-                    </SettingsControlRow>
-                  )}
-                  {(selected?.allowBaseUrlOverride || authType === "local") && (
-                    <SettingsControlRow
-                      title="Allow private network"
-                      description="Only for an explicitly trusted private endpoint"
+                    )}
+                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      Waiting for provider authorization…
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+                      <li>Open {authorizationProviderLabel} authorization and sign in.</li>
+                      <li>
+                        Copy the code {authorizationProviderLabel} shows, or the final localhost
+                        callback URL.
+                      </li>
+                      <li>Paste it below and confirm with the checkmark.</li>
+                    </ol>
+                    <Button asChild variant="outline">
+                      <a href={oauth.authorizationUrl} target="_blank" rel="noreferrer">
+                        <ExternalLink className="h-4 w-4" />
+                        Open {authorizationProviderLabel} authorization
+                      </a>
+                    </Button>
+                    <form
+                      className="flex min-w-0 border border-input bg-background"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void completeCallback();
+                      }}
                     >
-                      <Switch
-                        checked={allowPrivateNetwork}
-                        onChange={setAllowPrivateNetwork}
-                        ariaLabel="Allow private network"
+                      <Input
+                        value={callback}
+                        onChange={(event) => setCallback(event.target.value)}
+                        placeholder="Paste code#state or callback URL"
+                        className="min-w-0 flex-1 border-0"
+                        disabled={saving}
+                        autoFocus
                       />
-                    </SettingsControlRow>
-                  )}
-                </div>
-              )}
-              {oauth && (
-                <div className="space-y-3 border border-border p-4">
-                  {oauth.completionMode === "device_poll" ? (
-                    <>
-                      <p className="text-sm">
-                        Complete authorization in the provider window. Gateway checks the status
-                        automatically.
-                      </p>
-                      {oauth.userCode && (
-                        <CopyValueField
-                          label="Authorization code"
-                          value={oauth.userCode}
-                          valueClassName="font-mono"
-                          actions={
-                            <Button
-                              variant="ghost"
-                              className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
-                              onClick={() =>
-                                window.open(oauth.authorizationUrl, "_blank", "noopener,noreferrer")
-                              }
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                              Open
-                            </Button>
-                          }
-                        />
-                      )}
-                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        Waiting for provider authorization…
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-                        <li>Open {authorizationProviderLabel} authorization and sign in.</li>
-                        <li>
-                          Copy the code {authorizationProviderLabel} shows, or the final localhost
-                          callback URL.
-                        </li>
-                        <li>Paste it below and confirm with the checkmark.</li>
-                      </ol>
-                      <Button asChild variant="outline">
-                        <a href={oauth.authorizationUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="h-4 w-4" />
-                          Open {authorizationProviderLabel} authorization
-                        </a>
-                      </Button>
-                      <form
-                        className="flex min-w-0 border border-input bg-background"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void completeCallback();
-                        }}
+                      <Button
+                        type="submit"
+                        variant="ghost"
+                        size="icon"
+                        className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                        disabled={saving || !isCompleteCallback(callback.trim())}
+                        aria-label={`Complete ${authorizationProviderLabel} authorization`}
+                        title="Complete authorization"
                       >
-                        <Input
-                          value={callback}
-                          onChange={(event) => setCallback(event.target.value)}
-                          placeholder="Paste code#state or callback URL"
-                          className="min-w-0 flex-1 border-0"
-                          disabled={saving}
-                          autoFocus
-                        />
-                        <Button
-                          type="submit"
-                          variant="ghost"
-                          size="icon"
-                          className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                          disabled={saving || !isCompleteCallback(callback.trim())}
-                          aria-label={`Complete ${authorizationProviderLabel} authorization`}
-                          title="Complete authorization"
-                        >
-                          {saving ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Check className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </form>
-                      {saving && (
-                        <p className="text-xs text-muted-foreground">Completing authorization…</p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </motion.div>
-          </AnimatePresence>
+                        {saving ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Check className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </form>
+                    {saving && (
+                      <p className="text-xs text-muted-foreground">Completing authorization…</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </motion.div>
         </AnimatedHeight>
         <DialogFooter>
           {locked ? (

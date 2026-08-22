@@ -332,7 +332,7 @@ export class InferenceModelService {
       .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
-      .where(eq(inferenceModelSources.modelId, modelId));
+      .where(and(eq(inferenceModelSources.modelId, modelId), isNull(inferenceProviderConnections.deletedAt)));
     if (!sources.length) return [];
     const providerId = sources[0]!.connection.providerId;
     const upstreamModelId = sources[0]!.source.upstreamModelId;
@@ -434,7 +434,13 @@ export class InferenceModelService {
       .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
-      .where(and(eq(inferenceModelSources.modelId, modelId), eq(inferenceModelSources.enabled, true)));
+      .where(
+        and(
+          eq(inferenceModelSources.modelId, modelId),
+          eq(inferenceModelSources.enabled, true),
+          isNull(inferenceProviderConnections.deletedAt)
+        )
+      );
     if (!sources.length)
       throw new AppError(400, 'INFERENCE_MODEL_SOURCE_REQUIRED', 'Published model needs an enabled source');
     assertSingleProviderBindings(
@@ -461,7 +467,13 @@ export class InferenceModelService {
       .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
-      .where(and(eq(inferenceModelSources.modelId, modelId), eq(inferenceModelSources.enabled, true)));
+      .where(
+        and(
+          eq(inferenceModelSources.modelId, modelId),
+          eq(inferenceModelSources.enabled, true),
+          isNull(inferenceProviderConnections.deletedAt)
+        )
+      );
     assertSingleProviderBindings(
       sources.map(({ source, connection }) => ({
         providerId: connection.providerId,
@@ -482,8 +494,9 @@ export class InferenceModelService {
     const sources = await this.db
       .select({ source: inferenceModelSources, discovered: inferenceDiscoveredModels })
       .from(inferenceModelSources)
+      .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
       .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
-      .where(and(...conditions));
+      .where(and(...conditions, isNull(inferenceProviderConnections.deletedAt)));
     const technical = sources
       .filter(({ source }) => sourceRole(source) === 'primary')
       .map(({ source, discovered }) => {
@@ -533,7 +546,7 @@ export class InferenceModelService {
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
       .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
-      .where(eq(inferenceModelSources.modelId, model.id))
+      .where(and(eq(inferenceModelSources.modelId, model.id), isNull(inferenceProviderConnections.deletedAt)))
       .orderBy(asc(inferenceModelSources.priority));
     const pricing = sources.length
       ? await this.db
@@ -605,7 +618,7 @@ export class InferenceModelService {
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
       .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
-      .where(and(...conditions));
+      .where(and(...conditions, isNull(inferenceProviderConnections.deletedAt)));
     return {
       capabilities: detectedCapabilityState(configured, sources),
       supportsFast: supportsFastServiceTier(sources),
@@ -693,10 +706,12 @@ function supportsFastServiceTier(rows: CapabilitySourceRow[]): boolean {
         ? discovered.metadata.additional_speed_tiers
         : [];
       return (
+        discovered.capabilities.serviceTier === true ||
         serviceTiers.some(
           (tier) =>
             tier && typeof tier === 'object' && !Array.isArray(tier) && (tier as { id?: unknown }).id === 'priority'
-        ) || additionalSpeedTiers.includes('fast')
+        ) ||
+        additionalSpeedTiers.includes('fast')
       );
     })
   );

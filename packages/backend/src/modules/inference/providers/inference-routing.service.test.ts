@@ -54,11 +54,38 @@ describe('inference routing policy', () => {
     );
   });
 
-  it('protects the new-thread and emergency floors', () => {
+  it('uses the new-thread floor as a preference while honoring the configured reserve', () => {
     expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.099 }, false)).toBe(false);
     expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.099 }, true)).toBe(true);
-    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.029 }, true)).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.029 }, true)).toBe(true);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0 }, true)).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.029, minimumRemainingFraction: 0.03 }, true)).toBe(
+      false
+    );
     expect(__testOnly.isUsable({ ...healthy, status: 'cooldown' }, true)).toBe(false);
+  });
+
+  it('falls back below the new-thread floor when all accounts still have emergency capacity', () => {
+    const lowAccounts = [
+      { ...healthy, id: 'connection-a', status: 'quota_hot', remainingFraction: 0.07 },
+      { ...healthy, id: 'connection-b', status: 'quota_hot', remainingFraction: 0.04 },
+    ];
+
+    expect(__testOnly.usableCandidates(lowAccounts, false).map((candidate) => candidate.id)).toEqual([
+      'connection-a',
+      'connection-b',
+    ]);
+  });
+
+  it('keeps low-quota accounts out of new threads while normal capacity exists', () => {
+    const candidates = [
+      { ...healthy, id: 'connection-normal', remainingFraction: 0.2 },
+      { ...healthy, id: 'connection-low', status: 'quota_hot', remainingFraction: 0.07 },
+    ];
+
+    expect(__testOnly.usableCandidates(candidates, false).map((candidate) => candidate.id)).toEqual([
+      'connection-normal',
+    ]);
   });
 
   it('uses routing order only for sequential selection', () => {

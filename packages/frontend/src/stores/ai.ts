@@ -2664,8 +2664,20 @@ function reconcileOptimisticMessages(
   activeRunId: string | null,
   activeClientCommandId: string | null
 ): AIMessage[] {
+  const currentUsersByCommand = new Map(
+    currentMessages.flatMap((message) =>
+      message.role === "user" && message.clientCommandId
+        ? [[message.clientCommandId, message] as const]
+        : []
+    )
+  );
+  const stableSnapshotMessages = snapshotMessages.map((message) => {
+    if (message.role !== "user" || !message.clientCommandId) return message;
+    const current = currentUsersByCommand.get(message.clientCommandId);
+    return current ? { ...message, id: current.id } : message;
+  });
   const persistedCommands = new Set(
-    snapshotMessages.flatMap((message) =>
+    stableSnapshotMessages.flatMap((message) =>
       message.clientCommandId ? [message.clientCommandId] : []
     )
   );
@@ -2676,7 +2688,7 @@ function reconcileOptimisticMessages(
       message.clientCommandId &&
       !persistedCommands.has(message.clientCommandId)
   );
-  const next = [...snapshotMessages, ...missingOptimisticUsers];
+  const next = [...stableSnapshotMessages, ...missingOptimisticUsers];
   if (!activeRunId || !activeClientCommandId) return next;
   const optimisticAssistant = currentMessages.find(
     (message) => message.id === startingAssistantMessageId(activeClientCommandId)
