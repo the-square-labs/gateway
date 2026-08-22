@@ -737,6 +737,8 @@ message DockerVolumeCommand {
   string new_name = 8;
   bytes content = 9;
   string target_path = 10;
+  string storage_kind = 11;
+  int64 capacity_bytes = 12;
 }
 
 message DockerNetworkCommand {

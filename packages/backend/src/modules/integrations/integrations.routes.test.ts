@@ -609,12 +609,12 @@ describe('integrations routes', () => {
     expect(deleteCloudflareConnector).toHaveBeenCalledWith('cf-1', USER.id);
   });
 
-  it('allows Cloudflare DNS viewers to list connectors and zones without manage scope', async () => {
+  it('allows Cloudflare viewers to list connectors and zones without manage scope', async () => {
     const listCloudflareConnectors = vi.fn().mockResolvedValue([{ id: 'cf-1', tokenMasked: '****cret' }]);
     const getCloudflareConnector = vi.fn().mockResolvedValue({ id: 'cf-1', tokenMasked: '****cret' });
     const listCloudflareZones = vi.fn().mockResolvedValue([{ remoteId: 'zone-1', name: 'example.com' }]);
     const createCloudflareConnector = vi.fn();
-    registerServices(['integrations:cloudflare:dns:view'], {
+    registerServices(['integrations:cloudflare:view'], {
       listCloudflareConnectors,
       getCloudflareConnector,
       listCloudflareZones,

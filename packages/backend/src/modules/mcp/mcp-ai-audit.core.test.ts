@@ -266,7 +266,7 @@ describe('AIService MCP audit core behavior', () => {
     };
     const service = createService({ nodesService: {}, proxyService, auditService });
 
-    const result = await service.executeTool(USER, 'list_proxy_hosts', {}, { source: 'mcp', scopes: ['proxy:view'] });
+    const result = await service.executeTool(USER, 'list_routes', {}, { source: 'mcp', scopes: ['proxy:view'] });
 
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({
@@ -303,8 +303,8 @@ describe('AIService MCP audit core behavior', () => {
 
     const result = await service.executeTool(
       USER,
-      'get_proxy_host',
-      { proxyHostId: 'proxy-1' },
+      'get_route',
+      { routeId: 'proxy-1' },
       { source: 'mcp', scopes: ['proxy:view:proxy-1'] }
     );
 
@@ -338,26 +338,26 @@ describe('AIService MCP audit core behavior', () => {
     const results = await Promise.all([
       service.executeTool(
         USER,
-        'create_proxy_host',
+        'create_route',
         { nodeId: 'node-1', domainNames: ['app.example.com'], forwardHost: 'app', forwardPort: 3000 },
         { source: 'mcp', scopes: ['proxy:create'] }
       ),
       service.executeTool(
         USER,
-        'update_proxy_host',
-        { proxyHostId: 'proxy-1', enabled: false },
+        'update_route',
+        { routeId: 'proxy-1', enabled: false },
         { source: 'mcp', scopes: ['proxy:edit:proxy-1'] }
       ),
       service.executeTool(
         USER,
-        'update_proxy_raw_config',
-        { proxyHostId: 'proxy-1', rawConfig: 'server { return 204; }' },
+        'update_route_raw_config',
+        { routeId: 'proxy-1', rawConfig: 'server { return 204; }' },
         { source: 'mcp', scopes: ['proxy:raw:write:proxy-1'] }
       ),
       service.executeTool(
         USER,
-        'toggle_proxy_raw_mode',
-        { proxyHostId: 'proxy-1', enabled: true },
+        'toggle_route_raw_mode',
+        { routeId: 'proxy-1', enabled: true },
         { source: 'mcp', scopes: ['proxy:raw:toggle:proxy-1'] }
       ),
     ]);
@@ -380,8 +380,8 @@ describe('AIService MCP audit core behavior', () => {
 
     const result = await service.executeTool(
       { ...USER, scopes: ['proxy:edit:proxy-1'] },
-      'update_proxy_host',
-      { proxyHostId: 'proxy-1', rawConfig: 'server { return 204; }' },
+      'update_route',
+      { routeId: 'proxy-1', rawConfig: 'server { return 204; }' },
       { source: 'mcp', scopes: ['proxy:edit:proxy-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
 
@@ -399,8 +399,8 @@ describe('AIService MCP audit core behavior', () => {
 
     const denied = await service.executeTool(
       { ...USER, scopes: ['proxy:raw:write:proxy-1'] },
-      'get_proxy_rendered_config',
-      { proxyHostId: 'proxy-1' },
+      'get_route_rendered_config',
+      { routeId: 'proxy-1' },
       { source: 'mcp', scopes: ['proxy:raw:write:proxy-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
 
@@ -409,13 +409,13 @@ describe('AIService MCP audit core behavior', () => {
 
     const allowed = await service.executeTool(
       { ...USER, scopes: ['proxy:raw:read:proxy-1'] },
-      'get_proxy_rendered_config',
-      { proxyHostId: 'proxy-1' },
+      'get_route_rendered_config',
+      { routeId: 'proxy-1' },
       { source: 'mcp', scopes: ['proxy:raw:read:proxy-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
 
     expect(allowed.error).toBeUndefined();
-    expect(allowed.result).toEqual({ proxyHostId: 'proxy-1', config: 'server { return 204; }' });
+    expect(allowed.result).toEqual({ routeId: 'proxy-1', config: 'server { return 204; }' });
   });
 
   it('returns MCP proxy host resources without raw config fields', async () => {

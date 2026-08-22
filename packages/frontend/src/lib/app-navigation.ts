@@ -284,9 +284,6 @@ const SETTINGS_SCOPES = [
   "integrations:gitlab:manage",
   "integrations:cloudflare:view",
   "integrations:cloudflare:manage",
-  "integrations:cloudflare:dns:view",
-  "integrations:cloudflare:dns:edit",
-  "integrations:cloudflare:dns:delete",
   "feat:ai:configure",
 ] as const;
 

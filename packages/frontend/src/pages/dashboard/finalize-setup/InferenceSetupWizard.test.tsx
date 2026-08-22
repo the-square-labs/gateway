@@ -58,6 +58,7 @@ const readyModel = {
   id: "model-id",
   publicId: "gpt-5-6-luna",
   displayName: "GPT-5.6-Luna",
+  sortOrder: 0,
   enabled: true,
   contextWindow: 128_000,
   maxInputTokens: 128_000,

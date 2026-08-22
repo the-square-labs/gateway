@@ -33,24 +33,24 @@ describe('AI backend approval policy', () => {
   });
 
   it('asks for every non-system tool in always-ask mode', () => {
-    expect(getAIToolApprovalDecision('list_proxy_hosts', 'always-ask')).toMatchObject({
+    expect(getAIToolApprovalDecision('list_routes', 'always-ask')).toMatchObject({
       classification: 'read',
       approvalPolicy: 'requires_approval',
       requiresApproval: true,
     });
-    expect(getAIToolApprovalDecision('create_proxy_host', 'always-ask')).toMatchObject({
+    expect(getAIToolApprovalDecision('create_route', 'always-ask')).toMatchObject({
       classification: 'create',
       requiresApproval: true,
     });
   });
 
   it('normal mode auto-approves reads and asks for mutations', () => {
-    expect(getAIToolApprovalDecision('list_proxy_hosts', 'normal')).toMatchObject({
+    expect(getAIToolApprovalDecision('list_routes', 'normal')).toMatchObject({
       classification: 'read',
       approvalPolicy: 'auto_approved',
       requiresApproval: false,
     });
-    expect(getAIToolApprovalDecision('update_proxy_host', 'normal')).toMatchObject({
+    expect(getAIToolApprovalDecision('update_route', 'normal')).toMatchObject({
       classification: 'update',
       approvalPolicy: 'requires_approval',
       requiresApproval: true,
@@ -58,12 +58,12 @@ describe('AI backend approval policy', () => {
   });
 
   it('bypass-non-destructive mode still asks for delete and execute classes', () => {
-    expect(getAIToolApprovalDecision('create_proxy_host', 'bypass-non-destructive')).toMatchObject({
+    expect(getAIToolApprovalDecision('create_route', 'bypass-non-destructive')).toMatchObject({
       classification: 'create',
       approvalPolicy: 'auto_approved',
       requiresApproval: false,
     });
-    expect(getAIToolApprovalDecision('delete_proxy_host', 'bypass-non-destructive')).toMatchObject({
+    expect(getAIToolApprovalDecision('delete_route', 'bypass-non-destructive')).toMatchObject({
       classification: 'delete',
       approvalPolicy: 'requires_approval',
       requiresApproval: true,
@@ -76,7 +76,7 @@ describe('AI backend approval policy', () => {
   });
 
   it('bypass-everything mode auto-approves policy-eligible tools', () => {
-    expect(getAIToolApprovalDecision('delete_proxy_host', 'bypass-everything')).toMatchObject({
+    expect(getAIToolApprovalDecision('delete_route', 'bypass-everything')).toMatchObject({
       classification: 'delete',
       approvalPolicy: 'auto_approved',
       requiresApproval: false,

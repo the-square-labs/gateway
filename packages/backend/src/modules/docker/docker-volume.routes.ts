@@ -14,6 +14,7 @@ import {
   createVolumeRoute,
   deleteVolumeFileRoute,
   exportVolumeRoute,
+  getVolumeMetricsRoute,
   initVolumeFileUploadRoute,
   inspectVolumeRoute,
   listManagedVolumeOptionsRoute,
@@ -23,6 +24,7 @@ import {
   readVolumeFileRoute,
   removeVolumeRoute,
   renameVolumeRoute,
+  resizeVolumeRoute,
   updateVolumeLabelsRoute,
   uploadVolumeFileChunkRoute,
   writeVolumeFileRoute,
@@ -36,6 +38,7 @@ import {
   VolumeCreateSchema,
   VolumeLabelsUpdateSchema,
   VolumeRenameSchema,
+  VolumeResizeSchema,
 } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
 import { resolveDockerVolumeByName } from './docker-route-resolvers.js';
@@ -52,6 +55,8 @@ export function compactVolumeListItem(volume: Record<string, any>) {
     mountpoint: volume.mountpoint ?? volume.Mountpoint,
     scope: volume.scope ?? volume.Scope,
     managementState: volume.managementState,
+    storageKind: volume.storageKind,
+    capacityBytes: volume.capacityBytes,
     adoptable: Boolean(volume.adoptable),
     adoptionReason: volume.adoptionReason,
     availability: volume.availability,
@@ -73,6 +78,8 @@ export function normalizeVolumeDetailItem(volume: Record<string, any>) {
     options: volume.options ?? volume.Options ?? {},
     scope: volume.scope ?? volume.Scope,
     managementState: volume.managementState,
+    storageKind: volume.storageKind,
+    capacityBytes: volume.capacityBytes,
     adoptable: Boolean(volume.adoptable),
     adoptionReason: volume.adoptionReason,
     availability: volume.availability,
@@ -400,6 +407,29 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const config = VolumeCreateSchema.parse(body);
       const data = await service.createVolume(nodeId, config, user.id);
       return c.json({ data }, 201);
+    }
+  );
+
+  router.openapi(
+    { ...getVolumeMetricsRoute, middleware: requireScopeForResource('docker:volumes:view', 'nodeId') },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      const name = c.req.param('name')!;
+      return c.json({ data: await service.getVolumeMetrics(nodeId, name) });
+    }
+  );
+
+  router.openapi(
+    { ...resizeVolumeRoute, middleware: requireScopeForResource('docker:volumes:create', 'nodeId') },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      const name = c.req.param('name')!;
+      const user = c.get('user')!;
+      const { capacityBytes } = VolumeResizeSchema.parse(await c.req.json());
+      await service.resizeVolume(nodeId, name, capacityBytes, user.id);
+      return c.json({ success: true });
     }
   );
 

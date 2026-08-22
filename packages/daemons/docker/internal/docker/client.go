@@ -1975,7 +1975,7 @@ func (c *Client) UpdateVolumeLabels(ctx context.Context, name string, labels map
 	if currentLabels == nil {
 		currentLabels = map[string]string{}
 	}
-	for _, key := range []string{managedVolumeLabel, managedVolumeOriginLabel} {
+	for _, key := range []string{managedVolumeLabel, managedVolumeOriginLabel, managedVolumeStorageKindLabel, managedVolumeCapacityLabel} {
 		if supplied, ok := nextLabels[key]; ok && supplied != currentLabels[key] {
 			return fmt.Errorf("label %q is reserved for Gateway-managed volumes", key)
 		}
@@ -2081,8 +2081,9 @@ func (c *Client) CreateManagedVolume(ctx context.Context, name string) error {
 	}
 
 	labels := map[string]string{
-		managedVolumeLabel:       "true",
-		managedVolumeOriginLabel: "created",
+		managedVolumeLabel:            "true",
+		managedVolumeOriginLabel:      "created",
+		managedVolumeStorageKindLabel: volumeStorageKindRegular,
 	}
 	result, err := c.cli.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name:   name,
@@ -2097,6 +2098,36 @@ func (c *Client) CreateManagedVolume(ctx context.Context, name string) error {
 		return fmt.Errorf("volume %q appeared concurrently and was left unchanged", name)
 	}
 	return nil
+}
+
+func (c *Client) volumeDiskUsage(ctx context.Context, name string) (int64, error) {
+	usage, err := c.cli.DiskUsage(ctx, client.DiskUsageOptions{Volumes: true, Verbose: true})
+	if err != nil {
+		return -1, fmt.Errorf("volume disk usage: %w", err)
+	}
+	for _, item := range usage.Volumes.Items {
+		if item.Name == name && item.UsageData != nil {
+			return item.UsageData.Size, nil
+		}
+	}
+	return -1, nil
+}
+
+func (c *Client) runningVolumeAttachments(ctx context.Context, name string) (int64, error) {
+	containers, err := c.cli.ContainerList(ctx, client.ContainerListOptions{All: false})
+	if err != nil {
+		return 0, fmt.Errorf("list running containers: %w", err)
+	}
+	var count int64
+	for _, ctr := range containers.Items {
+		for _, mount := range ctr.Mounts {
+			if mount.Type == "volume" && mount.Name == name {
+				count++
+				break
+			}
+		}
+	}
+	return count, nil
 }
 
 // RemoveVolume removes a volume by name.

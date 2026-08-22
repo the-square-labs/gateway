@@ -100,8 +100,8 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     toolNames: [
       'list_nodes',
       'get_node',
-      'list_proxy_hosts',
-      'get_proxy_host',
+      'list_routes',
+      'get_route',
       'list_ssl_certificates',
       'list_domains',
       'list_access_lists',

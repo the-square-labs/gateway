@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
@@ -101,9 +101,14 @@ export class InferenceModelConfigurationService {
         await tx.delete(inferenceModelAccessRules).where(eq(inferenceModelAccessRules.modelId, id));
         await tx.delete(inferenceModelSources).where(eq(inferenceModelSources.modelId, id));
       } else {
+        const [lastModel] = await tx
+          .select({ sortOrder: inferenceModels.sortOrder })
+          .from(inferenceModels)
+          .orderBy(desc(inferenceModels.sortOrder))
+          .limit(1);
         const [created] = await tx
           .insert(inferenceModels)
-          .values({ ...values, createdBy: userId })
+          .values({ ...values, sortOrder: (lastModel?.sortOrder ?? -1) + 1, createdBy: userId })
           .returning({ id: inferenceModels.id });
         id = created!.id;
       }

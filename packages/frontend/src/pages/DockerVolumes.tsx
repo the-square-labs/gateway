@@ -88,6 +88,8 @@ export function DockerVolumes({
     onRefreshRef?.(() => void requestSnapshotRefresh("volumes", visibleNodeId));
   }, [onRefreshRef, requestSnapshotRefresh, visibleNodeId]);
   const [createName, setCreateName] = useState("");
+  const [createStorageKind, setCreateStorageKind] = useState<"regular" | "disk-image">("regular");
+  const [createCapacityGb, setCreateCapacityGb] = useState("10");
   const [creating, setCreating] = useState(false);
 
   const loadVolumeNodes = useCallback(async () => {
@@ -176,6 +178,10 @@ export function DockerVolumes({
     try {
       await api.createVolume(createNodeId, {
         name: createName.trim(),
+        storageKind: createStorageKind,
+        ...(createStorageKind === "disk-image"
+          ? { capacityBytes: Number(createCapacityGb) * 1024 ** 3 }
+          : {}),
       });
       toast.success("Volume created");
       closeCreate();
@@ -190,6 +196,8 @@ export function DockerVolumes({
   const closeCreate = () => {
     setCreateOpen(false);
     setCreateName("");
+    setCreateStorageKind("regular");
+    setCreateCapacityGb("10");
   };
 
   const handleAdopt = useCallback(
@@ -205,7 +213,31 @@ export function DockerVolumes({
     [fetchVolumes, search]
   );
 
-  const selectedNode = dockerNodes.find((n) => n.id === selectedNodeId);
+  const createNodes =
+    useDockerStore.getState().dockerNodes.length > 0
+      ? useDockerStore.getState().dockerNodes
+      : dockerNodes;
+  const selectedNode = createNodes.find((n) => n.id === createNodeId);
+  const selectedNodeCapabilities = selectedNode?.capabilities as
+    | Record<string, unknown>
+    | undefined;
+  const advertisedNodeCapabilities = Array.isArray(selectedNodeCapabilities?.capabilities)
+    ? selectedNodeCapabilities.capabilities
+    : [];
+  const supportsDiskImages = Boolean(
+    selectedNodeCapabilities?.dockerVolumeStorageImagesV1 === true ||
+      selectedNodeCapabilities?.docker_volume_storage_images_v1 === true ||
+      advertisedNodeCapabilities.includes("docker_volume_storage_images_v1")
+  );
+  const parsedCreateCapacityGb = Number(createCapacityGb);
+  const createCapacityValid =
+    Number.isInteger(parsedCreateCapacityGb) && parsedCreateCapacityGb >= 1;
+
+  useEffect(() => {
+    if (createStorageKind === "disk-image" && !supportsDiskImages) {
+      setCreateStorageKind("regular");
+    }
+  }, [createStorageKind, supportsDiskImages]);
 
   const allVolumeColumns: ResourceListColumn<DockerVolumeListItem>[] = useMemo(
     () => [
@@ -517,10 +549,7 @@ export function DockerVolumes({
                   <SelectValue placeholder="Select a node" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(useDockerStore.getState().dockerNodes.length > 0
-                    ? useDockerStore.getState().dockerNodes
-                    : dockerNodes
-                  ).map((n) => (
+                  {createNodes.map((n) => (
                     <SelectItem key={n.id} value={n.id}>
                       {n.displayName || n.hostname}
                     </SelectItem>
@@ -528,6 +557,55 @@ export function DockerVolumes({
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Volume type</label>
+              <Select
+                value={createStorageKind}
+                onValueChange={(value) => setCreateStorageKind(value as "regular" | "disk-image")}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="regular">
+                    <div className="flex flex-col items-start">
+                      <span>Regular volume</span>
+                      <span className="text-xs text-muted-foreground">
+                        Standard Docker storage using shared node capacity.
+                      </span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="disk-image" disabled={!supportsDiskImages}>
+                    <div className="flex flex-col items-start">
+                      <span>Disk image</span>
+                      <span className="text-xs text-muted-foreground">
+                        {supportsDiskImages
+                          ? "Fixed-capacity ext4 storage that can be expanded later."
+                          : "Not supported by the selected node."}
+                      </span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {createStorageKind === "disk-image" && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="volume-capacity-gb">
+                  Capacity, GB <span className="text-destructive">*</span>
+                </label>
+                <Input
+                  id="volume-capacity-gb"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={createCapacityGb}
+                  onChange={(event) => setCreateCapacityGb(event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Allocated as a fixed-size ext4 disk image.
+                </p>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Name <span className="text-destructive">*</span>
@@ -545,7 +623,13 @@ export function DockerVolumes({
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={creating || !createName.trim() || !createNodeId}
+              disabled={
+                creating ||
+                !createName.trim() ||
+                !createNodeId ||
+                (createStorageKind === "disk-image" &&
+                  (!supportsDiskImages || !createCapacityValid))
+              }
             >
               {creating ? "Creating..." : "Create"}
             </Button>

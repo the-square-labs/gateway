@@ -65,12 +65,7 @@ function emptyForm() {
 export function CloudflareIntegrationsSection() {
   const { hasScope } = useAuthStore();
   const canManage = hasScope("integrations:cloudflare:manage");
-  const canView =
-    canManage ||
-    hasScope("integrations:cloudflare:view") ||
-    hasScope("integrations:cloudflare:dns:view") ||
-    hasScope("integrations:cloudflare:dns:edit") ||
-    hasScope("integrations:cloudflare:dns:delete");
+  const canView = canManage || hasScope("integrations:cloudflare:view");
   const [connectors, setConnectors] = useState<CloudflareConnector[]>(
     () => api.getCached<CloudflareConnector[]>("settings:cloudflare-connectors") ?? []
   );

@@ -24,8 +24,8 @@ describe('MCP tool scope filtering', () => {
   });
 
   it('does not advertise rendered proxy config reads through raw write implication', () => {
-    expect(toolNames(['proxy:raw:write:proxy-1'])).not.toContain('get_proxy_rendered_config');
-    expect(toolNames(['proxy:raw:read:proxy-1'])).toContain('get_proxy_rendered_config');
+    expect(toolNames(['proxy:raw:write:proxy-1'])).not.toContain('get_route_rendered_config');
+    expect(toolNames(['proxy:raw:read:proxy-1'])).toContain('get_route_rendered_config');
   });
 
   it('advertises registry selection for Docker create and pull tools', () => {
@@ -46,7 +46,7 @@ describe('MCP tool scope filtering', () => {
     expect(toolNames(['docker:registries:delete'])).toContain('manage_docker_registry');
     expect(toolNames(['docker:volumes:delete:node-1'])).toContain('manage_docker_volume');
     expect(toolNames(['docker:networks:edit:node-1'])).toContain('manage_docker_network');
-    expect(toolNames(['docker:containers:files:node-1'])).toContain('manage_docker_container_config');
+    expect(toolNames(['docker:containers:files:read:node-1'])).toContain('manage_docker_container_config');
     expect(toolNames(['databases:credentials:reveal:db-1'])).toContain('manage_database_connection');
     expect(toolNames(['logs:read:env-1'])).toContain('manage_logging');
     expect(toolNames(['status-page:incidents:resolve'])).toContain('manage_status_page');

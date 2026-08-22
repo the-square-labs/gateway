@@ -59,6 +59,17 @@ export const UpdateInferenceModelSchema = InferenceModelFieldsSchema.partial()
   .extend({ enabled: z.boolean().optional() })
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
 
+export const ReorderInferenceModelsSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        sortOrder: z.number().int().min(0).max(100_000),
+      })
+    )
+    .min(1),
+});
+
 export const InferencePricingSchema = z.object({
   version: z.string().trim().min(1).max(80),
   inputMicrodollarsPerMillion: z.number().int().nonnegative(),

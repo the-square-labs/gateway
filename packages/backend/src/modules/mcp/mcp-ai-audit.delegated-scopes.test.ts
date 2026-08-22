@@ -136,7 +136,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
 
     const result = await service.executeTool(
       { ...USER, scopes: ['proxy:create:node-1'] },
-      'create_proxy_host',
+      'create_route',
       { nodeId: 'node-1', domainNames: ['example.com'] },
       { source: 'mcp', scopes: ['proxy:create:node-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
@@ -292,8 +292,8 @@ describe('AIService MCP delegated scope audit behavior', () => {
 
     const result = await service.executeTool(
       { ...USER, scopes: ['proxy:edit', 'proxy:advanced', 'proxy:advanced:bypass'] },
-      'update_proxy_host',
-      { proxyHostId: 'proxy-1', advancedConfig: 'proxy_set_header Host $host;' },
+      'update_route',
+      { routeId: 'proxy-1', advancedConfig: 'proxy_set_header Host $host;' },
       { source: 'mcp', scopes: ['proxy:edit'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
 
@@ -310,8 +310,8 @@ describe('AIService MCP delegated scope audit behavior', () => {
 
     const result = await service.executeTool(
       { ...USER, scopes: ['proxy:edit', 'proxy:advanced', 'proxy:advanced:bypass'] },
-      'update_proxy_host',
-      { proxyHostId: 'proxy-1', enabled: false },
+      'update_route',
+      { routeId: 'proxy-1', enabled: false },
       { source: 'mcp', scopes: ['proxy:edit:proxy-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
 

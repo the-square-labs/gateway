@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -104,6 +108,8 @@ export function AlertDialog({
   const [availableResources, setAvailableResources] = useState<AlertResourceOption[]>([]);
   const [resourceSearch, setResourceSearch] = useState("");
   const [webhookSearch, setWebhookSearch] = useState("");
+  const [resourceFilter, setResourceFilter] = useState<ScopeSelectionFilter>("all");
+  const [webhookFilter, setWebhookFilter] = useState<ScopeSelectionFilter>("all");
   const editorRef = useRef<TemplateEditorHandle>(null); // retained for cheatsheet click-to-insert (future)
   const catInitRef = useRef(false);
   const resourceLoadTokenRef = useRef(0);
@@ -154,6 +160,8 @@ export function AlertDialog({
     setCooldownSeconds(String(rule?.cooldownSeconds ?? 900));
     setResourceSearch("");
     setWebhookSearch("");
+    setResourceFilter("all");
+    setWebhookFilter("all");
     api
       .getAlertCategories()
       .then(setCategories)
@@ -371,16 +379,6 @@ export function AlertDialog({
       prev.includes(id) ? prev.filter((w) => w !== id) : [...prev, id]
     );
 
-  const filteredResources = useMemo(
-    () =>
-      resourceSearch
-        ? availableResources.filter((resource) =>
-            resource.label.toLowerCase().includes(resourceSearch.toLowerCase())
-          )
-        : availableResources,
-    [availableResources, resourceSearch]
-  );
-
   const filteredWebhooks = useMemo(
     () =>
       webhookSearch
@@ -392,14 +390,14 @@ export function AlertDialog({
   );
   const resourceScopeItems = useMemo(
     () =>
-      filteredResources.map((resource) => ({
+      availableResources.map((resource) => ({
         value: resource.id,
         label: resource.label,
         desc: resource.label,
         group: "",
         hideValue: true,
       })),
-    [filteredResources]
+    [availableResources]
   );
   const webhookScopeItems = useMemo(
     () =>
@@ -932,20 +930,22 @@ export function AlertDialog({
                   <div
                     className={`border border-border transition-opacity ${scopeEnabled ? "" : "opacity-40 pointer-events-none"}`}
                   >
-                    <Input
-                      value={resourceSearch}
-                      onChange={(e) => setResourceSearch(e.target.value)}
+                    <ScopeSearchFilter
+                      search={resourceSearch}
+                      onSearchChange={setResourceSearch}
+                      filter={resourceFilter}
+                      onFilterChange={setResourceFilter}
                       placeholder="Search resources..."
-                      className="border-0 border-b border-border rounded-none h-9 text-sm focus-visible:ring-0"
                       disabled={!scopeEnabled}
                     />
                     <div>
-                      {filteredResources.length === 0 ? (
+                      {availableResources.length === 0 ? (
                         <p className="p-3 text-sm text-muted-foreground">No resources found.</p>
                       ) : (
                         <ScopeList
                           scopes={resourceScopeItems}
-                          search=""
+                          search={resourceSearch}
+                          selectionFilter={resourceFilter}
                           selected={resourceIds}
                           onToggle={toggleResource}
                           readOnly={!scopeEnabled}
@@ -1031,16 +1031,18 @@ export function AlertDialog({
                     </p>
                   ) : (
                     <div className="border border-border">
-                      <Input
-                        value={webhookSearch}
-                        onChange={(e) => setWebhookSearch(e.target.value)}
+                      <ScopeSearchFilter
+                        search={webhookSearch}
+                        onSearchChange={setWebhookSearch}
+                        filter={webhookFilter}
+                        onFilterChange={setWebhookFilter}
                         placeholder="Search webhooks..."
-                        className="border-0 border-b border-border rounded-none h-9 text-sm focus-visible:ring-0"
                       />
                       <div>
                         <ScopeList
                           scopes={webhookScopeItems}
-                          search=""
+                          search={webhookSearch}
+                          selectionFilter={webhookFilter}
                           selected={selectedWebhookIds}
                           onToggle={toggleWebhook}
                           viewportClassName="max-sm:max-h-[25vh] max-sm:overflow-y-auto"

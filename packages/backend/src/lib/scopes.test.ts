@@ -66,7 +66,7 @@ function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
 describe('canonical scope definitions', () => {
   it('keeps external source-control and SSH integrations out of Gateway MCP delegation', () => {
     expect(MCP_TOKEN_SCOPES).toContain('nodes:details');
-    expect(MCP_TOKEN_SCOPES).toContain('integrations:cloudflare:dns:view');
+    expect(MCP_TOKEN_SCOPES).toContain('integrations:cloudflare:view');
     expect(MCP_TOKEN_SCOPES).not.toContain('mcp:use');
     expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:gitlab:'))).toBe(false);
     expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:github:'))).toBe(false);
@@ -324,7 +324,8 @@ describe('canonical scope definitions', () => {
       'nodes:files:read',
       'nodes:files:write',
       'docker:containers:console',
-      'docker:containers:files',
+      'docker:containers:files:read',
+      'docker:containers:files:write',
       'docker:containers:export',
       'docker:containers:secrets',
       'docker:containers:mounts',
@@ -343,8 +344,6 @@ describe('canonical scope definitions', () => {
       'integrations:gitlab:webhooks:manage',
       'integrations:gitlab:registry:manage',
       'integrations:gitlab:sandbox:clone',
-      'integrations:cloudflare:dns:edit',
-      'integrations:cloudflare:dns:delete',
       'logs:tokens:create',
       'admin:audit',
       'audit:siem:manage',

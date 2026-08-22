@@ -67,10 +67,7 @@ export function Settings() {
     hasScope("integrations:gitlab:view") ||
     hasScope("integrations:gitlab:manage") ||
     hasScope("integrations:cloudflare:view") ||
-    hasScope("integrations:cloudflare:manage") ||
-    hasScope("integrations:cloudflare:dns:view") ||
-    hasScope("integrations:cloudflare:dns:edit") ||
-    hasScope("integrations:cloudflare:dns:delete");
+    hasScope("integrations:cloudflare:manage");
   const canAccessGeneralTab = canViewGatewaySettings || canUpdate || canViewLicense;
   const canAccessAdvancedTab = canViewGatewaySettings || canManageRegistries;
   const canAccessFeaturesTab =

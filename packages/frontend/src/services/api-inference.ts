@@ -138,6 +138,13 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
       return this.request("/inference/models");
     }
 
+    reorderInferenceModels(items: Array<{ id: string; sortOrder: number }>): Promise<void> {
+      return this.request("/inference/models/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
     saveInferenceModelConfiguration(
       id: string | null,
       data: Record<string, unknown>

@@ -750,12 +750,12 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
-  it('allows integration connector events for Cloudflare DNS viewers', async () => {
+  it('allows integration connector events for Cloudflare viewers', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['integrations:cloudflare:dns:view'] },
-      effectiveScopes: ['integrations:cloudflare:dns:view'],
+      user: { ...USER, scopes: ['integrations:cloudflare:view'] },
+      effectiveScopes: ['integrations:cloudflare:view'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();
@@ -794,8 +794,8 @@ describe('events websocket authentication', () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['docker:containers:files:node-1'] },
-      effectiveScopes: ['docker:containers:files:node-1'],
+      user: { ...USER, scopes: ['docker:containers:files:read:node-1'] },
+      effectiveScopes: ['docker:containers:files:read:node-1'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();

@@ -282,6 +282,7 @@ export function FilesTab({
   containerId,
   scopeResourceId,
   canBrowse,
+  canWrite,
   fetchDirectory,
   operations,
   realtimeEvent = "docker.file.changed",
@@ -291,6 +292,7 @@ export function FilesTab({
   containerId?: string;
   scopeResourceId?: string;
   canBrowse?: boolean;
+  canWrite?: boolean;
   fetchDirectory?: (path: string) => Promise<FileEntry[]>;
   operations?: FileManagerOperations;
   realtimeEvent?: string | null;
@@ -299,7 +301,14 @@ export function FilesTab({
   const { hasScope } = useAuthStore();
   const canBrowseFiles =
     canBrowse ??
-    hasScope(`docker:containers:files:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`);
+    hasScope(
+      `docker:containers:files:read:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
+    );
+  const canWriteFiles =
+    canWrite ??
+    hasScope(
+      `docker:containers:files:write:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
+    );
   const containerOperations = useMemo<FileManagerOperations | undefined>(() => {
     if (!containerId) return undefined;
     return {
@@ -307,7 +316,7 @@ export function FilesTab({
       readFile: (path) => api.readContainerFile(nodeId, containerId, path),
       openFile: (filePath, writable) => {
         const params = new URLSearchParams({ path: filePath });
-        if (writable) params.set("writable", "1");
+        if (writable && canWriteFiles) params.set("writable", "1");
         const url = `/docker/file/${nodeId}/${containerId}?${params}`;
         const fileName = filePath.split("/").pop() || "file";
         window.open(
@@ -316,20 +325,42 @@ export function FilesTab({
           "width=900,height=600,menubar=no,toolbar=no"
         );
       },
-      createFile: (path, content, onProgress) =>
-        api.createContainerFile(nodeId, containerId, path, content, onProgress),
-      createDirectory: (path) => api.createContainerDirectory(nodeId, containerId, path),
-      deletePath: (path) => api.deleteContainerFile(nodeId, containerId, path),
-      movePath: (fromPath, toPath) => api.moveContainerFile(nodeId, containerId, fromPath, toPath),
-      initUpload: (path, totalBytes) =>
-        api.initContainerFileUpload(nodeId, containerId, path, totalBytes),
-      uploadChunk: (uploadId, offset, content, onProgress) =>
-        api.uploadContainerFileChunk(nodeId, containerId, uploadId, offset, content, onProgress),
-      completeUpload: (uploadId, path, totalBytes) =>
-        api.completeContainerFileUpload(nodeId, containerId, uploadId, path, totalBytes),
-      abortUpload: (uploadId) => api.abortContainerFileUpload(nodeId, containerId, uploadId),
+      ...(canWriteFiles
+        ? {
+            createFile: (
+              path: string,
+              content: Blob | BufferSource | string,
+              onProgress?: UploadProgressHandler
+            ) => api.createContainerFile(nodeId, containerId, path, content, onProgress),
+            createDirectory: (path: string) =>
+              api.createContainerDirectory(nodeId, containerId, path),
+            deletePath: (path: string) => api.deleteContainerFile(nodeId, containerId, path),
+            movePath: (fromPath: string, toPath: string) =>
+              api.moveContainerFile(nodeId, containerId, fromPath, toPath),
+            initUpload: (path: string, totalBytes: number) =>
+              api.initContainerFileUpload(nodeId, containerId, path, totalBytes),
+            uploadChunk: (
+              uploadId: string,
+              offset: number,
+              content: Blob,
+              onProgress?: UploadProgressHandler
+            ) =>
+              api.uploadContainerFileChunk(
+                nodeId,
+                containerId,
+                uploadId,
+                offset,
+                content,
+                onProgress
+              ),
+            completeUpload: (uploadId: string, path: string, totalBytes: number) =>
+              api.completeContainerFileUpload(nodeId, containerId, uploadId, path, totalBytes),
+            abortUpload: (uploadId: string) =>
+              api.abortContainerFileUpload(nodeId, containerId, uploadId),
+          }
+        : {}),
     };
-  }, [containerId, nodeId]);
+  }, [canWriteFiles, containerId, nodeId]);
   const fileOperations = operations ?? containerOperations;
   const canReadFiles = !!fileOperations?.readFile;
   const canOpenFiles = !!fileOperations?.openFile;

@@ -34,9 +34,9 @@ describe('AI service helpers', () => {
     });
   });
 
-  it('binds create_proxy_host authorization to the target node', () => {
-    expect(getToolAuthorizationResourceId('create_proxy_host', { nodeId: 'node-1' })).toBe('node-1');
-    expect(getToolAuthorizationResourceId('update_proxy_host', { proxyHostId: 'host-1' })).toBe('host-1');
+  it('binds create_route authorization to the target node', () => {
+    expect(getToolAuthorizationResourceId('create_route', { nodeId: 'node-1' })).toBe('node-1');
+    expect(getToolAuthorizationResourceId('update_route', { routeId: 'host-1' })).toBe('host-1');
   });
 
   it('normalizes agent pagination to bounded positive integers', () => {

@@ -11,14 +11,14 @@ import {
 } from './ai.service-helpers.js';
 
 export const PROXY_TOOL_NAMES = new Set([
-  'list_proxy_hosts',
-  'get_proxy_host',
-  'create_proxy_host',
-  'update_proxy_host',
-  'delete_proxy_host',
-  'create_proxy_folder',
-  'move_hosts_to_folder',
-  'delete_proxy_folder',
+  'list_routes',
+  'get_route',
+  'create_route',
+  'update_route',
+  'delete_route',
+  'create_route_folder',
+  'move_routes_to_folder',
+  'delete_route_folder',
 ]);
 
 export interface ProxyToolContext {
@@ -35,7 +35,7 @@ export async function executeProxyTool(
   const a = args as any;
 
   switch (toolName) {
-    case 'list_proxy_hosts': {
+    case 'list_routes': {
       const result = await context.proxyService.listProxyHosts(
         {
           search: a.search,
@@ -49,9 +49,9 @@ export async function executeProxyTool(
         data: result.data.map((host: any) => compactProxyHostForAgent(host)),
       };
     }
-    case 'get_proxy_host':
-      return compactProxyHostForAgent(await context.proxyService.getProxyHost(a.proxyHostId));
-    case 'create_proxy_host':
+    case 'get_route':
+      return compactProxyHostForAgent(await context.proxyService.getProxyHost(a.routeId));
+    case 'create_route':
       return compactProxyHostForAgent(
         await context.proxyService.createProxyHost(
           {
@@ -92,40 +92,40 @@ export async function executeProxyTool(
           user.id
         )
       );
-    case 'update_proxy_host': {
-      const { proxyHostId, advancedConfig } = a;
+    case 'update_route': {
+      const { routeId, advancedConfig } = a;
       if ('rawConfig' in a || 'rawConfigEnabled' in a || a.type === 'raw') {
         throw new Error('Raw config changes require dedicated raw config tools');
       }
-      if (advancedConfig && !hasScope(user.scopes, `proxy:advanced:${proxyHostId}`)) {
+      if (advancedConfig && !hasScope(user.scopes, `proxy:advanced:${routeId}`)) {
         throw new Error('Advanced config requires proxy:advanced scope');
       }
       const updateFields = PROXY_HOST_UPDATE_FIELDS.reduce<Record<string, unknown>>((fields, field) => {
         if (a[field] !== undefined) fields[field] = a[field];
         return fields;
       }, {});
-      const bypassAdvancedValidation = hasScope(user.scopes, `proxy:advanced:bypass:${proxyHostId}`);
+      const bypassAdvancedValidation = hasScope(user.scopes, `proxy:advanced:bypass:${routeId}`);
       const fields =
-        advancedConfig && hasScope(user.scopes, `proxy:advanced:${proxyHostId}`)
+        advancedConfig && hasScope(user.scopes, `proxy:advanced:${routeId}`)
           ? { ...updateFields, advancedConfig }
           : updateFields;
       return compactProxyHostForAgent(
-        await context.proxyService.updateProxyHost(proxyHostId, fields, user.id, { bypassAdvancedValidation })
+        await context.proxyService.updateProxyHost(routeId, fields, user.id, { bypassAdvancedValidation })
       );
     }
-    case 'delete_proxy_host':
-      await context.proxyService.deleteProxyHost(a.proxyHostId, user.id);
+    case 'delete_route':
+      await context.proxyService.deleteProxyHost(a.routeId, user.id);
       return { success: true };
-    case 'create_proxy_folder':
+    case 'create_route_folder':
       return context.folderService.createFolder({ name: a.name, parentId: a.parentId }, user.id);
-    case 'move_hosts_to_folder':
-      for (const hostId of a.hostIds || []) {
-        if (!hasScope(user.scopes, `proxy:edit:${hostId}`)) {
-          throw new Error(`PERMISSION_DENIED: Missing required scope proxy:edit:${hostId}`);
+    case 'move_routes_to_folder':
+      for (const routeId of a.routeIds || []) {
+        if (!hasScope(user.scopes, `proxy:edit:${routeId}`)) {
+          throw new Error(`PERMISSION_DENIED: Missing required scope proxy:edit:${routeId}`);
         }
       }
-      return context.folderService.moveHostsToFolder({ hostIds: a.hostIds, folderId: a.folderId }, user.id);
-    case 'delete_proxy_folder':
+      return context.folderService.moveHostsToFolder({ hostIds: a.routeIds, folderId: a.folderId }, user.id);
+    case 'delete_route_folder':
       await context.folderService.deleteFolder(a.folderId, user.id);
       return { success: true };
     default:

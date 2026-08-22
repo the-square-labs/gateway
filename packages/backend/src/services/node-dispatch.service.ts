@@ -674,11 +674,13 @@ export class NodeDispatchService {
       newName?: string;
       content?: string | Buffer;
       targetPath?: string;
+      storageKind?: 'regular' | 'disk-image';
+      capacityBytes?: number;
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
     await this.assertGenericDockerNode(nodeId);
-    if (!['list', 'inspect'].includes(action)) {
+    if (!['list', 'inspect', 'metrics'].includes(action)) {
       await this.assertNodeMutable(nodeId);
     }
     const payload = {

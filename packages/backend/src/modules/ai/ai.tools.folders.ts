@@ -18,7 +18,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
             'logging_schemas',
             'admin_users',
             'permission_groups',
-            'proxy_hosts',
+            'routes',
             'docker',
           ],
           description: 'Foldered resource type to inspect.',
@@ -53,7 +53,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
             'logging_schemas',
             'admin_users',
             'permission_groups',
-            'proxy_hosts',
+            'routes',
             'docker',
           ],
         },
@@ -71,7 +71,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
         resourceIds: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Resource UUIDs to move for non-Docker resources, or route UUIDs for proxy_hosts.',
+          description: 'Resource UUIDs to move for non-Docker resources, including route UUIDs for routes.',
         },
         items: {
           type: 'array',

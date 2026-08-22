@@ -169,6 +169,7 @@ export interface InferenceModel {
   id: string;
   publicId: string;
   displayName: string;
+  sortOrder: number;
   enabled: boolean;
   contextWindow: number;
   maxInputTokens: number;

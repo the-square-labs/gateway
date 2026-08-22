@@ -6,8 +6,24 @@ import {
   FileMoveSchema,
   FileUploadCompleteSchema,
   FileUploadInitSchema,
+  VolumeCreateSchema,
 } from './docker.schemas.js';
 import { DockerDeploymentDesiredConfigSchema } from './docker-deployment.schemas.js';
+
+describe('docker volume create schema', () => {
+  it('defaults regular volumes and requires capacity only for disk images', () => {
+    expect(VolumeCreateSchema.parse({ name: 'data' })).toEqual({ name: 'data', storageKind: 'regular' });
+    expect(VolumeCreateSchema.safeParse({ name: 'bounded', storageKind: 'disk-image' }).success).toBe(false);
+    expect(
+      VolumeCreateSchema.safeParse({
+        name: 'bounded',
+        storageKind: 'disk-image',
+        capacityBytes: 1024 ** 3,
+      }).success
+    ).toBe(true);
+    expect(VolumeCreateSchema.safeParse({ name: 'data', capacityBytes: 1024 ** 3 }).success).toBe(false);
+  });
+});
 
 describe('docker container create schemas', () => {
   it('requires exactly one mount source and absolute mount paths', () => {

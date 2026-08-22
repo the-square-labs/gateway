@@ -139,7 +139,8 @@ export function DockerDeploymentDetail({
   const canManageWebhooks = hasDeploymentScope("docker:containers:webhooks");
   const canViewContainer = hasDeploymentScope("docker:containers:view");
   const canUseConsole = hasDeploymentScope("docker:containers:console");
-  const canUseFiles = hasDeploymentScope("docker:containers:files");
+  const canReadFiles = hasDeploymentScope("docker:containers:files:read");
+  const canWriteFiles = hasDeploymentScope("docker:containers:files:write");
   const canUseEnvironment = hasDeploymentScope("docker:containers:environment");
   const canEditMounts = hasDeploymentScope("docker:containers:mounts");
 
@@ -441,14 +442,14 @@ export function DockerDeploymentDetail({
       "overview",
       ...(canViewContainer ? ["logs"] : []),
       ...(canUseConsole ? ["console"] : []),
-      ...(canUseFiles ? ["files"] : []),
+      ...(canReadFiles ? ["files"] : []),
       ...(canViewContainer ? ["stats"] : []),
       ...(canUseEnvironment ? ["environment"] : []),
       "slots",
       ...(canEdit ? ["settings"] : []),
       "config",
     ],
-    [canEdit, canUseConsole, canUseEnvironment, canUseFiles, canViewContainer]
+    [canEdit, canReadFiles, canUseConsole, canUseEnvironment, canViewContainer]
   );
 
   const isTabDisabled = useCallback(
@@ -735,7 +736,7 @@ export function DockerDeploymentDetail({
                 Console
               </TabsTrigger>
             )}
-            {canUseFiles && (
+            {canReadFiles && (
               <TabsTrigger value="files" disabled={isTabDisabled("files")} className="gap-1.5">
                 <Folder className="h-3.5 w-3.5" />
                 Files
@@ -797,12 +798,13 @@ export function DockerDeploymentDetail({
               />
             </TabsContent>
           )}
-          {canUseFiles && activeContainerId && !unavailable && (
+          {canReadFiles && activeContainerId && !unavailable && (
             <TabsContent value="files" className="pb-0">
               <FilesTab
                 nodeId={nodeId}
                 containerId={activeContainerId}
                 scopeResourceId={deploymentId}
+                canWrite={canWriteFiles}
               />
             </TabsContent>
           )}

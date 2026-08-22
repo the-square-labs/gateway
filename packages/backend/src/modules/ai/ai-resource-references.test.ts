@@ -123,8 +123,8 @@ describe('AI resource references', () => {
       }
     )[0];
     const fallback = extractAIResourceReferences(
-      'get_proxy_host',
-      { proxyHostId: 'host-1' },
+      'get_route',
+      { routeId: 'host-1' },
       { id: 'host-1', domainNames: ['additional-e2e.test', 'additional-e2e.localhost'] }
     )[0];
 

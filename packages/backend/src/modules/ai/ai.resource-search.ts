@@ -147,7 +147,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
   }
   if (typeWanted('proxy_host') && hasScopeBase(user.scopes, 'proxy:view')) {
     searchTasks.push(() =>
-      collect('proxy_host', 'list_proxy_hosts', { search: query, limit }, (host) => ({
+      collect('proxy_host', 'list_routes', { search: query, limit }, (host) => ({
         id: host.id,
         name: Array.isArray(host.domainNames) ? host.domainNames.join(', ') : host.id,
         nodeId: host.nodeId,

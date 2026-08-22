@@ -15,6 +15,10 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { type ScopeItem, ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -182,6 +186,7 @@ function GitLabIntegrationsSection() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [refreshingAllowlist, setRefreshingAllowlist] = useState(false);
   const [search, setSearch] = useState("");
+  const [allowlistFilter, setAllowlistFilter] = useState<ScopeSelectionFilter>("all");
   const [searchResults, setSearchResults] = useState<GitLabAllowlistEntry[]>([]);
   const [availableAllowlistEntries, setAvailableAllowlistEntries] = useState<
     GitLabAllowlistEntry[]
@@ -291,6 +296,7 @@ function GitLabIntegrationsSection() {
     setForm(emptyForm());
     setRefreshingAllowlist(false);
     setSearch("");
+    setAllowlistFilter("all");
     setSearchResults([]);
     setAvailableAllowlistEntries([]);
     setDialogStep(1);
@@ -303,6 +309,7 @@ function GitLabIntegrationsSection() {
     setEditingConnector(connector);
     setLoadingDetail(true);
     setSearch("");
+    setAllowlistFilter("all");
     setSearchResults([]);
     setAvailableAllowlistEntries(connector.allowlistEntries ?? []);
     setDialogStep(2);
@@ -345,6 +352,7 @@ function GitLabIntegrationsSection() {
       setForm(emptyForm());
       setRefreshingAllowlist(false);
       setSearch("");
+      setAllowlistFilter("all");
       setSearchResults([]);
       setAvailableAllowlistEntries([]);
       setDialogStep(1);
@@ -363,6 +371,7 @@ function GitLabIntegrationsSection() {
         setForm((current) => ({ ...current, allowlistEntries: merged }));
       }
       setSearch("");
+      setAllowlistFilter("all");
       setSearchResults([]);
       toast.success("GitLab projects updated");
     } catch (error) {
@@ -400,6 +409,7 @@ function GitLabIntegrationsSection() {
   const updateAllowlistMode = (mode: GitLabAllowlistMode) => {
     if (mode === "all_visible") {
       setSearch("");
+      setAllowlistFilter("all");
       setSearchResults([]);
     }
     setForm((current) => ({
@@ -455,6 +465,7 @@ function GitLabIntegrationsSection() {
         setForm((current) => ({ ...current, allowlistEntries: result.allowlistEntries }));
       }
       setSearch("");
+      setAllowlistFilter("all");
       setSearchResults([]);
       toast.success("GitLab connection test passed");
       if (advance) setDialogStep(2);
@@ -757,10 +768,12 @@ function GitLabIntegrationsSection() {
                       </Field>
 
                       <div className="border border-border">
-                        <div className="border-b border-border">
-                          <Input
-                            value={search}
-                            onChange={(event) => setSearch(event.target.value)}
+                        <div>
+                          <ScopeSearchFilter
+                            search={search}
+                            onSearchChange={setSearch}
+                            filter={allowlistFilter}
+                            onFilterChange={setAllowlistFilter}
                             placeholder="Search GitLab projects and groups..."
                             disabled={
                               !canManage ||
@@ -768,7 +781,6 @@ function GitLabIntegrationsSection() {
                               form.allowlistMode === "all_visible" ||
                               !canSearchAllowlist
                             }
-                            className="h-9 rounded-none border-0 text-sm focus-visible:ring-0"
                           />
                         </div>
                         <div className="max-h-[min(18rem,36dvh)] overflow-y-auto overscroll-contain">
@@ -786,6 +798,7 @@ function GitLabIntegrationsSection() {
                             <ScopeList
                               scopes={displayedAllowlistItems}
                               search={search}
+                              selectionFilter={allowlistFilter}
                               selected={selectedEntryValues}
                               onToggle={toggleAllowlistEntryByKey}
                               readOnly={form.allowlistMode === "all_visible"}

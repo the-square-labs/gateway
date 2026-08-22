@@ -8,6 +8,7 @@ import type { AppEnv, SessionData, User } from '@/types.js';
 import { InferenceUsageService } from './accounting/inference-usage.service.js';
 import { inferenceManagementRoutes } from './inference.routes.js';
 import { InferenceTokenService } from './inference-token.service.js';
+import { InferenceModelService } from './models/inference-model.service.js';
 import { InferenceModelConfigurationService } from './models/inference-model-configuration.service.js';
 import { InferenceOAuthService } from './providers/inference-oauth.service.js';
 import { InferenceProviderService } from './providers/inference-provider.service.js';
@@ -252,6 +253,31 @@ describe('inference management token routes', () => {
     expect(response.status).toBe(200);
     expect(service.save).toHaveBeenCalledWith(modelAdmin.id, modelId, payload);
     expect(await response.json()).toMatchObject({ id: modelId, publicId: 'logical-model' });
+  });
+
+  it('persists model order through the batch reorder route', async () => {
+    const modelAdmin = { ...USER, scopes: [...USER.scopes, 'inference:models:manage'] };
+    registerSession(modelAdmin);
+    const items = [
+      { id: '22222222-2222-4222-8222-222222222222', sortOrder: 0 },
+      { id: '33333333-3333-4333-8333-333333333333', sortOrder: 1 },
+    ];
+    const service = { reorder: vi.fn().mockResolvedValue(undefined) };
+    container.registerInstance(InferenceModelService, service as unknown as InferenceModelService);
+
+    const response = await createApp().request('/api/inference/models/reorder', {
+      method: 'PUT',
+      headers: {
+        Cookie: 'session_id=session-1',
+        'X-CSRF-Token': 'csrf-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ items }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(service.reorder).toHaveBeenCalledWith(modelAdmin.id, items);
+    expect(await response.json()).toEqual({ success: true });
   });
 
   it('passes a connection quota reserve through the provider management route', async () => {

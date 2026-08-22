@@ -45,13 +45,11 @@ describe("scope constants", () => {
     expect(tokenValues).toContain("docker:containers:view");
     expect(tokenValues).toContain("docker:registries:view");
     expect(tokenValues).not.toContain("integrations:gitlab:registry:view");
-    expect(tokenValues).toContain("integrations:cloudflare:dns:view");
-    expect(
-      TOKEN_SCOPES.find((scope) => scope.value === "integrations:cloudflare:dns:view")
-    ).toMatchObject({
-      label: "View Cloudflare DNS",
-      group: "Integrations: Cloudflare",
-    });
+    expect(tokenValues).not.toContain("integrations:cloudflare:dns:view");
+    expect(tokenValues).toContain("integrations:cloudflare:view");
+    expect(tokenValues).toContain("docker:containers:files:read");
+    expect(tokenValues).toContain("docker:containers:files:write");
+    expect(tokenValues).not.toContain("docker:containers:files");
 
     expect(apiTokenValues).not.toContain("feat:ai:use");
     expect(apiTokenValues).not.toContain("inference:use");
@@ -82,7 +80,7 @@ describe("scope constants", () => {
     const mcpValues = scopeValues(MCP_TOKEN_SCOPES);
 
     expect(mcpValues).toContain("nodes:details");
-    expect(mcpValues).toContain("integrations:cloudflare:dns:view");
+    expect(mcpValues).toContain("integrations:cloudflare:view");
     expect(mcpValues.some((scope) => scope.startsWith("integrations:gitlab:"))).toBe(false);
     expect(mcpValues.some((scope) => scope.startsWith("integrations:github:"))).toBe(false);
     expect(mcpValues.some((scope) => scope.startsWith("integrations:git:"))).toBe(false);

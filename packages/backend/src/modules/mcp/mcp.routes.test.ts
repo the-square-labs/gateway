@@ -439,25 +439,25 @@ describe('MCP tools', () => {
     await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'proxy' } });
     const list = await mcpRequest('tools/list');
     const names = list.body.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toContain('update_proxy_host');
+    expect(names).toContain('update_route');
 
     const allowed = await mcpRequest('tools/call', {
-      name: 'update_proxy_host',
-      arguments: { proxyHostId: 'host-1', enabled: false },
+      name: 'update_route',
+      arguments: { routeId: 'host-1', enabled: false },
     });
     expect(allowed.body.result.isError).not.toBe(true);
     expect(executeTool).toHaveBeenCalledWith(
       USER,
-      'update_proxy_host',
-      { proxyHostId: 'host-1', enabled: false },
+      'update_route',
+      { routeId: 'host-1', enabled: false },
       expect.objectContaining({ scopes: ['proxy:edit:host-1'] })
     );
 
     executeTool.mockClear();
     container.registerInstance(AuditService, { log: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService);
     const denied = await mcpRequest('tools/call', {
-      name: 'update_proxy_host',
-      arguments: { proxyHostId: 'host-2', enabled: false },
+      name: 'update_route',
+      arguments: { routeId: 'host-2', enabled: false },
     });
     expect(JSON.stringify(denied.body)).toContain('unavailable');
     expect(executeTool).not.toHaveBeenCalled();
@@ -469,7 +469,7 @@ describe('MCP tools', () => {
     const { body } = await mcpRequest('tools/list');
     const names = body.result.tools.map((tool: { name: string }) => tool.name);
 
-    expect(names).not.toContain('get_proxy_rendered_config');
+    expect(names).not.toContain('get_route_rendered_config');
   });
 
   it('lists blue/green deployment tools under Docker container scopes', async () => {
@@ -722,7 +722,7 @@ describe('MCP tools', () => {
     const names = sessionList.body.result.tools.map((tool: { name: string }) => tool.name);
 
     expect(names).toContain('list_docker_deployments');
-    expect(names).not.toContain('update_proxy_host');
+    expect(names).not.toContain('update_route');
   });
 
   it('ignores arbitrary MCP session ids that were not issued for the token/client', async () => {

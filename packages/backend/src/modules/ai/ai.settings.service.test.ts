@@ -124,6 +124,27 @@ describe('AISettingsService provider selection', () => {
     expect(values.get('ai:model')).toBe('preserved-model');
   });
 
+  it('replaces a deleted Gateway Inference default with the first available model', async () => {
+    const { service, values } = createHarness({
+      'ai:gateway_inference_model': 'deleted-model',
+    });
+
+    await service.handleGatewayInferenceModelRemoved('deleted-model', 'first-model');
+    expect(values.get('ai:gateway_inference_model')).toBe('first-model');
+
+    await service.handleGatewayInferenceModelRemoved('unrelated-model', 'other-model');
+    expect(values.get('ai:gateway_inference_model')).toBe('first-model');
+  });
+
+  it('clears the Gateway Inference default when the last model is deleted', async () => {
+    const { service, values } = createHarness({
+      'ai:gateway_inference_model': 'deleted-model',
+    });
+
+    await service.handleGatewayInferenceModelRemoved('deleted-model', null);
+    expect(values.get('ai:gateway_inference_model')).toBe('');
+  });
+
   it('disables the assistant when inference is disabled without a preserved provider key', async () => {
     const { service, values } = createHarness({
       'ai:enabled': true,

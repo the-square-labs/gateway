@@ -16,6 +16,12 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
   if (!Object.hasOwn(overrides, 'RATE_LIMIT_AI_WS_MAX_REQUESTS')) {
     delete inheritedEnv.RATE_LIMIT_AI_WS_MAX_REQUESTS;
   }
+  if (!Object.hasOwn(overrides, 'RATE_LIMIT_INFERENCE_MAX_REQUESTS')) {
+    delete inheritedEnv.RATE_LIMIT_INFERENCE_MAX_REQUESTS;
+  }
+  if (!Object.hasOwn(overrides, 'INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN')) {
+    delete inheritedEnv.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN;
+  }
   if (!Object.hasOwn(overrides, 'GITHUB_OAUTH_CLIENT_ID')) {
     delete inheritedEnv.GITHUB_OAUTH_CLIENT_ID;
   }
@@ -71,6 +77,22 @@ describe('getEnv gRPC TLS config', () => {
     const env = await loadEnv();
 
     expect(env.RATE_LIMIT_AI_WS_MAX_REQUESTS).toBe(120);
+  });
+
+  it('allows a high inference request rate and supports deployment overrides', async () => {
+    const defaults = await loadEnv();
+    const overridden = await loadEnv({ RATE_LIMIT_INFERENCE_MAX_REQUESTS: '2400' });
+
+    expect(defaults.RATE_LIMIT_INFERENCE_MAX_REQUESTS).toBe(1800);
+    expect(overridden.RATE_LIMIT_INFERENCE_MAX_REQUESTS).toBe(2400);
+  });
+
+  it('allows concurrent inference runs and supports deployment overrides', async () => {
+    const defaults = await loadEnv();
+    const overridden = await loadEnv({ INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN: '48' });
+
+    expect(defaults.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN).toBe(32);
+    expect(overridden.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN).toBe(48);
   });
 
   it('uses the built-in GitHub OAuth client ID unless explicitly overridden', async () => {

@@ -963,6 +963,9 @@ export async function initializeContainer(): Promise<void> {
     const models = await inferenceModelService.listAdmin();
     return models.some((candidate) => candidate.enabled && candidate.publicId === model);
   });
+  inferenceModelService.setModelRemovedHandler((removedModel, replacementModel) =>
+    aiSettingsService.handleGatewayInferenceModelRemoved(removedModel, replacementModel)
+  );
   generalSettingsService.setInferenceDisabledHandler(() => aiSettingsService.handleInferenceDisabled());
   container.registerInstance(AISettingsService, aiSettingsService);
   const aiSandboxArtifactService = new AISandboxArtifactService(env);

@@ -91,7 +91,7 @@ describe('AIService Docker container config tool routing', () => {
 
     await expect(
       service.executeTool(
-        { ...BASE_USER, scopes: ['docker:containers:files:node-1'] },
+        { ...BASE_USER, scopes: ['docker:containers:files:write:node-1'] },
         'manage_docker_container_config',
         {
           operation: 'write_file',
@@ -211,7 +211,7 @@ describe('AIService Docker container config tool routing', () => {
 
     await expect(
       service.executeTool(
-        { ...BASE_USER, scopes: ['docker:containers:files:node-1'] },
+        { ...BASE_USER, scopes: ['docker:containers:files:write:node-1'] },
         'manage_docker_container_config',
         {
           operation: 'write_file',

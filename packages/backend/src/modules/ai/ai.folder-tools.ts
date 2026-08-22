@@ -45,7 +45,7 @@ type ResourceType =
   | 'logging_schemas'
   | 'admin_users'
   | 'permission_groups'
-  | 'proxy_hosts'
+  | 'routes'
   | 'docker';
 
 type GenericFolderConfig = {
@@ -70,7 +70,7 @@ function resourceTypeArg(value: unknown): ResourceType {
     value === 'logging_schemas' ||
     value === 'admin_users' ||
     value === 'permission_groups' ||
-    value === 'proxy_hosts' ||
+    value === 'routes' ||
     value === 'docker'
   ) {
     return value;
@@ -106,7 +106,7 @@ function ensureScopeForResource(user: User, scope: string, resourceId: string) {
   }
 }
 
-function genericConfig(resourceType: Exclude<ResourceType, 'proxy_hosts' | 'docker'>): GenericFolderConfig {
+function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>): GenericFolderConfig {
   switch (resourceType) {
     case 'nodes':
       return {
@@ -155,7 +155,7 @@ function genericConfig(resourceType: Exclude<ResourceType, 'proxy_hosts' | 'dock
 
 function genericListOptions(
   user: User,
-  resourceType: Exclude<ResourceType, 'proxy_hosts' | 'docker'>,
+  resourceType: Exclude<ResourceType, 'routes' | 'docker'>,
   config: GenericFolderConfig
 ) {
   const isLoggingResource = resourceType === 'logging_environments' || resourceType === 'logging_schemas';
@@ -179,7 +179,7 @@ function genericListOptions(
 
 async function executeGenericFolderTool(
   user: User,
-  resourceType: Exclude<ResourceType, 'proxy_hosts' | 'docker'>,
+  resourceType: Exclude<ResourceType, 'routes' | 'docker'>,
   args: Record<string, unknown>
 ) {
   if (resourceType === 'logging_environments' || resourceType === 'logging_schemas') {
@@ -334,14 +334,14 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
 export async function executeFolderTool(user: User, toolName: string, args: Record<string, unknown>): Promise<unknown> {
   const resourceType = resourceTypeArg(args.resourceType);
   if (toolName === 'list_resource_folders') {
-    return resourceType === 'proxy_hosts'
+    return resourceType === 'routes'
       ? executeProxyFolderTool(user, { ...args, operation: 'list' })
       : resourceType === 'docker'
         ? executeDockerFolderTool(user, { ...args, operation: 'list' })
         : executeGenericFolderTool(user, resourceType, { ...args, operation: 'list' });
   }
   if (toolName !== 'manage_resource_folder') throw new Error(`Unsupported folder tool: ${toolName}`);
-  if (resourceType === 'proxy_hosts') return executeProxyFolderTool(user, args);
+  if (resourceType === 'routes') return executeProxyFolderTool(user, args);
   if (resourceType === 'docker') return executeDockerFolderTool(user, args);
   return executeGenericFolderTool(user, resourceType, args);
 }

@@ -164,12 +164,13 @@ export function DockerContainerDetail({
   const canMigrate = hasContainerScope("docker:containers:migrate");
   const canViewContainer = hasContainerScope("docker:containers:view");
   const canUseConsole = hasContainerScope("docker:containers:console");
-  const canUseFiles = hasContainerScope("docker:containers:files");
+  const canReadFiles = hasContainerScope("docker:containers:files:read");
+  const canWriteFiles = hasContainerScope("docker:containers:files:write");
   const canUseEnvironment = hasContainerScope("docker:containers:environment");
   const canUseSecrets = hasContainerScope("docker:containers:secrets");
   const archiveCapabilities = containerArchiveCapabilities({
     export: hasContainerScope("docker:containers:export"),
-    files: canUseFiles,
+    files: canReadFiles,
     environment: canUseEnvironment,
     secrets: canUseSecrets,
   });
@@ -308,13 +309,13 @@ export function DockerContainerDetail({
       "overview",
       ...(canViewContainer ? ["logs"] : []),
       ...(canUseConsole ? ["console"] : []),
-      ...(canUseFiles ? ["files"] : []),
+      ...(canReadFiles ? ["files"] : []),
       ...(canViewContainer ? ["stats"] : []),
       ...(canUseEnvironment || canUseSecrets ? ["environment"] : []),
       ...(canEdit ? ["settings"] : []),
       ...(canViewContainer ? ["config"] : []),
     ],
-    [canEdit, canUseConsole, canUseEnvironment, canUseFiles, canUseSecrets, canViewContainer]
+    [canEdit, canReadFiles, canUseConsole, canUseEnvironment, canUseSecrets, canViewContainer]
   );
   const backendTransition = container?._transition as string | undefined;
   const { effectiveTransition, beginMutationTransition, clearMutationTransition } =
@@ -971,7 +972,7 @@ export function DockerContainerDetail({
                 Console
               </TabsTrigger>
             )}
-            {canUseFiles && (
+            {canReadFiles && (
               <TabsTrigger value="files" disabled={isTabDisabled("files")}>
                 Files
               </TabsTrigger>
@@ -1015,12 +1016,13 @@ export function DockerContainerDetail({
               />
             </TabsContent>
           )}
-          {canUseFiles && !unavailable && (
+          {canReadFiles && !unavailable && (
             <TabsContent value="files" className="pb-0">
               <FilesTab
                 nodeId={nodeId!}
                 containerId={containerId!}
                 scopeResourceId={scopeResourceId}
+                canWrite={canWriteFiles}
               />
             </TabsContent>
           )}

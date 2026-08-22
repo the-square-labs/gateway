@@ -88,7 +88,7 @@ describe("CommandPalette", () => {
           scopes: [
             "docker:containers:console:node-1",
             "docker:containers:view:node-1",
-            "docker:containers:files:node-1",
+            "docker:containers:files:read:node-1",
           ],
           isBlocked: false,
         } as never,
@@ -590,7 +590,7 @@ describe("CommandPalette", () => {
           scopes: [
             "proxy:create",
             "docker:containers:view:node-1",
-            "docker:containers:files:node-1",
+            "docker:containers:files:read:node-1",
           ],
           isBlocked: false,
         } as never,

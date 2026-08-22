@@ -1,5 +1,20 @@
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { AnimatePresence, motion } from "framer-motion";
-import { Minus, Plus } from "lucide-react";
+import { GripVertical, Minus, Plus } from "lucide-react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -15,6 +30,14 @@ import {
 import type { ProviderModelOption } from "./inference-model-form";
 
 const RESIZE_TRANSITION = { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const };
+
+export function reorderReasoningMapping(
+  mapping: Record<string, string>,
+  oldIndex: number,
+  newIndex: number
+) {
+  return Object.fromEntries(arrayMove(Object.entries(mapping), oldIndex, newIndex));
+}
 
 export function ModelReasoningFields({
   selected,
@@ -36,6 +59,7 @@ export function ModelReasoningFields({
   const exposed = rows.flatMap(({ clientEffort, upstreamEffort }) =>
     clientEffort.trim() && upstreamEffort.trim() ? [clientEffort.trim()] : []
   );
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const updateRow = (index: number, field: "client" | "upstream", value: string) => {
     setMapping(
       Object.fromEntries(
@@ -49,6 +73,13 @@ export function ModelReasoningFields({
         )
       )
     );
+  };
+  const reorderRows = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return;
+    const oldIndex = Number(String(active.id).slice("reasoning-".length));
+    const newIndex = Number(String(over.id).slice("reasoning-".length));
+    if (!Number.isInteger(oldIndex) || !Number.isInteger(newIndex)) return;
+    setMapping(reorderReasoningMapping(mapping, oldIndex, newIndex));
   };
 
   return (
@@ -88,48 +119,28 @@ export function ModelReasoningFields({
       </SettingsControlRow>
       {rows.length ? (
         <>
-          <div className="grid grid-cols-2 border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[2.25rem_1fr_1fr] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div>
+              <span className="sr-only">Order</span>
+            </div>
             <div className="px-3 py-2">Client effort</div>
             <div className="border-l border-border px-3 py-2">Provider effort</div>
           </div>
-          <AnimatePresence initial={false} mode="popLayout">
-            {rows.map((row, index) => (
-              <motion.div
-                key={`${index}`}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={RESIZE_TRANSITION}
-                className="grid grid-cols-2 border-b border-border last:border-b-0"
-              >
-                <Input
-                  value={row.clientEffort}
-                  onChange={(event) => updateRow(index, "client", event.target.value)}
-                  aria-label={`Client effort ${index + 1}`}
-                  placeholder="ultra"
-                  className="h-9 rounded-none border-0 shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                />
-                <div className="flex min-w-0 items-center border-l border-border">
-                  <Combobox
-                    freeText
-                    value={row.upstreamEffort}
-                    options={(selected?.reasoningEfforts ?? []).map((effort) => ({
-                      value: effort,
-                      label: effort,
-                    }))}
-                    onValueChange={(value) => updateRow(index, "upstream", value)}
-                    ariaLabel={`Provider effort ${index + 1}`}
-                    placeholder="Select or enter an effort"
-                    searchPlaceholder="Select or enter an effort"
-                    className="min-w-0 flex-1"
-                    inputClassName="h-9 rounded-none border-0 shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Remove reasoning mapping ${index + 1}`}
-                    className="h-9 w-9 rounded-none border-l border-border"
-                    onClick={() =>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderRows}>
+            <SortableContext
+              items={rows.map((_, index) => `reasoning-${index}`)}
+              strategy={verticalListSortingStrategy}
+            >
+              <AnimatePresence initial={false} mode="popLayout">
+                {rows.map((row, index) => (
+                  <SortableReasoningRow
+                    key={`reasoning-${index}`}
+                    id={`reasoning-${index}`}
+                    index={index}
+                    row={row}
+                    selected={selected}
+                    updateRow={updateRow}
+                    remove={() =>
                       setMapping(
                         Object.fromEntries(
                           rows
@@ -141,13 +152,11 @@ export function ModelReasoningFields({
                         )
                       )
                     }
-                  >
-                    <Minus />
-                  </Button>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+                  />
+                ))}
+              </AnimatePresence>
+            </SortableContext>
+          </DndContext>
         </>
       ) : (
         <div className="px-4 py-8 text-center text-sm text-muted-foreground">
@@ -155,5 +164,81 @@ export function ModelReasoningFields({
         </div>
       )}
     </PanelShell>
+  );
+}
+
+function SortableReasoningRow({
+  id,
+  index,
+  row,
+  selected,
+  updateRow,
+  remove,
+}: {
+  id: string;
+  index: number;
+  row: { clientEffort: string; upstreamEffort: string };
+  selected: ProviderModelOption | null;
+  updateRow: (index: number, field: "client" | "upstream", value: string) => void;
+  remove: () => void;
+}) {
+  const sortable = useSortable({ id });
+  return (
+    <motion.div
+      ref={sortable.setNodeRef}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: sortable.isDragging ? 0.7 : 1 }}
+      exit={{ opacity: 0 }}
+      transition={RESIZE_TRANSITION}
+      style={{
+        transform: CSS.Transform.toString(sortable.transform),
+        transition: sortable.transition,
+      }}
+      className="grid grid-cols-[2.25rem_1fr_1fr] border-b border-border bg-card last:border-b-0"
+    >
+      <Button
+        ref={sortable.setActivatorNodeRef}
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 cursor-grab rounded-none text-muted-foreground active:cursor-grabbing"
+        aria-label={`Reorder reasoning mapping ${index + 1}`}
+        {...sortable.attributes}
+        {...sortable.listeners}
+      >
+        <GripVertical />
+      </Button>
+      <Input
+        value={row.clientEffort}
+        onChange={(event) => updateRow(index, "client", event.target.value)}
+        aria-label={`Client effort ${index + 1}`}
+        placeholder="ultra"
+        className="h-9 rounded-none border-0 border-l shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+      />
+      <div className="flex min-w-0 items-center border-l border-border">
+        <Combobox
+          freeText
+          value={row.upstreamEffort}
+          options={(selected?.reasoningEfforts ?? []).map((effort) => ({
+            value: effort,
+            label: effort,
+          }))}
+          onValueChange={(value) => updateRow(index, "upstream", value)}
+          ariaLabel={`Provider effort ${index + 1}`}
+          placeholder="Select or enter an effort"
+          searchPlaceholder="Select or enter an effort"
+          className="min-w-0 flex-1"
+          inputClassName="h-9 rounded-none border-0 shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Remove reasoning mapping ${index + 1}`}
+          className="h-9 w-9 rounded-none border-l border-border"
+          onClick={remove}
+        >
+          <Minus />
+        </Button>
+      </div>
+    </motion.div>
   );
 }

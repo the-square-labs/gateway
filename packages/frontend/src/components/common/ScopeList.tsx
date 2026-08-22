@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ScopeSelectionFilter } from "@/components/common/ScopeSearchFilter";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import {
@@ -148,6 +149,7 @@ interface ScopeListProps {
   inheritedFromName?: string;
   readOnly?: boolean;
   viewportClassName?: string;
+  selectionFilter?: ScopeSelectionFilter;
 }
 
 function matchesQuery(scope: ScopeItem, q: string): boolean {
@@ -324,6 +326,7 @@ export function ScopeList({
   inheritedFromName,
   readOnly,
   viewportClassName,
+  selectionFilter = "all",
 }: ScopeListProps) {
   const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
   const [folderOptions, setFolderOptions] = useState<FolderOption[]>([]);
@@ -332,7 +335,20 @@ export function ScopeList({
   const q = search.toLowerCase().trim();
   const inheritedParsed = parseScopedSelections(inheritedScopes ?? [], restrictableScopes ?? []);
   const inheritedBaseSet = new Set(inheritedParsed.baseScopes);
-  const categories = [...new Set(scopes.map((s) => s.group))];
+  const isSelected = (scope: ScopeItem) =>
+    selected.includes(scope.value) || inheritedBaseSet.has(scope.value);
+  const selectionFilteredScopes = scopes.filter((scope) => {
+    if (selectionFilter === "selected") return isSelected(scope);
+    if (selectionFilter === "unselected") return !isSelected(scope);
+    return true;
+  });
+  const directMatches = q ? selectionFilteredScopes.filter((scope) => matchesQuery(scope, q)) : [];
+  const visibleScopes = q
+    ? directMatches.length > 0
+      ? directMatches
+      : selectionFilteredScopes.filter((scope) => scope.group.toLowerCase().includes(q))
+    : selectionFilteredScopes;
+  const categories = [...new Set(visibleScopes.map((s) => s.group))];
   const folderFamiliesKey = [
     ...new Set(
       scopes
@@ -427,77 +443,10 @@ export function ScopeList({
     };
   }, [nodes, restrictableScopes, scopes]);
 
-  // When searching: split into matches (top) and rest (muted below)
-  if (q) {
-    const matches = scopes.filter((s) => matchesQuery(s, q));
-    const rest = scopes.filter((s) => !matchesQuery(s, q));
-
-    return (
-      <div className={cn("max-sm:max-h-[40vh] max-sm:overflow-y-auto", viewportClassName)}>
-        {matches.map((scope) => (
-          <ScopeRow
-            key={scope.value}
-            scope={scope}
-            isSelected={selected.includes(scope.value) || inheritedBaseSet.has(scope.value)}
-            isOwnSelected={selected.includes(scope.value)}
-            onToggle={onToggle}
-            muted={false}
-            disabled={readOnly}
-            resources={resources}
-            inheritedResources={inheritedParsed.resources}
-            inheritedExactBase={inheritedParsed.exactBaseScopes.has(scope.value)}
-            onToggleResource={onToggleResource}
-            cas={cas}
-            nodes={nodes}
-            proxyHosts={proxyHosts}
-            databases={databases}
-            domains={domainResources}
-            loggingEnvironments={loggingEnvironments}
-            loggingSchemas={loggingSchemas}
-            dockerResources={dockerResources}
-            folderOptions={folderOptions}
-            restrictableScopes={restrictableScopes}
-            allowedResourceIds={allowedResourceIds}
-            inheritedFromName={inheritedFromName}
-          />
-        ))}
-        {rest.length > 0 && matches.length > 0 && <div className="border-t border-border" />}
-        {rest.map((scope) => (
-          <ScopeRow
-            key={scope.value}
-            scope={scope}
-            isSelected={selected.includes(scope.value) || inheritedBaseSet.has(scope.value)}
-            isOwnSelected={selected.includes(scope.value)}
-            onToggle={onToggle}
-            muted
-            disabled={readOnly}
-            resources={resources}
-            inheritedResources={inheritedParsed.resources}
-            inheritedExactBase={inheritedParsed.exactBaseScopes.has(scope.value)}
-            onToggleResource={onToggleResource}
-            cas={cas}
-            nodes={nodes}
-            proxyHosts={proxyHosts}
-            databases={databases}
-            domains={domainResources}
-            loggingEnvironments={loggingEnvironments}
-            loggingSchemas={loggingSchemas}
-            dockerResources={dockerResources}
-            folderOptions={folderOptions}
-            restrictableScopes={restrictableScopes}
-            allowedResourceIds={allowedResourceIds}
-            inheritedFromName={inheritedFromName}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  // No search: render grouped by category
   return (
     <div className={cn("max-sm:max-h-[40vh] max-sm:overflow-y-auto", viewportClassName)}>
       {categories.map((cat) => {
-        const catScopes = scopes.filter((s) => s.group === cat);
+        const catScopes = visibleScopes.filter((s) => s.group === cat);
         if (catScopes.length === 0) return null;
         return (
           <div key={cat}>

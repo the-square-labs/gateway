@@ -492,11 +492,14 @@ export async function updateVolumeLabels(
 export async function createVolume(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,
-  config: { name: string },
+  config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number },
   userId: string
 ) {
+  const storageKind = config.storageKind ?? 'regular';
   const daemonConfig = {
     name: config.name,
+    ...(storageKind === 'disk-image' ? { storageKind } : {}),
+    ...(config.capacityBytes != null ? { capacityBytes: config.capacityBytes } : {}),
   };
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'create', daemonConfig);
   const data = context.parseResult(result);
@@ -505,6 +508,8 @@ export async function createVolume(
       nodeId,
       volumeName: config.name,
       origin: 'created',
+      storageKind,
+      capacityBytes: config.capacityBytes ?? null,
       createdById: userId,
     });
   } catch (error) {
@@ -521,10 +526,59 @@ export async function createVolume(
     action: 'docker.volume.create',
     userId,
     resourceType: 'docker-volume',
-    details: { nodeId, name: config.name },
+    details: {
+      nodeId,
+      name: config.name,
+      ...(storageKind === 'disk-image' ? { storageKind, capacityBytes: config.capacityBytes } : {}),
+    },
   });
   context.eventBus?.publish('docker.volume.changed', { nodeId, name: config.name, action: 'created' });
   return data;
+}
+
+export async function getVolumeMetrics(context: DockerVolumeNetworkOperationContext, nodeId: string, name: string) {
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'metrics', { name }, 60_000);
+  return context.parseResult(result);
+}
+
+export async function resizeVolume(
+  context: DockerVolumeNetworkOperationContext,
+  nodeId: string,
+  name: string,
+  capacityBytes: number,
+  userId: string
+) {
+  const current = await context.db
+    .select({ storageKind: dockerManagedVolumes.storageKind, capacityBytes: dockerManagedVolumes.capacityBytes })
+    .from(dockerManagedVolumes)
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)))
+    .limit(1);
+  const record = current[0];
+  if (!record || record.storageKind !== 'disk-image') {
+    throw new AppError(409, 'VOLUME_NOT_RESIZABLE', 'Only managed disk-image volumes can be resized');
+  }
+  if (record.capacityBytes != null && capacityBytes <= record.capacityBytes) {
+    throw new AppError(400, 'VOLUME_SIZE_NOT_INCREASED', 'Volume capacity can only be increased');
+  }
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(
+    nodeId,
+    'resize',
+    { name, capacityBytes },
+    10 * 60_000
+  );
+  context.parseResult(result);
+  await context.db
+    .update(dockerManagedVolumes)
+    .set({ capacityBytes, updatedAt: new Date() })
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)));
+  await context.auditService.log({
+    action: 'docker.volume.resize',
+    userId,
+    resourceType: 'docker-volume',
+    resourceId: name,
+    details: { nodeId, name, capacityBytes },
+  });
+  context.eventBus?.publish('docker.volume.changed', { nodeId, name, action: 'resized' });
 }
 
 export async function removeVolume(

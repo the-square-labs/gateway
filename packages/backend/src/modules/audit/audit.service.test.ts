@@ -31,9 +31,9 @@ describe('AuditService MCP context', () => {
       {
         auditEmitted: false,
         mcp: {
-          toolName: 'update_proxy_host',
-          category: 'Proxy Hosts',
-          arguments: { proxyHostId: 'proxy-1', token: '[REDACTED]' },
+          toolName: 'update_route',
+          category: 'Routes',
+          arguments: { routeId: 'proxy-1', token: '[REDACTED]' },
           tokenPrefix: 'gwo_abc123',
           authType: 'oauth',
           clientId: 'client-1',
@@ -55,9 +55,9 @@ describe('AuditService MCP context', () => {
         details: {
           domainNames: ['example.com'],
           source: 'mcp',
-          toolName: 'update_proxy_host',
-          category: 'Proxy Hosts',
-          arguments: { proxyHostId: 'proxy-1', token: '[REDACTED]' },
+          toolName: 'update_route',
+          category: 'Routes',
+          arguments: { routeId: 'proxy-1', token: '[REDACTED]' },
           tokenPrefix: 'gwo_abc123',
           authType: 'oauth',
           clientId: 'client-1',

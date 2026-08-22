@@ -56,7 +56,8 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:containers:environment",
   "docker:containers:delete",
   "docker:containers:console",
-  "docker:containers:files",
+  "docker:containers:files:read",
+  "docker:containers:files:write",
   "docker:containers:export",
   "docker:containers:secrets",
   "docker:containers:webhooks",
@@ -134,7 +135,8 @@ export const FOLDER_SCOPABLE_SCOPES = [
   "docker:containers:environment",
   "docker:containers:delete",
   "docker:containers:console",
-  "docker:containers:files",
+  "docker:containers:files:read",
+  "docker:containers:files:write",
   "docker:containers:export",
   "docker:containers:secrets",
   "docker:containers:webhooks",
@@ -787,24 +789,6 @@ const RAW_TOKEN_SCOPES = [
     desc: "Create, edit, test, synchronize, rotate, and delete Cloudflare connectors",
     group: "Integrations: Cloudflare",
   },
-  {
-    value: "integrations:cloudflare:dns:view",
-    label: "View Cloudflare DNS",
-    desc: "View Cloudflare DNS zones and records available to Gateway",
-    group: "Integrations: Cloudflare",
-  },
-  {
-    value: "integrations:cloudflare:dns:edit",
-    label: "Edit Cloudflare DNS",
-    desc: "Create and update Cloudflare DNS records through Gateway",
-    group: "Integrations: Cloudflare",
-  },
-  {
-    value: "integrations:cloudflare:dns:delete",
-    label: "Delete Cloudflare DNS",
-    desc: "Delete Cloudflare DNS records through Gateway",
-    group: "Integrations: Cloudflare",
-  },
   // Housekeeping
   {
     value: "housekeeping:view",
@@ -1089,9 +1073,15 @@ const RAW_TOKEN_SCOPES = [
     group: "Docker: Containers",
   },
   {
-    value: "docker:containers:files",
-    label: "Container Files",
-    desc: "Browse and edit files in containers",
+    value: "docker:containers:files:read",
+    label: "Read Container Files",
+    desc: "Browse and read files in containers",
+    group: "Docker: Containers",
+  },
+  {
+    value: "docker:containers:files:write",
+    label: "Write Container Files",
+    desc: "Create, edit, move, and delete files in containers",
     group: "Docker: Containers",
   },
   {

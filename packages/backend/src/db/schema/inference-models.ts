@@ -29,6 +29,7 @@ export const inferenceModels = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     publicId: varchar('public_id', { length: 255 }).notNull(),
     displayName: varchar('display_name', { length: 255 }).notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
     enabled: boolean('enabled').notNull().default(false),
     contextWindow: integer('context_window').notNull(),
     maxInputTokens: integer('max_input_tokens').notNull(),
@@ -46,6 +47,7 @@ export const inferenceModels = pgTable(
   },
   (table) => [
     uniqueIndex('inference_models_public_id_unique').on(table.publicId),
+    index('inference_models_sort_order_idx').on(table.sortOrder),
     index('inference_models_enabled_idx').on(table.enabled),
     check('inference_models_context_positive', sql`${table.contextWindow} > 0`),
     check(

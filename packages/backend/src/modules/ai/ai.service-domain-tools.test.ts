@@ -53,7 +53,7 @@ describe('AIService domain tool routing', () => {
     expect(domainsService.listDomains).toHaveBeenCalledWith({ search: 'example', page: 2, limit: 25 });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:dns:edit'] }, 'create_domain', {
+      service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:manage'] }, 'create_domain', {
         domain: 'example.com',
       })
     ).resolves.toMatchObject({ error: expect.stringContaining('domains:create'), invalidateStores: [] });
@@ -101,7 +101,7 @@ describe('AIService domain tool routing', () => {
     const service = createService(domainsService);
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:dns:view'] }, 'manage_domain', {
+      service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:view'] }, 'manage_domain', {
         operation: 'get',
         domainId: 'domain-1',
       })

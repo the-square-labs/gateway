@@ -1152,13 +1152,34 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return response.blob();
     }
 
-    async createVolume(nodeId: string, config: { name: string }): Promise<Record<string, unknown>> {
+    async createVolume(
+      nodeId: string,
+      config: { name: string; storageKind?: "regular" | "disk-image"; capacityBytes?: number }
+    ): Promise<Record<string, unknown>> {
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(`/docker/nodes/${nodeId}/volumes`, {
           method: "POST",
           body: JSON.stringify(config),
         })
       );
+    }
+
+    async getVolumeMetrics(
+      nodeId: string,
+      name: string
+    ): Promise<import("@/types").DockerVolumeMetrics> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").DockerVolumeMetrics }>(
+          `/docker/nodes/${nodeId}/volumes/${encodeURIComponent(name)}/metrics`
+        )
+      );
+    }
+
+    async resizeVolume(nodeId: string, name: string, capacityBytes: number): Promise<void> {
+      await this.request(`/docker/nodes/${nodeId}/volumes/${encodeURIComponent(name)}/resize`, {
+        method: "POST",
+        body: JSON.stringify({ capacityBytes }),
+      });
     }
 
     async listManagedVolumeOptions(nodeId: string): Promise<Array<{ name: string }>> {

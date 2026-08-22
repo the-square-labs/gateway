@@ -363,7 +363,6 @@ describe("AIMessage tool call groups", () => {
   });
 
   it("renders markdown while the assistant response is still streaming", () => {
-    vi.useFakeTimers();
     render(
       <AIMessage
         message={{
@@ -376,19 +375,14 @@ describe("AIMessage tool call groups", () => {
       />
     );
 
-    act(() => vi.advanceTimersByTime(240));
-
     expect(screen.getByRole("list")).toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByText("Docker").tagName).toBe("STRONG");
-    expect(screen.getAllByRole("listitem")[1]).toHaveTextContent("Базы данных");
-    expect(document.querySelector(".ai-streaming-chunk")).not.toBeInTheDocument();
+    expect(screen.getByText("Базы данных")).toHaveClass("ai-streaming-chunk");
     expect(screen.getByText("Docker")).not.toHaveClass("ai-streaming-chunk");
-    vi.useRealTimers();
   });
 
-  it("smooths a large provider delta without delaying terminal content", () => {
-    vi.useFakeTimers();
+  it("renders a large provider delta immediately through the streaming animation", () => {
     const streamingMessage: AIMessageType = {
       id: "assistant-large-delta",
       role: "assistant",
@@ -396,27 +390,15 @@ describe("AIMessage tool call groups", () => {
       isStreaming: true,
       streamingChunk: "One two three four five six seven eight nine ten eleven twelve",
     };
-    const { container, rerender } = render(<AIMessage message={streamingMessage} />);
+    const { container } = render(<AIMessage message={streamingMessage} />);
 
-    expect(container).not.toHaveTextContent("twelve");
-    act(() => vi.advanceTimersByTime(24));
-    expect(container).toHaveTextContent("One two three");
-    expect(container).not.toHaveTextContent("twelve");
-    expect(container.querySelector(".ai-streaming-chunk")).not.toBeInTheDocument();
-
-    act(() => vi.advanceTimersByTime(24));
-    expect(container).toHaveTextContent("One two three four");
-    expect(container.querySelector(".ai-streaming-chunk")).not.toBeInTheDocument();
-
-    rerender(<AIMessage message={{ ...streamingMessage, isStreaming: false }} />);
     expect(container).toHaveTextContent(
       "One two three four five six seven eight nine ten eleven twelve"
     );
-    vi.useRealTimers();
+    expect(container.querySelector(".ai-streaming-chunk")).toBeInTheDocument();
   });
 
   it("waits for heading text before rendering a streaming heading", () => {
-    vi.useFakeTimers();
     const message: AIMessageType = {
       id: "assistant-streaming-heading",
       role: "assistant",
@@ -426,16 +408,13 @@ describe("AIMessage tool call groups", () => {
     };
     const { rerender } = render(<AIMessage message={message} />);
 
-    act(() => vi.advanceTimersByTime(24));
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
-    expect(screen.getByText("##")).toBeInTheDocument();
+    expect(document.querySelector("p")).toHaveTextContent("##");
 
     rerender(
       <AIMessage message={{ ...message, content: "## Gateway", streamingChunk: "Gateway" }} />
     );
-    act(() => vi.advanceTimersByTime(24));
     expect(screen.getByRole("heading", { level: 2, name: "Gateway" })).toBeInTheDocument();
-    vi.useRealTimers();
   });
 
   it("renders running compact context with the thinking shimmer", () => {

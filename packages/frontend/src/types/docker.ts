@@ -266,6 +266,8 @@ export interface DockerVolume {
   options?: Record<string, string>;
   scope: string;
   managementState?: "managed" | "legacy";
+  storageKind?: "regular" | "disk-image";
+  capacityBytes?: number | null;
   adoptable?: boolean;
   adoptionReason?: string;
   createdAt?: string;
@@ -284,6 +286,17 @@ export interface DockerVolume {
   _nodeColor?: import("./nodes").NodeAppearanceColor | null;
   nodeId?: string;
   availability?: "available" | "unavailable";
+}
+
+export interface DockerVolumeMetrics {
+  storageKind: "regular" | "disk-image";
+  usedBytes: number | null;
+  capacityBytes: number | null;
+  availableBytes: number | null;
+  usedInodes: number | null;
+  totalInodes: number | null;
+  runningAttachmentCount: number;
+  collectedAt: string;
 }
 
 export interface DockerNetwork {

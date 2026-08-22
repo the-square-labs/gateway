@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { adoptVolume, createVolume, exportVolume, listVolumes } from './docker-volume-network-operations.js';
+import {
+  adoptVolume,
+  createVolume,
+  exportVolume,
+  getVolumeMetrics,
+  listVolumes,
+  resizeVolume,
+} from './docker-volume-network-operations.js';
 
 describe('exportVolume', () => {
   it('returns daemon bytes unchanged instead of decoding them as UTF-8 detail text', async () => {
@@ -32,6 +39,111 @@ describe('exportVolume', () => {
 });
 
 describe('managed volume inventory', () => {
+  it('creates a disk-image volume with fixed-capacity metadata', async () => {
+    const values = vi.fn().mockResolvedValue(undefined);
+    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const auditService = { log: vi.fn().mockResolvedValue(undefined) };
+    const context = {
+      db: { insert: vi.fn(() => ({ values })) },
+      nodeDispatch: { sendDockerVolumeCommand },
+      auditService,
+      eventBus: { publish: vi.fn() },
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
+    };
+
+    await createVolume(
+      context as never,
+      'node-1',
+      { name: 'bounded', storageKind: 'disk-image', capacityBytes: 5 * 1024 ** 3 },
+      'user-1'
+    );
+
+    expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'create', {
+      name: 'bounded',
+      storageKind: 'disk-image',
+      capacityBytes: 5 * 1024 ** 3,
+    });
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        volumeName: 'bounded',
+        storageKind: 'disk-image',
+        capacityBytes: 5 * 1024 ** 3,
+      })
+    );
+  });
+
+  it('returns direct daemon metrics without snapshot conversion', async () => {
+    const metrics = { storageKind: 'regular', usedBytes: 42, runningAttachmentCount: 1 };
+    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: JSON.stringify(metrics) });
+    const context = {
+      nodeDispatch: { sendDockerVolumeCommand },
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
+    };
+
+    await expect(getVolumeMetrics(context as never, 'node-1', 'data')).resolves.toEqual(metrics);
+    expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'metrics', { name: 'data' }, 60_000);
+  });
+
+  it('grows only registered disk-image volumes and persists the new capacity', async () => {
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true });
+    const auditService = { log: vi.fn().mockResolvedValue(undefined) };
+    const eventBus = { publish: vi.fn() };
+    const context = {
+      db: {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ storageKind: 'disk-image', capacityBytes: 1024 ** 3 }]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({ set: updateSet })),
+      },
+      nodeDispatch: { sendDockerVolumeCommand },
+      auditService,
+      eventBus,
+      parseResult: vi.fn(),
+    };
+
+    await resizeVolume(context as never, 'node-1', 'bounded', 2 * 1024 ** 3, 'user-1');
+
+    expect(sendDockerVolumeCommand).toHaveBeenCalledWith(
+      'node-1',
+      'resize',
+      { name: 'bounded', capacityBytes: 2 * 1024 ** 3 },
+      10 * 60_000
+    );
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ capacityBytes: 2 * 1024 ** 3 }));
+    expect(eventBus.publish).toHaveBeenCalledWith('docker.volume.changed', {
+      nodeId: 'node-1',
+      name: 'bounded',
+      action: 'resized',
+    });
+  });
+
+  it('rejects resize for ordinary volumes before dispatch', async () => {
+    const sendDockerVolumeCommand = vi.fn();
+    const context = {
+      db: {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ storageKind: 'regular', capacityBytes: null }]),
+            })),
+          })),
+        })),
+      },
+      nodeDispatch: { sendDockerVolumeCommand },
+    };
+
+    await expect(resizeVolume(context as never, 'node-1', 'data', 2 * 1024 ** 3, 'user-1')).rejects.toMatchObject({
+      code: 'VOLUME_NOT_RESIZABLE',
+    });
+    expect(sendDockerVolumeCommand).not.toHaveBeenCalled();
+  });
+
   it('reports a managed volume name conflict without claiming registry failure', async () => {
     const duplicate = Object.assign(new Error('duplicate'), {
       code: '23505',

@@ -170,9 +170,6 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `integrations:ssh:use` |  |
 | `integrations:cloudflare:view` |  |
 | `integrations:cloudflare:manage` |  |
-| `integrations:cloudflare:dns:view` |  |
-| `integrations:cloudflare:dns:edit` |  |
-| `integrations:cloudflare:dns:delete` |  |
 | `housekeeping:view` |  |
 | `housekeeping:run` |  |
 | `housekeeping:configure` |  |
@@ -201,7 +198,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:environment` | Yes |
 | `docker:containers:delete` | Yes |
 | `docker:containers:console` | Yes |
-| `docker:containers:files` | Yes |
+| `docker:containers:files:read` | Yes |
+| `docker:containers:files:write` | Yes |
 | `docker:containers:export` | Yes |
 | `docker:containers:secrets` | Yes |
 | `docker:containers:webhooks` | Yes |
@@ -315,7 +313,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 
 `mcp:use` is not a token scope. It gates whether the owning user account may use the MCP endpoint at all. MCP tokens use ordinary delegated Gateway scopes such as `nodes:details`, `proxy:view`, or `docker:containers:view` to determine which MCP tools and resources are available.
 
-Gateway MCP does not delegate `integrations:gitlab:*`, `integrations:github:*`, `integrations:git:*`, or `integrations:ssh:*` scopes. Source-control repository, CI, variable, webhook, registry, and external SSH operations belong to dedicated provider MCP servers rather than Gateway's control-plane MCP. Cloudflare DNS scopes remain available because Gateway directly manages domain and ingress DNS state.
+Gateway MCP does not delegate `integrations:gitlab:*`, `integrations:github:*`, `integrations:git:*`, or `integrations:ssh:*` scopes. Source-control repository, CI, variable, webhook, registry, and external SSH operations belong to dedicated provider MCP servers rather than Gateway's control-plane MCP. Managed DNS access uses the ordinary `domains:*` scopes; `integrations:cloudflare:*` is limited to connector visibility and administration.
 
 ## OAuth Manual Approval Scopes
 
@@ -340,7 +338,8 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `nodes:files:read` | Can read files from managed node filesystems. |
 | `nodes:files:write` | Can create, modify, move, or delete files on managed nodes. |
 | `docker:containers:console` | Can open an interactive console in containers. |
-| `docker:containers:files` | Can read and write container filesystem contents. |
+| `docker:containers:files:read` | Can browse and read container filesystem contents. |
+| `docker:containers:files:write` | Can create, modify, move, or delete container filesystem contents. |
 | `docker:containers:export` | Can export a container as a portable Gateway archive. |
 | `docker:containers:secrets` | Can reveal and manage encrypted container/deployment secrets. |
 | `docker:containers:mounts` | Can add, remove, or change container/deployment mounts within the managed-volume policy. New host bind mounts are prohibited. |
@@ -359,8 +358,6 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `integrations:gitlab:webhooks:manage` | Can create, update, or delete GitLab webhooks. |
 | `integrations:gitlab:registry:manage` | Can mutate GitLab container registry state. |
 | `integrations:gitlab:sandbox:clone` | Can clone connected GitLab repositories into AI sandboxes. |
-| `integrations:cloudflare:dns:edit` | Can create or update Cloudflare DNS records. |
-| `integrations:cloudflare:dns:delete` | Can delete Cloudflare DNS records. |
 | `logs:tokens:create` | Can mint logging ingest tokens. |
 | `admin:audit` | Can read audit history. |
 | `audit:siem:manage` | Can configure authenticated SIEM endpoints and replay failed audit exports. |

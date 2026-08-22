@@ -9,6 +9,7 @@ const SAFE_CONTEXT_KEYS = [
   'containerId',
   'containerName',
   'deploymentId',
+  'routeId',
   'proxyHostId',
   'projectId',
   'databaseId',

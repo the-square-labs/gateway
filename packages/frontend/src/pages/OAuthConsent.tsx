@@ -2,12 +2,27 @@ import { AlertTriangle, Check, Loader2, Shield, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  buildFinalScopes,
+  deriveAllowedResourceIdsByScope,
+  parseScopesForForm,
+} from "@/lib/scope-utils";
 import { api } from "@/services/api";
-import type { OAuthConsentPreview } from "@/types";
-import { TOKEN_SCOPES } from "@/types";
+import { useCAStore } from "@/stores/ca";
+import type {
+  DatabaseConnection,
+  LoggingSchema,
+  Node,
+  OAuthConsentPreview,
+  ProxyHost,
+} from "@/types";
+import { RESOURCE_SCOPABLE_SCOPES, TOKEN_SCOPES } from "@/types";
 
 type OAuthScopeItem = {
   value: string;
@@ -50,10 +65,17 @@ export function OAuthConsent() {
   const requestId = searchParams.get("request") ?? "";
   const [preview, setPreview] = useState<OAuthConsentPreview | null>(null);
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
+  const [resourceScopes, setResourceScopes] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<ConsentResult | null>(null);
   const [scopeSearch, setScopeSearch] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<ScopeSelectionFilter>("all");
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
+  const [databases, setDatabases] = useState<DatabaseConnection[]>([]);
+  const [loggingSchemas, setLoggingSchemas] = useState<LoggingSchema[]>([]);
+  const { cas, fetchCAs } = useCAStore();
 
   const load = useCallback(async () => {
     if (!requestId) {
@@ -63,9 +85,13 @@ export function OAuthConsent() {
     try {
       const data = await api.getOAuthConsent(requestId);
       setPreview(data);
-      setSelectedScopes(
+      const defaults = parseScopesForForm(
         data.grantableScopes.filter((scope) => !data.manualApprovalScopes.includes(scope))
       );
+      setSelectedScopes(defaults.baseScopes);
+      setResourceScopes(defaults.resources);
+      setScopeSearch("");
+      setScopeFilter("all");
     } catch (err) {
       setError(err instanceof Error ? err.message : "OAuth request could not be loaded");
     }
@@ -75,13 +101,49 @@ export function OAuthConsent() {
     void load();
   }, [load]);
 
-  const grantableScopeItems = useMemo(
-    () => (preview?.grantableScopes ?? []).map(scopeItem),
-    [preview]
+  useEffect(() => {
+    void fetchCAs();
+    void Promise.all([
+      api
+        .listNodes({ limit: 100 })
+        .then((response) => setNodes(response.data ?? []))
+        .catch(() => setNodes([])),
+      api
+        .listProxyHosts({ limit: 100 })
+        .then((response) => setProxyHosts(response.data ?? []))
+        .catch(() => setProxyHosts([])),
+      api
+        .listDatabases({ limit: 200 })
+        .then((response) => setDatabases(response.data ?? []))
+        .catch(() => setDatabases([])),
+      api
+        .listLoggingSchemas()
+        .then(setLoggingSchemas)
+        .catch(() => setLoggingSchemas([])),
+    ]);
+  }, [fetchCAs]);
+
+  const grantableParsed = useMemo(
+    () => parseScopesForForm(preview?.grantableScopes ?? []),
+    [preview?.grantableScopes]
   );
-  const unavailableScopeItems = useMemo(
-    () => (preview?.unavailableScopes ?? []).map(scopeItem),
-    [preview]
+
+  const grantableScopeItems = useMemo(
+    () => grantableParsed.baseScopes.map(scopeItem),
+    [grantableParsed.baseScopes]
+  );
+  const allowedResourceIdsByScope = useMemo(
+    () => deriveAllowedResourceIdsByScope(preview?.grantableScopes ?? []),
+    [preview?.grantableScopes]
+  );
+  const finalSelectedScopes = useMemo(
+    () => buildFinalScopes(selectedScopes, resourceScopes),
+    [resourceScopes, selectedScopes]
+  );
+  const hasMissingResourceSelection = selectedScopes.some(
+    (scope) =>
+      (allowedResourceIdsByScope[scope]?.length ?? 0) > 0 &&
+      (resourceScopes[scope]?.length ?? 0) === 0
   );
   const hasManualApprovalScopes = (preview?.manualApprovalScopes.length ?? 0) > 0;
 
@@ -95,45 +157,50 @@ export function OAuthConsent() {
     }
   }, [preview?.redirect.uri]);
 
-  const setScopeSelected = (scope: string, checked: boolean) => {
-    setSelectedScopes((current) =>
-      checked ? [...new Set([...current, scope])] : current.filter((item) => item !== scope)
-    );
+  const toggleScope = (scope: string) => {
+    setSelectedScopes((current) => {
+      if (current.includes(scope)) {
+        setResourceScopes((resources) => {
+          const next = { ...resources };
+          delete next[scope];
+          return next;
+        });
+        return current.filter((item) => item !== scope);
+      }
+      const allowedIds = allowedResourceIdsByScope[scope];
+      if (allowedIds?.length) {
+        setResourceScopes((resources) => ({ ...resources, [scope]: allowedIds }));
+      }
+      return [...current, scope];
+    });
   };
 
-  const deliverRedirect = async (redirectUrl: string): Promise<boolean> => {
-    try {
-      await fetch(redirectUrl, {
-        method: "GET",
-        mode: "no-cors",
-        credentials: "omit",
-        cache: "no-store",
-        redirect: "follow",
-        referrerPolicy: "no-referrer",
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const openLoopbackCallbackWindow = () =>
+    window.open(
+      "about:blank",
+      "gateway-oauth-callback",
+      "popup,width=520,height=320,left=120,top=120"
+    );
 
   const approve = async () => {
-    if (!requestId || selectedScopes.length === 0) return;
+    if (!requestId || finalSelectedScopes.length === 0 || hasMissingResourceSelection) return;
+    const callbackWindow = preview?.redirect.isExternal ? null : openLoopbackCallbackWindow();
     setIsSubmitting(true);
     try {
-      const result = await api.approveOAuthConsent(requestId, selectedScopes);
+      const result = await api.approveOAuthConsent(requestId, finalSelectedScopes);
       if (preview?.redirect.isExternal) {
         window.location.href = result.redirectUrl;
         return;
       }
-      const delivered = await deliverRedirect(result.redirectUrl);
-      if (!delivered) {
+      if (!callbackWindow) {
         window.location.href = result.redirectUrl;
         return;
       }
-      setResult({ kind: "approved", redirectUrl: result.redirectUrl, delivered });
+      callbackWindow.location.replace(result.redirectUrl);
+      setResult({ kind: "approved", redirectUrl: result.redirectUrl, delivered: true });
       setIsSubmitting(false);
     } catch (err) {
+      callbackWindow?.close();
       setError(err instanceof Error ? err.message : "Authorization failed");
       setIsSubmitting(false);
     }
@@ -141,6 +208,7 @@ export function OAuthConsent() {
 
   const deny = async () => {
     if (!requestId) return;
+    const callbackWindow = preview?.redirect.isExternal ? null : openLoopbackCallbackWindow();
     setIsSubmitting(true);
     try {
       const result = await api.denyOAuthConsent(requestId);
@@ -148,14 +216,15 @@ export function OAuthConsent() {
         window.location.href = result.redirectUrl;
         return;
       }
-      const delivered = await deliverRedirect(result.redirectUrl);
-      if (!delivered) {
+      if (!callbackWindow) {
         window.location.href = result.redirectUrl;
         return;
       }
-      setResult({ kind: "denied", redirectUrl: result.redirectUrl, delivered });
+      callbackWindow.location.replace(result.redirectUrl);
+      setResult({ kind: "denied", redirectUrl: result.redirectUrl, delivered: true });
       setIsSubmitting(false);
     } catch (err) {
+      callbackWindow?.close();
       setError(err instanceof Error ? err.message : "Could not deny authorization");
       setIsSubmitting(false);
     }
@@ -308,40 +377,44 @@ export function OAuthConsent() {
                 <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
               </div>
               <div className="flex min-h-0 flex-col border border-border">
-                <Input
-                  value={scopeSearch}
-                  onChange={(event) => setScopeSearch(event.target.value)}
+                <ScopeSearchFilter
+                  search={scopeSearch}
+                  onSearchChange={setScopeSearch}
+                  filter={scopeFilter}
+                  onFilterChange={setScopeFilter}
                   placeholder="Search scopes..."
-                  className="h-9 rounded-none border-0 border-b border-border text-sm focus-visible:ring-0"
                 />
                 <ScopeList
                   scopes={grantableScopeItems}
                   search={scopeSearch}
+                  selectionFilter={scopeFilter}
                   selected={selectedScopes}
-                  onToggle={(scope) => setScopeSelected(scope, !selectedScopes.includes(scope))}
+                  onToggle={toggleScope}
+                  resources={resourceScopes}
+                  onToggleResource={(scope, resourceId) => {
+                    setResourceScopes((current) => {
+                      const selected = current[scope] ?? [];
+                      return {
+                        ...current,
+                        [scope]: selected.includes(resourceId)
+                          ? selected.filter((id) => id !== resourceId)
+                          : [...selected, resourceId],
+                      };
+                    });
+                    setSelectedScopes((current) => [...new Set([...current, scope])]);
+                  }}
+                  cas={cas}
+                  nodes={nodes}
+                  proxyHosts={proxyHosts}
+                  databases={databases}
+                  loggingSchemas={loggingSchemas}
+                  restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+                  allowedResourceIds={allowedResourceIdsByScope}
                   readOnly={isSubmitting}
                   viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
                 />
               </div>
             </section>
-
-            {preview.unavailableScopes.length > 0 && (
-              <section className="p-5">
-                <h2 className="text-sm font-semibold text-foreground">Unavailable scopes</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  These were requested but cannot be granted by your account.
-                </p>
-                <div className="mt-3 divide-y divide-border border border-border opacity-80">
-                  <ScopeList
-                    scopes={unavailableScopeItems}
-                    search=""
-                    selected={[]}
-                    onToggle={() => {}}
-                    readOnly
-                  />
-                </div>
-              </section>
-            )}
           </div>
 
           <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-border p-5 sm:flex-row sm:justify-end">
@@ -349,7 +422,12 @@ export function OAuthConsent() {
               <X className="h-4 w-4" />
               Deny
             </Button>
-            <Button onClick={approve} disabled={isSubmitting || selectedScopes.length === 0}>
+            <Button
+              onClick={approve}
+              disabled={
+                isSubmitting || finalSelectedScopes.length === 0 || hasMissingResourceSelection
+              }
+            >
               {isSubmitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (

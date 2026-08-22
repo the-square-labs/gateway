@@ -1,8 +1,9 @@
-import { index, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, index, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { nodes } from './nodes.js';
 import { users } from './users.js';
 
 export type DockerManagedVolumeOrigin = 'created' | 'adopted';
+export type DockerManagedVolumeStorageKind = 'regular' | 'disk-image';
 
 export const dockerManagedVolumes = pgTable(
   'docker_managed_volumes',
@@ -12,6 +13,8 @@ export const dockerManagedVolumes = pgTable(
       .references(() => nodes.id, { onDelete: 'cascade' }),
     volumeName: text('volume_name').notNull(),
     origin: text('origin').$type<DockerManagedVolumeOrigin>().notNull(),
+    storageKind: text('storage_kind').$type<DockerManagedVolumeStorageKind>().notNull().default('regular'),
+    capacityBytes: bigint('capacity_bytes', { mode: 'number' }),
     createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

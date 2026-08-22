@@ -265,6 +265,12 @@ export class AISettingsService {
     if (!apiKey) await this.setSetting('ai:enabled', false);
   }
 
+  async handleGatewayInferenceModelRemoved(removedModel: string, replacementModel: string | null): Promise<void> {
+    const current = await this.getSetting<string>('ai:gateway_inference_model');
+    if (current !== removedModel) return;
+    await this.setSetting('ai:gateway_inference_model', replacementModel ?? '');
+  }
+
   async getDecryptedApiKey(): Promise<string | null> {
     const encrypted = await this.getSetting<EncryptedValue | null>('ai:api_key_encrypted');
     if (!encrypted) return null;

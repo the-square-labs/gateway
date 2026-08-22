@@ -6367,6 +6367,8 @@ type DockerVolumeCommand struct {
 	NewName       string                 `protobuf:"bytes,8,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
 	Content       []byte                 `protobuf:"bytes,9,opt,name=content,proto3" json:"content,omitempty"`
 	TargetPath    string                 `protobuf:"bytes,10,opt,name=target_path,json=targetPath,proto3" json:"target_path,omitempty"`
+	StorageKind   string                 `protobuf:"bytes,11,opt,name=storage_kind,json=storageKind,proto3" json:"storage_kind,omitempty"`
+	CapacityBytes int64                  `protobuf:"varint,12,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6462,6 +6464,20 @@ func (x *DockerVolumeCommand) GetTargetPath() string {
 		return x.TargetPath
 	}
 	return ""
+}
+
+func (x *DockerVolumeCommand) GetStorageKind() string {
+	if x != nil {
+		return x.StorageKind
+	}
+	return ""
+}
+
+func (x *DockerVolumeCommand) GetCapacityBytes() int64 {
+	if x != nil {
+		return x.CapacityBytes
+	}
+	return 0
 }
 
 type DockerNetworkCommand struct {
@@ -9505,7 +9521,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12\x1b\n" +
 	"\timage_ref\x18\x02 \x01(\tR\bimageRef\x12,\n" +
 	"\x12registry_auth_json\x18\x03 \x01(\tR\x10registryAuthJson\x12\x14\n" +
-	"\x05force\x18\x04 \x01(\bR\x05force\"\xe4\x02\n" +
+	"\x05force\x18\x04 \x01(\bR\x05force\"\xae\x03\n" +
 	"\x13DockerVolumeCommand\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12C\n" +
@@ -9517,7 +9533,9 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\acontent\x18\t \x01(\fR\acontent\x12\x1f\n" +
 	"\vtarget_path\x18\n" +
 	" \x01(\tR\n" +
-	"targetPath\x1a9\n" +
+	"targetPath\x12!\n" +
+	"\fstorage_kind\x18\v \x01(\tR\vstorageKind\x12%\n" +
+	"\x0ecapacity_bytes\x18\f \x01(\x03R\rcapacityBytes\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x03\x10\x04\"\xc3\x01\n" +

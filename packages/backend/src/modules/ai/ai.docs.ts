@@ -75,7 +75,7 @@ Use find_resource with an empty query and a concrete type when the user asks to 
 PKI certificates live in a separate store from SSL certificates. To use a PKI cert with an ingress route:
 1. issue_certificate → returns { certificate, message }
 2. link_internal_cert(internalCertId: certificate.id) → creates an SSL certificate entry
-3. Use the SSL certificate ID (from step 2) when creating/updating routes through the existing proxy-host tools.
+3. Use the SSL certificate ID (from step 2) when creating/updating routes through the route tools.
 NEVER use a PKI certificate ID directly as sslCertificateId on a route.`,
 
   ssl: `# SSL Certificates
@@ -125,7 +125,7 @@ Certificate issuance itself is not tied to a machine. HTTP-01 validation is serv
 
   proxy: `# Ingress Routes
 
-The UI calls these resources Routes. Existing REST paths, tool names, resource types, and persisted identifiers retain the proxy-host name for compatibility.
+The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route, create_route, update_route, and delete_route. Existing REST paths, internal resource types, and persisted identifiers retain the proxy-host name for compatibility.
 
 ## Types
 - **proxy**: Forward requests to a backend server (forwardHost:forwardPort).
@@ -150,27 +150,27 @@ The UI calls these resources Routes. Existing REST paths, tool names, resource t
 - folderId: organize into folders.
 - nginxTemplateId: use a custom nginx template.
 
-Ordinary list_proxy_hosts and get_proxy_host responses omit rawConfig and rawConfigEnabled. Raw content is only available through explicit raw config read/render tools with raw-read permission.
+Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled. Raw content is only available through explicit route raw-config tools with raw-read permission.
 
 ## Maintenance Mode
 - Maintenance mode is available for enabled managed routes that are not using raw config. It keeps the configured HTTP/HTTPS vhosts but returns HTTP 503 and pauses managed health checks until maintenance ends.
 - Maintenance state is audited and can feed notification rules and status pages.
-- The current Assistant proxy tools do not expose maintenance toggling or Docker upstream fields. Direct the user to the Routes UI or documented REST API instead of trying to emulate maintenance by disabling the route or rewriting its config.
+- The current Assistant route tools do not expose maintenance toggling or Docker upstream fields. Direct the user to the Routes UI or documented REST API instead of trying to emulate maintenance by disabling the route or rewriting its config.
 
 ## Docker Upstreams
 - The UI and REST API can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
-- The current Assistant create/update proxy tools support manual upstream fields only. Do not invent Docker-upstream arguments.
+- The current Assistant create/update route tools support manual upstream fields only. Do not invent Docker-upstream arguments.
 
 ## Additional Routes And Secure Links
-- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
-- Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
+- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
+- Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config and pass the parent \`routeId\`. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
 
 ## Nginx Config
 Each route generates an nginx server block on its selected ingress node. Changes are applied by reloading nginx.
 Config templates can customize the generated config (see templates topic).
 
 ## Raw Config Mode
-When rawConfigEnabled is true, the template rendering is bypassed and rawConfig is used directly as the nginx server block. Use get_proxy_rendered_config to view the current config, toggle_proxy_raw_mode to enable/disable, and update_proxy_raw_config to write raw config.`,
+When rawConfigEnabled is true, the template rendering is bypassed and rawConfig is used directly as the nginx server block. Use get_route_rendered_config to view the current config, toggle_route_raw_mode to enable/disable, and update_route_raw_config to write raw config.`,
 
   domains: `# Domains
 
@@ -407,7 +407,7 @@ Gateway manages public ingress through nginx daemon nodes running on remote serv
 - Raw content can only be read through explicit raw config read/render paths with raw-read permission
 - Requires proxy:raw:toggle and proxy:raw:write scopes
 - proxy:raw:bypass can bypass dangerous raw directive validation for the same route
-- Use get_proxy_rendered_config to see the current generated config before switching to raw mode
+- Use get_route_rendered_config to see the current generated config before switching to raw mode
 
 ## Monitoring
 - **Stub status**: nginx stub_status module provides active connections, accepts, handled, requests, reading, writing, waiting
@@ -838,7 +838,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - logging_schemas
 - admin_users
 - permission_groups
-- proxy_hosts
+- routes
 - docker with dockerResourceType: container, image, network, or volume
 
 ## Operations
@@ -858,7 +858,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - logging_schemas: list with logs:schemas:view, logs:schemas:folders:manage, or logs:manage; mutate with logs:schemas:folders:manage or logs:manage.
 - admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.
 - permission_groups: list with admin:groups or admin:groups:folders:manage; mutate with admin:groups:folders:manage.
-- proxy_hosts: list with proxy:view or proxy:folders:manage; mutate folders with proxy:folders:manage; moving hosts also checks proxy:edit for each host.
+- routes: list with proxy:view or proxy:folders:manage; mutate folders with proxy:folders:manage; moving routes also checks proxy:edit for each route.
 - docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
 
   'node-files': `# Node File Management
@@ -1093,9 +1093,9 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 
 ## MCP
 - mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
-- Gateway MCP never delegates GitLab, GitHub, generic Git, or external SSH integration scopes. External agents must configure dedicated provider MCP servers for repository, CI, variable, webhook, registry, and SSH operations. Cloudflare DNS remains part of Gateway MCP because Gateway directly manages domain and ingress DNS state.
+- Gateway MCP never delegates GitLab, GitHub, generic Git, or external SSH integration scopes. External agents must configure dedicated provider MCP servers for repository, CI, variable, webhook, registry, and SSH operations. Managed DNS uses the ordinary Domains tools and \`domains:*\` scopes.
 - The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
-- The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. Stable tool names, resource URIs, scopes, and REST paths still use proxy-host identifiers for compatibility.
+- The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. Route tools use UI-aligned names and arguments; resource URIs, scopes, REST paths, and persisted identifiers keep their existing compatibility contracts.
 - Use \`manage_additional_route\` for path-prefix locations inside a Route. It supports manual, Docker container/deployment, and Pages Tag targets plus location advanced config. Docker targets create and own their required Secure Link binding.
 - Use \`manage_additional_secure_link\` only for extra bindings referenced by a Route's advanced nginx config. Route-owned bindings are visible in its list but must be changed through \`manage_additional_route\`, not deleted independently.
 - The \`Pages\` toolset exposes Page Projects, Deployments, Tags, runtime configuration, profile settings, and project migration. The \`Databases\` toolset includes managed database provisioning and application bindings.

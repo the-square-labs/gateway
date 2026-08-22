@@ -288,7 +288,9 @@ function inferResourceType(toolName: string, args: Record<string, unknown>): AIR
   if (toolName.includes('docker_volume')) return 'docker_volume';
   if (toolName.includes('docker_network')) return 'docker_network';
   if (toolName.includes('docker_registry')) return 'docker_registry';
-  if (toolName.includes('proxy_host')) return 'proxy_host';
+  if (['list_routes', 'get_route', 'create_route', 'update_route', 'delete_route'].includes(toolName)) {
+    return 'proxy_host';
+  }
   if (toolName.includes('proxy_template')) return 'proxy_template';
   if (toolName.includes('ssl_certificate') || toolName === 'request_acme_cert') return 'ssl_certificate';
   if (toolName.includes('access_list')) return 'access_list';
@@ -342,7 +344,7 @@ function resourceIdForType(
 ): string {
   const candidatesByType: Partial<Record<AIResourceReferenceType, unknown[]>> = {
     node: [data.id, value.id, args.nodeId, args.id],
-    proxy_host: [data.id, value.id, args.proxyHostId, args.id],
+    proxy_host: [data.id, value.id, args.routeId, args.proxyHostId, args.id],
     proxy_template: [data.id, value.id, args.templateId, args.id],
     ssl_certificate: [data.id, value.id, args.certificateId, args.id],
     domain: [data.id, value.id, args.domainId, args.id, args.domain],

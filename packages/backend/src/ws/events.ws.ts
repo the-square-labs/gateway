@@ -91,7 +91,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'docker.folder.changed') return 'docker:containers:view';
   if (channel === 'docker.image-cleanup.changed') return 'docker:containers:edit';
   if (channel === 'docker.registry.changed') return 'docker:registries:view';
-  if (channel === 'docker.file.changed') return 'docker:containers:files';
+  if (channel === 'docker.file.changed') return 'docker:containers:files:read';
   if (channel === 'docker.volume.file.changed') return 'docker:volumes:files:read';
   if (channel === 'docker.snapshot.changed') return 'docker:containers:view';
   if (channel === 'docker.migration.changed') return 'docker:containers:view';
@@ -147,9 +147,6 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScope(scopes, 'integrations:gitlab:manage') ||
       hasScope(scopes, 'integrations:cloudflare:view') ||
       hasScope(scopes, 'integrations:cloudflare:manage') ||
-      hasScope(scopes, 'integrations:cloudflare:dns:view') ||
-      hasScope(scopes, 'integrations:cloudflare:dns:edit') ||
-      hasScope(scopes, 'integrations:cloudflare:dns:delete') ||
       hasScope(scopes, 'integrations:github:view') ||
       hasScope(scopes, 'integrations:github:manage') ||
       hasScope(scopes, 'integrations:git:view') ||
@@ -191,7 +188,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScopeBase(scopes, 'docker:containers:view');
   }
   if (channel === 'docker.file.changed') {
-    return hasScopeBase(scopes, 'docker:containers:files');
+    return hasScopeBase(scopes, 'docker:containers:files:read');
   }
   if (channel === 'docker.image-cleanup.changed') {
     return hasScopeBase(scopes, 'docker:containers:edit');
@@ -419,7 +416,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
   }
   if (channel === 'docker.file.changed') {
-    return hasDockerEventAccess(scopes, 'docker:containers:files', payload);
+    return hasDockerEventAccess(scopes, 'docker:containers:files:read', payload);
   }
   if (channel === 'docker.volume.file.changed') {
     const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;

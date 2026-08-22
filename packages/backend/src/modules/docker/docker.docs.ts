@@ -39,6 +39,7 @@ import {
   VolumeCreateSchema,
   VolumeLabelsUpdateSchema,
   VolumeRenameSchema,
+  VolumeResizeSchema,
 } from './docker.schemas.js';
 import {
   DockerDeploymentCreateSchema,
@@ -888,6 +889,22 @@ export const createVolumeRoute = appRoute({
   summary: 'Create a volume',
   request: { params: nodeParams, ...jsonBody(VolumeCreateSchema) },
   responses: createdJson(UnknownDataResponseSchema),
+});
+export const getVolumeMetricsRoute = appRoute({
+  method: 'get',
+  path: '/nodes/{nodeId}/volumes/{name}/metrics',
+  tags: ['Docker Volumes'],
+  summary: 'Get current volume metrics',
+  request: { params: volumeParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const resizeVolumeRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/volumes/{name}/resize',
+  tags: ['Docker Volumes'],
+  summary: 'Grow a managed disk-image volume',
+  request: { params: volumeParams, ...jsonBody(VolumeResizeSchema) },
+  responses: successJson,
 });
 export const listManagedVolumeOptionsRoute = appRoute({
   method: 'get',

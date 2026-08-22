@@ -446,7 +446,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const scopeResourceId = String(inspected?.scopeResourceId ?? '');
       if (
         query.imageMode === 'portable' &&
-        !hasDockerResourceScope(actorScopes, 'docker:containers:files', nodeId, scopeResourceId)
+        !hasDockerResourceScope(actorScopes, 'docker:containers:files:read', nodeId, scopeResourceId)
       ) {
         throw new AppError(403, 'FORBIDDEN', 'Exporting a portable container archive requires files access');
       }
@@ -860,7 +860,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // List directory
   router.openapi(
-    { ...listContainerFilesRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...listContainerFilesRoute, middleware: requireDockerContainerScope('docker:containers:files:read') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -880,7 +880,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Read file
   router.openapi(
-    { ...readContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...readContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files:read') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -900,7 +900,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Write file
   router.openapi(
-    { ...writeContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...writeContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -913,7 +913,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...createContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...createContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -926,7 +926,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...initContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...initContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -939,7 +939,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...uploadContainerFileChunkRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...uploadContainerFileChunkRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -953,7 +953,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...completeContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...completeContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -966,7 +966,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...abortContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...abortContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -978,7 +978,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...createContainerDirectoryRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...createContainerDirectoryRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -992,7 +992,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deleteContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...deleteContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -1006,7 +1006,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...moveContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...moveContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files:write') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;

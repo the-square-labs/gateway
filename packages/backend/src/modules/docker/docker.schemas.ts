@@ -291,7 +291,36 @@ export const ImagePullSchema = z.object({
 });
 
 // Volume create
-export const VolumeCreateSchema = z.object({ name: z.string().trim().min(1) }).strict();
+export const VolumeCreateSchema = z
+  .object({
+    name: z.string().trim().min(1),
+    storageKind: z.enum(['regular', 'disk-image']).default('regular'),
+    capacityBytes: z
+      .number()
+      .int()
+      .min(256 * 1024 * 1024)
+      .optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.storageKind === 'disk-image' && value.capacityBytes == null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['capacityBytes'], message: 'Capacity is required' });
+    }
+    if (value.storageKind === 'regular' && value.capacityBytes != null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['capacityBytes'],
+        message: 'Capacity is only valid for disk-image volumes',
+      });
+    }
+  });
+
+export const VolumeResizeSchema = z.object({
+  capacityBytes: z
+    .number()
+    .int()
+    .min(256 * 1024 * 1024),
+});
 
 export const VolumeRenameSchema = z.object({
   name: z.string().min(1),

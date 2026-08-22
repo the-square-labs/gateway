@@ -105,8 +105,8 @@ export async function manageDockerContainerConfigTool(
   if (operation === 'list_files') {
     ensureToolScopeForResource(
       user,
-      'docker:containers:files',
-      await authorizationResourceId('docker:containers:files')
+      'docker:containers:files:read',
+      await authorizationResourceId('docker:containers:files:read')
     );
     const input = FileBrowseSchema.parse(args);
     return context.dockerService.listDirectory(nodeId, containerId, input.path);
@@ -114,8 +114,8 @@ export async function manageDockerContainerConfigTool(
   if (operation === 'read_file') {
     ensureToolScopeForResource(
       user,
-      'docker:containers:files',
-      await authorizationResourceId('docker:containers:files')
+      'docker:containers:files:read',
+      await authorizationResourceId('docker:containers:files:read')
     );
     const input = FileBrowseSchema.parse(args);
     const content = await context.dockerService.readFile(nodeId, containerId, input.path);
@@ -124,8 +124,8 @@ export async function manageDockerContainerConfigTool(
   if (operation === 'write_file') {
     ensureToolScopeForResource(
       user,
-      'docker:containers:files',
-      await authorizationResourceId('docker:containers:files')
+      'docker:containers:files:write',
+      await authorizationResourceId('docker:containers:files:write')
     );
     const input = FileWriteToolSchema.parse(args);
     await context.dockerService.writeFile(nodeId, containerId, input.path, input.content, user.id);
@@ -239,9 +239,8 @@ export async function manageDockerContainerConfigTool(
 
 function dockerConfigOperationScope(operation: string): string | undefined {
   if (operation === 'get_env' || operation === 'update_env') return 'docker:containers:environment';
-  if (operation === 'list_files' || operation === 'read_file' || operation === 'write_file') {
-    return 'docker:containers:files';
-  }
+  if (operation === 'list_files' || operation === 'read_file') return 'docker:containers:files:read';
+  if (operation === 'write_file') return 'docker:containers:files:write';
   if (operation.endsWith('_secret') || operation === 'list_secrets') return 'docker:containers:secrets';
   if (operation.includes('webhook')) return 'docker:containers:webhooks';
   if (operation === 'get_health_check') return 'docker:containers:view';

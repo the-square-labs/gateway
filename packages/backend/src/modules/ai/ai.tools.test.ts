@@ -64,6 +64,47 @@ describe('AI tool scope filtering', () => {
     });
   });
 
+  it('exposes UI-aligned route tools without legacy proxy-host names', () => {
+    const names = AI_TOOLS.map((tool) => tool.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'list_routes',
+        'get_route',
+        'create_route',
+        'update_route',
+        'delete_route',
+        'create_route_folder',
+        'move_routes_to_folder',
+        'delete_route_folder',
+        'get_route_rendered_config',
+        'update_route_raw_config',
+        'toggle_route_raw_mode',
+      ])
+    );
+    expect(names).not.toEqual(
+      expect.arrayContaining([
+        'list_proxy_hosts',
+        'get_proxy_host',
+        'create_proxy_host',
+        'update_proxy_host',
+        'delete_proxy_host',
+        'create_proxy_folder',
+        'move_hosts_to_folder',
+        'delete_proxy_folder',
+        'get_proxy_rendered_config',
+        'update_proxy_raw_config',
+        'toggle_proxy_raw_mode',
+      ])
+    );
+    expect(
+      parseAndValidateAIToolArguments('update_route', JSON.stringify({ routeId: 'route-1', enabled: false }))
+    ).toMatchObject({ ok: true, arguments: { routeId: 'route-1' } });
+    expect(parseAndValidateAIToolArguments('update_route', JSON.stringify({ proxyHostId: 'route-1' }))).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments at $/routeId',
+    });
+  });
+
   it('exposes concrete connector and node setup handoffs without the Finalize Setup route', () => {
     expect(toolNames(['feat:ai:use'])).toEqual(
       expect.arrayContaining(['open_connector_setup', 'open_node_enrollment'])
@@ -149,7 +190,7 @@ describe('AI tool scope filtering', () => {
     expect(
       parseAndValidateAIToolArguments(
         'manage_additional_route',
-        JSON.stringify({ operation: 'create', proxyHostId: 'host-1', path: '/api', targetKind: 'manual' })
+        JSON.stringify({ operation: 'create', routeId: 'host-1', path: '/api', targetKind: 'manual' })
       )
     ).toMatchObject({ ok: true });
   });
@@ -270,14 +311,14 @@ describe('AI tool scope filtering', () => {
       'manage_template',
       'list_resource_folders',
       'manage_resource_folder',
-      'list_proxy_hosts',
-      'get_proxy_host',
-      'create_proxy_host',
-      'update_proxy_host',
-      'delete_proxy_host',
-      'create_proxy_folder',
-      'move_hosts_to_folder',
-      'delete_proxy_folder',
+      'list_routes',
+      'get_route',
+      'create_route',
+      'update_route',
+      'delete_route',
+      'create_route_folder',
+      'move_routes_to_folder',
+      'delete_route_folder',
       'manage_proxy_template',
       'list_ssl_certificates',
       'request_acme_cert',
@@ -299,9 +340,9 @@ describe('AI tool scope filtering', () => {
       'delete_node',
       'manage_node_config',
       'manage_node_file',
-      'get_proxy_rendered_config',
-      'update_proxy_raw_config',
-      'toggle_proxy_raw_mode',
+      'get_route_rendered_config',
+      'update_route_raw_config',
+      'toggle_route_raw_mode',
       'list_users',
       'create_user',
       'update_user_role',
@@ -330,7 +371,7 @@ describe('AI tool scope filtering', () => {
     ]);
     expect(TOOL_STORE_INVALIDATION_MAP.create_root_ca).toEqual(['ca']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_certificate).toEqual(['certificates', 'ca']);
-    expect(TOOL_STORE_INVALIDATION_MAP.update_proxy_host).toEqual(['proxy']);
+    expect(TOOL_STORE_INVALIDATION_MAP.update_route).toEqual(['proxy']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_ssl_certificate).toEqual(['ssl']);
     expect(TOOL_STORE_INVALIDATION_MAP.create_user).toEqual(['users']);
     expect(TOOL_STORE_INVALIDATION_MAP.update_user_role).toEqual(['users']);
@@ -352,10 +393,10 @@ describe('AI tool scope filtering', () => {
     ).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
     expect(TOOL_STORE_INVALIDATION_MAP.update_gateway_settings).toEqual(['settings']);
     expect(isDestructiveTool('find_resource')).toBe(false);
-    expect(isDestructiveTool('list_proxy_hosts')).toBe(false);
-    expect(isDestructiveTool('get_proxy_host')).toBe(false);
+    expect(isDestructiveTool('list_routes')).toBe(false);
+    expect(isDestructiveTool('get_route')).toBe(false);
     expect(isDestructiveTool('manage_ca')).toBe(true);
-    expect(isDestructiveTool('create_proxy_folder')).toBe(true);
+    expect(isDestructiveTool('create_route_folder')).toBe(true);
     expect(isDestructiveTool('execute_node_console_command')).toBe(true);
   });
 
@@ -399,9 +440,9 @@ describe('AI tool scope filtering', () => {
       expect.arrayContaining(['list_certificates', 'get_certificate', 'manage_certificate'])
     );
     expect(toolNames(['pki:templates:view'])).toEqual(expect.arrayContaining(['list_templates', 'manage_template']));
-    expect(toolNames(['proxy:view'])).toEqual(expect.arrayContaining(['list_proxy_hosts', 'get_proxy_host']));
+    expect(toolNames(['proxy:view'])).toEqual(expect.arrayContaining(['list_routes', 'get_route']));
     expect(toolNames(['proxy:folders:manage'])).toEqual(
-      expect.arrayContaining(['create_proxy_folder', 'move_hosts_to_folder', 'delete_proxy_folder'])
+      expect.arrayContaining(['create_route_folder', 'move_routes_to_folder', 'delete_route_folder'])
     );
     expect(toolNames(['ssl:cert:view'])).toEqual(
       expect.arrayContaining(['list_ssl_certificates', 'manage_ssl_certificate'])
@@ -437,18 +478,18 @@ describe('AI tool scope filtering', () => {
         'internal_documentation',
       ])
     );
-    expect(toolNames(['proxy:raw:read:proxy-1'])).toContain('get_proxy_rendered_config');
-    expect(toolNames(['proxy:raw:read:proxy-1'])).not.toContain('update_proxy_raw_config');
+    expect(toolNames(['proxy:raw:read:proxy-1'])).toContain('get_route_rendered_config');
+    expect(toolNames(['proxy:raw:read:proxy-1'])).not.toContain('update_route_raw_config');
     expect(toolNames(['nodes:details'])).not.toContain('execute_node_console_command');
     expect(toolNames(['nodes:console'])).toContain('execute_node_console_command');
     expect(toolNames(['domains:view'])).toContain('list_domains');
     expect(toolNames(['domains:view'])).not.toContain('create_domain');
     expect(toolNames(['domains:create'])).toContain('create_domain');
-    expect(toolNames(['integrations:cloudflare:dns:edit'])).not.toContain('create_domain');
+    expect(toolNames(['integrations:cloudflare:manage'])).not.toContain('create_domain');
     expect(toolNames(['domains:delete'])).toContain('delete_domain');
-    expect(toolNames(['integrations:cloudflare:dns:delete'])).not.toContain('delete_domain');
+    expect(toolNames(['integrations:cloudflare:manage'])).not.toContain('delete_domain');
     expect(toolNames(['domains:view'])).toContain('manage_domain');
-    expect(toolNames(['integrations:cloudflare:dns:view'])).not.toContain('manage_domain');
+    expect(toolNames(['integrations:cloudflare:view'])).not.toContain('manage_domain');
   });
 
   it('requires direct database view before advertising database query tools', () => {

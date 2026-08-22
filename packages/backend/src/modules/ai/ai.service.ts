@@ -1741,29 +1741,29 @@ export class AIService {
       }
 
       // ── Raw Config ──
-      case 'get_proxy_rendered_config': {
-        const host = await this.proxyService.getProxyHost(a.proxyHostId);
+      case 'get_route_rendered_config': {
+        const host = await this.proxyService.getProxyHost(a.routeId);
         if (!host) throw new Error('Route not found');
-        const renderedConfig = await this.proxyService.getRenderedConfig(a.proxyHostId);
-        return { proxyHostId: a.proxyHostId, config: renderedConfig };
+        const renderedConfig = await this.proxyService.getRenderedConfig(a.routeId);
+        return { routeId: a.routeId, config: renderedConfig };
       }
-      case 'update_proxy_raw_config': {
-        const rawHost = await this.proxyService.getProxyHost(a.proxyHostId);
+      case 'update_route_raw_config': {
+        const rawHost = await this.proxyService.getProxyHost(a.routeId);
         if (!rawHost) throw new Error('Route not found');
         if (!(rawHost as any).rawConfigEnabled) {
-          throw new Error('Raw mode is not enabled on this route. Enable it first with toggle_proxy_raw_mode.');
+          throw new Error('Raw mode is not enabled on this route. Enable it first with toggle_route_raw_mode.');
         }
-        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.proxyHostId}`);
+        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`);
         return compactProxyHostForAgent(
-          await this.proxyService.updateProxyHost(a.proxyHostId, { rawConfig: a.rawConfig } as any, user.id, {
+          await this.proxyService.updateProxyHost(a.routeId, { rawConfig: a.rawConfig } as any, user.id, {
             bypassRawValidation,
           })
         );
       }
-      case 'toggle_proxy_raw_mode': {
-        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.proxyHostId}`);
+      case 'toggle_route_raw_mode': {
+        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`);
         return compactProxyHostForAgent(
-          await this.proxyService.updateProxyHost(a.proxyHostId, { rawConfigEnabled: a.enabled } as any, user.id, {
+          await this.proxyService.updateProxyHost(a.routeId, { rawConfigEnabled: a.enabled } as any, user.id, {
             bypassRawValidation,
           })
         );

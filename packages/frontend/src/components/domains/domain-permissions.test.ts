@@ -15,9 +15,7 @@ describe("domain permissions", () => {
   });
 
   it("does not let Cloudflare-only scopes enable Gateway domain actions", () => {
-    expect(
-      permissionsFor(["integrations:cloudflare:dns:edit", "integrations:cloudflare:dns:delete"])
-    ).toEqual({
+    expect(permissionsFor(["integrations:cloudflare:view"])).toEqual({
       canCreateDomain: false,
       canEditDomain: false,
       canDeleteDomain: false,

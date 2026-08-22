@@ -6,6 +6,10 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -59,6 +63,7 @@ export function ApiTokensSection({
   const [createdSecretDialogOpen, setCreatedSecretDialogOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [tokenScopeSearch, setTokenScopeSearch] = useState("");
+  const [tokenScopeFilter, setTokenScopeFilter] = useState<ScopeSelectionFilter>("all");
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
@@ -112,6 +117,7 @@ export function ApiTokensSection({
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
     setCreatedSecret(null);
     setTokenScopeSearch("");
+    setTokenScopeFilter("all");
     setCreateDialogOpen(true);
   };
 
@@ -157,6 +163,7 @@ export function ApiTokensSection({
     setInitialResourceLimitedScopes([]);
     setCreatedSecret(null);
     setTokenScopeSearch("");
+    setTokenScopeFilter("all");
     setCreateDialogOpen(true);
   };
 
@@ -313,11 +320,12 @@ export function ApiTokensSection({
             </div>
 
             <div className="border border-border">
-              <Input
-                value={tokenScopeSearch}
-                onChange={(e) => setTokenScopeSearch(e.target.value)}
+              <ScopeSearchFilter
+                search={tokenScopeSearch}
+                onSearchChange={setTokenScopeSearch}
+                filter={tokenScopeFilter}
+                onFilterChange={setTokenScopeFilter}
                 placeholder="Search scopes..."
-                className="border-0 border-b border-border rounded-none h-9 text-sm focus-visible:ring-0"
               />
               <ScopeList
                 scopes={API_TOKEN_SCOPES.filter(
@@ -326,6 +334,7 @@ export function ApiTokensSection({
                     hasSelectableScopeBase(userScopes, scope.value)
                 )}
                 search={tokenScopeSearch}
+                selectionFilter={tokenScopeFilter}
                 selected={selectedScopes}
                 onToggle={toggleScope}
                 resources={resourceScopes}

@@ -220,4 +220,71 @@ describe("ScopeList", () => {
     expect(folder.closest("label")).toHaveClass("pl-5");
     expect(resource.closest("label")).toHaveClass("pl-10");
   });
+
+  it("shows an entire group when the query matches only the group name", () => {
+    render(
+      <ScopeList
+        scopes={[
+          { value: "acl:view", label: "View Lists", desc: "View lists", group: "Access Control" },
+          { value: "acl:edit", label: "Edit Lists", desc: "Edit lists", group: "Access Control" },
+          { value: "nodes:details", label: "Node Details", desc: "View nodes", group: "Nodes" },
+        ]}
+        search="access control"
+        selected={[]}
+        onToggle={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("View Lists")).toBeInTheDocument();
+    expect(screen.getByText("Edit Lists")).toBeInTheDocument();
+    expect(screen.queryByText("Node Details")).not.toBeInTheDocument();
+  });
+
+  it("shows only matching permissions when an item matches the query", () => {
+    render(
+      <ScopeList
+        scopes={[
+          { value: "acl:view", label: "View Lists", desc: "View lists", group: "Access Control" },
+          { value: "acl:edit", label: "Edit Lists", desc: "Edit lists", group: "Access Control" },
+        ]}
+        search="edit lists"
+        selected={[]}
+        onToggle={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Edit Lists")).toBeInTheDocument();
+    expect(screen.queryByText("View Lists")).not.toBeInTheDocument();
+  });
+
+  it("filters the list by selected state", () => {
+    const scopes = [
+      { value: "acl:view", label: "View Lists", desc: "View lists", group: "Access Control" },
+      { value: "acl:edit", label: "Edit Lists", desc: "Edit lists", group: "Access Control" },
+    ];
+    const { rerender } = render(
+      <ScopeList
+        scopes={scopes}
+        search=""
+        selectionFilter="selected"
+        selected={["acl:view"]}
+        onToggle={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("View Lists")).toBeInTheDocument();
+    expect(screen.queryByText("Edit Lists")).not.toBeInTheDocument();
+
+    rerender(
+      <ScopeList
+        scopes={scopes}
+        search=""
+        selectionFilter="unselected"
+        selected={["acl:view"]}
+        onToggle={vi.fn()}
+      />
+    );
+    expect(screen.queryByText("View Lists")).not.toBeInTheDocument();
+    expect(screen.getByText("Edit Lists")).toBeInTheDocument();
+  });
 });

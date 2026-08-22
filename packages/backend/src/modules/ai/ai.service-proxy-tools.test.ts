@@ -74,7 +74,7 @@ describe('AIService proxy tool routing', () => {
     const service = createService(proxyService);
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:view'] }, 'list_proxy_hosts', {
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:view'] }, 'list_routes', {
         search: 'app',
         page: 2,
         limit: 25,
@@ -86,14 +86,14 @@ describe('AIService proxy tool routing', () => {
     );
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: [`proxy:view:${COMPACT_HOST.id}`] }, 'get_proxy_host', {
-        proxyHostId: COMPACT_HOST.id,
+      service.executeTool({ ...BASE_USER, scopes: [`proxy:view:${COMPACT_HOST.id}`] }, 'get_route', {
+        routeId: COMPACT_HOST.id,
       })
     ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: [] });
     expect(proxyService.getProxyHost).toHaveBeenCalledWith(COMPACT_HOST.id);
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_proxy_host', {
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', {
         nodeId: 'node-1',
         domainNames: ['app.example.com'],
         forwardHost: 'app',
@@ -138,7 +138,7 @@ describe('AIService proxy tool routing', () => {
     );
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:create:node-1'] }, 'create_proxy_host', {
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create:node-1'] }, 'create_route', {
         nodeId: 'node-1',
         domainNames: ['scoped.example.com'],
       })
@@ -149,8 +149,8 @@ describe('AIService proxy tool routing', () => {
     );
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: [`proxy:delete:${COMPACT_HOST.id}`] }, 'delete_proxy_host', {
-        proxyHostId: COMPACT_HOST.id,
+      service.executeTool({ ...BASE_USER, scopes: [`proxy:delete:${COMPACT_HOST.id}`] }, 'delete_route', {
+        routeId: COMPACT_HOST.id,
       })
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['proxy'] });
     expect(proxyService.deleteProxyHost).toHaveBeenCalledWith(COMPACT_HOST.id, 'user-1');
@@ -172,9 +172,9 @@ describe('AIService proxy tool routing', () => {
             `proxy:advanced:bypass:${COMPACT_HOST.id}`,
           ],
         },
-        'update_proxy_host',
+        'update_route',
         {
-          proxyHostId: COMPACT_HOST.id,
+          routeId: COMPACT_HOST.id,
           domainNames: ['new.example.com'],
           nodeId: 'node-2',
           type: 'proxy',
@@ -249,15 +249,15 @@ describe('AIService proxy tool routing', () => {
     );
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: [`proxy:edit:${COMPACT_HOST.id}`] }, 'update_proxy_host', {
-        proxyHostId: COMPACT_HOST.id,
+      service.executeTool({ ...BASE_USER, scopes: [`proxy:edit:${COMPACT_HOST.id}`] }, 'update_route', {
+        routeId: COMPACT_HOST.id,
         advancedConfig: 'proxy_set_header X-Test true;',
       })
     ).resolves.toEqual({ error: 'Advanced config requires proxy:advanced scope', invalidateStores: [] });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: [`proxy:edit:${COMPACT_HOST.id}`] }, 'update_proxy_host', {
-        proxyHostId: COMPACT_HOST.id,
+      service.executeTool({ ...BASE_USER, scopes: [`proxy:edit:${COMPACT_HOST.id}`] }, 'update_route', {
+        routeId: COMPACT_HOST.id,
         rawConfig: 'server {}',
       })
     ).resolves.toEqual({ error: 'Raw config changes require dedicated raw config tools', invalidateStores: [] });
@@ -275,8 +275,8 @@ describe('AIService proxy tool routing', () => {
           ...BASE_USER,
           scopes: [`proxy:raw:toggle:${COMPACT_HOST.id}`, `proxy:raw:bypass:${COMPACT_HOST.id}`],
         },
-        'toggle_proxy_raw_mode',
-        { proxyHostId: COMPACT_HOST.id, enabled: true }
+        'toggle_route_raw_mode',
+        { routeId: COMPACT_HOST.id, enabled: true }
       )
     ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });
 
@@ -294,7 +294,7 @@ describe('AIService proxy tool routing', () => {
     const service = createService({}, folderService);
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'create_proxy_folder', {
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'create_route_folder', {
         name: 'Apps',
         parentId: 'parent-1',
       })
@@ -304,9 +304,9 @@ describe('AIService proxy tool routing', () => {
     await expect(
       service.executeTool(
         { ...BASE_USER, scopes: ['proxy:folders:manage', 'proxy:edit:proxy-1', 'proxy:edit:proxy-2'] },
-        'move_hosts_to_folder',
+        'move_routes_to_folder',
         {
-          hostIds: ['proxy-1', 'proxy-2'],
+          routeIds: ['proxy-1', 'proxy-2'],
           folderId: null,
         }
       )
@@ -317,8 +317,8 @@ describe('AIService proxy tool routing', () => {
     );
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'move_hosts_to_folder', {
-        hostIds: ['proxy-1'],
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'move_routes_to_folder', {
+        routeIds: ['proxy-1'],
         folderId: 'folder-1',
       })
     ).resolves.toEqual({
@@ -327,7 +327,7 @@ describe('AIService proxy tool routing', () => {
     });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'delete_proxy_folder', {
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'delete_route_folder', {
         folderId: 'folder-1',
       })
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['proxy'] });

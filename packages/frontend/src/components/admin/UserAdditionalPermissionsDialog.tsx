@@ -2,6 +2,10 @@ import { Loader2, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,7 +14,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import {
@@ -72,6 +75,7 @@ export function UserAdditionalPermissionsDialog({
   const [resources, setResources] = useState<Record<string, string[]>>({});
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const [selectionFilter, setSelectionFilter] = useState<ScopeSelectionFilter>("all");
   const [saving, setSaving] = useState(false);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
@@ -97,6 +101,7 @@ export function UserAdditionalPermissionsDialog({
     setResources(parsed.resources);
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
     setSearch("");
+    setSelectionFilter("all");
   }, [open, user]);
 
   useEffect(() => {
@@ -217,15 +222,17 @@ export function UserAdditionalPermissionsDialog({
           </TabsList>
 
           <TabsContent value="additional" className="border border-border">
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+            <ScopeSearchFilter
+              search={search}
+              onSearchChange={setSearch}
+              filter={selectionFilter}
+              onFilterChange={setSelectionFilter}
               placeholder="Search permissions..."
-              className="h-9 rounded-none border-0 border-b border-border text-sm focus-visible:ring-0"
             />
             <ScopeList
               scopes={assignableScopes}
               search={search}
+              selectionFilter={selectionFilter}
               selected={baseScopes}
               onToggle={toggleScope}
               resources={resources}

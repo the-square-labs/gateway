@@ -1,0 +1,73 @@
+import { Filter } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+
+export type ScopeSelectionFilter = "all" | "selected" | "unselected";
+
+const FILTER_LABELS: Record<ScopeSelectionFilter, string> = {
+  all: "All items",
+  selected: "Selected only",
+  unselected: "Unselected only",
+};
+
+export function ScopeSearchFilter({
+  search,
+  onSearchChange,
+  filter,
+  onFilterChange,
+  placeholder = "Search permissions...",
+  className,
+  disabled = false,
+}: {
+  search: string;
+  onSearchChange: (value: string) => void;
+  filter: ScopeSelectionFilter;
+  onFilterChange: (filter: ScopeSelectionFilter) => void;
+  placeholder?: string;
+  className?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className={cn("flex min-w-0 border-b border-border", className)}>
+      <Input
+        value={search}
+        onChange={(event) => onSearchChange(event.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        className="h-9 min-w-0 flex-1 rounded-none border-0 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label={`Filter scopes: ${FILTER_LABELS[filter]}`}
+            title={`Filter scopes: ${FILTER_LABELS[filter]}`}
+            disabled={disabled}
+          >
+            <Filter className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuRadioGroup
+            value={filter}
+            onValueChange={(value) => onFilterChange(value as ScopeSelectionFilter)}
+          >
+            <DropdownMenuRadioItem value="all">All items</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="selected">Selected only</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="unselected">Unselected only</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}

@@ -5,6 +5,10 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +19,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -104,6 +107,7 @@ export function OAuthApplicationsSection({
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const [savingScopes, setSavingScopes] = useState(false);
   const [scopeSearch, setScopeSearch] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<ScopeSelectionFilter>("all");
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
   const allowedResourceIdsByScope = useMemo(
     () => deriveAllowedResourceIdsByScope(userScopes),
@@ -170,6 +174,7 @@ export function OAuthApplicationsSection({
     setEditableResourceScopes(parsed.resources);
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
     setScopeSearch("");
+    setScopeFilter("all");
   };
 
   const toggleScope = (scope: string) => {
@@ -422,15 +427,17 @@ export function OAuthApplicationsSection({
               </div>
 
               <div className="border border-border">
-                <Input
-                  value={scopeSearch}
-                  onChange={(event) => setScopeSearch(event.target.value)}
+                <ScopeSearchFilter
+                  search={scopeSearch}
+                  onSearchChange={setScopeSearch}
+                  filter={scopeFilter}
+                  onFilterChange={setScopeFilter}
                   placeholder="Search scopes..."
-                  className="h-9 rounded-none border-0 border-b border-border text-sm focus-visible:ring-0"
                 />
                 <ScopeList
                   scopes={visibleScopes}
                   search={scopeSearch}
+                  selectionFilter={scopeFilter}
                   selected={editableBaseScopes}
                   onToggle={toggleScope}
                   resources={editableResourceScopes}

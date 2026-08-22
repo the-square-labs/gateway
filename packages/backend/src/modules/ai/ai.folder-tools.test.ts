@@ -59,7 +59,7 @@ describe('AI folder tools', () => {
     });
 
     const result = await executeFolderTool({ ...BASE_USER, scopes: ['proxy:view:proxy-1'] }, 'list_resource_folders', {
-      resourceType: 'proxy_hosts',
+      resourceType: 'routes',
     });
 
     expect(proxyFolderService.getFolderTree).toHaveBeenCalledWith({ allowedHostIds: ['proxy-1'] });
@@ -113,7 +113,7 @@ describe('AI folder tools', () => {
         { ...BASE_USER, scopes: ['proxy:folders:manage', `proxy:edit:${proxyOneId}`] },
         'manage_resource_folder',
         {
-          resourceType: 'proxy_hosts',
+          resourceType: 'routes',
           operation: 'reorder_resources',
           items: [
             { id: proxyOneId, sortOrder: 0 },
@@ -129,7 +129,7 @@ describe('AI folder tools', () => {
         { ...BASE_USER, scopes: ['proxy:folders:manage', `proxy:edit:${proxyOneId}`, `proxy:edit:${proxyTwoId}`] },
         'manage_resource_folder',
         {
-          resourceType: 'proxy_hosts',
+          resourceType: 'routes',
           operation: 'reorder_resources',
           items: [
             { id: proxyOneId, sortOrder: 0 },

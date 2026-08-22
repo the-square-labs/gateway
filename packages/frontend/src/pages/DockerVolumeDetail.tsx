@@ -1,14 +1,18 @@
 import {
+  Boxes,
   Download,
   Folder,
+  HardDrive,
+  Hash,
   Save,
+  Scaling,
   Settings,
   ShieldCheck,
   ShieldOff,
   Trash2,
   Type,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -27,17 +31,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { StatCard } from "@/components/ui/stat-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { dockerContainerRoute, dockerVolumeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState, getReturnNavigationTarget } from "@/lib/return-navigation";
+import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { useUIStore } from "@/stores/ui";
-import type { DockerVolume } from "@/types";
+import type { DockerVolume, DockerVolumeMetrics } from "@/types";
 import { type FileManagerOperations, FilesTab } from "./docker-detail/FilesTab";
 import { LabelsSection } from "./docker-detail/LabelsSection";
 
@@ -106,6 +112,18 @@ export function DockerVolumeDetail({
   const [renameValue, setRenameValue] = useState("");
   const [usageContainers, setUsageContainers] = useState<VolumeUsageContainer[]>([]);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [metrics, setMetrics] = useState<DockerVolumeMetrics | null>(null);
+  const [metricHistory, setMetricHistory] = useState({
+    space: [] as number[],
+    inodes: [] as number[],
+    attachments: [] as number[],
+  });
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const [resizeCapacityGb, setResizeCapacityGb] = useState("");
+  const [resizing, setResizing] = useState(false);
+  const metricsRequestRef = useRef<string | null>(null);
+  const metricsIdentityRef = useRef("");
+  metricsIdentityRef.current = `${nodeId ?? ""}:${decodedVolumeName}`;
 
   const canCreateVolume =
     hasScope("docker:volumes:create") || !!(nodeId && hasScope(`docker:volumes:create:${nodeId}`));
@@ -129,6 +147,11 @@ export function DockerVolumeDetail({
   }, [volume]);
   const isUsed = usedBy.length > 0 || (volume?.usedByCount ?? 0) > 0;
   const labelsChanged = labelsSignature(labels) !== labelsSignature(savedLabels);
+  const isDiskImage = volume?.storageKind === "disk-image";
+  const currentCapacityGb = Math.max(
+    1,
+    Math.ceil((volume?.capacityBytes ?? metrics?.capacityBytes ?? 0) / 1024 ** 3)
+  );
   const usageColumns = useMemo<SimpleTableColumn<VolumeUsageContainer>[]>(
     () => [
       {
@@ -240,6 +263,36 @@ export function DockerVolumeDetail({
       cancelled = true;
     };
   }, [nodeId, usedBy]);
+
+  const fetchMetrics = useCallback(async () => {
+    if (!nodeId || !decodedVolumeName || activeTab !== "settings" || unavailable) return;
+    const identity = `${nodeId}:${decodedVolumeName}`;
+    if (metricsRequestRef.current === identity) return;
+    metricsRequestRef.current = identity;
+    try {
+      const next = await api.getVolumeMetrics(nodeId, decodedVolumeName);
+      if (metricsIdentityRef.current !== identity) return;
+      setMetrics(next);
+      setMetricHistory((previous) => ({
+        space: [...previous.space, next.usedBytes ?? 0].slice(-60),
+        inodes: [...previous.inodes, next.usedInodes ?? 0].slice(-60),
+        attachments: [...previous.attachments, next.runningAttachmentCount].slice(-60),
+      }));
+    } catch {
+      // Keep the last successful sample during transient daemon refreshes.
+    } finally {
+      if (metricsRequestRef.current === identity) metricsRequestRef.current = null;
+    }
+  }, [activeTab, decodedVolumeName, nodeId, unavailable]);
+
+  useEffect(() => {
+    if (activeTab !== "settings") return;
+    setMetrics(null);
+    setMetricHistory({ space: [], inodes: [], attachments: [] });
+    void fetchMetrics();
+    const interval = window.setInterval(() => void fetchMetrics(), 30_000);
+    return () => window.clearInterval(interval);
+  }, [activeTab, fetchMetrics]);
 
   useRealtime("docker.volume.changed", (payload) => {
     const event = payload as { nodeId?: string; oldName?: string; name?: string };
@@ -451,7 +504,47 @@ export function DockerVolumeDetail({
     volume?.labels,
   ]);
 
+  const openResize = useCallback(() => {
+    setResizeCapacityGb(String(currentCapacityGb + 1));
+    setResizeOpen(true);
+  }, [currentCapacityGb]);
+
+  const handleResize = useCallback(async () => {
+    if (!nodeId || !isDiskImage) return;
+    const nextGb = Number(resizeCapacityGb);
+    if (!Number.isInteger(nextGb) || nextGb <= currentCapacityGb) return;
+    setResizing(true);
+    try {
+      await api.resizeVolume(nodeId, decodedVolumeName, nextGb * 1024 ** 3);
+      toast.success("Volume storage resized");
+      setResizeOpen(false);
+      await Promise.all([fetchVolume(true), fetchMetrics()]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to resize volume storage");
+    } finally {
+      setResizing(false);
+    }
+  }, [
+    currentCapacityGb,
+    decodedVolumeName,
+    fetchMetrics,
+    fetchVolume,
+    isDiskImage,
+    nodeId,
+    resizeCapacityGb,
+  ]);
+
   const headerActions = [
+    ...(canCreateVolume && isDiskImage && volume?.managementState === "managed"
+      ? [
+          {
+            label: "Resize",
+            icon: <Scaling className="h-4 w-4" />,
+            onClick: openResize,
+            disabled: actionLoading || unavailable,
+          },
+        ]
+      : []),
     ...(canRenameVolume
       ? [
           {
@@ -519,6 +612,16 @@ export function DockerVolumeDetail({
               </div>
             </div>
             <ResponsiveHeaderActions actions={headerActions}>
+              {canCreateVolume && isDiskImage && volume?.managementState === "managed" && (
+                <Button
+                  variant="outline"
+                  onClick={openResize}
+                  disabled={actionLoading || unavailable}
+                >
+                  <Scaling className="h-3.5 w-3.5" />
+                  Resize
+                </Button>
+              )}
               {canRenameVolume && (
                 <Button
                   variant="outline"
@@ -583,6 +686,61 @@ export function DockerVolumeDetail({
             </TabsContent>
             <TabsContent value="settings" className="pb-0">
               <div className="space-y-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <StatCard
+                    label="Space"
+                    value={
+                      metrics?.usedBytes == null
+                        ? "N/A"
+                        : metrics.capacityBytes != null
+                          ? `${formatBytes(metrics.usedBytes)} / ${formatBytes(metrics.capacityBytes)}`
+                          : formatBytes(metrics.usedBytes)
+                    }
+                    icon={HardDrive}
+                    history={metricHistory.space.length ? metricHistory.space : [0]}
+                    sparklineMax={metrics?.capacityBytes ?? undefined}
+                    progress={
+                      metrics?.usedBytes != null && metrics.capacityBytes
+                        ? {
+                            percent: Math.min(
+                              100,
+                              (metrics.usedBytes / metrics.capacityBytes) * 100
+                            ),
+                          }
+                        : undefined
+                    }
+                    subtitle={
+                      metrics?.availableBytes != null
+                        ? `${formatBytes(metrics.availableBytes)} available`
+                        : metrics?.usedBytes != null
+                          ? "Capacity is shared with the node"
+                          : "Unavailable"
+                    }
+                  />
+                  <StatCard
+                    label="Inodes count"
+                    value={
+                      metrics?.usedInodes != null && metrics.totalInodes != null
+                        ? `${metrics.usedInodes.toLocaleString()} / ${metrics.totalInodes.toLocaleString()}`
+                        : "N/A"
+                    }
+                    icon={Hash}
+                    history={metricHistory.inodes.length ? metricHistory.inodes : [0]}
+                    sparklineMax={metrics?.totalInodes ?? undefined}
+                    subtitle={
+                      isDiskImage
+                        ? "Used / total filesystem inodes"
+                        : "Unavailable for regular volumes"
+                    }
+                  />
+                  <StatCard
+                    label="Attached containers"
+                    value={String(metrics?.runningAttachmentCount ?? 0)}
+                    icon={Boxes}
+                    history={metricHistory.attachments.length ? metricHistory.attachments : [0]}
+                    subtitle="Running containers only"
+                  />
+                </div>
                 <PanelShell
                   title="Usage"
                   description="Containers currently attached to this volume."
@@ -672,6 +830,51 @@ export function DockerVolumeDetail({
               disabled={actionLoading || unavailable || !renameValue.trim()}
             >
               Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={resizeOpen} onOpenChange={setResizeOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Resize volume</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Disk-image storage can only be increased. The filesystem is expanded without
+              recreating the volume.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="docker-volume-resize-capacity">
+                New capacity, GB
+              </label>
+              <Input
+                id="docker-volume-resize-capacity"
+                type="number"
+                min={currentCapacityGb + 1}
+                step={1}
+                value={resizeCapacityGb}
+                onChange={(event) => setResizeCapacityGb(event.target.value)}
+                disabled={resizing}
+              />
+              <p className="text-xs text-muted-foreground">
+                Enter a whole number greater than {currentCapacityGb} GB.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResizeOpen(false)} disabled={resizing}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleResize()}
+              disabled={
+                resizing ||
+                !Number.isInteger(Number(resizeCapacityGb)) ||
+                Number(resizeCapacityGb) <= currentCapacityGb
+              }
+            >
+              {resizing ? "Resizing..." : "Resize volume"}
             </Button>
           </DialogFooter>
         </DialogContent>

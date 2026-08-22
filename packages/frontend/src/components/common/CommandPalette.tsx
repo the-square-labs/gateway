@@ -609,10 +609,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           "integrations:gitlab:view",
           "integrations:gitlab:manage",
           "integrations:cloudflare:view",
-          "integrations:cloudflare:manage",
-          "integrations:cloudflare:dns:view",
-          "integrations:cloudflare:dns:edit",
-          "integrations:cloudflare:dns:delete"
+          "integrations:cloudflare:manage"
         ),
       },
       {
@@ -703,8 +700,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         });
       }
       if (
-        hasScope("docker:containers:files") ||
-        hasScope(`docker:containers:files:${resourceSuffix}`)
+        hasScope("docker:containers:files:read") ||
+        hasScope(`docker:containers:files:read:${resourceSuffix}`)
       ) {
         actions.push({
           id: "context:container-files",
@@ -983,8 +980,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       }
       if (
         filesRoute &&
-        (hasScope("docker:containers:files") ||
-          hasScope(`docker:containers:files:${resourceSuffix}`))
+        (hasScope("docker:containers:files:read") ||
+          hasScope(`docker:containers:files:read:${resourceSuffix}`))
       ) {
         entries.push({
           id: `command:container-files:${nodeId}:${container.id}`,

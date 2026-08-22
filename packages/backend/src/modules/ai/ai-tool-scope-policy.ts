@@ -2,7 +2,7 @@ import { FOLDER_TOOL_REQUIREMENT_SCOPES } from './ai.folder-tool-scopes.js';
 
 export const AI_BROAD_ONLY_TOOL_SCOPES = new Set<string>();
 export const AI_DIRECT_DATABASE_VIEW_TOOLS = new Set(['list_databases', 'get_database_connection']);
-export const AI_DIRECT_RAW_READ_TOOLS = new Set(['get_proxy_rendered_config']);
+export const AI_DIRECT_RAW_READ_TOOLS = new Set(['get_route_rendered_config']);
 export const AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS = new Set([
   'query_postgres_read',
   'execute_postgres_sql',
@@ -65,7 +65,8 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   manage_docker_container_config: [
     'docker:containers:view',
     'docker:containers:environment',
-    'docker:containers:files',
+    'docker:containers:files:read',
+    'docker:containers:files:write',
     'docker:containers:secrets',
     'docker:containers:webhooks',
     'docker:containers:config',

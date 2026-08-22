@@ -593,7 +593,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 
   // ── Ingress Routes ──
   {
-    name: 'list_proxy_hosts',
+    name: 'list_routes',
     description: 'List all ingress routes with their status, domains, node placement, and TLS configuration.',
     parameters: {
       type: 'object',
@@ -609,14 +609,14 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: [],
   },
   {
-    name: 'get_proxy_host',
+    name: 'get_route',
     description: 'Get detailed configuration of a specific ingress route.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
+        routeId: { type: 'string', description: 'Route UUID' },
       },
-      required: ['proxyHostId'],
+      required: ['routeId'],
     },
     destructive: false,
     category: 'Ingress',
@@ -624,7 +624,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: [],
   },
   {
-    name: 'create_proxy_host',
+    name: 'create_route',
     description: 'Create a new ingress route configuration on a selected nginx node.',
     parameters: {
       type: 'object',
@@ -715,12 +715,12 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: ['proxy'],
   },
   {
-    name: 'update_proxy_host',
+    name: 'update_route',
     description: 'Update an existing ingress route configuration.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
+        routeId: { type: 'string', description: 'Route UUID' },
         type: {
           type: 'string',
           enum: ['proxy', 'redirect', '404'],
@@ -800,7 +800,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         healthCheckSlowThreshold: { type: ['number', 'null'], description: 'Nx average threshold; null clears it' },
         enabled: { type: 'boolean', description: 'Enable or disable the route' },
       },
-      required: ['proxyHostId'],
+      required: ['routeId'],
     },
     destructive: true,
     category: 'Ingress',
@@ -808,14 +808,14 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: ['proxy'],
   },
   {
-    name: 'delete_proxy_host',
+    name: 'delete_route',
     description: 'Permanently delete an ingress route and its nginx configuration.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Route UUID to delete (proxy-host API resource)' },
+        routeId: { type: 'string', description: 'Route UUID to delete' },
       },
-      required: ['proxyHostId'],
+      required: ['routeId'],
     },
     destructive: true,
     category: 'Ingress',
@@ -825,7 +825,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 
   // ── Route Folders ──
   {
-    name: 'create_proxy_folder',
+    name: 'create_route_folder',
     description: 'Create a folder to organize ingress routes.',
     parameters: {
       type: 'object',
@@ -841,15 +841,15 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: ['proxy'],
   },
   {
-    name: 'move_hosts_to_folder',
+    name: 'move_routes_to_folder',
     description: 'Move one or more ingress routes into a folder (or to root by passing null as folderId).',
     parameters: {
       type: 'object',
       properties: {
-        hostIds: { type: 'array', items: { type: 'string' }, description: 'Route UUIDs to move' },
+        routeIds: { type: 'array', items: { type: 'string' }, description: 'Route UUIDs to move' },
         folderId: { type: ['string', 'null'], description: 'Target folder UUID, or null to move to root (ungrouped)' },
       },
-      required: ['hostIds', 'folderId'],
+      required: ['routeIds', 'folderId'],
     },
     destructive: true,
     category: 'Ingress',
@@ -857,7 +857,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: ['proxy'],
   },
   {
-    name: 'delete_proxy_folder',
+    name: 'delete_route_folder',
     description: 'Delete a route folder. Routes inside will be moved to root (ungrouped).',
     parameters: {
       type: 'object',
@@ -1301,15 +1301,15 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 
   // ── Raw Config ──
   {
-    name: 'get_proxy_rendered_config',
+    name: 'get_route_rendered_config',
     description:
       'Get the rendered nginx configuration for an ingress route. Shows either the template-generated or raw config.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
+        routeId: { type: 'string', description: 'Route UUID' },
       },
-      required: ['proxyHostId'],
+      required: ['routeId'],
     },
     destructive: false,
     category: 'Ingress',
@@ -1317,15 +1317,15 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: [],
   },
   {
-    name: 'update_proxy_raw_config',
+    name: 'update_route_raw_config',
     description: 'Write raw nginx configuration for an ingress route. Raw mode must be enabled first.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
+        routeId: { type: 'string', description: 'Route UUID' },
         rawConfig: { type: 'string', description: 'Raw nginx configuration content' },
       },
-      required: ['proxyHostId', 'rawConfig'],
+      required: ['routeId', 'rawConfig'],
     },
     destructive: true,
     category: 'Ingress',
@@ -1333,16 +1333,16 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: ['proxy'],
   },
   {
-    name: 'toggle_proxy_raw_mode',
+    name: 'toggle_route_raw_mode',
     description:
       'Enable or disable raw config mode on an ingress route. When enabled, template rendering is bypassed and the raw config is used directly.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
+        routeId: { type: 'string', description: 'Route UUID' },
         enabled: { type: 'boolean', description: 'true to enable raw mode, false to disable' },
       },
-      required: ['proxyHostId', 'enabled'],
+      required: ['routeId', 'enabled'],
     },
     destructive: true,
     category: 'Ingress',

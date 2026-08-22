@@ -65,6 +65,34 @@ describe('Codex catalog synchronization', () => {
     });
   });
 
+  it('preserves Gateway model and reasoning effort order in the Codex catalog', () => {
+    const first = {
+      ...MODELS.data[0],
+      id: 'first-model',
+      display_name: 'First Model',
+      supported_reasoning_efforts: ['high', 'low', 'medium'],
+      default_reasoning_effort: 'low',
+    };
+    const second = {
+      ...MODELS.data[0],
+      id: 'second-model',
+      display_name: 'Second Model',
+    };
+
+    const catalog = codexCatalogFromModels([first, second]);
+
+    expect(catalog.models.map((model) => [model.slug, model.priority])).toEqual([
+      ['first-model', 0],
+      ['second-model', 1],
+    ]);
+    expect(catalog.models[0].supported_reasoning_levels).toEqual([
+      { effort: 'high', description: expect.any(String) },
+      { effort: 'low', description: expect.any(String) },
+      { effort: 'medium', description: expect.any(String) },
+    ]);
+    expect(catalog.models[0].default_reasoning_level).toBe('low');
+  });
+
   it('downloads the standard model list, converts it, and then uses If-None-Match', async () => {
     const files = await fixture();
     const calls: Request[] = [];

@@ -107,7 +107,8 @@ const RESOURCE_SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:edit',
   'docker:containers:environment',
   'docker:containers:secrets',
-  'docker:containers:files',
+  'docker:containers:files:read',
+  'docker:containers:files:write',
   'docker:containers:export',
   'docker:containers:webhooks',
   'docker:containers:mounts',
@@ -170,6 +171,9 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
       ...(capabilities?.cpuCores !== undefined ? { cpuCores: capabilities.cpuCores } : {}),
       ...(capabilities?.dockerRuntimeStatus ? { dockerRuntimeStatus: capabilities.dockerRuntimeStatus } : {}),
       ...(advertisedCapabilities.includes('docker_port_bind_ip_v1') ? { dockerPortBindIpV1: true } : {}),
+      ...(advertisedCapabilities.includes('docker_volume_storage_images_v1')
+        ? { dockerVolumeStorageImagesV1: true }
+        : {}),
       ...(advertisedCapabilities.includes('nginx_pages_v1') ? { nginx_pages_v1: true } : {}),
       ...(advertisedCapabilities.includes('nginx_pages_config_v1') ? { nginx_pages_config_v1: true } : {}),
     },

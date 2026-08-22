@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,7 @@ type DockerPlugin struct {
 	migrationStore  *migrationArtifactStore
 	archiveStreams  *archiveLiveStore
 	databaseManager *managedDatabaseManager
+	volumeImages    *volumeImageManager
 	relayGrants     *relayGrantStore
 	relayTunnelMu   sync.Mutex
 	relayTunnels    map[string]*relayTunnelRouter
@@ -155,6 +157,10 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 	}
 	if p.cfg.Docker.Mode != "databases" {
+		p.volumeImages, err = newVolumeImageManager(p.cfg.StateDir, p.client, p.logger)
+		if err != nil {
+			return fmt.Errorf("initialize disk-image volume storage: %w", err)
+		}
 		p.secureLinks, err = newDockerSecureLinkManager(p)
 		if err != nil {
 			return fmt.Errorf("initialize proxy secure links: %w", err)
@@ -272,6 +278,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 			}
 		}
 		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
+		if p.volumeImages != nil && p.volumeImages.supported {
+			values = append(values, "docker_volume_storage_images_v1")
+		}
 		if p.getRuntimeStatus().State == runtimemanager.StateHealthy {
 			values = append(values, "docker_runsc_healthy_v1")
 		}
@@ -1025,7 +1034,59 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = "name is required for volume create"
 			return
 		}
-		if err := p.client.CreateManagedVolume(ctx, cmd.Name); err != nil {
+		var err error
+		if cmd.StorageKind == volumeStorageKindDiskImage {
+			if p.volumeImages == nil {
+				err = errors.New("disk-image volume storage is not initialized")
+			} else {
+				err = p.volumeImages.create(ctx, cmd.Name, cmd.CapacityBytes)
+			}
+		} else {
+			err = p.client.CreateManagedVolume(ctx, cmd.Name)
+		}
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+
+	case "metrics":
+		if cmd.Name == "" {
+			result.Success = false
+			result.Error = "name is required for volume metrics"
+			return
+		}
+		if p.volumeImages == nil {
+			result.Success = false
+			result.Error = "volume metrics are not initialized"
+			return
+		}
+		metrics, err := p.volumeImages.metrics(ctx, cmd.Name)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		data, err := json.Marshal(metrics)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		result.Detail = string(data)
+
+	case "resize":
+		if cmd.Name == "" || cmd.CapacityBytes <= 0 {
+			result.Success = false
+			result.Error = "name and capacity_bytes are required for volume resize"
+			return
+		}
+		if p.volumeImages == nil {
+			result.Success = false
+			result.Error = "disk-image volume storage is not initialized"
+			return
+		}
+		if err := p.volumeImages.resize(ctx, cmd.Name, cmd.CapacityBytes); err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return
@@ -1037,7 +1098,17 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = "name is required for volume remove"
 			return
 		}
-		if err := p.client.RemoveVolume(ctx, cmd.Name, cmd.Force); err != nil {
+		var err error
+		if p.volumeImages != nil {
+			if _, recordErr := p.volumeImages.loadRecord(cmd.Name); recordErr == nil {
+				err = p.volumeImages.remove(ctx, cmd.Name, cmd.Force)
+			} else {
+				err = p.client.RemoveVolume(ctx, cmd.Name, cmd.Force)
+			}
+		} else {
+			err = p.client.RemoveVolume(ctx, cmd.Name, cmd.Force)
+		}
+		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return
@@ -1049,7 +1120,17 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = "name and new_name are required for volume rename"
 			return
 		}
-		if err := p.client.RenameVolume(ctx, cmd.Name, cmd.NewName); err != nil {
+		var err error
+		if p.volumeImages != nil {
+			if _, recordErr := p.volumeImages.loadRecord(cmd.Name); recordErr == nil {
+				err = p.volumeImages.rename(ctx, cmd.Name, cmd.NewName)
+			} else {
+				err = p.client.RenameVolume(ctx, cmd.Name, cmd.NewName)
+			}
+		} else {
+			err = p.client.RenameVolume(ctx, cmd.Name, cmd.NewName)
+		}
+		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return
@@ -1061,7 +1142,17 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = "name is required for volume label update"
 			return
 		}
-		if err := p.client.UpdateVolumeLabels(ctx, cmd.Name, cmd.Labels); err != nil {
+		var err error
+		if p.volumeImages != nil {
+			if _, recordErr := p.volumeImages.loadRecord(cmd.Name); recordErr == nil {
+				err = p.volumeImages.updateLabels(ctx, cmd.Name, cmd.Labels)
+			} else {
+				err = p.client.UpdateVolumeLabels(ctx, cmd.Name, cmd.Labels)
+			}
+		} else {
+			err = p.client.UpdateVolumeLabels(ctx, cmd.Name, cmd.Labels)
+		}
+		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return

@@ -210,39 +210,41 @@ async function managePages(user: User, args: Record<string, unknown>) {
 
 async function manageAdditionalRoute(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation);
-  const proxyHostId = requiredString(args.proxyHostId);
+  const routeId = requiredString(args.routeId);
   const service = container.resolve(AdditionalRouteService);
   if (operation === 'list') {
-    ensureResourceScope(user, 'proxy:view', proxyHostId);
-    return { data: await service.list(proxyHostId) };
+    ensureResourceScope(user, 'proxy:view', routeId);
+    return { data: await service.list(routeId) };
   }
-  const routeId = operation === 'create' ? undefined : requiredString(args.routeId);
+  const additionalRouteId = operation === 'create' ? undefined : requiredString(args.additionalRouteId);
   if (operation === 'get') {
-    ensureResourceScope(user, 'proxy:view', proxyHostId);
-    return service.present(await service.get(proxyHostId, requiredValue(routeId)));
+    ensureResourceScope(user, 'proxy:view', routeId);
+    return service.present(await service.get(routeId, requiredValue(additionalRouteId)));
   }
-  ensureResourceScope(user, 'proxy:edit', proxyHostId);
+  ensureResourceScope(user, 'proxy:edit', routeId);
   if (operation === 'create') {
     const input = CreateAdditionalRouteSchema.parse(args);
     if (input.advancedConfig !== undefined && input.advancedConfig !== null) {
-      ensureResourceScope(user, 'proxy:advanced', proxyHostId);
+      ensureResourceScope(user, 'proxy:advanced', routeId);
     }
     await requirePagesForAdditionalTarget(input);
-    return service.present(await service.create(proxyHostId, input, user.id, user.scopes));
+    return service.present(await service.create(routeId, input, user.id, user.scopes));
   }
   if (operation === 'update') {
     const input = UpdateAdditionalRouteSchema.parse(args);
-    if (input.advancedConfig !== undefined) ensureResourceScope(user, 'proxy:advanced', proxyHostId);
+    if (input.advancedConfig !== undefined) ensureResourceScope(user, 'proxy:advanced', routeId);
     await requirePagesForAdditionalTarget(input);
-    return service.present(await service.update(proxyHostId, requiredValue(routeId), input, user.id, user.scopes));
+    return service.present(
+      await service.update(routeId, requiredValue(additionalRouteId), input, user.id, user.scopes)
+    );
   }
   if (operation === 'retry') {
-    const existing = await service.get(proxyHostId, requiredValue(routeId));
+    const existing = await service.get(routeId, requiredValue(additionalRouteId));
     if (existing.targetKind === 'pages') await container.resolve(LicensePolicyService).requireFeature('pages');
-    return service.present(await service.retry(proxyHostId, existing.id, user.id, user.scopes));
+    return service.present(await service.retry(routeId, existing.id, user.id, user.scopes));
   }
   if (operation === 'delete') {
-    await service.remove(proxyHostId, requiredValue(routeId), user.id);
+    await service.remove(routeId, requiredValue(additionalRouteId), user.id);
     return { success: true };
   }
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported Additional Route operation: ${operation}`);
@@ -250,16 +252,16 @@ async function manageAdditionalRoute(user: User, args: Record<string, unknown>) 
 
 async function manageAdditionalSecureLink(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation);
-  const proxyHostId = requiredString(args.proxyHostId);
+  const routeId = requiredString(args.routeId);
   const service = container.resolve(ProxyService);
   if (operation === 'list') {
-    ensureResourceScope(user, 'proxy:view', proxyHostId);
-    return { data: await service.listAdditionalSecureLinks(proxyHostId) };
+    ensureResourceScope(user, 'proxy:view', routeId);
+    return { data: await service.listAdditionalSecureLinks(routeId) };
   }
-  ensureResourceScope(user, 'proxy:edit', proxyHostId);
+  ensureResourceScope(user, 'proxy:edit', routeId);
   if (operation === 'create') {
     return service.createAdditionalSecureLink(
-      proxyHostId,
+      routeId,
       {
         name: requiredString(args.name),
         upstreamKind: requiredEnum(args.upstreamKind, ['docker_container', 'docker_deployment']),
@@ -273,9 +275,9 @@ async function manageAdditionalSecureLink(user: User, args: Record<string, unkno
     );
   }
   const bindingId = requiredString(args.bindingId);
-  if (operation === 'retry') return service.retryAdditionalSecureLink(proxyHostId, bindingId, user.id);
+  if (operation === 'retry') return service.retryAdditionalSecureLink(routeId, bindingId, user.id);
   if (operation === 'delete') {
-    await service.deleteAdditionalSecureLink(proxyHostId, bindingId, user.id);
+    await service.deleteAdditionalSecureLink(routeId, bindingId, user.id);
     return { success: true };
   }
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported Additional Secure Link operation: ${operation}`);

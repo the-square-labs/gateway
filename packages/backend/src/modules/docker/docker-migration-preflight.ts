@@ -197,6 +197,15 @@ export class DockerMigrationPreflightService {
     const allowedConsumers = allowedSourceConsumers(inspect, deployment);
     for (const volume of volumeNames) {
       const sourceVolume = sourceVolumes.find((item) => migrationItemName(item) === volume);
+      if ((sourceVolume?.storageKind ?? sourceVolume?.StorageKind) === 'disk-image') {
+        blockers.push(
+          issue(
+            'MIGRATION_DISK_IMAGE_VOLUME_UNSUPPORTED',
+            `Disk-image volume "${volume}" cannot be migrated without losing its fixed-capacity storage semantics`,
+            volume
+          )
+        );
+      }
       const driver = String(sourceVolume?.Driver ?? sourceVolume?.driver ?? '');
       if (driver && driver !== 'local') {
         blockers.push(

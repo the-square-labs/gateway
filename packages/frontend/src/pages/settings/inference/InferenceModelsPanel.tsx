@@ -1,12 +1,32 @@
-import { Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { GripVertical, Plus, Trash2 } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import {
+  SimpleTable,
+  type SimpleTableColumn,
+  type SimpleTableRowRenderProps,
+} from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PermissionGroup, User } from "@/types";
@@ -16,6 +36,21 @@ import type {
   InferenceProviderConnection,
 } from "@/types/inference";
 import { InferenceModelDialog } from "./InferenceModelDialog";
+
+type ModelSortable = ReturnType<typeof useSortable>;
+const ModelDragHandleContext = createContext<
+  Pick<ModelSortable, "attributes" | "listeners" | "setActivatorNodeRef"> | undefined
+>(undefined);
+
+export function reorderInferenceModels(models: InferenceModel[], activeId: string, overId: string) {
+  const oldIndex = models.findIndex((model) => model.id === activeId);
+  const newIndex = models.findIndex((model) => model.id === overId);
+  if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return models;
+  return arrayMove(models, oldIndex, newIndex).map((model, sortOrder) => ({
+    ...model,
+    sortOrder,
+  }));
+}
 
 export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: number }) {
   const canManage = useAuthStore((state) => state.hasScope("inference:models:manage"));
@@ -55,7 +90,9 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
   const [loading, setLoading] = useState(!hasCachedData);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<InferenceModel | null>(null);
+  const [reordering, setReordering] = useState(false);
   const initializedRef = useRef(hasCachedData);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const providerLabels = new Map(catalog.map((provider) => [provider.id, provider.label]));
 
   const load = useCallback(
@@ -107,7 +144,42 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
     }
   };
 
+  const reorderModels = async ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id || reordering) return;
+    const previous = models;
+    const next = reorderInferenceModels(previous, String(active.id), String(over.id));
+    if (next === previous) return;
+    setModels(next);
+    setReordering(true);
+    try {
+      await api.reorderInferenceModels(
+        next.map((model, sortOrder) => ({ id: model.id, sortOrder }))
+      );
+      await load({ showLoading: false });
+      toast.success("Model order updated");
+    } catch (error) {
+      setModels(previous);
+      await load({ showLoading: false });
+      toast.error(error instanceof Error ? error.message : "Failed to update model order");
+    } finally {
+      setReordering(false);
+    }
+  };
+
   const columns: SimpleTableColumn<InferenceModel>[] = [
+    ...(canManage && models.length > 1
+      ? [
+          {
+            id: "reorder",
+            header: <span className="sr-only">Order</span>,
+            className: "w-10 pr-0",
+            cellClassName: "w-10 pr-0",
+            render: (model: InferenceModel) => (
+              <ModelDragHandle model={model} disabled={reordering} />
+            ),
+          },
+        ]
+      : []),
     {
       id: "model",
       header: "Model",
@@ -212,25 +284,45 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
           ) : null
         }
       >
-        <SimpleTable
-          columns={columns}
-          rows={models}
-          getRowKey={(row) => row.id}
-          loading={loading}
-          emptyMessage={
-            connections.length
-              ? "No inference models published"
-              : "Connect a provider before adding models"
-          }
-          onRowClick={
-            canManage
-              ? (model) => {
+        {canManage && models.length > 1 ? (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={(event) => void reorderModels(event)}
+          >
+            <SortableContext
+              items={models.map((model) => model.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <ModelTable
+                columns={columns}
+                models={models}
+                loading={loading}
+                hasConnections={connections.length > 0}
+                onEdit={(model) => {
                   setEditing(model);
                   setDialogOpen(true);
-                }
-              : undefined
-          }
-        />
+                }}
+                sortable
+              />
+            </SortableContext>
+          </DndContext>
+        ) : (
+          <ModelTable
+            columns={columns}
+            models={models}
+            loading={loading}
+            hasConnections={connections.length > 0}
+            onEdit={
+              canManage
+                ? (model) => {
+                    setEditing(model);
+                    setDialogOpen(true);
+                  }
+                : undefined
+            }
+          />
+        )}
       </PanelShell>
       <InferenceModelDialog
         open={dialogOpen}
@@ -243,5 +335,86 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
         onSaved={() => load({ showLoading: false })}
       />
     </>
+  );
+}
+
+function ModelTable({
+  columns,
+  models,
+  loading,
+  hasConnections,
+  onEdit,
+  sortable = false,
+}: {
+  columns: SimpleTableColumn<InferenceModel>[];
+  models: InferenceModel[];
+  loading: boolean;
+  hasConnections: boolean;
+  onEdit?: (model: InferenceModel) => void;
+  sortable?: boolean;
+}) {
+  return (
+    <SimpleTable
+      columns={columns}
+      rows={models}
+      getRowKey={(row) => row.id}
+      loading={loading}
+      emptyMessage={
+        hasConnections ? "No inference models published" : "Connect a provider before adding models"
+      }
+      onRowClick={onEdit}
+      rowRenderer={sortable ? (props) => <SortableModelRow {...props} /> : undefined}
+    />
+  );
+}
+
+function SortableModelRow({
+  row,
+  className,
+  onClick,
+  children,
+}: SimpleTableRowRenderProps<InferenceModel>) {
+  const sortable = useSortable({ id: row.id });
+  return (
+    <ModelDragHandleContext.Provider
+      value={{
+        attributes: sortable.attributes,
+        listeners: sortable.listeners,
+        setActivatorNodeRef: sortable.setActivatorNodeRef,
+      }}
+    >
+      <tr
+        ref={sortable.setNodeRef}
+        style={{
+          transform: CSS.Transform.toString(sortable.transform),
+          transition: sortable.transition,
+        }}
+        className={cn(className, sortable.isDragging && "relative z-10 bg-accent opacity-70")}
+        onClick={onClick}
+      >
+        {children}
+      </tr>
+    </ModelDragHandleContext.Provider>
+  );
+}
+
+function ModelDragHandle({ model, disabled }: { model: InferenceModel; disabled: boolean }) {
+  const sortable = useContext(ModelDragHandleContext);
+  if (!sortable) return null;
+  return (
+    <Button
+      ref={sortable.setActivatorNodeRef}
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 cursor-grab text-muted-foreground active:cursor-grabbing"
+      disabled={disabled}
+      aria-label={`Reorder ${model.displayName}`}
+      title={`Reorder ${model.displayName}`}
+      onClick={(event) => event.stopPropagation()}
+      {...sortable.attributes}
+      {...sortable.listeners}
+    >
+      <GripVertical />
+    </Button>
   );
 }

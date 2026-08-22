@@ -20,6 +20,10 @@ import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { ScopeList } from "@/components/common/ScopeList";
+import {
+  ScopeSearchFilter,
+  type ScopeSelectionFilter,
+} from "@/components/common/ScopeSearchFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -139,6 +143,7 @@ export function AdminGroups({
   const [formRequireGateway2fa, setFormRequireGateway2fa] = useState(false);
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const [scopeSearch, setScopeSearch] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<ScopeSelectionFilter>("all");
   const [listSearch, setListSearch] = useState("");
   const [groupDialogMode, setGroupDialogMode] = useState<"edit" | "readonly">("edit");
   const [saving, setSaving] = useState(false);
@@ -281,6 +286,7 @@ export function AdminGroups({
     setFormRequireGateway2fa(false);
     setInitialResourceLimitedScopes([]);
     setScopeSearch("");
+    setScopeFilter("all");
     setDialogOpen(true);
   }, []);
 
@@ -302,6 +308,7 @@ export function AdminGroups({
     setFormRequireGateway2fa(group.requireGateway2fa ?? false);
     setInitialResourceLimitedScopes(Object.keys(resources));
     setScopeSearch("");
+    setScopeFilter("all");
     setDialogOpen(true);
   };
 
@@ -740,15 +747,17 @@ export function AdminGroups({
               )}
             </div>
             <div className="border border-border">
-              <Input
-                value={scopeSearch}
-                onChange={(e) => setScopeSearch(e.target.value)}
+              <ScopeSearchFilter
+                search={scopeSearch}
+                onSearchChange={setScopeSearch}
+                filter={scopeFilter}
+                onFilterChange={setScopeFilter}
                 placeholder="Search scopes..."
-                className="border-0 border-b border-border rounded-none h-9 text-sm focus-visible:ring-0"
               />
               <ScopeList
                 scopes={visibleAssignableScopes}
                 search={scopeSearch}
+                selectionFilter={scopeFilter}
                 selected={formBaseScopes}
                 onToggle={toggleScope}
                 resources={formResources}

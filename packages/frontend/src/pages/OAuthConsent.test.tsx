@@ -1,6 +1,6 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { OAuthConsent } from "@/pages/OAuthConsent";
 import { api } from "@/services/api";
 import { renderWithRouter } from "@/test/render";
@@ -41,8 +41,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+beforeEach(() => {
+  vi.spyOn(api, "listCAs").mockResolvedValue([]);
+  vi.spyOn(api, "listNodes").mockResolvedValue({ data: [] } as never);
+  vi.spyOn(api, "listProxyHosts").mockResolvedValue({ data: [] } as never);
+  vi.spyOn(api, "listDatabases").mockResolvedValue({ data: [] } as never);
+  vi.spyOn(api, "listLoggingSchemas").mockResolvedValue([]);
+  vi.spyOn(window, "open").mockReturnValue({
+    location: { replace: vi.fn() },
+    close: vi.fn(),
+  } as unknown as Window);
+});
+
 describe("OAuthConsent", () => {
-  it("shows client, selected account, grantable scopes, unavailable scopes, and warning", async () => {
+  it("shows client, selected account, grantable scopes, and warning without unavailable scopes", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
 
     renderWithRouter(<OAuthConsent />, {
@@ -61,10 +73,8 @@ describe("OAuthConsent", () => {
     expect(screen.getByText(/Only authorize tools you trust/)).toBeInTheDocument();
     expect(screen.getByText("View Nodes")).toBeInTheDocument();
     expect(screen.getByText("View Containers")).toBeInTheDocument();
-    expect(screen.getByText("Manage Users")).toBeInTheDocument();
-    expect(
-      screen.getByText("These were requested but cannot be granted by your account.")
-    ).toBeInTheDocument();
+    expect(screen.queryByText("Manage Users")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unavailable scopes")).not.toBeInTheDocument();
   });
 
   it("renders the inference setup scope once with useful metadata and a content-sized scope section", async () => {
@@ -156,14 +166,16 @@ describe("OAuthConsent", () => {
     );
   });
 
-  it("delivers the callback in the background and shows a result screen", async () => {
+  it("delivers a loopback callback through a small popup and shows a result screen", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
     vi.spyOn(api, "approveOAuthConsent").mockResolvedValue({
       redirectUrl: "http://127.0.0.1:8765/callback?code=abc",
     });
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 204 }));
+    const replace = vi.fn();
+    vi.mocked(window.open).mockReturnValue({
+      location: { replace },
+      close: vi.fn(),
+    } as unknown as Window);
 
     renderWithRouter(<OAuthConsent />, {
       path: "/oauth/consent",
@@ -179,22 +191,20 @@ describe("OAuthConsent", () => {
       "href",
       "http://127.0.0.1:8765/callback?code=abc"
     );
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "http://127.0.0.1:8765/callback?code=abc",
-      expect.objectContaining({
-        mode: "no-cors",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-      })
+    expect(window.open).toHaveBeenCalledWith(
+      "about:blank",
+      "gateway-oauth-callback",
+      expect.stringContaining("width=520")
     );
+    expect(replace).toHaveBeenCalledWith("http://127.0.0.1:8765/callback?code=abc");
   });
 
-  it("falls back to browser navigation when background callback delivery fails", async () => {
+  it("falls back to browser navigation when the callback popup is blocked", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
     vi.spyOn(api, "approveOAuthConsent").mockResolvedValue({
       redirectUrl: "http://127.0.0.1:8765/callback?code=abc",
     });
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("callback offline"));
+    vi.mocked(window.open).mockReturnValue(null);
     const hrefSetter = vi.fn();
     const originalLocation = window.location;
     Object.defineProperty(window, "location", {
@@ -236,7 +246,6 @@ describe("OAuthConsent", () => {
     vi.spyOn(api, "approveOAuthConsent").mockResolvedValue({
       redirectUrl: "https://client.example.com/callback?code=abc",
     });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const hrefSetter = vi.fn();
     const originalLocation = window.location;
     Object.defineProperty(window, "location", {
@@ -259,11 +268,7 @@ describe("OAuthConsent", () => {
       await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
       expect(hrefSetter).toHaveBeenCalledWith("https://client.example.com/callback?code=abc");
-      expect(
-        fetchSpy.mock.calls.some(
-          ([input]) => input === "https://client.example.com/callback?code=abc"
-        )
-      ).toBe(false);
+      expect(window.open).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
@@ -283,7 +288,6 @@ describe("OAuthConsent", () => {
     vi.spyOn(api, "denyOAuthConsent").mockResolvedValue({
       redirectUrl: "https://client.example.com/callback?error=access_denied",
     });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const hrefSetter = vi.fn();
     const originalLocation = window.location;
     Object.defineProperty(window, "location", {
@@ -308,11 +312,7 @@ describe("OAuthConsent", () => {
       expect(hrefSetter).toHaveBeenCalledWith(
         "https://client.example.com/callback?error=access_denied"
       );
-      expect(
-        fetchSpy.mock.calls.some(
-          ([input]) => input === "https://client.example.com/callback?error=access_denied"
-        )
-      ).toBe(false);
+      expect(window.open).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
@@ -322,6 +322,9 @@ describe("OAuthConsent", () => {
   });
 
   it("preserves resource-scoped scope values when authorizing", async () => {
+    vi.mocked(api.listNodes).mockResolvedValue({
+      data: [{ id: "node-1", type: "docker", hostname: "docker-1", displayName: "Docker 1" }],
+    } as never);
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue({
       ...preview,
       requestedScopes: ["docker:containers:view:node-1"],
@@ -337,8 +340,8 @@ describe("OAuthConsent", () => {
       route: "/oauth/consent?request=request-1",
     });
 
-    expect(await screen.findByText("docker:containers:view:node-1")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /docker:containers:view:node-1/i })).toBeChecked();
+    expect(await screen.findByText("View Containers")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Docker 1/i })).toBeChecked();
 
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 

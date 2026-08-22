@@ -88,6 +88,7 @@ import {
   deleteVolumeFile as deleteDockerVolumeFile,
   disconnectContainerFromNetwork as disconnectDockerContainerFromNetwork,
   exportVolume as exportDockerVolume,
+  getVolumeMetrics as getDockerVolumeMetrics,
   initVolumeFileUpload as initDockerVolumeFileUpload,
   inspectVolume as inspectDockerVolume,
   listNetworks as listDockerNetworks,
@@ -98,6 +99,7 @@ import {
   removeNetwork as removeDockerNetwork,
   removeVolume as removeDockerVolume,
   renameVolume as renameDockerVolume,
+  resizeVolume as resizeDockerVolume,
   updateVolumeLabels as updateDockerVolumeLabels,
   writeVolumeFile as writeDockerVolumeFile,
 } from './docker-volume-network-operations.js';
@@ -1235,9 +1237,24 @@ export class DockerManagementService {
     await updateDockerVolumeLabels(this.volumeNetworkOperationContext(), nodeId, name, labels, userId);
   }
 
-  async createVolume(nodeId: string, config: { name: string }, userId: string) {
+  async createVolume(
+    nodeId: string,
+    config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number },
+    userId: string
+  ) {
     await this.validateDockerNode(nodeId);
     return createDockerVolume(this.volumeNetworkOperationContext(), nodeId, config, userId);
+  }
+
+  async getVolumeMetrics(nodeId: string, name: string) {
+    await this.validateDockerNode(nodeId);
+    return getDockerVolumeMetrics(this.volumeNetworkOperationContext(), nodeId, name);
+  }
+
+  async resizeVolume(nodeId: string, name: string, capacityBytes: number, userId: string) {
+    await this.migrationGuard?.assertVolumeAllowed(nodeId, name);
+    await this.validateDockerNode(nodeId);
+    return resizeDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, capacityBytes, userId);
   }
 
   async listManagedVolumeOptions(nodeId: string) {
@@ -1255,10 +1272,14 @@ export class DockerManagementService {
     containers: Array<Record<string, any>>
   ) {
     const managedRows = await this.db
-      .select({ volumeName: dockerManagedVolumes.volumeName })
+      .select({
+        volumeName: dockerManagedVolumes.volumeName,
+        storageKind: dockerManagedVolumes.storageKind,
+        capacityBytes: dockerManagedVolumes.capacityBytes,
+      })
       .from(dockerManagedVolumes)
       .where(eq(dockerManagedVolumes.nodeId, nodeId));
-    const managedNames = new Set(managedRows.map((row) => row.volumeName));
+    const managedByName = new Map(managedRows.map((row) => [row.volumeName, row]));
     const publicContainerNames = new Set(
       containers
         .filter((entry) => !isGatewayInternalContainer(entry))
@@ -1272,7 +1293,8 @@ export class DockerManagementService {
       const name = String(volume.Name ?? volume.name ?? '');
       if (!name) return [];
       const usedBy = Array.isArray(volume.UsedBy ?? volume.usedBy) ? (volume.UsedBy ?? volume.usedBy) : [];
-      const managed = managedNames.has(name);
+      const managedRecord = managedByName.get(name);
+      const managed = !!managedRecord;
       if (!managed && !usedBy.some((containerName: string) => publicContainerNames.has(containerName))) return [];
       const driver = String(volume.Driver ?? volume.driver ?? '');
       const scope = String(volume.Scope ?? volume.scope ?? '');
@@ -1282,6 +1304,8 @@ export class DockerManagementService {
         {
           ...volume,
           managementState: managed ? 'managed' : 'legacy',
+          storageKind: managedRecord?.storageKind ?? 'regular',
+          capacityBytes: managedRecord?.capacityBytes ?? null,
           adoptable,
           adoptionReason:
             !managed && !adoptable ? 'Only local volumes without driver options can be migrated' : undefined,
@@ -1289,7 +1313,7 @@ export class DockerManagementService {
       ];
     });
     const returned = new Set(visible.map((volume) => String(volume.Name ?? volume.name ?? '')));
-    for (const { volumeName } of managedRows) {
+    for (const { volumeName, storageKind, capacityBytes } of managedRows) {
       if (!returned.has(volumeName)) {
         visible.push({
           Name: volumeName,
@@ -1297,6 +1321,8 @@ export class DockerManagementService {
           Scope: 'local',
           UsedBy: [],
           managementState: 'managed',
+          storageKind,
+          capacityBytes,
           adoptable: false,
           availability: 'unavailable',
         });

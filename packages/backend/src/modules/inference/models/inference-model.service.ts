@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -41,6 +41,8 @@ export type { InferenceModelInput, InferenceModelSourceInput, InferencePricingIn
 
 @injectable()
 export class InferenceModelService {
+  private modelRemovedHandler?: (removedPublicId: string, replacementPublicId: string | null) => Promise<void>;
+
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly registry: InferenceProviderRegistry,
@@ -55,8 +57,17 @@ export class InferenceModelService {
     return this.coreBridge ? this.coreBridge.coreReady() : false;
   }
 
+  setModelRemovedHandler(
+    handler: (removedPublicId: string, replacementPublicId: string | null) => Promise<void>
+  ): void {
+    this.modelRemovedHandler = handler;
+  }
+
   async listAdmin() {
-    const models = await this.db.select().from(inferenceModels).orderBy(asc(inferenceModels.publicId));
+    const models = await this.db
+      .select()
+      .from(inferenceModels)
+      .orderBy(asc(inferenceModels.sortOrder), asc(inferenceModels.publicId));
     return Promise.all(models.map((model) => this.serializeModel(model)));
   }
 
@@ -68,6 +79,11 @@ export class InferenceModelService {
     validateModelInput(input);
     const efforts = normalizeReasoningEfforts(input.reasoningEfforts);
     validateDefaultEffort(efforts, input.defaultReasoningEffort);
+    const [lastModel] = await this.db
+      .select({ sortOrder: inferenceModels.sortOrder })
+      .from(inferenceModels)
+      .orderBy(desc(inferenceModels.sortOrder))
+      .limit(1);
     const [model] = await this.db
       .insert(inferenceModels)
       .values({
@@ -76,6 +92,7 @@ export class InferenceModelService {
         displayName: input.displayName.trim(),
         reasoningEfforts: efforts,
         defaultReasoningEffort: input.defaultReasoningEffort ?? null,
+        sortOrder: (lastModel?.sortOrder ?? -1) + 1,
         subscriptionMultiplier: String(input.subscriptionMultiplier),
         enabled: false,
         createdBy: userId,
@@ -124,9 +141,38 @@ export class InferenceModelService {
 
   async remove(userId: string, modelId: string): Promise<void> {
     const model = await this.requireModel(modelId);
+    if (this.modelRemovedHandler) {
+      const [replacement] = await this.db
+        .select({ publicId: inferenceModels.publicId })
+        .from(inferenceModels)
+        .where(and(eq(inferenceModels.enabled, true), ne(inferenceModels.id, modelId)))
+        .orderBy(asc(inferenceModels.sortOrder), asc(inferenceModels.publicId))
+        .limit(1);
+      await this.modelRemovedHandler(model.publicId, replacement?.publicId ?? null);
+    }
     await this.db.delete(inferenceModels).where(eq(inferenceModels.id, modelId));
     await this.access.invalidate();
     await this.changed(userId, 'inference.model.delete', modelId, { publicId: model.publicId });
+  }
+
+  async reorder(userId: string, items: Array<{ id: string; sortOrder: number }>): Promise<void> {
+    const ids = items.map((item) => item.id);
+    if (new Set(ids).size !== ids.length || new Set(items.map((item) => item.sortOrder)).size !== items.length) {
+      throw new AppError(400, 'INFERENCE_MODEL_ORDER_INVALID', 'Model IDs and sort positions must be unique');
+    }
+    await this.db.transaction(async (tx) => {
+      const existing = await tx.select({ id: inferenceModels.id }).from(inferenceModels);
+      if (existing.length !== ids.length || existing.some((model) => !ids.includes(model.id))) {
+        throw new AppError(409, 'INFERENCE_MODEL_ORDER_STALE', 'Model order is stale; reload models and try again');
+      }
+      for (const item of items) {
+        await tx
+          .update(inferenceModels)
+          .set({ sortOrder: item.sortOrder, updatedAt: new Date() })
+          .where(eq(inferenceModels.id, item.id));
+      }
+    });
+    await this.changed(userId, 'inference.model.reorder', 'inference-models', { count: items.length });
   }
 
   async addSource(userId: string, modelId: string, input: InferenceModelSourceInput) {
@@ -371,7 +417,7 @@ export class InferenceModelService {
       .select()
       .from(inferenceModels)
       .where(and(eq(inferenceModels.enabled, true), inArray(inferenceModels.id, availability.modelIds)))
-      .orderBy(asc(inferenceModels.publicId));
+      .orderBy(asc(inferenceModels.sortOrder), asc(inferenceModels.publicId));
     const data = await Promise.all(models.map((model) => this.publicModel(model, availability.apiUsageEnabled)));
     return { object: 'list', data };
   }

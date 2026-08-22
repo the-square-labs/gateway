@@ -82,7 +82,9 @@ export function DockerFilePopout() {
   const isNodeFile = !containerId && !volumeName;
   const resourceId = volumeName ?? containerId ?? nodeId;
   const canUseContainerFiles =
-    !!nodeId && !!containerId && hasScopedAccess("docker:containers:files");
+    !!nodeId && !!containerId && hasScopedAccess("docker:containers:files:read");
+  const canWriteContainerFiles =
+    !!nodeId && !!containerId && hasScopedAccess("docker:containers:files:write");
   const canUseVolumeFiles =
     !!nodeId &&
     !!volumeName &&
@@ -106,7 +108,7 @@ export function DockerFilePopout() {
       : canUseContainerFiles;
   const canSaveFile =
     isWritable &&
-    (isNodeFile ? canWriteNodeFiles : isVolumeFile ? canWriteVolumeFiles : canUseContainerFiles);
+    (isNodeFile ? canWriteNodeFiles : isVolumeFile ? canWriteVolumeFiles : canWriteContainerFiles);
 
   const [content, setContent] = useState<string | null>(null);
   const [savedContent, setSavedContent] = useState<string | null>(null);

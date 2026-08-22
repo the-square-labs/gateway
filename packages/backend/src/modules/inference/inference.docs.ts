@@ -15,6 +15,7 @@ import {
   InferenceProviderIdParamSchema,
   InferenceSelfUsageResponseSchema,
   InferenceTokenResponseSchema,
+  ReorderInferenceModelsSchema,
   StartInferenceOAuthSchema,
   UpdateInferenceProviderConnectionSchema,
   UpdateInferenceProviderRoutingSchema,
@@ -152,6 +153,15 @@ export const listInferenceModelsAdminRoute = appRoute({
   tags: ['Inference Models'],
   summary: 'List published inference models with sources and admin metadata',
   responses: okJson(z.array(InferenceAdminModelResponseSchema)),
+});
+
+export const reorderInferenceModelsRoute = appRoute({
+  method: 'put',
+  path: '/models/reorder',
+  tags: ['Inference Models'],
+  summary: 'Persist the display and client manifest order of inference models',
+  request: jsonBody(ReorderInferenceModelsSchema),
+  responses: okJson(z.object({ success: z.literal(true) })),
 });
 
 export const createInferenceModelConfigurationRoute = appRoute({

@@ -136,11 +136,7 @@ export function SSLCertificates() {
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
   );
   const canInspectCloudflare =
-    hasScope("integrations:cloudflare:view") ||
-    hasScope("integrations:cloudflare:dns:view") ||
-    hasScope("integrations:cloudflare:dns:edit") ||
-    hasScope("integrations:cloudflare:dns:delete") ||
-    hasScope("integrations:cloudflare:manage");
+    hasScope("integrations:cloudflare:view") || hasScope("integrations:cloudflare:manage");
   const cloudflareConfigured = cloudflareReady ?? hasCloudflareIntegration;
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);

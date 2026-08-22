@@ -391,7 +391,8 @@ describe('OAuthService.createConsentRequest', () => {
         scopes: [
           ...USER.scopes,
           'docker:containers:environment',
-          'docker:containers:files',
+          'docker:containers:files:read',
+          'docker:containers:files:write',
           'docker:containers:secrets',
           'pki:cert:export',
           'admin:update',
@@ -404,21 +405,23 @@ describe('OAuthService.createConsentRequest', () => {
         code_challenge: 'challenge',
         code_challenge_method: 'S256',
         scope:
-          'nodes:details docker:containers:environment docker:containers:files:node-1 docker:containers:secrets pki:cert:export admin:update',
+          'nodes:details docker:containers:environment docker:containers:files:read:node-1 docker:containers:files:write:node-1 docker:containers:secrets pki:cert:export admin:update',
       }
     );
 
     expect(pending.grantableScopes).toEqual([
       'admin:update',
       'docker:containers:environment',
-      'docker:containers:files:node-1',
+      'docker:containers:files:read:node-1',
+      'docker:containers:files:write:node-1',
       'docker:containers:secrets',
       'nodes:details',
       'pki:cert:export',
     ]);
     expect(pending.manualApprovalScopes).toEqual([
       'admin:update',
-      'docker:containers:files:node-1',
+      'docker:containers:files:read:node-1',
+      'docker:containers:files:write:node-1',
       'docker:containers:secrets',
       'pki:cert:export',
     ]);

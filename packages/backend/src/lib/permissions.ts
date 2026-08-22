@@ -38,7 +38,8 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
     'docker:containers:config',
     'docker:containers:manage',
     'docker:containers:console',
-    'docker:containers:files',
+    'docker:containers:files:read',
+    'docker:containers:files:write',
     'docker:containers:environment',
     'docker:containers:secrets',
     'docker:containers:webhooks',
@@ -61,11 +62,6 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   'integrations:github:view': ['integrations:github:manage'],
   'integrations:git:view': ['integrations:git:manage'],
   'integrations:ssh:view': ['integrations:ssh:manage'],
-  'integrations:cloudflare:dns:view': [
-    'integrations:cloudflare:manage',
-    'integrations:cloudflare:dns:edit',
-    'integrations:cloudflare:dns:delete',
-  ],
   'inference:providers:view': ['inference:providers:manage', 'inference:models:manage'],
 };
 

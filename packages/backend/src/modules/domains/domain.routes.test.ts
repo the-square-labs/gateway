@@ -122,7 +122,7 @@ describe('domain routes authorization', () => {
   });
 
   it('does not accept a Cloudflare-only scope for domain creation', async () => {
-    mocks.scopes = ['integrations:cloudflare:dns:edit'];
+    mocks.scopes = ['integrations:cloudflare:manage'];
 
     const response = await request('POST', '/', { domain: 'example.com' });
 

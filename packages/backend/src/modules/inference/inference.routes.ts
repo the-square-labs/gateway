@@ -26,6 +26,7 @@ import {
   listInferenceProviderCatalogRoute,
   listInferenceProviderConnectionsRoute,
   listInferenceTokensRoute,
+  reorderInferenceModelsRoute,
   replaceInferenceModelConfigurationRoute,
   revokeInferenceTokenRoute,
   setInferenceDefaultLimitsRoute,
@@ -42,6 +43,7 @@ import {
   InferenceActivityQuerySchema,
   InferenceLimitPolicyInputSchema,
   InferenceModelConfigurationSchema,
+  ReorderInferenceModelsSchema,
   StartInferenceOAuthSchema,
   UpdateInferenceProviderConnectionSchema,
   UpdateInferenceProviderRoutingSchema,
@@ -159,6 +161,12 @@ inferenceManagementRoutes.use('/models/*', requireScope('inference:models:manage
 
 inferenceManagementRoutes.openapi(listInferenceModelsAdminRoute, async (c) => {
   return c.json(await container.resolve(InferenceModelService).listAdmin());
+});
+
+inferenceManagementRoutes.openapi(reorderInferenceModelsRoute, async (c) => {
+  const input = ReorderInferenceModelsSchema.parse(await c.req.json());
+  await container.resolve(InferenceModelService).reorder(c.get('user')!.id, input.items);
+  return c.json({ success: true as const });
 });
 
 inferenceManagementRoutes.openapi(createInferenceModelConfigurationRoute, async (c) => {

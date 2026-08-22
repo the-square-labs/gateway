@@ -108,7 +108,7 @@ describe('GWCA archive export route', () => {
   it('does not read environment or secrets when their export option is disabled', async () => {
     const { app, dispatch, docker } = setup([
       containerScope('docker:containers:export'),
-      containerScope('docker:containers:files'),
+      containerScope('docker:containers:files:read'),
     ]);
 
     const response = await app.request(

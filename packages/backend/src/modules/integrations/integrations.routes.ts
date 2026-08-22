@@ -371,9 +371,6 @@ integrationsRoutes.openapi(
     ...listCloudflareConnectorsRoute,
     middleware: requireCloudflareOperation('connector.list', [
       'integrations:cloudflare:view',
-      'integrations:cloudflare:dns:view',
-      'integrations:cloudflare:dns:edit',
-      'integrations:cloudflare:dns:delete',
       'integrations:cloudflare:manage',
     ]),
   },
@@ -417,9 +414,6 @@ integrationsRoutes.openapi(
     ...getCloudflareConnectorRoute,
     middleware: requireCloudflareOperation('connector.get', [
       'integrations:cloudflare:view',
-      'integrations:cloudflare:dns:view',
-      'integrations:cloudflare:dns:edit',
-      'integrations:cloudflare:dns:delete',
       'integrations:cloudflare:manage',
     ]),
   },
@@ -502,7 +496,6 @@ integrationsRoutes.openapi(
     ...listCloudflareZonesRoute,
     middleware: requireCloudflareOperation('connector.zones.list', [
       'integrations:cloudflare:view',
-      'integrations:cloudflare:dns:view',
       'integrations:cloudflare:manage',
     ]),
   },
