@@ -214,6 +214,22 @@ describe('inference core proxy', () => {
     );
   });
 
+  it('marks Responses compaction_trigger turns for protected-reserve accounting', async () => {
+    const { service, coreAccounting } = createService();
+    const c = createContext(
+      JSON.stringify({
+        model: 'gpt-5.5',
+        input: [{ role: 'user', content: 'history' }, { type: 'compaction_trigger' }],
+      }),
+      { 'content-type': 'application/json' }
+    );
+
+    const response = await service.proxy(c, 'responses');
+
+    expect(response.status).toBe(200);
+    expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ isCompaction: true }));
+  });
+
   it('performs cross-account failover in Gateway with a new signed pin', async () => {
     const { service, routing, coreAccounting, fetchStub } = createService({
       sources: [
@@ -265,6 +281,60 @@ describe('inference core proxy', () => {
       'completed',
       undefined
     );
+  });
+
+  it('repairs an interrupted core SSE body with a structured failed terminal', async () => {
+    let reads = 0;
+    const coreBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        reads += 1;
+        if (reads === 1) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_core"}}\n\n'
+            )
+          );
+          return;
+        }
+        controller.error(new Error('socket reset'));
+      },
+    });
+    const { service, coreAccounting } = createService({
+      coreResponse: new Response(coreBody, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }), { 'content-type': 'application/json' }),
+      'responses'
+    );
+
+    await expect(response.text()).resolves.toContain('response.failed');
+    await vi.waitFor(() =>
+      expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(
+        '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+        'failed',
+        expect.objectContaining({ message: 'socket reset' })
+      )
+    );
+  });
+
+  it('replaces an unreadable core error body with stable JSON', async () => {
+    const brokenErrorBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error('broken error body'));
+      },
+    });
+    const { service } = createService({
+      coreResponse: new Response(brokenErrorBody, { status: 502, headers: { 'content-type': 'application/json' } }),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }), { 'content-type': 'application/json' }),
+      'responses'
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'inference_core_stream_reset' },
+    });
   });
 
   it('rewrites multipart image edits and applies the fixed image charge', async () => {

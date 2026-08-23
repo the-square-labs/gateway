@@ -53,7 +53,8 @@ interface ActiveTurn {
   cancelled: boolean;
   terminalSeen: boolean;
   terminalSent: boolean;
-  clientEventSent: boolean;
+  emittedOutput: boolean;
+  pendingPreludeFrames: string[];
   finalized: boolean;
   /** Per-user concurrency lease; released exactly once when the turn ends. */
   release: () => Promise<void>;
@@ -61,6 +62,7 @@ interface ActiveTurn {
 
 /** Responses WS events that end a turn. */
 const TERMINAL_EVENTS = new Set(['response.completed', 'response.failed', 'response.incomplete', 'error']);
+const MAX_PENDING_PRELUDE_FRAMES = 4;
 
 /**
  * Per-turn WebSocket proxy (plan T5). The client-facing contract is unchanged:
@@ -188,6 +190,7 @@ async function startTurn(
 
   const affinityKey = typeof envelope.prompt_cache_key === 'string' ? envelope.prompt_cache_key : undefined;
   const existingThread = typeof envelope.previous_response_id === 'string';
+  const isCompaction = hasCompactionTrigger(envelope.input);
   const initial = await proxy.resolveTarget(auth.user, publicModelId, {
     ...(affinityKey ? { affinityKey } : {}),
     existingThread,
@@ -210,6 +213,7 @@ async function startTurn(
     reasoningEffort: typeof requestedEffort === 'string' ? requestedEffort : null,
     ...(typeof envelope.idempotency_key === 'string' ? { idempotencyKey: envelope.idempotency_key } : {}),
     ...(affinityKey ? { affinityKey } : {}),
+    ...(isCompaction ? { isCompaction: true } : {}),
   });
   const turn: ActiveTurn = {
     upstream: null,
@@ -219,7 +223,8 @@ async function startTurn(
     cancelled: false,
     terminalSeen: false,
     terminalSent: false,
-    clientEventSent: false,
+    emittedOutput: false,
+    pendingPreludeFrames: [],
     finalized: false,
     release,
   };
@@ -329,7 +334,8 @@ async function connectTurnAttempt(input: {
     if (ended) return;
     ended = true;
     if (input.state.active !== input.turn || input.turn.cancelled || input.turn.finalized) return;
-    if (allowConnectionFailover && !input.turn.clientEventSent && resolved.candidateConnectionIds.length > 1) {
+    if (allowConnectionFailover && !input.turn.emittedOutput && resolved.candidateConnectionIds.length > 1) {
+      input.turn.pendingPreludeFrames = [];
       void connectTurnAttempt({
         ...input,
         resolved,
@@ -359,7 +365,7 @@ async function connectTurnAttempt(input: {
     const terminal = parsed !== null && typeof parsed.type === 'string' && TERMINAL_EVENTS.has(parsed.type);
     if (
       terminal &&
-      !input.turn.clientEventSent &&
+      !input.turn.emittedOutput &&
       resolved.candidateConnectionIds.length > 1 &&
       shouldFailOverWsEvent(parsed)
     ) {
@@ -375,12 +381,20 @@ async function connectTurnAttempt(input: {
       input.turn.terminalSeen = true;
       input.turn.terminalSent = true;
     }
-    input.turn.clientEventSent = true;
-    try {
-      input.ws.send(text);
-    } catch {
-      // The peer may have closed while the upstream frame was in flight.
+    const eventType = typeof parsed?.type === 'string' ? parsed.type : '';
+    if (!terminal && isPreludeEvent(eventType)) {
+      if (input.turn.pendingPreludeFrames.length < MAX_PENDING_PRELUDE_FRAMES) {
+        input.turn.pendingPreludeFrames.push(text);
+      }
+      return;
     }
+    if (!terminal && !isSubstantiveOutputEvent(eventType)) {
+      sendRaw(input.ws, text);
+      return;
+    }
+    flushPreludeFrames(input.ws, input.turn);
+    if (!terminal) input.turn.emittedOutput = true;
+    sendRaw(input.ws, text);
     if (terminal) {
       ended = true;
       try {
@@ -548,6 +562,40 @@ function safeParse(text: string): unknown {
     return JSON.parse(text);
   } catch {
     return null;
+  }
+}
+
+function hasCompactionTrigger(input: unknown): boolean {
+  return (
+    Array.isArray(input) &&
+    input.some(
+      (item) =>
+        item !== null &&
+        typeof item === 'object' &&
+        !Array.isArray(item) &&
+        (item as Record<string, unknown>).type === 'compaction_trigger'
+    )
+  );
+}
+
+function isPreludeEvent(type: string): boolean {
+  return type === 'response.created' || type === 'response.queued' || type === 'response.in_progress';
+}
+
+function isSubstantiveOutputEvent(type: string): boolean {
+  return type.startsWith('response.') && !isPreludeEvent(type) && !TERMINAL_EVENTS.has(type);
+}
+
+function flushPreludeFrames(ws: WSContext, turn: ActiveTurn): void {
+  for (const frame of turn.pendingPreludeFrames) sendRaw(ws, frame);
+  turn.pendingPreludeFrames = [];
+}
+
+function sendRaw(ws: WSContext, frame: string): void {
+  try {
+    ws.send(frame);
+  } catch {
+    // The peer may have closed while the upstream frame was in flight.
   }
 }
 

@@ -79,6 +79,7 @@ const CORE_ADMITTED: ReadonlySet<CoreProxyOperation> = new Set([
 type ProxyRequestBody = string | ArrayBuffer | FormData;
 
 const MAX_DECOMPRESSED_JSON_BODY_BYTES = 256 * 1024 * 1024;
+const MAX_CORE_ERROR_BODY_BYTES = 1024 * 1024;
 
 function requireAuth(c: Context<AppEnv>): { user: User; tokenId: string } {
   const user = c.get('user');
@@ -199,7 +200,7 @@ export class InferenceCoreProxyService {
           ...(prepared.idempotencyKey ? { idempotencyKey: prepared.idempotencyKey } : {}),
           ...(prepared.affinityKey ? { affinityKey: prepared.affinityKey } : {}),
           ...(fixedApiMicrodollars ? { fixedApiMicrodollars } : {}),
-          ...(operation === 'responses/compact' ? { isCompaction: true } : {}),
+          ...(prepared.isCompaction ? { isCompaction: true } : {}),
         })
       ).requestId;
     }
@@ -313,6 +314,30 @@ export class InferenceCoreProxyService {
       await upstream.body?.cancel().catch(() => undefined);
       return { kind: 'retry' };
     }
+    if (status >= 400 && upstream.body) {
+      const headers = publicResponseHeaders(upstream.headers);
+      try {
+        const body = await readBoundedCoreErrorBody(upstream.body);
+        finalize('failed');
+        return { kind: 'response', response: new Response(body, { status, headers }) };
+      } catch (error) {
+        finalize(clientGone ? 'cancelled' : 'failed', error);
+        if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+        return {
+          kind: 'response',
+          response: Response.json(
+            {
+              error: {
+                type: 'server_error',
+                code: 'inference_core_stream_reset',
+                message: 'The inference core error response ended before it could be read',
+              },
+            },
+            { status: 502 }
+          ),
+        };
+      }
+    }
     if (!upstream.body) {
       finalize(status < 400 ? 'completed' : 'failed');
       return {
@@ -320,14 +345,18 @@ export class InferenceCoreProxyService {
         response: new Response(null, { status, headers: publicResponseHeaders(upstream.headers) }),
       };
     }
-    const stream = new TransformStream<Uint8Array, Uint8Array>();
-    upstream.body.pipeTo(stream.writable).then(
-      () => finalize(status < 400 ? 'completed' : 'failed'),
-      (error) => finalize(clientGone ? 'cancelled' : 'failed', error)
-    );
+    const headers = publicResponseHeaders(upstream.headers);
+    const stream = relayCoreResponseBody(upstream.body, {
+      requestId,
+      contentType: headers.get('content-type') ?? '',
+      abortUpstream: (reason) => controller.abort(reason),
+      clientGone: () => clientGone,
+      finalize,
+      upstreamStatus: status,
+    });
     return {
       kind: 'response',
-      response: new Response(stream.readable, { status, headers: publicResponseHeaders(upstream.headers) }),
+      response: new Response(stream, { status, headers }),
     };
   }
 
@@ -410,6 +439,7 @@ export class InferenceCoreProxyService {
     reasoningEffort?: string;
     idempotencyKey?: string;
     affinityKey?: string;
+    isCompaction: boolean;
     existingThread: boolean;
     rewrite: (
       upstreamModel: string,
@@ -430,6 +460,7 @@ export class InferenceCoreProxyService {
         publicModelId: model,
         units,
         headers: {},
+        isCompaction: false,
         existingThread: false,
         rewrite: (upstreamModel) => {
           const upstream = new FormData();
@@ -446,6 +477,7 @@ export class InferenceCoreProxyService {
         publicModelId: model,
         units: 1,
         headers: {}, // realtime builds its own headers in proxyRealtime
+        isCompaction: false,
         existingThread: false,
         rewrite: () => rawBody,
       };
@@ -465,6 +497,7 @@ export class InferenceCoreProxyService {
       ...(typeof reasoningEffort === 'string' ? { reasoningEffort } : {}),
       ...(typeof body.idempotency_key === 'string' ? { idempotencyKey: body.idempotency_key } : {}),
       ...(typeof body.prompt_cache_key === 'string' ? { affinityKey: body.prompt_cache_key } : {}),
+      isCompaction: operation === 'responses/compact' || hasCompactionTrigger(body.input),
       existingThread: typeof body.previous_response_id === 'string',
       rewrite: (upstreamModel, resolvedModel, source) => {
         const next: Record<string, unknown> = { ...body, model: upstreamModel };
@@ -681,6 +714,177 @@ function positiveUnits(value: number): number {
     throw new InferenceProtocolError(400, 'invalid_request_error', 'n must be an integer between 1 and 100');
   }
   return value;
+}
+
+function hasCompactionTrigger(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  return input.some(
+    (item) =>
+      item !== null &&
+      typeof item === 'object' &&
+      !Array.isArray(item) &&
+      (item as Record<string, unknown>).type === 'compaction_trigger'
+  );
+}
+
+type CoreStreamOutcome = 'completed' | 'failed' | 'cancelled';
+
+async function readBoundedCoreErrorBody(body: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_CORE_ERROR_BODY_BYTES) {
+        await reader.cancel('core error body exceeded safe limit').catch(() => undefined);
+        throw new Error('Inference core error response exceeded the safe body limit');
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
+  }
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+function relayCoreResponseBody(
+  body: ReadableStream<Uint8Array>,
+  options: {
+    requestId: string;
+    contentType: string;
+    upstreamStatus: number;
+    abortUpstream: (reason?: unknown) => void;
+    clientGone: () => boolean;
+    finalize: (outcome: CoreStreamOutcome, error?: unknown) => void;
+  }
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const isSse = options.contentType.toLowerCase().includes('text/event-stream');
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let sseBuffer = '';
+  let terminal: Exclude<CoreStreamOutcome, 'cancelled'> | null = null;
+  let settled = false;
+  const settle = (outcome: CoreStreamOutcome, error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    options.finalize(outcome, error);
+  };
+  const observe = (value: Uint8Array) => {
+    if (!isSse || terminal) return;
+    sseBuffer += decoder.decode(value, { stream: true });
+    for (;;) {
+      const match = /\r?\n\r?\n/.exec(sseBuffer);
+      if (!match || match.index === undefined) break;
+      const block = sseBuffer.slice(0, match.index);
+      sseBuffer = sseBuffer.slice(match.index + match[0].length);
+      const payload = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n');
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const event = JSON.parse(payload) as { type?: unknown };
+        if (event.type === 'response.completed') terminal = 'completed';
+        else if (event.type === 'response.failed' || event.type === 'response.incomplete' || event.type === 'error') {
+          terminal = 'failed';
+        }
+      } catch {
+        // The core owns protocol validation. This observer only decides whether
+        // it must append a terminal after a transport-level body failure.
+      }
+    }
+    if (sseBuffer.length > 64 * 1024) sseBuffer = sseBuffer.slice(-64 * 1024);
+  };
+  const failedTail = (error?: unknown) => {
+    const failure = {
+      type: 'upstream_error',
+      code: 'inference_core_stream_reset',
+      message: `Inference core stream terminated unexpectedly${
+        error instanceof Error && error.message ? `: ${error.message}` : ''
+      }`.slice(0, 500),
+    };
+    return encoder.encode(
+      `\n\nevent: response.failed\ndata: ${JSON.stringify({
+        type: 'response.failed',
+        response: {
+          id: `resp_${options.requestId}`,
+          object: 'response',
+          status: 'failed',
+          output: [],
+          error: failure,
+          last_error: failure,
+        },
+      })}\n\ndata: [DONE]\n\n`
+    );
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (!done) {
+          observe(value);
+          controller.enqueue(value);
+          if (terminal) {
+            void reader.cancel('Responses terminal event received').catch(() => undefined);
+            settle(terminal);
+            controller.close();
+          }
+          return;
+        }
+        if (isSse && !terminal) {
+          controller.enqueue(failedTail());
+          settle('failed', new Error('Inference core stream ended without a Responses terminal event'));
+        } else {
+          settle(terminal ?? (options.upstreamStatus < 400 ? 'completed' : 'failed'));
+        }
+        controller.close();
+      } catch (error) {
+        if (options.clientGone()) {
+          settle('cancelled', error);
+          try {
+            controller.error(error);
+          } catch {
+            // Client already disconnected.
+          }
+          return;
+        }
+        if (isSse && !terminal) {
+          try {
+            controller.enqueue(failedTail(error));
+            controller.close();
+          } catch {
+            // Client disappeared while the synthetic terminal was emitted.
+          }
+          settle('failed', error);
+          return;
+        }
+        settle(terminal ?? 'failed', error);
+        try {
+          controller.error(error);
+        } catch {
+          // Client already disconnected.
+        }
+      }
+    },
+    cancel(reason) {
+      options.abortUpstream(reason);
+      void reader.cancel(reason).catch(() => undefined);
+      settle('cancelled', reason);
+    },
+  });
 }
 
 function publicResponseHeaders(headers: Headers): Headers {

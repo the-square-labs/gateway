@@ -158,6 +158,130 @@ describe('core responses websocket proxy', () => {
     expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'failed');
   });
 
+  it('marks compaction_trigger WebSocket turns as compaction roots', async () => {
+    const { accounting } = registerCommon();
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      {
+        data: JSON.stringify({
+          type: 'response.create',
+          response: {
+            model: 'gpt-5.5',
+            input: [{ role: 'user', content: 'history' }, { type: 'compaction_trigger' }],
+          },
+        }),
+      } as never,
+      ws as never
+    );
+
+    expect(accounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ isCompaction: true }));
+  });
+
+  it('fails over after response.created when no substantive output was delivered', async () => {
+    const { proxy, accounting } = registerCommon(['conn-1', 'conn-2']);
+    proxy.resolveTarget
+      .mockResolvedValueOnce({
+        model: { id: 'model-1', publicId: 'gpt-5.5', reasoningEfforts: [], defaultReasoningEffort: null },
+        selected: {
+          source: {
+            id: 'source-1',
+            reasoningEffortMap: {},
+            coreAccountId: 'core-conn-1',
+            coreModelId: 'core-conn-1/gpt-5.5',
+          },
+          connection: { id: 'conn-1' },
+        },
+        upstreamModel: 'core-conn-1/gpt-5.5',
+        coreAccountId: 'core-conn-1',
+        candidateConnectionIds: ['conn-1', 'conn-2'],
+      })
+      .mockResolvedValueOnce({
+        model: { id: 'model-1', publicId: 'gpt-5.5', reasoningEfforts: [], defaultReasoningEffort: null },
+        selected: {
+          source: {
+            id: 'source-2',
+            reasoningEffortMap: {},
+            coreAccountId: 'core-conn-2',
+            coreModelId: 'core-conn-2/gpt-5.5',
+          },
+          connection: { id: 'conn-2' },
+        },
+        upstreamModel: 'core-conn-2/gpt-5.5',
+        coreAccountId: 'core-conn-2',
+        candidateConnectionIds: ['conn-2'],
+      });
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
+    );
+
+    const first = upstreamInstances[0]!;
+    first.handlers.open?.();
+    first.handlers.message?.(
+      JSON.stringify({ type: 'response.created', response: { id: 'resp_first', status: 'in_progress' } })
+    );
+    expect(ws.send).not.toHaveBeenCalled();
+    first.handlers.message?.(
+      JSON.stringify({ type: 'error', status: 502, error: { code: 'upstream_server_error', message: 'failed' } })
+    );
+
+    await vi.waitFor(() => expect(upstreamInstances).toHaveLength(2));
+    const second = upstreamInstances[1]!;
+    second.handlers.open?.();
+    second.handlers.message?.(
+      JSON.stringify({ type: 'response.created', response: { id: 'resp_second', status: 'in_progress' } })
+    );
+    second.handlers.message?.(JSON.stringify({ type: 'response.output_text.delta', delta: 'ok' }));
+    second.handlers.message?.(
+      JSON.stringify({ type: 'response.completed', response: { id: 'resp_second', status: 'completed' } })
+    );
+
+    const frames = ws.send.mock.calls.map((call) => JSON.parse(call[0] as string));
+    expect(frames.map((frame) => frame.type)).toEqual([
+      'response.created',
+      'response.output_text.delta',
+      'response.completed',
+    ]);
+    expect(frames[0].response.id).toBe('resp_second');
+    expect(accounting.retargetCoreRequest).toHaveBeenCalled();
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
+  });
+
+  it('does not fail over after substantive output was delivered', async () => {
+    const { proxy, accounting } = registerCommon(['conn-1', 'conn-2']);
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
+    );
+
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    upstream.handlers.message?.(
+      JSON.stringify({ type: 'response.created', response: { id: 'resp_first', status: 'in_progress' } })
+    );
+    upstream.handlers.message?.(JSON.stringify({ type: 'response.output_text.delta', delta: 'partial' }));
+    upstream.handlers.message?.(
+      JSON.stringify({ type: 'error', status: 502, error: { code: 'upstream_server_error', message: 'failed' } })
+    );
+
+    expect(upstreamInstances).toHaveLength(1);
+    expect(proxy.resolveTarget).toHaveBeenCalledTimes(1);
+    expect(ws.send.mock.calls.map((call) => JSON.parse(call[0] as string).type)).toEqual([
+      'response.created',
+      'response.output_text.delta',
+      'error',
+    ]);
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'failed');
+  });
+
   it('forwards cyber_policy to the client without failing over to another provider connection', async () => {
     const { accounting, proxy } = registerCommon(['conn-1', 'conn-2']);
     const ws = clientSocket();
