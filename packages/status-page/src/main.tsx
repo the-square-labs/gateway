@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -160,6 +160,7 @@ function updatedAgoLabel(generatedAt: string, now: number) {
 function App() {
   const [data, setData] = useState<PublicStatusPageDto | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -184,8 +185,19 @@ function App() {
     };
   }, []);
 
+  const initialLoadComplete = data !== null || error !== null;
+
+  useEffect(() => {
+    if (!initialLoadComplete || revealed) return;
+
+    const frame = window.requestAnimationFrame(() => setRevealed(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialLoadComplete, revealed]);
+
+  let content = null;
+
   if (error) {
-    return (
+    content = (
       <main className="shell">
         <section className="hero">
           <span className="badge danger">Unavailable</span>
@@ -194,20 +206,18 @@ function App() {
         </section>
       </main>
     );
+  } else if (data) {
+    content = <StatusPage data={data} />;
   }
 
-  if (!data) {
-    return (
-      <main className="shell">
-        <section className="hero">
-          <span className="badge muted">Loading</span>
-          <h1>Loading status</h1>
-        </section>
-      </main>
-    );
-  }
-
-  return <StatusPage data={data} />;
+  return (
+    <div
+      className={`status-page-transition${revealed ? " status-page-transition-ready" : ""}`}
+      aria-busy={!initialLoadComplete || undefined}
+    >
+      {content}
+    </div>
+  );
 }
 
 function StatusPage({ data }: { data: PublicStatusPageDto }) {
@@ -318,7 +328,7 @@ function HealthBars({ service }: { service: PublicStatusPageDto["services"][numb
   const containerRef = useRef<HTMLDivElement>(null);
   const [barCount, setBarCount] = useState(0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = containerRef.current;
     if (!element) return;
 
