@@ -160,6 +160,7 @@ describe('AI tool scope filtering', () => {
         'manage_additional_secure_link',
       ])
     );
+    expect(names).not.toContain('upload_pages_artifact');
     expect(
       parseAndValidateAIToolArguments(
         'manage_managed_database',
@@ -315,6 +316,7 @@ describe('AI tool scope filtering', () => {
       'get_route',
       'create_route',
       'update_route',
+      'set_route_maintenance',
       'delete_route',
       'create_route_folder',
       'move_routes_to_folder',
@@ -367,7 +369,6 @@ describe('AI tool scope filtering', () => {
       'list_groups',
       'create_group',
       'update_group',
-      'delete_group',
     ]);
     expect(TOOL_STORE_INVALIDATION_MAP.create_root_ca).toEqual(['ca']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_certificate).toEqual(['certificates', 'ca']);

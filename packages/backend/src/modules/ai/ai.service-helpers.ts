@@ -13,9 +13,18 @@ const PROXY_HOST_UPDATE_FIELDS = [
   'type',
   'nodeId',
   'domainNames',
+  'upstreamKind',
   'forwardHost',
   'forwardPort',
   'forwardScheme',
+  'dockerNodeId',
+  'dockerContainerName',
+  'dockerDeploymentId',
+  'dockerContainerPort',
+  'pageProjectId',
+  'pageTagId',
+  'relaySpreadMode',
+  'relaySpreadCount',
   'sslEnabled',
   'sslForced',
   'http2Support',
@@ -28,6 +37,7 @@ const PROXY_HOST_UPDATE_FIELDS = [
   'cacheEnabled',
   'cacheOptions',
   'rateLimitEnabled',
+  'rateLimitMode',
   'rateLimitOptions',
   'customRewrites',
   'accessListId',
@@ -81,7 +91,7 @@ function directResourceIdsForScopes(scopes: string[], baseScope: string): string
 }
 
 const SENSITIVE_TOOL_ARG_RE =
-  /(?:password|passwd|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh)/i;
+  /(?:password|passwd|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64)/i;
 
 function redactToolArgs(value: unknown, depth = 0): unknown {
   if (value === null || typeof value !== 'object') return value;
@@ -171,6 +181,38 @@ function estimateMessagesTokens(messages: Record<string, unknown>[]): number {
 
 function compactProxyHostForAgent(host: Record<string, any>) {
   const safeHost = stripRawProxyConfigForProgrammatic(host);
+  const managedTarget = {
+    ...(safeHost.upstreamKind !== undefined ? { upstreamKind: safeHost.upstreamKind } : {}),
+    ...(safeHost.dockerNodeId !== undefined ? { dockerNodeId: safeHost.dockerNodeId } : {}),
+    ...(safeHost.dockerNodeSlug !== undefined ? { dockerNodeSlug: safeHost.dockerNodeSlug } : {}),
+    ...(safeHost.dockerContainerName !== undefined ? { dockerContainerName: safeHost.dockerContainerName } : {}),
+    ...(safeHost.dockerDeploymentId !== undefined ? { dockerDeploymentId: safeHost.dockerDeploymentId } : {}),
+    ...(safeHost.dockerDeploymentName !== undefined ? { dockerDeploymentName: safeHost.dockerDeploymentName } : {}),
+    ...(safeHost.dockerContainerPort !== undefined ? { dockerContainerPort: safeHost.dockerContainerPort } : {}),
+    ...(safeHost.dockerHostPort !== undefined ? { dockerHostPort: safeHost.dockerHostPort } : {}),
+    ...(safeHost.dockerProtocol !== undefined ? { dockerProtocol: safeHost.dockerProtocol } : {}),
+    ...(safeHost.secureLinkActive !== undefined ? { secureLinkActive: safeHost.secureLinkActive } : {}),
+    ...(safeHost.pageTarget
+      ? {
+          pageTarget: {
+            projectId: safeHost.pageTarget.projectId,
+            projectName: safeHost.pageTarget.projectName,
+            projectSlug: safeHost.pageTarget.projectSlug,
+            tagId: safeHost.pageTarget.tagId,
+            tagName: safeHost.pageTarget.tagName,
+            deploymentId: safeHost.pageTarget.deploymentId,
+            status: safeHost.pageTarget.status,
+            generation: safeHost.pageTarget.generation,
+            lastErrorCode: safeHost.pageTarget.lastErrorCode,
+          },
+        }
+      : {}),
+    ...(safeHost.relaySpreadMode !== undefined ? { relaySpreadMode: safeHost.relaySpreadMode } : {}),
+    ...(safeHost.relaySpreadCount !== undefined ? { relaySpreadCount: safeHost.relaySpreadCount } : {}),
+    ...(safeHost.rateLimitMode !== undefined ? { rateLimitMode: safeHost.rateLimitMode } : {}),
+    ...(safeHost.maintenanceEnabled !== undefined ? { maintenanceEnabled: safeHost.maintenanceEnabled } : {}),
+    ...(safeHost.maintenanceStartedAt !== undefined ? { maintenanceStartedAt: safeHost.maintenanceStartedAt } : {}),
+  };
   return {
     id: safeHost.id,
     slug: safeHost.slug,
@@ -178,6 +220,7 @@ function compactProxyHostForAgent(host: Record<string, any>) {
     domainNames: safeHost.domainNames,
     enabled: safeHost.enabled,
     nodeId: safeHost.nodeId,
+    ...managedTarget,
     forwardScheme: safeHost.forwardScheme,
     forwardHost: safeHost.forwardHost,
     forwardPort: safeHost.forwardPort,

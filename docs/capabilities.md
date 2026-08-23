@@ -53,11 +53,13 @@ Pages workflows:
 - Serve public runtime configuration at `/_gateway/pages/config.js` as `window.runtime.config`. It is capped at 64 KiB, served with `no-store`, and does not change Deployment identity or artifact hashes.
 - Re-authorize resumable upload append/finalize requests and deploy-token Tag policy; publication verifies generation/status and rollback state before cleanup.
 - Integrate Pages with scopes, folders, EventBus/WebSocket, notifications, audit/SIEM, retention, navigation, search, cache, and resource context.
-- Operate Projects, Deployments, Tags, runtime configuration, placement migration, and profile settings through the scoped AI Workspace and remote MCP Pages toolset; upload artifact bytes through the resumable deploy API.
+- Operate Projects, Deployments, Tags, runtime configuration, placement migration, and profile settings through the scoped AI Workspace and remote MCP Pages toolset. Remote MCP clients can upload artifact bytes with the authenticated `upload_pages_artifact` begin/chunk/finalize workflow (maximum 1 MiB decoded per chunk, no credential argument); ordinary API clients can keep using the resumable deploy API.
 
 ## Route Extensions
 
 Managed Routes can contain Additional Routes for literal path prefixes such as `/api` or `/assets`. Each location can target a manual address, Docker container, Docker deployment, or ready Pages Tag and can carry its own buffering, timeout, WebSocket, prefix-stripping, and advanced location directives. Custom proxy templates support them when they include `{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}` inside the intended `server` block. Docker targets own the Secure Link binding created for that location, so retry, edit, and delete follow the Additional Route lifecycle.
+
+The AI Workspace and remote MCP Ingress route tools use the same managed-upstream contract as the Console and REST API: root Routes can target manual addresses, Docker containers, Docker deployments, or ready Pages Tags, and `set_route_maintenance` uses the canonical maintenance lifecycle instead of disabling or rewriting a Route.
 
 Additional Secure Link Bindings are separate user-managed Docker bindings intended for upstreams referenced from advanced nginx config. Route-owned bindings remain visible in the binding list but cannot be deleted independently. Both lifecycles are available through the scoped Operations Console, AI Workspace, REST/OAuth, and remote MCP Ingress toolset.
 

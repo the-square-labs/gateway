@@ -125,7 +125,7 @@ Certificate issuance itself is not tied to a machine. HTTP-01 validation is serv
 
   proxy: `# Ingress Routes
 
-The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route, create_route, update_route, and delete_route. Existing REST paths, internal resource types, and persisted identifiers retain the proxy-host name for compatibility.
+The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route, create_route, update_route, set_route_maintenance, and delete_route. Existing REST paths, internal resource types, and persisted identifiers retain the proxy-host name for compatibility.
 
 ## Types
 - **proxy**: Forward requests to a backend server (forwardHost:forwardPort).
@@ -155,11 +155,15 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 ## Maintenance Mode
 - Maintenance mode is available for enabled managed routes that are not using raw config. It keeps the configured HTTP/HTTPS vhosts but returns HTTP 503 and pauses managed health checks until maintenance ends.
 - Maintenance state is audited and can feed notification rules and status pages.
-- The current Assistant route tools do not expose maintenance toggling or Docker upstream fields. Direct the user to the Routes UI or documented REST API instead of trying to emulate maintenance by disabling the route or rewriting its config.
+- Use \`set_route_maintenance({ routeId, enabled })\`. Do not emulate maintenance by disabling the route or rewriting its config.
 
 ## Docker Upstreams
-- The UI and REST API can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
-- The current Assistant create/update route tools support manual upstream fields only. Do not invent Docker-upstream arguments.
+- The UI, REST API, AI Workspace, and remote MCP Ingress toolset can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
+- For \`docker_container\`, pass \`dockerNodeId\`, \`dockerContainerName\`, and \`dockerContainerPort\`. For \`docker_deployment\`, pass \`dockerNodeId\`, \`dockerDeploymentId\`, and \`dockerContainerPort\`. The caller must hold the same delegated Docker scopes enforced by the REST API.
+
+## Pages Upstreams
+- Use \`upstreamKind: "pages"\` with \`pageProjectId\` and \`pageTagId\`. Routes target a mutable ready Tag, never an immutable Deployment.
+- Pages route creation and retargeting require the Pages feature and profile plus view access to the selected Project.
 
 ## Additional Routes And Secure Links
 - Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
@@ -705,7 +709,8 @@ Pages serves immutable static Deployments owned by a Page Project. Use \`find_re
 
 ## Workflow
 - The Pages profile must be licensed and enabled. A Project is placed on one Pages-capable node and can be migrated with \`project_migrate\`.
-- Artifact bytes are uploaded through the resumable Pages deploy API; \`manage_pages\` operates deployment metadata and publication, not local archive bytes.
+- Remote MCP clients upload artifact bytes with \`upload_pages_artifact\`: call \`begin\` with the exact archive size and lowercase SHA-256, send ordered \`chunk\` calls with the returned upload ID/current offset and no more than 1 MiB decoded data per base64 chunk, then call \`finalize\`. Authentication comes from the MCP OAuth connection; never pass a token or Authorization value as a tool argument. The embedded AI Workspace does not expose this binary-transfer tool.
+- \`manage_pages\` operates deployment metadata and publication, not local archive bytes. The REST resumable deploy API remains available to ordinary API clients.
 - Deploy tokens can be listed, created, and revoked with \`manage_pages\`. A newly created raw token is returned once; do not repeat it in later chat messages, notifications, or logs.
 - Deployments are immutable. Mutable Tags point at ready Deployments. Ingress Routes and Additional Routes target a Tag, never an immutable Deployment.
 - Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override.
@@ -1103,10 +1108,10 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 - mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
 - Gateway MCP never delegates GitLab, GitHub, generic Git, or external SSH integration scopes. External agents must configure dedicated provider MCP servers for repository, CI, variable, webhook, registry, and SSH operations. Managed DNS uses the ordinary Domains tools and \`domains:*\` scopes.
 - The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
-- The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. Route tools use UI-aligned names and arguments; resource URIs, scopes, REST paths, and persisted identifiers keep their existing compatibility contracts.
+- The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, raw route configuration, managed manual/Docker/Pages upstreams, and the canonical maintenance lifecycle. Route tools use UI-aligned names and arguments; resource URIs, scopes, REST paths, and persisted identifiers keep their existing compatibility contracts.
 - Use \`manage_additional_route\` for path-prefix locations inside a Route. It supports manual, Docker container/deployment, and Pages Tag targets plus location advanced config. Docker targets create and own their required Secure Link binding.
 - Use \`manage_additional_secure_link\` only for extra bindings referenced by a Route's advanced nginx config. Route-owned bindings are visible in its list but must be changed through \`manage_additional_route\`, not deleted independently.
-- The \`Pages\` toolset exposes Page Projects, Deployments, Tags, runtime configuration, profile settings, and project migration. The \`Databases\` toolset includes managed database provisioning and application bindings.
+- The \`Pages\` toolset exposes Page Projects, Deployments, Tags, runtime configuration, profile settings, project migration, and an MCP-only resumable artifact uploader. Upload chunks are base64-encoded, capped at 1 MiB decoded, and authenticated by the MCP connection rather than a token argument. The \`Databases\` toolset includes managed database provisioning and application bindings.
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings

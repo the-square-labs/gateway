@@ -137,6 +137,11 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     execute: ['project_migrate'],
     delete: ['project_delete', 'deployment_delete', 'tag_delete', 'token_revoke'],
   }),
+  upload_pages_artifact: operationPolicies({
+    create: ['begin'],
+    update: ['chunk'],
+    execute: ['finalize'],
+  }),
   manage_additional_route: operationPolicies({
     read: ['list', 'get'],
     create: ['create'],

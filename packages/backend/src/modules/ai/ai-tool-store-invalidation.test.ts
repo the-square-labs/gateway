@@ -34,6 +34,12 @@ describe('AI and MCP tool store invalidation', () => {
       'loggingTokens',
     ]);
     expect(resolveToolStoreInvalidations('manage_pages', { operation: 'token_revoke' }, [])).toEqual(['pageTokens']);
+    expect(resolveToolStoreInvalidations('upload_pages_artifact', { operation: 'begin' }, [])).toEqual(['pages']);
+    expect(resolveToolStoreInvalidations('upload_pages_artifact', { operation: 'chunk' }, [])).toEqual([]);
+    expect(resolveToolStoreInvalidations('upload_pages_artifact', { operation: 'finalize' }, [])).toEqual([
+      'pages',
+      'proxy-hosts',
+    ]);
   });
 
   it('publishes only safe resource context to the target user channel', () => {

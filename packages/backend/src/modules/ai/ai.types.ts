@@ -78,6 +78,8 @@ export interface AIToolDefinition {
   requiredScope: string;
   invalidateStores: string[];
   historyRetention?: AIToolHistoryRetention;
+  /** Advertise this tool only through authenticated remote MCP, never to the embedded model runtime. */
+  mcpOnly?: boolean;
   /** Backend-only policy metadata. Provider adapters intentionally do not expose these fields. */
   effect?: AIToolEffect;
   approvalClass?: AIToolApprovalClass;

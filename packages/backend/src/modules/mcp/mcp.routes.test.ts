@@ -392,6 +392,42 @@ describe('MCP tools', () => {
     );
   });
 
+  it('redacts Pages artifact bytes when a scoped MCP call is denied', async () => {
+    registerToken(['pages:view:project-1']);
+    const executeTool = vi.fn();
+    const auditLog = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AIService, { executeTool } as unknown as AIService);
+    container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+
+    const { body } = await mcpRequest('tools/call', {
+      name: 'upload_pages_artifact',
+      arguments: {
+        operation: 'chunk',
+        uploadId: 'upload-1',
+        offset: 0,
+        contentBase64: 'c2Vuc2l0aXZlLWFydGlmYWN0LWJ5dGVz',
+      },
+    });
+
+    expect(body.result.isError).toBe(true);
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'mcp.upload_pages_artifact',
+        details: expect.objectContaining({
+          denied: true,
+          reason: 'missing_scope',
+          arguments: {
+            operation: 'chunk',
+            uploadId: 'upload-1',
+            offset: 0,
+            contentBase64: '[REDACTED]',
+          },
+        }),
+      })
+    );
+  });
+
   it('passes effective token scopes and token metadata to AI tool execution', async () => {
     registerToken(['nodes:details']);
     const executeTool = vi.fn().mockResolvedValue({ result: { data: [] }, invalidateStores: [] });
@@ -513,7 +549,7 @@ describe('MCP tools', () => {
   });
 
   it('discovers Pages and managed database lifecycle tools by domain', async () => {
-    registerToken(['pages:view', 'databases:view']);
+    registerToken(['pages:view', 'pages:deploy', 'databases:view']);
 
     await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'pages' } });
     await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'databases' } });
@@ -521,6 +557,7 @@ describe('MCP tools', () => {
     const refreshed = await mcpRequest('tools/list');
     const names = refreshed.body.result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toContain('manage_pages');
+    expect(names).toContain('upload_pages_artifact');
     expect(names).toContain('manage_managed_database');
   });
 

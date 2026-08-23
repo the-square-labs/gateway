@@ -1139,6 +1139,9 @@ export class AIService {
     if (!toolDef) {
       return { error: `Unknown tool: ${toolName}`, invalidateStores: [] };
     }
+    if (toolDef.mcpOnly && options.source !== 'mcp') {
+      return { error: `Tool ${toolName} is available only through remote MCP`, invalidateStores: [] };
+    }
 
     const activePlan =
       options.source !== 'mcp' && options.conversationId && this.planService

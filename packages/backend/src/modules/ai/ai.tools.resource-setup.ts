@@ -2,9 +2,52 @@ import type { AIToolDefinition } from './ai.types.js';
 
 export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
+    name: 'upload_pages_artifact',
+    description:
+      'Upload a static Pages project archive through authenticated MCP using a resumable begin/chunk/finalize workflow. Authentication comes from the MCP connection; never pass a token or Authorization value. Chunks contain at most 1 MiB of decoded base64 data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['begin', 'chunk', 'finalize'] },
+        projectId: { type: 'string', description: 'Page Project UUID for begin.' },
+        declaredSizeBytes: { type: 'number', description: 'Exact compressed archive size in bytes for begin.' },
+        sha256: { type: 'string', description: 'Lowercase SHA-256 of the complete compressed archive for begin.' },
+        idempotencyKey: { type: 'string' },
+        tag: { type: 'string', description: 'Optional mutable Tag to publish after finalize.' },
+        source: {
+          type: 'object',
+          properties: {
+            provider: { type: 'string' },
+            repository: { type: 'string' },
+            commitSha: { type: 'string' },
+            ref: { type: 'string' },
+            mergeRequest: { type: 'string' },
+            actor: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        uploadId: { type: 'string', description: 'Upload UUID returned by begin.' },
+        offset: { type: 'number', description: 'Current byte offset for chunk.' },
+        contentBase64: {
+          type: 'string',
+          maxLength: 1_398_104,
+          description: 'Base64-encoded archive chunk, at most 1 MiB decoded.',
+        },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Pages',
+    requiredScope: 'pages:deploy',
+    invalidateStores: [],
+    historyRetention: { mode: 'never_full' },
+    mcpOnly: true,
+  },
+  {
     name: 'manage_pages',
     description:
-      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, and runtime configuration. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes are uploaded through the resumable deploy API, not this metadata tool.',
+      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, and runtime configuration. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
     parameters: {
       type: 'object',
       properties: {

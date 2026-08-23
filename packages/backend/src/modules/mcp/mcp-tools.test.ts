@@ -51,6 +51,16 @@ describe('MCP tool scope filtering', () => {
     expect(toolNames(['logs:read:env-1'])).toContain('manage_logging');
     expect(toolNames(['status-page:incidents:resolve'])).toContain('manage_status_page');
     expect(toolNames(['pages:tokens:manage:project-1'])).toContain('manage_pages');
+    expect(toolNames(['pages:deploy:project-1'])).toContain('upload_pages_artifact');
+  });
+
+  it('advertises Pages upload as an MCP-only resumable binary contract', () => {
+    const tool = toolByName(['pages:deploy:project-1'], 'upload_pages_artifact');
+
+    expect(tool?.mcpOnly).toBe(true);
+    expect(tool?.parameters.properties).toHaveProperty('contentBase64');
+    expect(tool?.parameters.properties).not.toHaveProperty('token');
+    expect(tool?.parameters.properties).not.toHaveProperty('authorization');
   });
 
   it('never exposes AI sandbox runner tools through MCP', () => {

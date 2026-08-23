@@ -18,8 +18,14 @@ import { DockerMigrationService } from '@/modules/docker/docker-migration.servic
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
-import { PageDeploymentListQuerySchema } from '@/modules/pages/deployments/page-deployment.schemas.js';
-import { PageDeploymentService } from '@/modules/pages/deployments/page-deployment.service.js';
+import {
+  CreatePageDeploymentSchema,
+  PageDeploymentListQuerySchema,
+} from '@/modules/pages/deployments/page-deployment.schemas.js';
+import {
+  PageDeploymentService,
+  type PageDeployPrincipal,
+} from '@/modules/pages/deployments/page-deployment.service.js';
 import {
   CreatePageProjectSchema,
   MigratePageProjectSchema,
@@ -50,6 +56,7 @@ import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
 
 export const RESOURCE_SETUP_TOOL_NAMES = new Set([
+  'upload_pages_artifact',
   'manage_pages',
   'manage_additional_route',
   'manage_additional_secure_link',
@@ -59,6 +66,7 @@ export const RESOURCE_SETUP_TOOL_NAMES = new Set([
 ]);
 
 export async function executeResourceSetupTool(user: User, toolName: string, args: Record<string, unknown>) {
+  if (toolName === 'upload_pages_artifact') return uploadPagesArtifact(user, args);
   if (toolName === 'manage_pages') return managePages(user, args);
   if (toolName === 'manage_additional_route') return manageAdditionalRoute(user, args);
   if (toolName === 'manage_additional_secure_link') return manageAdditionalSecureLink(user, args);
@@ -66,6 +74,57 @@ export async function executeResourceSetupTool(user: User, toolName: string, arg
   if (toolName === 'manage_docker_migration') return manageDockerMigration(user, args);
   if (toolName === 'manage_logging_backend') return manageLoggingBackend(user, args);
   throw new Error(`Unsupported resource setup tool: ${toolName}`);
+}
+
+const MCP_PAGE_UPLOAD_CHUNK_MAX_BYTES = 1024 * 1024;
+
+async function uploadPagesArtifact(user: User, args: Record<string, unknown>) {
+  const operation = requiredEnum(args.operation, ['begin', 'chunk', 'finalize'] as const);
+  await container.resolve(LicensePolicyService).requireFeature('pages');
+  await container.resolve(PageProfileService).requireEnabled();
+
+  const deployments = container.resolve(PageDeploymentService);
+  const principal: PageDeployPrincipal = { kind: 'user', userId: user.id, scopes: user.scopes };
+  if (operation === 'begin') {
+    const input = CreatePageDeploymentSchema.parse(args);
+    ensureResourceScope(user, 'pages:deploy', input.projectId);
+    return deployments.create(input, principal);
+  }
+
+  const uploadId = requiredString(args.uploadId);
+  if (operation === 'chunk') {
+    const offset = requiredNumber(args.offset);
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', 'Upload offset must be a non-negative integer');
+    }
+    return deployments.appendChunk(
+      uploadId,
+      offset,
+      decodeMcpPageUploadChunk(requiredString(args.contentBase64)),
+      principal
+    );
+  }
+
+  const stored = await deployments.finalize(uploadId, principal);
+  await container.resolve(PagePublicationService).markDeploymentReady(stored.deployment.id);
+  return { deployment: await deployments.get(stored.deployment.id) };
+}
+
+function decodeMcpPageUploadChunk(value: string): Uint8Array {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new AppError(400, 'PAGES_UPLOAD_CHUNK_INVALID', 'Upload chunk must use canonical base64 encoding');
+  }
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.byteLength === 0) {
+    throw new AppError(400, 'PAGES_UPLOAD_CHUNK_EMPTY', 'Upload chunk cannot be empty');
+  }
+  if (bytes.byteLength > MCP_PAGE_UPLOAD_CHUNK_MAX_BYTES) {
+    throw new AppError(413, 'PAGES_UPLOAD_CHUNK_TOO_LARGE', 'MCP upload chunks cannot exceed 1 MiB');
+  }
+  if (bytes.toString('base64') !== value) {
+    throw new AppError(400, 'PAGES_UPLOAD_CHUNK_INVALID', 'Upload chunk must use canonical base64 encoding');
+  }
+  return bytes;
 }
 
 async function managePages(user: User, args: Record<string, unknown>) {

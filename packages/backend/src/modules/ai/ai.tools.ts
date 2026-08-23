@@ -636,9 +636,22 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           items: { type: 'string' },
           description: 'Domain names for this route; registered domains must use the same nginx node',
         },
+        upstreamKind: {
+          type: 'string',
+          enum: ['manual', 'docker_container', 'docker_deployment', 'pages'],
+          description: 'Upstream target kind. Defaults to manual.',
+        },
         forwardHost: { type: 'string', description: 'Backend host to proxy to (for proxy type)' },
         forwardPort: { type: 'number', description: 'Backend port (for proxy type)' },
         forwardScheme: { type: 'string', enum: ['http', 'https'], description: 'Backend scheme (default: http)' },
+        dockerNodeId: { type: 'string', description: 'Docker node UUID for a container upstream.' },
+        dockerContainerName: { type: 'string', description: 'Stable Docker container name.' },
+        dockerDeploymentId: { type: 'string', description: 'Docker deployment UUID.' },
+        dockerContainerPort: { type: 'number', description: 'Published TCP container port.' },
+        pageProjectId: { type: 'string', description: 'Page Project UUID for a Pages upstream.' },
+        pageTagId: { type: 'string', description: 'Mutable Page Tag UUID for a Pages upstream.' },
+        relaySpreadMode: { type: 'string', enum: ['inherit', 'fixed', 'all'] },
+        relaySpreadCount: { type: ['number', 'null'], description: 'Required only for fixed relay spread.' },
         sslEnabled: { type: 'boolean', description: 'Enable SSL/TLS' },
         sslForced: { type: 'boolean', description: 'Force HTTPS redirect (default: false)' },
         sslCertificateId: {
@@ -669,6 +682,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           description: 'Cache configuration (requires cacheEnabled)',
         },
         rateLimitEnabled: { type: 'boolean', description: 'Enable per-host rate limiting' },
+        rateLimitMode: { type: 'string', enum: ['inherit', 'custom', 'disabled'] },
         rateLimitOptions: {
           type: 'object',
           properties: {
@@ -691,6 +705,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           },
           description: 'URL rewrite rules applied before proxying',
         },
+        advancedConfig: { type: 'string', description: 'Advanced nginx snippet; requires proxy:advanced.' },
         accessListId: { type: 'string', description: 'Access list UUID for IP/auth restrictions' },
         folderId: { type: 'string', description: 'Folder UUID for organizing this route' },
         nginxTemplateId: { type: 'string', description: 'Custom nginx config template UUID' },
@@ -728,9 +743,22 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
         nodeId: { type: 'string', description: 'Nginx ingress node UUID to deploy this route on' },
         domainNames: { type: 'array', items: { type: 'string' }, description: 'Domain names' },
+        upstreamKind: {
+          type: 'string',
+          enum: ['manual', 'docker_container', 'docker_deployment', 'pages'],
+          description: 'Managed upstream kind. Pages Routes can be retargeted but not converted to another kind.',
+        },
         forwardHost: { type: ['string', 'null'], description: 'Backend host; null clears it' },
         forwardPort: { type: ['number', 'null'], description: 'Backend port; null clears it' },
         forwardScheme: { type: 'string', enum: ['http', 'https'] },
+        dockerNodeId: { type: ['string', 'null'] },
+        dockerContainerName: { type: ['string', 'null'] },
+        dockerDeploymentId: { type: ['string', 'null'] },
+        dockerContainerPort: { type: ['number', 'null'] },
+        pageProjectId: { type: ['string', 'null'] },
+        pageTagId: { type: ['string', 'null'] },
+        relaySpreadMode: { type: 'string', enum: ['inherit', 'fixed', 'all'] },
+        relaySpreadCount: { type: ['number', 'null'] },
         sslEnabled: { type: 'boolean' },
         sslForced: { type: 'boolean', description: 'Force HTTPS redirect' },
         http2Support: { type: 'boolean', description: 'Enable HTTP/2' },
@@ -761,6 +789,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           description: 'Cache configuration; null clears it',
         },
         rateLimitEnabled: { type: 'boolean', description: 'Enable rate limiting' },
+        rateLimitMode: { type: 'string', enum: ['inherit', 'custom', 'disabled'] },
         rateLimitOptions: {
           type: ['object', 'null'],
           properties: {
@@ -801,6 +830,23 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         enabled: { type: 'boolean', description: 'Enable or disable the route' },
       },
       required: ['routeId'],
+    },
+    destructive: true,
+    category: 'Ingress',
+    requiredScope: 'proxy:edit',
+    invalidateStores: ['proxy'],
+  },
+  {
+    name: 'set_route_maintenance',
+    description:
+      'Enter or exit maintenance mode for an enabled managed Route through the canonical maintenance lifecycle.',
+    parameters: {
+      type: 'object',
+      properties: {
+        routeId: { type: 'string', description: 'Route UUID' },
+        enabled: { type: 'boolean', description: 'True enters maintenance; false exits maintenance.' },
+      },
+      required: ['routeId', 'enabled'],
     },
     destructive: true,
     category: 'Ingress',
@@ -2157,6 +2203,7 @@ export function getOpenAITools(
 ): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }> {
   const discoveredToolsets = options.discoveredToolsets === undefined ? undefined : new Set(options.discoveredToolsets);
   return AI_TOOLS.filter((t) => {
+    if (t.mcpOnly) return false;
     if (options.planningMode && t.planningAccess !== 'allowed') return false;
     if (disabledTools.includes(t.name) && !REQUIRED_RUNTIME_AI_TOOL_NAMES.has(t.name)) return false;
     if (t.name === 'web_search' && !webSearchEnabled) return false;
