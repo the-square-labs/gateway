@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
+import { syncCodexCatalog } from './codex-catalog.js';
 import type { CredentialStore } from './credentials.js';
-import { CliError } from './errors.js';
+import { CliError, redactText } from './errors.js';
 import {
   inferenceProxyBaseUrl,
   inferenceProxyInstanceId,
@@ -12,6 +13,7 @@ import type { CliPaths } from './paths.js';
 
 const START_TIMEOUT_MS = 5_000;
 const STOP_TIMEOUT_MS = 2_000;
+const CATALOG_REFRESH_INTERVAL_MS = 60_000;
 
 export interface InferenceProxyDaemonManager {
   ensure(input: {
@@ -54,9 +56,36 @@ export async function runInferenceProxyDaemon(input: {
   });
   if (!proxy.owned) return;
 
+  let refreshPromise: Promise<void> | null = null;
+  const refreshCatalog = () => {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = (async () => {
+      const credential = await input.credentials.getRuntime(input.profileName);
+      if (!credential) return;
+      await syncCodexCatalog({
+        modelsUrl: `${configured.baseUrl!.replace(/\/$/, '')}/models`,
+        token: credential.token,
+        catalogFile: integrationPaths.catalogFile,
+        metadataFile: integrationPaths.metadataFile,
+        lockFile: integrationPaths.lockFile,
+      });
+    })().finally(() => {
+      refreshPromise = null;
+    });
+    return refreshPromise;
+  };
+  const reportRefreshError = (error: unknown) =>
+    process.stderr.write(
+      `Gateway catalog daemon refresh failed: ${redactText(error instanceof Error ? error.message : String(error))}\n`
+    );
+  void refreshCatalog().catch(reportRefreshError);
+  const refreshTimer = setInterval(() => void refreshCatalog().catch(reportRefreshError), CATALOG_REFRESH_INTERVAL_MS);
+  refreshTimer.unref();
+
   try {
     await waitForShutdown(input.signal);
   } finally {
+    clearInterval(refreshTimer);
     await proxy.close();
   }
 }

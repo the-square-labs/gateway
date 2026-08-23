@@ -1,6 +1,6 @@
 {
   "name": "@wiolett/gateway-inference",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Interactive inference companion for Wiolett Gateway",
   "type": "module",
   "bin": {
