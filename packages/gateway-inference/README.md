@@ -19,12 +19,26 @@ The manager shows the active Gateway connection plus Codex and Claude Code state
 ```sh
 npx -y @wiolett/gateway-inference@latest login
 npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
+npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...
 npx -y @wiolett/gateway-inference@latest logout
 ```
 
 `login` asks for the Gateway URL when it is omitted in an interactive terminal. It discovers the Gateway instance, opens its OAuth consent screen, and completes Authorization Code with PKCE through a random loopback callback. It requests only the isolated `inference:setup` resource.
 
+An existing `gwi_` inference token can be used instead of OAuth with `--token`. The token itself identifies its Gateway user; no email or separate account identifier is required. Treat the command as sensitive because command-line arguments may be retained by shell history or process inspection.
+
 OAuth and inference runtime credentials are stored in the operating-system credential store. If none is available, an interactive warning can opt into a mode-`0600` file. The dedicated `gwi_` runtime token stays in that Gateway-owned credential store and is never written to Codex configuration or `$CODEX_HOME/auth.json`. `logout` removes setup authorization but leaves an already configured harness and its dedicated runtime token unchanged.
+
+## Portable companion home
+
+Pass `--home` before or after the command to keep all companion-owned filesystem state in one directory:
+
+```sh
+npx -y @wiolett/gateway-inference@latest --home /data/inference login https://gateway.example.com --token gwi_...
+npx -y @wiolett/gateway-inference@latest --home /data/inference setup codex
+```
+
+Profiles, the private runtime helper, catalogs, proxy state, and mode-`0600` setup/runtime credentials are stored below `/data/inference`. Generated Codex and Claude Code configuration remains in each harness's native configuration directory so the harness can discover it. `GATEWAY_INFERENCE_HOME=/data/inference` is equivalent to the CLI option. The installed helper, MCP command, credential helper, and detached proxy retain the selected home automatically.
 
 ## Configure Codex
 

@@ -85,7 +85,7 @@ describe('InferenceTokenService', () => {
   });
 
   it('validates against the live owner and required inference scope', async () => {
-    const token = { id: TOKEN_ID, userId: USER_ID, tokenPrefix: 'gwi_12345678' };
+    const token = { id: TOKEN_ID, userId: USER_ID, tokenPrefix: 'gwi_12345678', managedBy: null };
     const allowed = await new InferenceTokenService(
       liveUserDb(token) as never,
       { log: vi.fn() } as never
@@ -99,7 +99,12 @@ describe('InferenceTokenService', () => {
       { log: vi.fn() } as never
     ).validateToken('gwi_test');
 
-    expect(allowed).toMatchObject({ user: { id: USER_ID }, tokenId: TOKEN_ID, tokenPrefix: 'gwi_12345678' });
+    expect(allowed).toMatchObject({
+      user: { id: USER_ID },
+      tokenId: TOKEN_ID,
+      tokenPrefix: 'gwi_12345678',
+      managedBy: null,
+    });
     expect(blocked).toBeNull();
     expect(demoted).toBeNull();
   });

@@ -213,7 +213,9 @@ export class InferenceTokenService {
     this.eventBus?.publish(inferenceTokenChangedChannel(userId), { action: 'revoke', id: token.id, userId });
   }
 
-  async validateToken(rawToken: string): Promise<{ user: User; tokenId: string; tokenPrefix: string } | null> {
+  async validateToken(
+    rawToken: string
+  ): Promise<{ user: User; tokenId: string; tokenPrefix: string; managedBy: string | null } | null> {
     if (!rawToken.startsWith('gwi_')) return null;
 
     const token = await this.db.query.inferenceTokens.findFirst({
@@ -231,7 +233,7 @@ export class InferenceTokenService {
       .execute()
       .catch((error) => logger.error('Failed to update inference token lastUsedAt', { tokenId: token.id, error }));
 
-    return { user, tokenId: token.id, tokenPrefix: token.tokenPrefix };
+    return { user, tokenId: token.id, tokenPrefix: token.tokenPrefix, managedBy: token.managedBy ?? null };
   }
 }
 

@@ -84,13 +84,14 @@ export async function configureCodex(input: {
   baseUrl: string;
   proxyBaseUrl: string;
   runtimeFile: string;
+  cliHome?: string;
   now?: () => Date;
   afterConfigWrite?: () => Promise<void> | void;
 }): Promise<CodexConfigResult> {
   const providerId = 'openai' as const;
   const mcpId = `wiolett-inference-${safeId(input.profile)}`;
   const rootBlock = rootBlockFor(input.model, input.paths.catalogFile, input.proxyBaseUrl);
-  const mcpBlock = mcpBlockFor(mcpId, input.runtimeFile);
+  const mcpBlock = mcpBlockFor(mcpId, input.runtimeFile, input.cliHome);
   const original = await readOptional(input.paths.configFile);
   const unmanagedOriginal = stripManagedMarkerLines(original);
   const persistedState = await readState(input.paths.stateFile);
@@ -256,10 +257,11 @@ function rootBlockFor(model: string, catalogFile: string, proxyBaseUrl: string):
   return `${ROOT_COMMENT}\nmodel = ${tomlString(model)}\nmodel_provider = "openai"\nmodel_catalog_json = ${tomlString(catalogFile)}\nopenai_base_url = ${tomlString(proxyBaseUrl)}`;
 }
 
-function mcpBlockFor(mcpId: string, runtimeFile: string): string {
+function mcpBlockFor(mcpId: string, runtimeFile: string, cliHome?: string): string {
+  const args = [runtimeFile, ...(cliHome ? ['--home', cliHome] : []), '__mcp'];
   return `[mcp_servers.${tomlString(mcpId)}]
 command = ${tomlString(process.execPath)}
-args = [${tomlString(runtimeFile)}, "__mcp"]
+args = [${args.map(tomlString).join(', ')}]
 startup_timeout_sec = 30`;
 }
 

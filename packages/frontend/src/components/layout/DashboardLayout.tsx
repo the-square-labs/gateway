@@ -126,8 +126,7 @@ export function DashboardLayout() {
   const [aiWorkspaceAvailability, setAIWorkspaceAvailability] =
     useState<AIWorkspaceAvailability | null>(null);
   const setSystemConfig = useSystemConfigStore((state) => state.setConfig);
-  const systemConfigLoaded = useSystemConfigStore((state) => state.loaded);
-  const [systemConfigReady, setSystemConfigReady] = useState(systemConfigLoaded);
+  const [systemConfigReady, setSystemConfigReady] = useState(false);
   const uiBootstrap = useUIBootstrapStore((state) => state.snapshot);
   const loadUIBootstrap = useUIBootstrapStore((state) => state.load);
   const invalidateUIBootstrap = useUIBootstrapStore((state) => state.invalidate);
@@ -226,10 +225,6 @@ export function DashboardLayout() {
     savePreferredInterface,
   ]);
 
-  useEffect(() => {
-    if (systemConfigLoaded) setSystemConfigReady(true);
-  }, [systemConfigLoaded]);
-
   // Project each refreshed shell atomically into the existing feature stores.
   // The layout must subscribe to the store as well as await the first load so
   // realtime invalidations update navigation without a full page reload.
@@ -241,7 +236,6 @@ export function DashboardLayout() {
       useUpdateStore.setState({ status: applyForcedGatewayUpdateStatus(uiBootstrap.update) });
     }
     if (uiBootstrap.aiStatus) useAIStore.getState().setProviderStatus(uiBootstrap.aiStatus);
-    setSystemConfigReady(true);
   }, [setSystemConfig, uiBootstrap]);
 
   useEffect(() => {
@@ -310,12 +304,11 @@ export function DashboardLayout() {
         setLoading(false);
         const shell = await loadUIBootstrap(`${user.id}:${[...user.scopes].sort().join("|")}`);
         if (cancelled) return;
-        if (!shell) {
-          // A failed optional shell refresh must not strand an authenticated
-          // user on a permanent skeleton. Default config is conservative and
-          // the next focus/realtime invalidation retries the projection.
-          setSystemConfigReady(true);
-        }
+        // Do not let a durable but stale feature snapshot mount protected
+        // routes before the current shell request settles. That otherwise
+        // produces transient FEATURE_DISABLED requests after a feature toggle.
+        if (shell) setSystemConfig(shell.systemConfig);
+        setSystemConfigReady(true);
         const hasAdminScopes = user.scopes.some((scope) => scope.startsWith("admin:"));
         const docker = useDockerStore.getState();
         const dockerFolders = useDockerFolderStore.getState();
@@ -382,7 +375,16 @@ export function DashboardLayout() {
       cancelled = true;
       prewarmController.abort();
     };
-  }, [authAccessKey, loadUIBootstrap, loginRedirectUrl, logout, navigate, setLoading, setUser]);
+  }, [
+    authAccessKey,
+    loadUIBootstrap,
+    loginRedirectUrl,
+    logout,
+    navigate,
+    setLoading,
+    setSystemConfig,
+    setUser,
+  ]);
 
   useEffect(() => {
     const checkMobile = () => {

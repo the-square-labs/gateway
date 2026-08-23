@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { vi } from "vitest";
 import { api } from "@/services/api";
-import type { InferenceProviderCatalogItem, InferenceProviderConnection } from "@/types/inference";
+import type {
+  InferenceModel,
+  InferenceProviderCatalogItem,
+  InferenceProviderConnection,
+} from "@/types/inference";
 import { InferenceModelDialog } from "./InferenceModelDialog";
 
 describe("InferenceModelDialog", () => {
@@ -73,6 +77,80 @@ describe("InferenceModelDialog", () => {
     );
 
     expect(displayName).toHaveValue("Unsaved model name");
+  });
+
+  it("restores reasoning rows in the model's saved order", async () => {
+    const user = userEvent.setup();
+    const editing = {
+      id: "model-1",
+      publicId: "k3",
+      displayName: "K3",
+      sortOrder: 0,
+      enabled: true,
+      contextWindow: 1_000_000,
+      maxInputTokens: 900_000,
+      maxOutputTokens: 8_000,
+      autoCompactTokenLimit: 800_000,
+      modalities: ["text", "image"],
+      capabilities: { reasoning: true, tools: true, vision: true },
+      configuredCapabilities: { reasoning: true, tools: true, vision: true },
+      capabilityLimitations: {},
+      reasoningEfforts: ["high", "low", "ultra"],
+      defaultReasoningEffort: "high",
+      defaultAccessAllowed: true,
+      accessMode: "everyone",
+      accessSubjects: [],
+      subscriptionMultiplier: 1,
+      sources: [
+        {
+          id: "source-1",
+          connectionId: "kimi-a",
+          discoveredModelId: "kimi-a-k3",
+          providerId: "kimi",
+          connectionName: "kimi-a",
+          upstreamModelId: "k3",
+          sourceType: "subscription",
+          enabled: true,
+          priority: 0,
+          subscriptionMultiplierOverride: null,
+          // PostgreSQL jsonb does not preserve the order selected by the user.
+          reasoningEffortMap: { low: "low", high: "high", ultra: "max" },
+          reasoningEfforts: ["low", "high", "max"],
+          capabilities: { reasoning: true, tools: true, vision: true },
+          contextWindow: 1_000_000,
+          maxInputTokens: 900_000,
+          maxOutputTokens: 8_000,
+          autoCompactTokenLimit: 800_000,
+          modalities: ["text", "image"],
+          capabilitiesOverride: null,
+          metadata: {},
+          pricing: null,
+        },
+      ],
+      accessRules: [],
+    } as InferenceModel;
+
+    render(
+      <InferenceModelDialog
+        open
+        editing={editing}
+        connections={[connection("kimi-a")]}
+        catalog={[provider("kimi", "Kimi subscription", true)]}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Reasoning" }));
+    expect(
+      [1, 2, 3].map(
+        (index) =>
+          (screen.getByRole("textbox", { name: `Client effort ${index}` }) as HTMLInputElement)
+            .value
+      )
+    ).toEqual(["high", "low", "ultra"]);
   });
 
   it("shows upstream ids only when display names collide", async () => {

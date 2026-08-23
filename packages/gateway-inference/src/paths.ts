@@ -1,9 +1,12 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+export const GATEWAY_INFERENCE_HOME_ENV = 'GATEWAY_INFERENCE_HOME';
 
 export interface CliPaths {
   configDir: string;
   dataDir: string;
+  homeDir?: string;
   profilesFile: string;
   fileCredentialsFile: string;
   runtimeDir: string;
@@ -13,12 +16,23 @@ export interface CliPaths {
 export function resolveCliPaths(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
-  home = homedir()
+  home = homedir(),
+  explicitHome?: string
 ): CliPaths {
   let configDir: string;
   let dataDir: string;
+  const configuredHome = explicitHome?.trim() || env[GATEWAY_INFERENCE_HOME_ENV]?.trim();
 
-  if (platform === 'darwin') {
+  if (configuredHome) {
+    const expanded =
+      configuredHome === '~'
+        ? home
+        : configuredHome.startsWith('~/') || configuredHome.startsWith('~\\')
+          ? join(home, configuredHome.slice(2))
+          : configuredHome;
+    configDir = resolve(expanded);
+    dataDir = configDir;
+  } else if (platform === 'darwin') {
     configDir = join(home, 'Library', 'Application Support', 'Wiolett Gateway');
     dataDir = configDir;
   } else if (platform === 'win32') {
@@ -35,6 +49,7 @@ export function resolveCliPaths(
   return {
     configDir,
     dataDir,
+    ...(configuredHome ? { homeDir: configDir } : {}),
     profilesFile: join(configDir, 'profiles.json'),
     fileCredentialsFile: join(dataDir, 'credentials.json'),
     runtimeDir,

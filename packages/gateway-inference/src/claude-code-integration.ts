@@ -54,6 +54,7 @@ export class ClaudeCodeIntegrationService {
       baseUrl: input.discovery.adapters.anthropic.baseUrl,
       model: defaultModel,
       runtimeFile: this.paths.runtimeFile,
+      cliHome: this.paths.homeDir,
     });
     return {
       claudeCodeVersion: claude.version,

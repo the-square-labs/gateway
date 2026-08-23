@@ -7,6 +7,7 @@ import {
   pageProjects,
   pageRouteTargets,
   pageRuntimeConfigs,
+  pageTagActivations,
   pageTags,
 } from '@/db/schema/index.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
@@ -394,7 +395,22 @@ export class PageProjectService {
         }
       );
     }
-    await this.db.delete(pageProjects).where(eq(pageProjects.id, id));
+    await this.db.transaction(async (tx) => {
+      const activations = await tx
+        .select({ id: pageTagActivations.id })
+        .from(pageTagActivations)
+        .innerJoin(pageTags, eq(pageTagActivations.tagId, pageTags.id))
+        .where(eq(pageTags.projectId, id));
+      if (activations.length > 0) {
+        await tx.delete(pageTagActivations).where(
+          inArray(
+            pageTagActivations.id,
+            activations.map((activation) => activation.id)
+          )
+        );
+      }
+      await tx.delete(pageProjects).where(eq(pageProjects.id, id));
+    });
     await this.auditService.log({
       userId,
       action: 'page_project.delete',

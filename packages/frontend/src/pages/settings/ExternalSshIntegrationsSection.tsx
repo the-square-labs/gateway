@@ -29,9 +29,10 @@ const CACHE_KEY = "settings:ssh-connectors";
 export function ExternalSshIntegrationsSection() {
   const hasScope = useAuthStore((state) => state.hasScope);
   const canManage = hasScope("integrations:ssh:manage");
+  const canView = canManage || hasScope("integrations:ssh:view");
   const cached = api.getCached<ExternalSshConnector[]>(CACHE_KEY);
   const [connectors, setConnectors] = useState<ExternalSshConnector[]>(() => cached ?? []);
-  const [initialLoadComplete, setInitialLoadComplete] = useState(cached !== undefined);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(!canView || cached !== undefined);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -40,6 +41,7 @@ export function ExternalSshIntegrationsSection() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const refresh = useCallback(async () => {
+    if (!canView) return;
     try {
       const data = await api.listExternalSshConnectors();
       api.setCache(CACHE_KEY, data);
@@ -49,7 +51,7 @@ export function ExternalSshIntegrationsSection() {
     } finally {
       setInitialLoadComplete(true);
     }
-  }, []);
+  }, [canView]);
 
   useEffect(() => {
     void refresh();
@@ -120,6 +122,7 @@ export function ExternalSshIntegrationsSection() {
     }
   };
 
+  if (!canView) return null;
   if (!initialLoadComplete) return <Skeleton className="h-40 w-full" />;
 
   const connectorNames = new Map(connectors.map((connector) => [connector.id, connector.name]));

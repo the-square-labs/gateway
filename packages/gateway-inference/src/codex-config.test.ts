@@ -24,6 +24,21 @@ async function fixture() {
 }
 
 describe('Codex managed configuration', () => {
+  it('keeps an explicit companion home in the installed MCP command', async () => {
+    const { paths, codex } = await fixture();
+    await configureCodex({
+      paths: codex,
+      profile: 'work',
+      model: 'gateway-model',
+      baseUrl: 'https://gateway.example.com/api/inference/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
+      runtimeFile: paths.runtimeFile,
+      cliHome: '/data/inference',
+    });
+    const configured = await readFile(codex.configFile, 'utf8');
+    expect(configured).toContain(`args = ["${paths.runtimeFile}", "--home", "/data/inference", "__mcp"]`);
+  });
+
   it('preserves unrelated TOML and restores prior root selections on removal', async () => {
     const { paths, codex } = await fixture();
     const original = `# user comment

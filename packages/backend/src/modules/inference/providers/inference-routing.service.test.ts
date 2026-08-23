@@ -81,9 +81,7 @@ describe('inference routing policy', () => {
       { ...healthy, id: 'connection-low', status: 'quota_hot', remainingFraction: 0.01 },
     ];
 
-    expect(__testOnly.usableCandidates(candidates).map((candidate) => candidate.id)).toEqual([
-      'connection-normal',
-    ]);
+    expect(__testOnly.usableCandidates(candidates).map((candidate) => candidate.id)).toEqual(['connection-normal']);
   });
 
   it('uses routing order only for sequential selection', () => {
@@ -128,6 +126,7 @@ describe('inference routing policy', () => {
       canFailOver(new InferenceProtocolError(429, 'provider_api_budget_exhausted', 'budget exhausted'), false)
     ).toBe(true);
     expect(canFailOver(retryable, true)).toBe(false);
+    expect(canFailOver(new InferenceProtocolError(502, 'cyber_policy', 'blocked by policy'), false)).toBe(false);
     expect(canFailOver(new InferenceProtocolError(400, 'invalid_request', 'bad'), false)).toBe(false);
     expect(canFailOver(new Error('network details'), false)).toBe(false);
   });

@@ -97,14 +97,17 @@ describe("Settings inference bootstrap", () => {
     });
   });
 
-  it("keeps a stable application skeleton until feature config is known and preserves the deep link", async () => {
+  it("keeps a stable application skeleton until the current shell settles, even with cached feature config", async () => {
     const user = makeUser({
       scopes: ["feat:ai:use", "inference:providers:view"],
     });
     useAuthStore.setState({ user, isAuthenticated: true, isLoading: false });
     useSystemConfigStore.setState({
-      config: DEFAULT_SYSTEM_CONFIG,
-      loaded: false,
+      config: withDefaultSystemConfig({
+        ...DEFAULT_SYSTEM_CONFIG,
+        features: { ...DEFAULT_SYSTEM_CONFIG.features, inferenceEnabled: true },
+      }),
+      loaded: true,
       isLoading: false,
     });
 

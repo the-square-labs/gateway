@@ -420,7 +420,7 @@ describe('inference core accounting', () => {
 
     await service.finalizeCoreRequest(REQUEST.id, 'completed');
 
-    expect(requestUpdates[0]).toMatchObject({ status: 'failed', errorCode: 'upstream_error' });
+    expect(requestUpdates[0]).toMatchObject({ status: 'failed', errorCode: 'upstream_server_error' });
   });
 
   it('keeps transport completion when a failover root attempt completed', async () => {
@@ -484,7 +484,7 @@ describe('inference core accounting', () => {
       sourceType: 'subscription',
       terminalStatus: 'failed',
       upstreamStatus: 502,
-      errorCode: 'upstream_server_error',
+      errorCode: 'cyber_policy',
       usage: { uncachedInputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 },
       usageEstimated: true,
       emittedOutput: true,
@@ -492,7 +492,47 @@ describe('inference core accounting', () => {
       completedAt: new Date().toISOString(),
     });
 
-    expect(requestUpdates).toContainEqual(expect.objectContaining({ status: 'failed', errorCode: 'upstream_error' }));
+    expect(requestUpdates).toContainEqual(expect.objectContaining({ status: 'failed', errorCode: 'cyber_policy' }));
+  });
+
+  it('replaces a transport-level upstream_error with the settled cyber_policy code', async () => {
+    const { service, requestUpdates } = createHarness({
+      request: { ...REQUEST, status: 'failed', errorCode: 'upstream_error' },
+      attemptLookups: [ATTEMPT, null],
+      selectRows: [
+        [
+          {
+            uncachedInputTokens: 0,
+            cachedInputTokens: 0,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+          },
+        ],
+        [{ credits: '0', apiMicrodollars: 0, estimatedUsage: false }],
+      ],
+    });
+
+    await service.settleCoreAttempt({
+      contractId: 'wiolett-core/v1',
+      rootRequestId: REQUEST.id,
+      attemptId: 'att_1',
+      parentAttemptId: null,
+      attemptKind: 'root',
+      coreAccountId: 'core-conn-1',
+      coreModelId: 'core-conn-1/gpt-5.5',
+      sourceType: 'subscription',
+      terminalStatus: 'failed',
+      upstreamStatus: 400,
+      errorCode: 'cyber_policy',
+      usage: { uncachedInputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 },
+      usageEstimated: false,
+      emittedOutput: false,
+      startedAt: new Date(Date.now() - 1000).toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    expect(requestUpdates).toContainEqual(expect.objectContaining({ status: 'failed', errorCode: 'cyber_policy' }));
   });
 
   it('persists cancellation distinctly from failure', async () => {

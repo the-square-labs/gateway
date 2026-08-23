@@ -13,10 +13,19 @@ export async function authenticatedSetupClient(
   fetcher?: Fetch
 ) {
   const profile = await profiles.getRequired(profileName);
+  const discovery = await discoverInference(profile.origin, fetcher);
+  const stored = await credentials.get(profileName);
+  if (stored?.authMode === 'inference-token' || stored?.accessToken.startsWith('gwi_')) {
+    return {
+      client: new InferenceSetupClient(profile.origin, stored.accessToken, fetcher),
+      credential: stored,
+      discovery,
+      profile,
+    };
+  }
   if (!profile.clientId) {
     throw new CliError('NOT_LOGGED_IN', 'Gateway connection is not logged in.', { exitCode: 2 });
   }
-  const discovery = await discoverInference(profile.origin, fetcher);
   const metadata = await fetchSetupOAuthMetadata(discovery, fetcher);
   const credential = await refreshCredential({
     profile: profileName,

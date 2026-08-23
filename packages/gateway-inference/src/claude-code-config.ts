@@ -53,8 +53,8 @@ export function resolveClaudeCodePaths(
   };
 }
 
-export function claudeCodeApiKeyHelper(runtimeFile: string, platform = process.platform): string {
-  const args = [process.execPath, runtimeFile, '__credential', 'claude-code'];
+export function claudeCodeApiKeyHelper(runtimeFile: string, platform = process.platform, cliHome?: string): string {
+  const args = [process.execPath, runtimeFile, ...(cliHome ? ['--home', cliHome] : []), '__credential', 'claude-code'];
   return platform === 'win32' ? args.map(windowsShellQuote).join(' ') : args.map(posixShellQuote).join(' ');
 }
 
@@ -64,10 +64,11 @@ export async function configureClaudeCode(input: {
   baseUrl: string;
   model: string;
   runtimeFile: string;
+  cliHome?: string;
 }): Promise<{ configFile: string; stateFile: string; apiKeyHelper: string }> {
   const settings = await readSettings(input.paths.configFile);
   const state = await readState(input.paths.stateFile);
-  const apiKeyHelper = claudeCodeApiKeyHelper(input.runtimeFile);
+  const apiKeyHelper = claudeCodeApiKeyHelper(input.runtimeFile, process.platform, input.cliHome);
   const managed: ClaudeCodeIntegrationState['managed'] = {
     apiKeyHelper,
     env: {

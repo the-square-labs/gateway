@@ -91,6 +91,7 @@ export class CodexIntegrationService {
       baseUrl: input.discovery.adapters.openai.baseUrl,
       proxyBaseUrl: inferenceProxyBaseUrl(this.paths, input.profileName),
       runtimeFile: this.paths.runtimeFile,
+      cliHome: this.paths.homeDir,
       now: this.options.now,
     });
     try {

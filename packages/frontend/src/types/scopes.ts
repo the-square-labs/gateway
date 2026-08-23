@@ -974,13 +974,8 @@ const RAW_TOKEN_SCOPES = [
     desc: "Allow this user account to access the remote MCP server with OAuth",
     group: "Features",
   },
-  // Inference administration
-  {
-    value: "inference:setup",
-    label: "Set Up Inference Harnesses",
-    desc: "Authorize companion CLI setup for supported AI harnesses",
-    group: "Inference",
-  },
+  // Inference administration. inference:setup is an OAuth-only protocol
+  // scope rendered by OAuthConsent and must not be user-assignable.
   {
     value: "inference:tokens:manage",
     label: "Manage Inference Tokens",
@@ -1406,6 +1401,12 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "settings:gateway:edit",
   "integrations:gitlab:manage",
   "integrations:gitlab:system",
+  "integrations:github:manage",
+  "integrations:github:system",
+  "integrations:git:manage",
+  "integrations:git:system",
+  "integrations:ssh:manage",
+  "integrations:cloudflare:manage",
   "proxy:raw:read",
   "proxy:raw:write",
   "proxy:raw:toggle",

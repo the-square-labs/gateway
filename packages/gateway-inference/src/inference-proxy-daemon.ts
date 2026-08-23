@@ -106,12 +106,16 @@ export async function ensureInferenceProxyDaemon(input: {
     await terminateProxy(current.pid, input.paths, input.profileName);
   }
 
-  const child = spawn(process.execPath, [input.runtimeFile, '__proxy'], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env: { ...process.env, ...input.env },
-  });
+  const child = spawn(
+    process.execPath,
+    [input.runtimeFile, ...(input.paths.homeDir ? ['--home', input.paths.homeDir] : []), '__proxy'],
+    {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, ...input.env },
+    }
+  );
   let spawnError: Error | undefined;
   child.once('error', (error) => {
     spawnError = error;

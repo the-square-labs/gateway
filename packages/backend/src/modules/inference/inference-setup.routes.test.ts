@@ -50,6 +50,20 @@ function registerServices() {
     }),
   };
   const tokens = {
+    validateToken: vi.fn().mockImplementation(async (token: string) => {
+      if (token === 'gwi_valid') {
+        return { user: USER, tokenId: 'inference-token-1', tokenPrefix: 'gwi_valid', managedBy: null };
+      }
+      if (token === 'gwi_managed') {
+        return {
+          user: USER,
+          tokenId: 'managed-inference-token-1',
+          tokenPrefix: 'gwi_managed',
+          managedBy: 'gateway-cli',
+        };
+      }
+      return null;
+    }),
     listManagedTokens: vi.fn().mockResolvedValue([]),
     createManagedToken: vi.fn().mockResolvedValue({
       id: '22222222-2222-4222-8222-222222222222',
@@ -107,23 +121,32 @@ describe('inference setup discovery and control plane', () => {
     });
   });
 
-  it('rejects non-setup credentials and isolates OAuth validation to the setup resource', async () => {
-    const { oauth } = registerServices();
+  it('accepts OAuth or a valid inference token and rejects unrelated credentials', async () => {
+    const { oauth, tokens } = registerServices();
     const app = createApp();
 
     const ordinary = await app.request('/api/inference/setup/me', {
       headers: { Authorization: 'Bearer gw_not_setup' },
     });
-    const inference = await app.request('/api/inference/setup/me', {
+    const invalidInference = await app.request('/api/inference/setup/me', {
       headers: { Authorization: 'Bearer gwi_not_setup' },
+    });
+    const managedInference = await app.request('/api/inference/setup/me', {
+      headers: { Authorization: 'Bearer gwi_managed' },
+    });
+    const inference = await app.request('/api/inference/setup/me', {
+      headers: { Authorization: 'Bearer gwi_valid' },
     });
     const setup = await app.request('/api/inference/setup/me', {
       headers: { Authorization: 'Bearer gwo_setup' },
     });
 
     expect(ordinary.status).toBe(401);
-    expect(inference.status).toBe(401);
+    expect(invalidInference.status).toBe(401);
+    expect(managedInference.status).toBe(401);
+    expect(inference.status).toBe(200);
     expect(setup.status).toBe(200);
+    expect(tokens.validateToken).toHaveBeenCalledWith('gwi_valid');
     expect(oauth.validateAccessToken).toHaveBeenCalledWith('gwo_setup', {
       resource: 'https://gateway.example.com/api/inference/setup',
     });

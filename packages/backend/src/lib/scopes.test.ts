@@ -30,6 +30,20 @@ function frontendResourceScopableScopes(): string[] {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
+function frontendSelectableScopes(): string[] {
+  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scopes.ts'), 'utf8');
+  const match = source.match(/const RAW_TOKEN_SCOPES = \[([\s\S]*?)\] as const;/);
+  if (!match) throw new Error('RAW_TOKEN_SCOPES not found');
+  return [...match[1].matchAll(/value: "([^"]+)"/g)].map((entry) => entry[1]);
+}
+
+function frontendProgrammaticDeniedScopes(): string[] {
+  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scopes.ts'), 'utf8');
+  const match = source.match(/const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>\(\[([\s\S]*?)\]\);/);
+  if (!match) throw new Error('PROGRAMMATIC_DENIED_SCOPE_VALUES not found');
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}
+
 function listScopeRemovalMigration(): string {
   return readFileSync(join(process.cwd(), 'src/db/migrations/0030_remove_list_scopes.sql'), 'utf8');
 }
@@ -86,6 +100,11 @@ describe('canonical scope definitions', () => {
     expect(documentedScopes()).toEqual([...ALL_SCOPES]);
     expect(documentedProgrammaticDeniedScopes()).toEqual([...PROGRAMMATIC_DENIED_BASE_SCOPES]);
     expect(documentedManualApprovalScopes()).toEqual([...MANUAL_APPROVAL_SCOPES]);
+  });
+
+  it('keeps frontend scope selectors aligned while reserving inference setup for OAuth', () => {
+    expect(frontendSelectableScopes().sort()).toEqual(ALL_SCOPES.filter((scope) => scope !== 'inference:setup').sort());
+    expect(frontendProgrammaticDeniedScopes().sort()).toEqual([...PROGRAMMATIC_DENIED_BASE_SCOPES].sort());
   });
 
   it('keeps built-in admin broad while excluding protected operational scopes', () => {

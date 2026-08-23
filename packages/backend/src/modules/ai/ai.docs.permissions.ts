@@ -141,7 +141,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Inference Gateway
 | Scope | Description |
 |-------|-------------|
-| inference:setup | Authorize the Gateway companion CLI setup resource |
+| inference:setup | OAuth-only authorization for the Gateway companion CLI setup resource; do not assign it to users or groups |
 | inference:tokens:manage | Create and revoke dedicated gwi_ inference tokens for the current user |
 | inference:providers:view | View provider templates, connections, masked credentials, discovery, and quota |
 | inference:providers:manage | Connect, update, synchronize, route, and disconnect inference providers |

@@ -100,7 +100,9 @@ export function InferenceModelDialog({
     const baseForm = editing ? formFromModel(editing) : EMPTY_MODEL_FORM;
     setForm(option ? formWithProviderModel(baseForm, option) : baseForm);
     const nextMapping = defaultReasoningMap(
-      option?.reasoningEfforts ?? [],
+      editing?.reasoningEfforts.length
+        ? editing.reasoningEfforts
+        : (option?.reasoningEfforts ?? []),
       firstSource?.reasoningEffortMap ?? {}
     );
     setMapping(nextMapping);

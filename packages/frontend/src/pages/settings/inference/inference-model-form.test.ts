@@ -116,6 +116,18 @@ describe("inference model form helpers", () => {
     });
   });
 
+  it("restores persisted reasoning mappings in the model's saved order", () => {
+    expect(
+      Object.keys(
+        defaultReasoningMap(
+          ["high", "low", "ultra"],
+          // PostgreSQL jsonb may return object keys in a different order.
+          { low: "low", high: "high", ultra: "max" }
+        )
+      )
+    ).toEqual(["high", "low", "ultra"]);
+  });
+
   it("keeps auto-compaction within the selected provider model input limit", () => {
     const [option] = buildProviderModelOptions(
       [connection("openai", "team", [model("gpt", 200_000, 150_000, 180_000)])],

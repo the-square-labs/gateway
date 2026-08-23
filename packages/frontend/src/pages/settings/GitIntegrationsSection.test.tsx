@@ -186,4 +186,19 @@ describe("GitIntegrationsSection", () => {
 
     await waitFor(() => expect(mocks.syncGitConnector).toHaveBeenCalledWith("github", "github-1"));
   });
+
+  it("does not load connector families the user cannot view", async () => {
+    useAuthStore.setState((state) => ({
+      user: state.user ? { ...state.user, scopes: [] } : null,
+    }));
+
+    render(<GitIntegrationsSection />);
+
+    await waitFor(() => {
+      expect(mocks.listGitConnectors).not.toHaveBeenCalled();
+      expect(mocks.getGitHubOAuthAvailability).not.toHaveBeenCalled();
+    });
+    expect(screen.queryByText("GitHub Integrations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Git Integrations")).not.toBeInTheDocument();
+  });
 });

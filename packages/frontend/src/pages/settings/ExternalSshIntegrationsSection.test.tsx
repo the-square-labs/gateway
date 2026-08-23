@@ -133,4 +133,15 @@ describe("ExternalSshIntegrationsSection", () => {
       expect(mocks.updateExternalSshConnector).toHaveBeenCalledWith("jump-1", "Primary jump")
     );
   });
+
+  it("does not load SSH connectors without a view scope", async () => {
+    useAuthStore.setState((state) => ({
+      user: state.user ? { ...state.user, scopes: [] } : null,
+    }));
+
+    render(<ExternalSshIntegrationsSection />);
+
+    await waitFor(() => expect(mocks.listExternalSshConnectors).not.toHaveBeenCalled());
+    expect(screen.queryByText("External SSH Integrations")).not.toBeInTheDocument();
+  });
 });

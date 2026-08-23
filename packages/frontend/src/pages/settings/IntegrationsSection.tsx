@@ -170,11 +170,12 @@ export function IntegrationsSection() {
 function GitLabIntegrationsSection() {
   const { hasScope } = useAuthStore();
   const canManage = hasScope("integrations:gitlab:manage");
+  const canView = canManage || hasScope("integrations:gitlab:view");
   const [connectors, setConnectors] = useState<GitLabConnector[]>(
     () => api.getCached<GitLabConnector[]>("settings:gitlab-connectors") ?? []
   );
   const [initialLoadComplete, setInitialLoadComplete] = useState(
-    () => api.getCached<GitLabConnector[]>("settings:gitlab-connectors") !== undefined
+    () => !canView || api.getCached<GitLabConnector[]>("settings:gitlab-connectors") !== undefined
   );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<GitLabConnector | null>(null);
@@ -233,6 +234,7 @@ function GitLabIntegrationsSection() {
   );
 
   const loadConnectors = useCallback(async () => {
+    if (!canView) return;
     try {
       const data = await api.listGitLabConnectors();
       api.setCache("settings:gitlab-connectors", data ?? []);
@@ -242,7 +244,7 @@ function GitLabIntegrationsSection() {
     } finally {
       setInitialLoadComplete(true);
     }
-  }, []);
+  }, [canView]);
 
   useEffect(() => {
     loadConnectors();
@@ -580,6 +582,7 @@ function GitLabIntegrationsSection() {
     }
   };
 
+  if (!canView) return null;
   if (!initialLoadComplete) return <Skeleton />;
 
   return (

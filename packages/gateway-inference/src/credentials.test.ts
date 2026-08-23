@@ -64,6 +64,22 @@ describe('secure credentials', () => {
     expect(await later.get('work')).toEqual(credential);
   });
 
+  it('keeps credentials in the selected companion home when file storage is preferred', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gateway-cli-credential-'));
+    const path = join(directory, 'credentials.json');
+    const keyring = new MemoryBackend(true);
+    const store = new SecureCredentialStore(keyring, new FileCredentialBackend(path), {
+      allowFileCredentials: true,
+      preferFileCredentials: true,
+    });
+
+    await store.set('work', credential);
+
+    expect(keyring.values.size).toBe(0);
+    expect(await store.get('work')).toEqual(credential);
+    if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
   it('keeps OAuth and runtime tokens separate and reads an existing fallback when keyring is empty', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gateway-cli-credential-'));
     const file = new FileCredentialBackend(join(directory, 'credentials.json'));

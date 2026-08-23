@@ -142,6 +142,7 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain("THEN 'inference:tokens:manage'");
     expect(migration).toContain('UPDATE "permission_groups"');
     expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain('UPDATE "api_tokens"');
     expect(migration).toContain('UPDATE "oauth_authorization_codes"');
     expect(migration).toContain('UPDATE "ai_run_tool_calls"');
     expect(migration).toContain('UPDATE "sandbox_jobs"');
@@ -182,6 +183,19 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('UPDATE "oauth_access_tokens"');
     expect(migration).toContain('UPDATE "ai_run_tool_calls"');
     expect(migration).toContain('UPDATE "sandbox_jobs"');
+  });
+
+  it('removes the OAuth-only inference setup scope from user assignments', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0154_remove_inference_setup_assignments.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain("scope_value <> 'inference:setup'");
+    expect(migration).not.toContain('UPDATE "oauth_access_tokens"');
+    expect(migration).not.toContain('UPDATE "oauth_refresh_tokens"');
   });
 
   it('adds the inference core runtime tables without touching existing inference rows', () => {

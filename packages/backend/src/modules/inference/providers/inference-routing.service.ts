@@ -225,6 +225,7 @@ export function canFailOver(error: unknown, emittedOutput: boolean): boolean {
   if (
     [
       'duplicate_request',
+      'cyber_policy',
       'invalid_request_error',
       'model_not_found',
       'reservation_unavailable',

@@ -41,4 +41,19 @@ describe('Gateway profiles and paths', () => {
       resolveCliPaths({ APPDATA: 'C:\\Roaming', LOCALAPPDATA: 'C:\\Local' }, 'win32', 'C:\\Users\\alice').dataDir
     ).toContain('C:\\Local');
   });
+
+  it('places all companion filesystem state under an explicit or environment home', () => {
+    expect(resolveCliPaths({}, 'linux', '/home/alice', '/data/inference')).toEqual({
+      configDir: '/data/inference',
+      dataDir: '/data/inference',
+      homeDir: '/data/inference',
+      profilesFile: '/data/inference/profiles.json',
+      fileCredentialsFile: '/data/inference/credentials.json',
+      runtimeDir: '/data/inference/runtime',
+      runtimeFile: '/data/inference/runtime/gateway-cli.js',
+    });
+    expect(resolveCliPaths({ GATEWAY_INFERENCE_HOME: '~/inference' }, 'linux', '/home/alice').homeDir).toBe(
+      '/home/alice/inference'
+    );
+  });
 });

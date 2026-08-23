@@ -91,12 +91,13 @@ function GitConnectorPanel({
 }) {
   const hasScope = useAuthStore((state) => state.hasScope);
   const canManage = hasScope(`integrations:${provider}:manage`);
+  const canView = canManage || hasScope(`integrations:${provider}:view`);
   const cacheKey = `settings:${provider}-connectors`;
   const [connectors, setConnectors] = useState<GitConnector[]>(
     () => api.getCached<GitConnector[]>(cacheKey) ?? []
   );
   const [initialLoadComplete, setInitialLoadComplete] = useState(
-    () => api.getCached<GitConnector[]>(cacheKey) !== undefined
+    () => !canView || api.getCached<GitConnector[]>(cacheKey) !== undefined
   );
   const [editingConnector, setEditingConnector] = useState<GitConnector | null>(null);
   const [methodOpen, setMethodOpen] = useState(false);
@@ -121,6 +122,7 @@ function GitConnectorPanel({
   );
 
   const refresh = useCallback(async () => {
+    if (!canView) return;
     try {
       const data = await api.listGitConnectors(provider);
       api.setCache(cacheKey, data);
@@ -130,7 +132,7 @@ function GitConnectorPanel({
     } finally {
       setInitialLoadComplete(true);
     }
-  }, [cacheKey, provider, title]);
+  }, [cacheKey, canView, provider, title]);
 
   useEffect(() => {
     void refresh();
@@ -141,12 +143,12 @@ function GitConnectorPanel({
   });
 
   useEffect(() => {
-    if (provider !== "github") return;
+    if (!canView || provider !== "github") return;
     void api
       .getGitHubOAuthAvailability()
       .then(({ available }) => setGithubOAuthAvailable(available))
       .catch(() => setGithubOAuthAvailable(false));
-  }, [provider]);
+  }, [canView, provider]);
 
   const resetForm = () => {
     setForm(initialForm(provider));
@@ -380,6 +382,7 @@ function GitConnectorPanel({
     }
   };
 
+  if (!canView) return null;
   if (!initialLoadComplete) return <Skeleton />;
 
   return (

@@ -88,6 +88,13 @@ describe('Claude Code configuration', () => {
       conflicts: ['env.ANTHROPIC_BASE_URL'],
     });
   });
+
+  it('keeps an explicit companion home in the installed credential helper command', () => {
+    const helper = claudeCodeApiKeyHelper('/data/inference/runtime/gateway-cli.js', 'linux', '/data/inference');
+    expect(helper).toContain("'--home'");
+    expect(helper).toContain("'/data/inference'");
+    expect(helper).toContain("'__credential'");
+  });
 });
 
 function cliPaths(root: string): CliPaths {

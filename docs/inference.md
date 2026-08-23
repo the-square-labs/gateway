@@ -67,24 +67,17 @@ For Codex and Claude Code, prefer the companion package instead of editing confi
 npx -y @wiolett/gateway-inference@latest
 ```
 
-The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, and offers each supported harness. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available:
+The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, and offers each supported harness. An existing `gwi_` token can authenticate `login` directly; the token already identifies its user, so no email is required. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available:
 
 ```bash
+npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...
 npx -y @wiolett/gateway-inference@latest setup codex
-npx -y @wiolett/gateway-inference@latest setup codex --desktop-usage
-npx -y @wiolett/gateway-inference@latest setup codex --cli-usage
 npx -y @wiolett/gateway-inference@latest setup claude-code
 ```
 
-Codex setup issues a dedicated runtime token, installs a private stable helper and loopback proxy, and maintains the authoritative Gateway model catalog. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog.
+Codex setup issues a dedicated runtime token, installs a private stable helper and loopback proxy, and maintains the authoritative Gateway model catalog. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog. Native Codex usage and quota displays are not overridden.
 
-The same Codex setup can optionally install Gateway usage surfaces; there is no separate wrapper installation command. Interactive setup offers Desktop, `gateway-codex`, both, or neither. `--desktop-usage` enables the Desktop integration and `--cli-usage` installs a separate launcher without shadowing the normal `codex` command. Wrapped sessions translate Gateway usage into Codex app-server messages, suppress native OpenAI quota notifications, and fail closed before the first successful Gateway usage read.
-
-Optional activation performs an authenticated `/usage` compatibility preflight before writing a Desktop wrapper, LaunchAgent, XDG entry, or `gateway-codex` launcher. If Gateway is older than this contract or the endpoint cannot be verified, setup leaves optional usage activation absent and preserves the functioning base Codex integration so the administrator can update Gateway and retry safely.
-
-Desktop usage supports macOS and compatible native/AppImage Linux builds. Linux gets a separate **ChatGPT (Gateway)** XDG launcher; Flatpak and Snap are excluded. Windows continues to support the base Codex setup but not these usage wrappers. The CLI wrapper forwards non-interactive commands directly and interposes only interactive, resume, and fork sessions.
-
-Emergency removal is offline and ownership-aware. `uninstall codex-usage desktop` and `uninstall codex-usage cli` remove one surface; `uninstall codex-usage` or `uninstall codex-usage all` removes both while preserving the base integration, proxy, catalog, and runtime token.
+Use `--home /data/inference` or `GATEWAY_INFERENCE_HOME=/data/inference` to keep profiles, credentials, catalogs, helper, and proxy state below one companion directory. The package propagates that home into its installed long-lived processes. Codex and Claude Code configuration still remains in the harness-native configuration directory.
 
 Claude Code setup requires Claude Code 2.1.129 or newer. It configures Claude Code's native Anthropic gateway contract through `ANTHROPIC_BASE_URL`, model discovery, and a private `apiKeyHelper`; it does not run a loopback proxy. The integration applies only to the Claude Code CLI, not Claude Desktop or the VS Code extension.
 

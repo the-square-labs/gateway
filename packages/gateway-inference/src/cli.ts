@@ -17,7 +17,7 @@ import {
 } from './interactive-command.js';
 import { isAuthorizationRequired } from './interactive-setup.js';
 import { createInteractiveCliUi, type InteractiveCliUi } from './interactive-ui.js';
-import { loginCommand, logoutCommand } from './login-command.js';
+import { loginCommand, loginWithInferenceTokenCommand, logoutCommand } from './login-command.js';
 import { createOutput, type Output } from './output.js';
 import { type CliPaths, resolveCliPaths } from './paths.js';
 import { ProfileStore } from './profiles.js';
@@ -25,6 +25,8 @@ import { authenticatedSetupClient } from './session.js';
 
 interface ParsedArgs {
   command: string[];
+  home?: string;
+  token?: string;
 }
 
 interface CliDependencies {
@@ -45,28 +47,58 @@ interface CliDependencies {
 
 const CONNECTION_NAME = 'default';
 
-const HELP = `Usage: npx @wiolett/gateway-inference [command]
+const HELP = `Usage: npx @wiolett/gateway-inference [--home <path>] [command]
 
 Commands:
-  login [GATEWAY]                  Authorize this device through Gateway
+  login [GATEWAY]                  Authorize through OAuth or an existing gwi_ token
   logout                           Remove Gateway setup authorization
   setup [codex|claude-code]        Configure an inference harness
 
 Running without a command opens the interactive manager.
 
 Options:
+  --home <path>                    Store all companion data under this directory
+  --token <gwi_token>              Authenticate with an existing inference token
   -h, --help                       Show help
   -v, --version                    Show version`;
 
-function parseArgs(args: string[]): ParsedArgs {
+export function parseArgs(args: string[]): ParsedArgs {
   const command: string[] = [];
-  for (const value of args) {
+  let home: string | undefined;
+  let token: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index]!;
     if (value === '--help' || value === '-h') return { command: ['help'] };
     if (value === '--version' || value === '-v') return { command: ['version'] };
+    if (value === '--home' || value.startsWith('--home=')) {
+      if (home !== undefined) throw new CliError('INVALID_ARGUMENT', 'Option --home may be provided only once.');
+      const candidate = value === '--home' ? args[++index] : value.slice('--home='.length);
+      if (!candidate?.trim() || candidate.startsWith('-')) {
+        throw new CliError('INVALID_ARGUMENT', 'Option --home requires a directory path.');
+      }
+      home = candidate.trim();
+      continue;
+    }
+    if (value === '--token' || value.startsWith('--token=')) {
+      if (token !== undefined) throw new CliError('INVALID_ARGUMENT', 'Option --token may be provided only once.');
+      const candidate = value === '--token' ? args[++index] : value.slice('--token='.length);
+      if (!candidate?.trim() || candidate.startsWith('-')) {
+        throw new CliError('INVALID_ARGUMENT', 'Option --token requires a value.');
+      }
+      token = candidate.trim();
+      continue;
+    }
     if (value.startsWith('-')) throw new CliError('INVALID_ARGUMENT', `Unknown option: ${value}`);
     command.push(value);
   }
-  return { command };
+  if (token && command[0] !== 'login') {
+    throw new CliError('INVALID_ARGUMENT', 'Option --token is supported only with the login command.');
+  }
+  return {
+    command,
+    ...(home ? { home } : {}),
+    ...(token ? { token } : {}),
+  };
 }
 
 export async function runCli(args: string[], dependencies: CliDependencies = {}): Promise<number> {
@@ -79,14 +111,17 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     output.write(payload, () => `Error [${payload.error.code}]: ${payload.error.message}`);
     return error instanceof CliError ? error.exitCode : 1;
   }
-  const paths = dependencies.paths ?? resolveCliPaths();
+  const paths =
+    dependencies.paths ??
+    resolveCliPaths(dependencies.env ?? process.env, process.platform, dependencies.home, parsed.home);
   const profiles = dependencies.profiles ?? new ProfileStore(paths.profilesFile);
   const interactive = dependencies.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
   const interactiveUi = dependencies.interactiveUi ?? (interactive ? createInteractiveCliUi() : undefined);
   const credentials =
     dependencies.credentials ??
     SecureCredentialStore.forPlatform(paths.fileCredentialsFile, paths.dataDir, {
-      allowFileCredentials: false,
+      allowFileCredentials: Boolean(paths.homeDir),
+      preferFileCredentials: Boolean(paths.homeDir),
       interactive: interactive && process.platform !== 'darwin',
       confirmFileFallback: interactiveUi
         ? async () =>
@@ -161,15 +196,26 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       if (!gateway) {
         throw new CliError('GATEWAY_REQUIRED', 'Provide a Gateway URL or run login in an interactive terminal.');
       }
-      await loginCommand(
-        { gateway, command: ['login'] },
-        CONNECTION_NAME,
-        profiles,
-        credentials,
-        output,
-        dependencies.fetch,
-        dependencies.openBrowser
-      );
+      if (parsed.token) {
+        await loginWithInferenceTokenCommand(
+          { gateway, token: parsed.token },
+          CONNECTION_NAME,
+          profiles,
+          credentials,
+          output,
+          dependencies.fetch
+        );
+      } else {
+        await loginCommand(
+          { gateway, command: ['login'] },
+          CONNECTION_NAME,
+          profiles,
+          credentials,
+          output,
+          dependencies.fetch,
+          dependencies.openBrowser
+        );
+      }
       return 0;
     }
     if (parsed.command[0] === 'logout') {

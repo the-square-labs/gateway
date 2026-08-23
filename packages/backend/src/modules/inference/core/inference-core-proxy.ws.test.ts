@@ -51,7 +51,7 @@ import { createCoreResponsesWSHandlers } from './inference-core-proxy.ws.js';
 
 const USER = { id: '11111111-1111-4111-8111-111111111111', isBlocked: false, scopes: [] };
 
-function registerCommon() {
+function registerCommon(candidateConnectionIds = ['conn-1']) {
   container.registerInstance(InferenceTokenService, {
     validateToken: vi.fn().mockResolvedValue({ user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_a' }),
   } as never);
@@ -85,7 +85,7 @@ function registerCommon() {
       },
       upstreamModel: 'core-conn-1/gpt-5.5',
       coreAccountId: 'core-conn-1',
-      candidateConnectionIds: ['conn-1'],
+      candidateConnectionIds,
     }),
     dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data' }),
   };
@@ -155,10 +155,39 @@ describe('core responses websocket proxy', () => {
           : { type, response: { id: 'resp_1', status: type.slice('response.'.length) } }
       )
     );
-    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
-      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-      'failed'
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'failed');
+  });
+
+  it('forwards cyber_policy to the client without failing over to another provider connection', async () => {
+    const { accounting, proxy } = registerCommon(['conn-1', 'conn-2']);
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
     );
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    const failure = {
+      type: 'response.failed',
+      response: {
+        id: 'resp_1',
+        status: 'failed',
+        error: {
+          type: 'invalid_request_error',
+          code: 'cyber_policy',
+          message: 'This request was blocked by cyber safety policy',
+        },
+      },
+    };
+
+    upstream.handlers.message?.(JSON.stringify(failure));
+
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify(failure));
+    expect(proxy.resolveTarget).toHaveBeenCalledTimes(1);
+    expect(upstreamInstances).toHaveLength(1);
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'failed');
   });
 
   it('rejects a second turn while one is active', async () => {

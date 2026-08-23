@@ -183,7 +183,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `ai:sandbox:tier:high` |  |
 | `ai:sandbox:manage` |  |
 | `mcp:use` |  |
-| `inference:setup` |  |
+| `inference:setup` | OAuth-only companion setup token scope; not assignable to users or groups. |
 | `inference:tokens:manage` |  |
 | `inference:providers:view` |  |
 | `inference:providers:manage` |  |
@@ -281,7 +281,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `ai:sandbox:tier:high` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
-| `inference:setup` | User/session-only companion CLI authorization resource. |
+| `inference:setup` | OAuth-only companion CLI authorization resource; not assignable to users or groups. |
 | `inference:tokens:manage` | User/session-only inference token creation and revocation. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |

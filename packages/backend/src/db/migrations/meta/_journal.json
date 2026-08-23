@@ -1079,6 +1079,13 @@
       "when": 1787504125513,
       "tag": "0153_unique_prodigy",
       "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1787516192476,
+      "tag": "0154_remove_inference_setup_assignments",
+      "breakpoints": true
     }
   ]
 }

@@ -33,6 +33,7 @@ describe("scope constants", () => {
     const groupValues = scopeValues(GROUP_ASSIGNABLE_SCOPES);
 
     expect(tokenValues).toContain("feat:ai:use");
+    expect(tokenValues).not.toContain("inference:setup");
     expect(tokenValues).not.toContain("inference:use");
     expect(tokenValues).toContain("inference:providers:manage");
     expect(tokenValues).not.toContain("inference:usage:view:self");
@@ -63,8 +64,16 @@ describe("scope constants", () => {
     expect(apiTokenValues).toContain("nodes:files:write");
     expect(apiTokenValues).toContain("docker:containers:view");
     expect(apiTokenValues).toContain("databases:query:read");
+    expect(apiTokenValues).not.toContain("integrations:gitlab:manage");
+    expect(apiTokenValues).not.toContain("integrations:github:manage");
+    expect(apiTokenValues).not.toContain("integrations:github:system");
+    expect(apiTokenValues).not.toContain("integrations:git:manage");
+    expect(apiTokenValues).not.toContain("integrations:git:system");
+    expect(apiTokenValues).not.toContain("integrations:ssh:manage");
+    expect(apiTokenValues).not.toContain("integrations:cloudflare:manage");
 
     expect(groupValues).toContain("feat:ai:use");
+    expect(groupValues).not.toContain("inference:setup");
     expect(groupValues).not.toContain("inference:use");
     expect(groupValues).toContain("inference:providers:manage");
     expect(groupValues).not.toContain("inference:usage:view:self");

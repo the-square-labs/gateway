@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { pageProjects, pageTagActivations } from '@/db/schema/index.js';
 import { pageProjectEvent } from './page-events.js';
 import {
   CreatePageProjectSchema,
@@ -182,6 +183,65 @@ describe('Pages Project platform contract', () => {
     expect(eventBus.publish).toHaveBeenCalledWith(
       'pages.project.changed',
       expect.objectContaining({ projectId: 'project-1', scopeResourceId: 'project-1', action: 'created' })
+    );
+  });
+
+  it('deletes Tag activation history before hard-deleting a Project', async () => {
+    const now = new Date();
+    const project = {
+      id: 'project-1',
+      name: 'Docs',
+      slug: 'docs',
+      description: null,
+      nodeId: '00000000-0000-4000-8000-000000000001',
+      folderId: null,
+      sortOrder: 0,
+      maxDeployments: 20,
+      storageQuotaBytes: 1_073_741_824,
+      storageUsedBytes: 0,
+      nextDeploymentSequence: 2,
+      migrationSourceNodeId: null,
+      migrationTargetNodeId: null,
+      migrationStatus: null,
+      migrationGeneration: 0,
+      migrationError: null,
+      appearanceColor: null,
+      createdById: 'user-1',
+      updatedById: 'user-1',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const select = vi
+      .fn()
+      .mockReturnValueOnce({ from: () => ({ where: () => ({ limit: async () => [project] }) }) })
+      .mockReturnValueOnce({ from: () => ({ where: async () => [{ deploymentCount: 0 }] }) })
+      .mockReturnValueOnce({ from: () => ({ where: async () => [{ tagCount: 1 }] }) })
+      .mockReturnValueOnce({ from: () => ({ where: async () => [{ routeCount: 0 }] }) });
+    const activationDelete = vi.fn().mockResolvedValue(undefined);
+    const projectDelete = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      select: vi.fn().mockReturnValue({
+        from: () => ({
+          innerJoin: () => ({ where: async () => [{ id: 'activation-1' }] }),
+        }),
+      }),
+      delete: vi.fn((table) => ({
+        where: table === pageTagActivations ? activationDelete : projectDelete,
+      })),
+    };
+    const db = { select, transaction: vi.fn(async (callback) => callback(tx)) };
+    const audit = { log: vi.fn().mockResolvedValue(undefined) };
+    const service = new PageProjectService(db as any, audit as any);
+
+    await service.delete('project-1', 'user-1');
+
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(tx.delete).toHaveBeenNthCalledWith(1, pageTagActivations);
+    expect(tx.delete).toHaveBeenNthCalledWith(2, pageProjects);
+    expect(activationDelete).toHaveBeenCalledOnce();
+    expect(projectDelete).toHaveBeenCalledOnce();
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'page_project.delete', resourceId: 'project-1' })
     );
   });
 

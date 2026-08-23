@@ -268,7 +268,16 @@ export function defaultReasoningMap(
   wireEfforts: string[],
   persisted: Record<string, string>
 ): Record<string, string> {
-  if (Object.keys(persisted).length) return persisted;
+  if (Object.keys(persisted).length) {
+    const ordered = wireEfforts.flatMap((effort) =>
+      Object.hasOwn(persisted, effort) ? [[effort, persisted[effort]!] as const] : []
+    );
+    const known = new Set(ordered.map(([effort]) => effort));
+    return Object.fromEntries([
+      ...ordered,
+      ...Object.entries(persisted).filter(([effort]) => !known.has(effort)),
+    ]);
+  }
   return Object.fromEntries(
     CLIENT_REASONING_EFFORTS.flatMap((effort) =>
       wireEfforts.includes(effort) ? [[effort, effort]] : []

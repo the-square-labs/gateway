@@ -34,6 +34,7 @@ export interface OAuthCredential {
   expiresAt?: string;
   tokenType: 'Bearer';
   scope: string;
+  authMode?: 'oauth' | 'inference-token';
 }
 
 export interface OAuthTokenResponse {

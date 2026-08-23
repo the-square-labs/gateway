@@ -120,6 +120,7 @@ export class FileCredentialBackend implements CredentialBackend {
 
 export interface SecureCredentialStoreOptions {
   allowFileCredentials?: boolean;
+  preferFileCredentials?: boolean;
   interactive?: boolean;
   confirmFileFallback?: (file: string) => Promise<boolean>;
 }
@@ -182,6 +183,11 @@ export class SecureCredentialStore implements CredentialStore {
   private async withFallback(operation: 'delete', profile: string): Promise<void>;
   private async withFallback(operation: 'get' | 'set' | 'delete', profile: string, value?: string) {
     const fileExists = await this.fileBackend.exists();
+    if (this.options.preferFileCredentials) {
+      if (operation === 'get') return fileExists ? this.fileBackend.get(profile) : null;
+      if (operation === 'set') return this.fileBackend.set(profile, value!);
+      return fileExists ? this.fileBackend.delete(profile) : undefined;
+    }
     try {
       if (await this.platformBackend.available()) {
         if (operation === 'get') {

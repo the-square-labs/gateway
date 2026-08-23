@@ -531,7 +531,7 @@ export class InferenceCoreAccountingService {
       // settled the top-level attempt as failed. Never let that transport-level
       // completion leave the request recorded as successful. A completed
       // sibling top-level attempt still wins for legitimate provider failover.
-      if (request.status === 'completed' && input.parentAttemptId === null && input.terminalStatus !== 'completed') {
+      if (input.parentAttemptId === null && input.terminalStatus !== 'completed') {
         const completedTopLevelAttempt = await database.query.inferenceRequestAttempts.findFirst({
           where: and(
             eq(inferenceRequestAttempts.requestId, request.id),
@@ -545,9 +545,16 @@ export class InferenceCoreAccountingService {
             .update(inferenceRequests)
             .set({
               status: input.terminalStatus,
-              errorCode: input.terminalStatus === 'failed' ? 'upstream_error' : 'client_cancelled',
+              errorCode: input.terminalStatus === 'failed' ? (input.errorCode ?? 'upstream_error') : 'client_cancelled',
             })
-            .where(eq(inferenceRequests.id, request.id));
+            .where(
+              and(
+                eq(inferenceRequests.id, request.id),
+                // A client cancellation is authoritative: a later upstream
+                // failure must not rewrite it as a provider failure.
+                inArray(inferenceRequests.status, ['completed', 'failed'])
+              )
+            );
         }
       }
       return { reservationId: attempt.reservationId, settled: true };
@@ -598,9 +605,7 @@ export class InferenceCoreAccountingService {
           status: effectiveOutcome,
           errorCode:
             effectiveOutcome === 'failed'
-              ? outcome === 'failed'
-                ? errorCode(error)
-                : 'upstream_error'
+              ? (failedAttempt?.errorCode ?? errorCode(error))
               : effectiveOutcome === 'cancelled'
                 ? 'client_cancelled'
                 : null,

@@ -80,15 +80,16 @@ export class ProfileStore {
     return `${this.file}.oauth-${validateProfileName(name)}.lock`;
   }
 
-  async upsert(name: string, origin: string, values: { clientId?: string } = {}): Promise<GatewayProfile> {
+  async upsert(name: string, origin: string, values: { clientId?: string | null } = {}): Promise<GatewayProfile> {
     validateProfileName(name);
     const state = await this.read();
     const existing = state.profiles[name];
     const timestamp = this.now().toISOString();
+    const clientId = values.clientId === null ? undefined : (values.clientId ?? existing?.clientId);
     const profile: GatewayProfile = {
       origin: normalizeGatewayOrigin(origin),
       installationId: existing?.installationId ?? randomUUID(),
-      ...((values.clientId ?? existing?.clientId) ? { clientId: values.clientId ?? existing?.clientId } : {}),
+      ...(clientId ? { clientId } : {}),
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     };
