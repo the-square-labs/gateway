@@ -63,7 +63,7 @@ export function EnvironmentTab({
 
   // Secrets state — edited locally, flushed to DB on recreate
   const [secretRows, setSecretRows] = useState<SecretRow[]>([]);
-  const [deletedSecretIds, setDeletedSecretIds] = useState<Set<string>>(new Set());
+  const [deletedSecrets, setDeletedSecrets] = useState<Map<string, string>>(new Map());
   const [hasDatabaseNode, setHasDatabaseNode] = useState(false);
   const [databaseNodeLoading, setDatabaseNodeLoading] = useState(true);
   const [databaseLinksLoading, setDatabaseLinksLoading] = useState(true);
@@ -131,7 +131,7 @@ export function EnvironmentTab({
             dirty: false,
           }))
         );
-        setDeletedSecretIds(new Set());
+        setDeletedSecrets(new Map());
         return;
       }
 
@@ -165,10 +165,10 @@ export function EnvironmentTab({
           dirty: false,
         }));
         setSecretRows(rows);
-        setDeletedSecretIds(new Set());
+        setDeletedSecrets(new Map());
       } else {
         setSecretRows([]);
-        setDeletedSecretIds(new Set());
+        setDeletedSecrets(new Map());
       }
     } catch (err) {
       if (isCurrentRequest()) {
@@ -406,7 +406,7 @@ export function EnvironmentTab({
       // 1. Flush secret changes to DB
       if (hasSecretsChanges) {
         // Delete removed secrets
-        for (const id of deletedSecretIds) {
+        for (const id of deletedSecrets.keys()) {
           if (onSaveServiceEnv) {
             await api.deleteDockerDeploymentSecret(nodeId, containerId, id);
           } else {
@@ -456,7 +456,7 @@ export function EnvironmentTab({
             dirty: false,
           }))
         );
-        setDeletedSecretIds(new Set());
+        setDeletedSecrets(new Map());
       }
 
       const newEnv: Record<string, string> = {};
@@ -481,11 +481,12 @@ export function EnvironmentTab({
           replaceExistingEnvironment,
           targetEnvironment: newEnv,
         });
-      } else if (canEdit && hasEnvChanges) {
+      } else if (canEdit && (hasEnvChanges || hasSecretsChanges)) {
         const newKeys = new Set(Object.keys(newEnv));
-        const removeEnv = originalEnv
-          .map((entry) => entry.split("=")[0])
-          .filter((key) => !newKeys.has(key));
+        const removeEnv = [
+          ...originalEnv.map((entry) => entry.split("=")[0]).filter((key) => !newKeys.has(key)),
+          ...deletedSecrets.values(),
+        ].filter((key, index, keys) => key && keys.indexOf(key) === index);
         await api.updateContainerEnv(
           nodeId,
           containerId,
@@ -636,7 +637,7 @@ export function EnvironmentTab({
 
   // Secret changes
   const hasSecretsChanges =
-    deletedSecretIds.size > 0 ||
+    deletedSecrets.size > 0 ||
     secretRows.some((row) => !replacementDatabaseVariableNames.has(row.key.trim()) && row.dirty);
   const hasChanges = hasEnvChanges || hasSecretsChanges;
   const hasCombinedChanges = hasChanges || databaseLinkDraft.hasChanges;
@@ -817,7 +818,7 @@ export function EnvironmentTab({
             isSaving={isSaving}
             secretRows={secretRows}
             setSecretRows={setSecretRows}
-            setDeletedSecretIds={setDeletedSecretIds}
+            setDeletedSecrets={setDeletedSecrets}
             duplicateSecretIndices={
               new Set([...duplicateSecretIndices, ...managedSecretCollisionIndices])
             }

@@ -21,7 +21,7 @@ interface SecretsSectionProps {
   isSaving?: boolean;
   secretRows: SecretRow[];
   setSecretRows: React.Dispatch<React.SetStateAction<SecretRow[]>>;
-  setDeletedSecretIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setDeletedSecrets: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   duplicateSecretIndices: Set<number>;
   invalidKeyPattern: RegExp;
   hiddenKeys?: Set<string>;
@@ -35,7 +35,7 @@ export function SecretsSection({
   isSaving = false,
   secretRows,
   setSecretRows,
-  setDeletedSecretIds,
+  setDeletedSecrets,
   duplicateSecretIndices,
   invalidKeyPattern,
   hiddenKeys = new Set(),
@@ -58,7 +58,9 @@ export function SecretsSection({
 
   const removeSecretRow = (idx: number) => {
     const row = secretRows[idx];
-    if (row.id) setDeletedSecretIds((prev) => new Set(prev).add(row.id!));
+    if (row.id) {
+      setDeletedSecrets((prev) => new Map(prev).set(row.id!, row.key.trim()));
+    }
     setSecretRows((prev) => prev.filter((_, i) => i !== idx));
   };
 

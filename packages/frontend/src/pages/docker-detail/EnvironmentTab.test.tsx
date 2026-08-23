@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -296,5 +296,134 @@ describe("EnvironmentTab managed database links", () => {
     await waitFor(() => expect(api.createManagedDatabaseBinding).toHaveBeenCalledOnce());
     expect(getContainerEnv).toHaveBeenCalledOnce();
     expect(onRecreating).toHaveBeenCalledOnce();
+  });
+
+  it("recreates a running container when only a secret changed", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "getContainerEnv").mockResolvedValue(["PATH=/usr/bin"]);
+    vi.spyOn(api, "listDockerSecrets")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: "secret-1",
+          key: "OPENAI_API_KEY",
+          value: "••••••••",
+          createdAt: "2026-08-23T17:36:10.000Z",
+          updatedAt: "2026-08-23T17:36:10.000Z",
+        },
+      ]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+    vi.spyOn(api, "createDockerSecret").mockResolvedValue({
+      id: "secret-1",
+      key: "OPENAI_API_KEY",
+      value: "••••••••",
+      createdAt: "2026-08-23T17:36:10.000Z",
+      updatedAt: "2026-08-23T17:36:10.000Z",
+    });
+    const updateContainerEnv = vi.spyOn(api, "updateContainerEnv").mockResolvedValue({});
+    vi.mocked(confirm).mockResolvedValue(true);
+    const onMutationStart = vi.fn();
+    const onRecreating = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="container-1"
+          containerName="app"
+          containerState="running"
+          onMutationStart={onMutationStart}
+          onRecreating={onRecreating}
+        />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("No secrets configured.");
+    fireEvent.click(screen.getByTitle("Add secret"));
+    fireEvent.change(screen.getByPlaceholderText("SECRET_KEY"), {
+      target: { value: "OPENAI_API_KEY" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("secret value"), {
+      target: { value: "secret-value" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
+
+    await waitFor(() => expect(api.createDockerSecret).toHaveBeenCalledOnce());
+    expect(updateContainerEnv).toHaveBeenCalledWith(
+      "node-1",
+      "container-1",
+      { PATH: "/usr/bin" },
+      undefined
+    );
+    expect(onMutationStart).toHaveBeenCalledWith("updating");
+    expect(onRecreating).toHaveBeenCalledOnce();
+  });
+
+  it("removes a deleted secret from runtime env during recreate", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "getContainerEnv").mockResolvedValue(["PATH=/usr/bin"]);
+    vi.spyOn(api, "listDockerSecrets")
+      .mockResolvedValueOnce([
+        {
+          id: "secret-1",
+          key: "OPENAI_API_KEY",
+          value: "••••••••",
+          createdAt: "2026-08-23T17:36:10.000Z",
+          updatedAt: "2026-08-23T17:36:10.000Z",
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+    vi.spyOn(api, "deleteDockerSecret").mockResolvedValue(undefined);
+    const updateContainerEnv = vi.spyOn(api, "updateContainerEnv").mockResolvedValue({});
+    vi.mocked(confirm).mockResolvedValue(true);
+
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="container-1"
+          containerName="app"
+          containerState="running"
+        />
+      </MemoryRouter>
+    );
+
+    const secretKey = await screen.findByDisplayValue("OPENAI_API_KEY");
+    const secretRow = secretKey.closest(".grid");
+    expect(secretRow).not.toBeNull();
+    const secretActions = within(secretRow as HTMLElement).getAllByRole("button");
+    fireEvent.click(secretActions.at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
+
+    await waitFor(() => expect(api.deleteDockerSecret).toHaveBeenCalledOnce());
+    expect(updateContainerEnv).toHaveBeenCalledWith(
+      "node-1",
+      "container-1",
+      { PATH: "/usr/bin" },
+      ["OPENAI_API_KEY"]
+    );
   });
 });
