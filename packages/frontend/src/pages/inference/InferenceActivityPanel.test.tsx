@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import type { InferenceActivity } from "@/types/inference";
@@ -53,10 +54,14 @@ describe("InferenceActivityPanel", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("shows six recent rows and lazily requests additional modal pages", async () => {
-    render(<InferenceActivityPanel />);
+    const user = userEvent.setup();
+    const { rerender } = render(<InferenceActivityPanel refreshToken={0} />);
 
     expect(await screen.findByText("User recent-5")).toBeInTheDocument();
     expect(screen.getAllByText("gpt-5.6 high")).toHaveLength(6);
+    await user.hover(screen.getAllByText("gpt-5.6 high")[0]!);
+    expect((await screen.findAllByText("Primary ChatGPT")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("a***@example.com").length).toBeGreaterThan(0);
     expect(api.listInferenceActivity).toHaveBeenCalledWith({ page: 1, limit: 6 });
     expect(screen.getByRole("columnheader", { name: "Status" })).toHaveClass("text-left");
     expect(screen.getByRole("columnheader", { name: "Cost" })).toHaveClass("text-right");
@@ -73,6 +78,9 @@ describe("InferenceActivityPanel", () => {
       )
     );
     const dialog = screen.getByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).queryByText("Loading activity...")).not.toBeInTheDocument()
+    );
     expect(within(dialog).queryByRole("button", { name: "Filters" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
     expect(within(dialog).queryByText("Operation")).not.toBeInTheDocument();
@@ -111,6 +119,9 @@ describe("InferenceActivityPanel", () => {
         expect.objectContaining({ page: 1, model: "kimi-k3" })
       )
     );
+    vi.mocked(api.listInferenceActivity).mockImplementation(() => new Promise(() => {}));
+    rerender(<InferenceActivityPanel refreshToken={1} />);
+    expect(within(dialog).queryByText("Loading activity...")).not.toBeInTheDocument();
   });
 
   it("shows cached recent activity while refreshing it in the background", () => {
@@ -140,6 +151,8 @@ function activity(id: string): InferenceActivity {
     operation: "responses",
     publicModelId: "gpt-5.6",
     reasoningEffort: "high",
+    providerConnectionName: "Primary ChatGPT",
+    providerAccountLabel: "a***@example.com",
     budgetType: "subscription",
     status: "completed",
     credits: 1,

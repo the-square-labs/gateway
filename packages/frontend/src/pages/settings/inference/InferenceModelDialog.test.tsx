@@ -307,11 +307,10 @@ describe("InferenceModelDialog", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum output tokens" })).toHaveAttribute(
       "readonly"
     );
-    const multiplier = screen.getByRole("spinbutton", { name: "Subscription multiplier" });
-    await user.clear(multiplier);
-    expect(multiplier).toHaveValue(null);
-    expect(screen.getByRole("button", { name: "Add model" })).toBeDisabled();
-    await user.type(multiplier, "1");
+    expect(
+      screen.queryByRole("spinbutton", { name: "Subscription multiplier" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("model-identity-fields")).toHaveClass("sm:grid-cols-2");
     await user.clear(screen.getByRole("spinbutton", { name: "Context window" }));
     await user.type(screen.getByRole("spinbutton", { name: "Context window" }), "450000");
     expect(screen.getByText(/Override exceeds provider metadata \(400,000\)/)).toBeInTheDocument();
@@ -325,6 +324,7 @@ describe("InferenceModelDialog", () => {
     await user.click(screen.getByRole("button", { name: "Add model" }));
     await waitFor(() => expect(save).toHaveBeenCalled());
     expect(save.mock.calls[0]?.[1]).toMatchObject({
+      model: { subscriptionMultiplier: 1 },
       sources: [
         expect.objectContaining({
           manualMetadata: { contextWindow: 450_000 },

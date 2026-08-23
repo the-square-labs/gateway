@@ -147,7 +147,8 @@ export function InferenceModelDialog({
       const efforts = exposedReasoningEfforts(normalizedMapping);
       const limits = modelTechnicalLimits(form);
       const manualMetadata = manualMetadataForProviderModel(form, selected);
-      const subscriptionMultiplier = parsePositiveNumber(form.subscriptionMultiplier);
+      const subscriptionMultiplier =
+        selected.sourceType === "api" ? 1 : parsePositiveNumber(form.subscriptionMultiplier);
       if (subscriptionMultiplier === null || !hasCompletePricing(pricing)) return;
       const payload = {
         publicId: form.publicId.trim(),
@@ -195,7 +196,8 @@ export function InferenceModelDialog({
     selected &&
       form.publicId.trim() &&
       form.displayName.trim() &&
-      parsePositiveNumber(form.subscriptionMultiplier) !== null &&
+      (selected.sourceType === "api" ||
+        parsePositiveNumber(form.subscriptionMultiplier) !== null) &&
       hasCompleteTechnicalLimits(form) &&
       selected.bindings.length > 0 &&
       (accessMode !== "selected" ||

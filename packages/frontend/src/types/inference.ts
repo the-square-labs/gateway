@@ -244,6 +244,8 @@ export interface InferenceActivity {
   operation: string;
   publicModelId: string;
   reasoningEffort: string | null;
+  providerConnectionName: string | null;
+  providerAccountLabel: string | null;
   budgetType: "subscription" | "api" | null;
   status: string;
   credits: number;

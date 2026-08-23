@@ -229,7 +229,13 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
     {
       id: "billing",
       header: "Billing",
-      render: (model) => <span>{model.subscriptionMultiplier}× credits</span>,
+      render: (model) => (
+        <span>
+          {model.sources[0]?.sourceType === "api"
+            ? "API"
+            : `${model.subscriptionMultiplier}× credits`}
+        </span>
+      ),
     },
     {
       id: "status",
@@ -246,7 +252,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
       align: "right",
       render: (model) =>
         canManage ? (
-          <div className="flex justify-end">
+          <div className="flex justify-end" onPointerDown={(event) => event.stopPropagation()}>
             <Button
               variant="outline"
               size="icon"
@@ -298,6 +304,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
                 columns={columns}
                 models={models}
                 loading={loading}
+                reordering={reordering}
                 hasConnections={connections.length > 0}
                 onEdit={(model) => {
                   setEditing(model);
@@ -312,6 +319,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
             columns={columns}
             models={models}
             loading={loading}
+            reordering={reordering}
             hasConnections={connections.length > 0}
             onEdit={
               canManage
@@ -342,6 +350,7 @@ function ModelTable({
   columns,
   models,
   loading,
+  reordering,
   hasConnections,
   onEdit,
   sortable = false,
@@ -349,6 +358,7 @@ function ModelTable({
   columns: SimpleTableColumn<InferenceModel>[];
   models: InferenceModel[];
   loading: boolean;
+  reordering: boolean;
   hasConnections: boolean;
   onEdit?: (model: InferenceModel) => void;
   sortable?: boolean;
@@ -363,7 +373,9 @@ function ModelTable({
         hasConnections ? "No inference models published" : "Connect a provider before adding models"
       }
       onRowClick={onEdit}
-      rowRenderer={sortable ? (props) => <SortableModelRow {...props} /> : undefined}
+      rowRenderer={
+        sortable ? (props) => <SortableModelRow {...props} disabled={reordering} /> : undefined
+      }
     />
   );
 }
@@ -373,8 +385,9 @@ function SortableModelRow({
   className,
   onClick,
   children,
-}: SimpleTableRowRenderProps<InferenceModel>) {
-  const sortable = useSortable({ id: row.id });
+  disabled,
+}: SimpleTableRowRenderProps<InferenceModel> & { disabled: boolean }) {
+  const sortable = useSortable({ id: row.id, disabled });
   return (
     <ModelDragHandleContext.Provider
       value={{
@@ -389,8 +402,14 @@ function SortableModelRow({
           transform: CSS.Transform.toString(sortable.transform),
           transition: sortable.transition,
         }}
-        className={cn(className, sortable.isDragging && "relative z-10 bg-accent opacity-70")}
+        className={cn(
+          className,
+          "touch-none cursor-grab active:cursor-grabbing",
+          sortable.isDragging && "relative z-10 bg-accent opacity-70"
+        )}
         onClick={onClick}
+        {...sortable.attributes}
+        {...sortable.listeners}
       >
         {children}
       </tr>

@@ -132,7 +132,11 @@ export function ModelGeneralFields({
 
       <div
         data-testid="model-identity-fields"
-        className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]"
+        className={
+          selected?.sourceType === "api"
+            ? "grid gap-4 sm:grid-cols-2"
+            : "grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]"
+        }
       >
         <label className="space-y-1.5">
           <span className="text-sm font-medium">Public model ID</span>
@@ -150,16 +154,18 @@ export function ModelGeneralFields({
             placeholder="Kimi K3"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium">Subscription multiplier</span>
-          <Input
-            type="number"
-            min="0.01"
-            step="0.1"
-            value={form.subscriptionMultiplier}
-            onChange={(event) => setFormValue("subscriptionMultiplier", event.target.value)}
-          />
-        </label>
+        {selected?.sourceType !== "api" ? (
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Subscription multiplier</span>
+            <Input
+              type="number"
+              min="0.01"
+              step="0.1"
+              value={form.subscriptionMultiplier}
+              onChange={(event) => setFormValue("subscriptionMultiplier", event.target.value)}
+            />
+          </label>
+        ) : null}
       </div>
 
       <AnimatePresence initial={false} mode="popLayout">

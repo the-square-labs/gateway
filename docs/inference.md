@@ -27,19 +27,21 @@ Administrators manage the core from **Settings > Inference** (and during initial
 
 Only one lifecycle operation runs at a time. Operations interrupted by a Gateway restart are marked failed and reconciled from observed container state on boot.
 
-After a Gateway or core upgrade, connected client harnesses must be reconnected (rerun the companion CLI `setup` command) so they pick up the current endpoint contract.
+Gateway and inference-core upgrades do not invalidate provider connections, runtime tokens, or an installed harness integration. The companion helper refreshes the Codex model catalog automatically. Rerun `setup` only when repairing or replacing the local integration, changing Gateway identity, or adopting a future explicitly incompatible endpoint contract.
 
 ## Administrator setup
 
 1. Open **Settings > Inference**.
 2. Install the inference core and wait for it to report healthy.
 3. In **Providers**, connect subscription accounts through the displayed OAuth/device flow or add API/local credentials. OpenAI/Codex uses the remote-safe device flow at `auth.openai.com/codex/device`; Gateway never relies on the Codex CLI's `localhost:1455` loopback callback. Subscription connectors are unofficial upstream integrations and require explicit terms/risk acknowledgement.
-4. Wait for sync. Each connected account/key appears as its own row. Open a row to review 5h/7d/30d subscription quota, enable or disable it, synchronize it manually, or configure a minimum remaining reserve.
-5. Gateway automatically routes across compatible accounts for the same provider/model while retaining thread affinity and failing over only before client output begins. A subscription connection is excluded when its worst fresh quota window falls below its configured reserve.
+4. Wait for sync. Providers with multiple connected accounts/keys appear as one collapsible table group; a provider with one connection remains a normal row. Open an account row to review 5h/7d/30d subscription quota, enable or disable it, synchronize it manually, or configure a minimum remaining reserve.
+5. Gateway automatically routes across compatible accounts for the same provider/model while retaining thread affinity and failing over only before client output begins. Within a provider group, drag account rows to set the priority used by Sequential routing; accounts cannot be moved between provider groups. A subscription connection is excluded when its worst fresh quota window falls below its configured reserve.
 6. In **Models**, publish a stable public model ID for one provider and upstream model.
-7. Configure context/input/output/auto-compaction limits, modalities, access, subscription multiplier, and versioned API pricing.
-8. Configure reasoning overrides such as `ultra=max`. Efforts without an override map to the same provider name.
+7. Configure context/input/output/auto-compaction limits, modalities, and access. Subscription-backed models also have a credit multiplier; API-backed models use versioned provider/manual pricing and do not expose a subscription multiplier.
+8. Configure reasoning overrides such as `ultra=max`. Efforts without an override map to the same provider name. Drag efforts into the order that clients and the AI Workspace reasoning selector should display them.
 9. In **Settings > Inference > Limits**, set default limits and optional per-user overrides.
+
+Drag model rows to set the order returned by the management and data-plane catalogs. The companion preserves that order in the Codex manifest, and AI Workspace uses it for its model selector and default-model fallback.
 
 There is no user-visible or administrator-managed Pool entity. One logical model belongs to one provider template and one upstream model; Gateway does not mix providers behind a model.
 
@@ -91,7 +93,7 @@ Supported primary operations include:
 - `POST /alpha/search`
 - `POST /realtime/calls` and `POST /live`
 
-Responses, Chat Completions, and Messages support unary and SSE responses. Responses also supports its WebSocket transport. Realtime sideband/audio WebSockets are intentionally excluded from this release. Authentication accepts only a dedicated `gwi_` token through `Authorization: Bearer` or `x-api-key`; browser sessions and regular `gw_`/`gwo_` credentials cannot enter the data plane.
+Responses, Chat Completions, and Messages support unary and SSE responses. Responses also supports an end-to-end WebSocket transport: Gateway keeps the client socket open across turns, forwards each turn to the managed core over WebSocket, and issues fresh signed admission context per turn without converting the stream through SSE or disk files. Realtime sideband/audio WebSockets are intentionally excluded from this release. Authentication accepts only a dedicated `gwi_` token through `Authorization: Bearer` or `x-api-key`; browser sessions and regular `gw_`/`gwo_` credentials cannot enter the data plane.
 
 ## Limits and accounting
 
@@ -105,17 +107,27 @@ Administrators can see raw cost, tokens, credits, upstream quota, and request me
 
 Setting a user's monthly API budget to zero disables API-funded usage for that user. Logical models whose usable sources are API-only are then omitted from the OpenAI-compatible catalog and the AI Workspace model picker instead of being shown as unusable choices.
 
-Subscription credits use:
+Settled subscription credits use weighted token classes:
 
 ```text
-tokens / 1000 × logical-or-source model multiplier × frozen dynamic burn multiplier × frozen service-tier multiplier
+weighted tokens =
+    uncached input
+  + cached input × 0.10
+  + cache write × 1.25
+  + output
+  + reasoning
+
+credits = weighted tokens / 1000
+  × model multiplier
+  × frozen dynamic burn multiplier
+  × frozen service-tier multiplier
 ```
 
-Dynamic burn protects upstream quota with a 30% reserve, a 10% new-thread floor, a 3% emergency floor, and an 8x cap. The multiplier is frozen at admission. Codex Fast adds a separate fixed 2x service-tier multiplier for eligible ChatGPT subscription sources.
+Admission first reserves a conservative input-plus-output estimate without assuming a future cache hit; settlement replaces it with the weighted actual usage above. Dynamic burn compares remaining quota with the fraction of time left in each reported window, enforces a 30% quota-pressure floor, and caps the result at 8x. Stale, exhausted, or invalid quota data fails closed at 8x. The multiplier is frozen at admission. Codex Fast adds a separate fixed 2x service-tier multiplier for eligible ChatGPT subscription sources; API dollar accounting is unaffected.
 
 The final 5% of each subscription limit is excluded from the user-visible chat budget and reserved for recovery. When a full conservative output reservation no longer fits, Gateway reduces the admitted `maxOutputTokens` to the remaining budget. A final request may borrow at most 1% of the configured limit, leaving at least 4% protected for compaction. Compaction uses a 1x dynamic burn, retains the requested Fast multiplier, and may consume the protected reserve.
 
-API usage is stored in integer microdollars using the pricing snapshot selected at admission. Redis holds atomic reservations, affinity, cooldowns, and refresh locks; PostgreSQL remains the source of truth and stores immutable settlement ledger rows. Continuation state lives in the managed core.
+API usage is stored in integer microdollars using the pricing snapshot selected at admission. API-backed models do not consume subscription credits or use a subscription multiplier. Redis holds atomic reservations, affinity, cooldowns, and refresh locks; PostgreSQL remains the source of truth and stores immutable settlement ledger rows. Continuation state lives in the managed core rather than being duplicated in Gateway request-history storage.
 
 ## Compaction and continuation
 
@@ -127,6 +139,8 @@ Gateway supports:
 - Gateway `ocx1:` compaction envelopes that can be passed back as a `compaction` input item.
 
 Compaction is accounted separately and never receives dynamic burn; a requested eligible Fast tier still receives its fixed service-tier multiplier. Provider selection cannot change after output begins, preventing mixed or duplicated streams.
+
+For Responses WebSocket clients, the socket remains usable until the client, Gateway, or the managed core closes it. A failed or incomplete turn is recorded as failed instead of being finalized as a successful zero-output request. Activity stores normalized metadata and usage only; hovering a model in the administrator activity table identifies the provider account used for that request.
 
 ## Security and privacy
 
@@ -146,7 +160,7 @@ Back up the PostgreSQL inference tables with the normal database backup and pres
 Troubleshooting:
 
 - Core unhealthy or missing: use **Repair** in **Settings > Inference**; check the lifecycle operation log shown there for the failing step.
-- Requests failing with core admission errors after an upgrade: reconnect the affected harness with the companion CLI so it adopts the current endpoint contract.
+- A broken local Codex/Claude Code integration after an upgrade: run the companion manager's diagnose/repair flow; rerun `setup` only if the package-managed integration itself must be replaced.
 - A failed core update rolls back automatically; if rollback also fails, **Repair** reinstalls the last known-good pinned release.
 
 To disable inference:
@@ -166,7 +180,7 @@ Before enabling production scopes, verify in staging with at least one real subs
 - OAuth/API credential lifecycle and reauthentication;
 - real model/quota discovery and freshness;
 - published model access and reasoning mapping;
-- subscription request, quota pressure, and automatic API fallback;
+- subscription request, quota pressure, and pre-output failover between eligible accounts of the same provider/model;
 - user percentage update and administrator raw accounting;
 - Codex discovery, streaming, tools, reasoning, continuation, and explicit auto-compaction;
 - Claude Messages streaming and `count_tokens`;

@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDateTime, formatRelativeDate, getInitials } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
@@ -89,7 +90,6 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
       if (!replace && loadingMore.current) return;
       const currentRequest = ++requestId.current;
       if (replace) {
-        setRows([]);
         setNextPage(null);
       } else {
         loadingMore.current = true;
@@ -227,7 +227,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
   );
 
   return (
-    <>
+    <TooltipProvider>
       {recentLoading && <Skeleton />}
       <PanelShell
         title="Recent activity"
@@ -348,7 +348,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
           </div>
         </DialogContent>
       </Dialog>
-    </>
+    </TooltipProvider>
   );
 }
 
@@ -386,11 +386,24 @@ const activityColumns: DataTableColumn<InferenceActivity>[] = [
 ];
 
 function ActivityModel({ row }: { row: InferenceActivity }) {
+  const connectionName = row.providerConnectionName ?? "Deleted provider account";
   return (
-    <span className="block min-w-0 truncate">
-      {row.publicModelId}
-      {row.reasoningEffort ? ` ${row.reasoningEffort}` : ""}
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="block min-w-0 cursor-help truncate">
+          {row.publicModelId}
+          {row.reasoningEffort ? ` ${row.reasoningEffort}` : ""}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <div className="space-y-0.5">
+          <p>{connectionName}</p>
+          {row.providerAccountLabel && row.providerAccountLabel !== connectionName ? (
+            <p className="text-muted-foreground">{row.providerAccountLabel}</p>
+          ) : null}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

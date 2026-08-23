@@ -13,8 +13,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { GripVertical, Minus, Plus } from "lucide-react";
+import { useRef } from "react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -52,10 +53,29 @@ export function ModelReasoningFields({
   defaultEffort: string;
   setDefaultEffort: (effort: string) => void;
 }) {
-  const rows = Object.entries(mapping).map(([clientEffort, upstreamEffort]) => ({
-    clientEffort,
-    upstreamEffort,
-  }));
+  const rowIdentity = useRef<Array<{ id: string; clientEffort: string; upstreamEffort: string }>>(
+    []
+  );
+  const nextRowId = useRef(0);
+  const previousRows = rowIdentity.current;
+  const usedIds = new Set<string>();
+  const rows = Object.entries(mapping).map(([clientEffort, upstreamEffort], index) => {
+    const exact = previousRows.find(
+      (row) =>
+        !usedIds.has(row.id) &&
+        row.clientEffort === clientEffort &&
+        row.upstreamEffort === upstreamEffort
+    );
+    const positional = previousRows[index];
+    const id =
+      exact?.id ??
+      (positional && !usedIds.has(positional.id)
+        ? positional.id
+        : `reasoning:${nextRowId.current++}`);
+    usedIds.add(id);
+    return { id, clientEffort, upstreamEffort };
+  });
+  rowIdentity.current = rows;
   const exposed = rows.flatMap(({ clientEffort, upstreamEffort }) =>
     clientEffort.trim() && upstreamEffort.trim() ? [clientEffort.trim()] : []
   );
@@ -76,9 +96,9 @@ export function ModelReasoningFields({
   };
   const reorderRows = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const oldIndex = Number(String(active.id).slice("reasoning-".length));
-    const newIndex = Number(String(over.id).slice("reasoning-".length));
-    if (!Number.isInteger(oldIndex) || !Number.isInteger(newIndex)) return;
+    const oldIndex = rows.findIndex((row) => row.id === active.id);
+    const newIndex = rows.findIndex((row) => row.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
     setMapping(reorderReasoningMapping(mapping, oldIndex, newIndex));
   };
 
@@ -128,33 +148,29 @@ export function ModelReasoningFields({
           </div>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderRows}>
             <SortableContext
-              items={rows.map((_, index) => `reasoning-${index}`)}
+              items={rows.map((row) => row.id)}
               strategy={verticalListSortingStrategy}
             >
-              <AnimatePresence initial={false} mode="popLayout">
-                {rows.map((row, index) => (
-                  <SortableReasoningRow
-                    key={`reasoning-${index}`}
-                    id={`reasoning-${index}`}
-                    index={index}
-                    row={row}
-                    selected={selected}
-                    updateRow={updateRow}
-                    remove={() =>
-                      setMapping(
-                        Object.fromEntries(
-                          rows
-                            .filter((_, rowIndex) => rowIndex !== index)
-                            .map(({ clientEffort, upstreamEffort }) => [
-                              clientEffort,
-                              upstreamEffort,
-                            ])
-                        )
+              {rows.map((row, index) => (
+                <SortableReasoningRow
+                  key={row.id}
+                  id={row.id}
+                  index={index}
+                  row={row}
+                  isLast={index === rows.length - 1}
+                  selected={selected}
+                  updateRow={updateRow}
+                  remove={() =>
+                    setMapping(
+                      Object.fromEntries(
+                        rows
+                          .filter((_, rowIndex) => rowIndex !== index)
+                          .map(({ clientEffort, upstreamEffort }) => [clientEffort, upstreamEffort])
                       )
-                    }
-                  />
-                ))}
-              </AnimatePresence>
+                    )
+                  }
+                />
+              ))}
             </SortableContext>
           </DndContext>
         </>
@@ -171,6 +187,7 @@ function SortableReasoningRow({
   id,
   index,
   row,
+  isLast,
   selected,
   updateRow,
   remove,
@@ -178,6 +195,7 @@ function SortableReasoningRow({
   id: string;
   index: number;
   row: { clientEffort: string; upstreamEffort: string };
+  isLast: boolean;
   selected: ProviderModelOption | null;
   updateRow: (index: number, field: "client" | "upstream", value: string) => void;
   remove: () => void;
@@ -194,7 +212,7 @@ function SortableReasoningRow({
         transform: CSS.Transform.toString(sortable.transform),
         transition: sortable.transition,
       }}
-      className="grid grid-cols-[2.25rem_1fr_1fr] border-b border-border bg-card last:border-b-0"
+      className={`grid grid-cols-[2.25rem_1fr_1fr] bg-card ${isLast ? "" : "border-b border-border"}`}
     >
       <Button
         ref={sortable.setActivatorNodeRef}

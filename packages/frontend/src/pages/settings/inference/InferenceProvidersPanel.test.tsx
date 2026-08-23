@@ -5,7 +5,11 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
 import type { InferenceProviderCatalogItem, InferenceProviderConnection } from "@/types/inference";
-import { InferenceProvidersPanel, reorderProviderConnections } from "./InferenceProvidersPanel";
+import {
+  groupProviderConnections,
+  InferenceProvidersPanel,
+  reorderProviderConnections,
+} from "./InferenceProvidersPanel";
 
 describe("InferenceProvidersPanel", () => {
   afterEach(() => {
@@ -13,7 +17,7 @@ describe("InferenceProvidersPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders flat accounts and manages one subscription connection in a modal", async () => {
+  it("groups repeated providers and manages one subscription connection in a modal", async () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["inference:providers:manage"] }),
       isAuthenticated: true,
@@ -31,10 +35,15 @@ describe("InferenceProvidersPanel", () => {
 
     render(<InferenceProvidersPanel />);
 
-    expect(await screen.findAllByText("Kimi subscription")).toHaveLength(2);
+    expect(await screen.findAllByText("Kimi subscription")).toHaveLength(1);
     expect(screen.queryByText("OpenRouter")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reorder account-a" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reorder account-b" })).toBeInTheDocument();
+    expect(screen.getByText("account-a").closest("tr")).toHaveClass("cursor-grab");
+    await user.click(screen.getByRole("button", { name: "Collapse Kimi subscription" }));
+    expect(screen.queryByText("account-a")).not.toBeInTheDocument();
+    expect(screen.queryByText("account-b")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand Kimi subscription" }));
     expect(
       screen.getByText(
         /Higher connections are used first by Sequential routing; Balanced distributes evenly/
@@ -207,6 +216,26 @@ describe("InferenceProvidersPanel", () => {
       expect.objectContaining({ id: "account-c", routingOrder: 0 }),
       expect.objectContaining({ id: "account-a", routingOrder: 1 }),
       expect.objectContaining({ id: "account-b", routingOrder: 2 }),
+    ]);
+  });
+
+  it("keeps connections inside their provider group", () => {
+    const connections = [
+      connection("kimi-a"),
+      connection("router", "openrouter"),
+      connection("kimi-b"),
+    ];
+
+    expect(reorderProviderConnections(connections, "kimi-a", "router")).toBe(connections);
+    expect(groupProviderConnections(connections).map((row) => row.id)).toEqual([
+      "provider-group:kimi",
+      "kimi-a",
+      "kimi-b",
+      "router",
+    ]);
+    expect(groupProviderConnections(connections, new Set(["kimi"])).map((row) => row.id)).toEqual([
+      "provider-group:kimi",
+      "router",
     ]);
   });
 });

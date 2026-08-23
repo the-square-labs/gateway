@@ -277,7 +277,9 @@ Inference features:
 
 - Connect multiple API-key, local, device-code, and supported subscription providers.
 - Publish logical models with access rules, reasoning mappings, pricing, context limits, and one or more compatible account sources.
+- Order published models and reasoning levels for data-plane catalogs, Codex manifests, and AI Workspace selectors.
 - Route requests across healthy accounts while keeping continuation and conversation affinity.
+- Group multiple accounts of the same provider in the administration table and reorder them within that provider for Sequential routing.
 - Enforce default and per-user five-hour, weekly, monthly, and API-spend budgets.
 - Expose a base OpenAI-compatible API plus optional Codex- and Anthropic-specific adapters.
 - Issue dedicated `gwi_` runtime tokens that are accepted only by inference data-plane routes.

@@ -210,6 +210,8 @@ export class InferenceUsageService {
         operation: inferenceRequests.operation,
         publicModelId: inferenceRequests.publicModelId,
         reasoningEffort: inferenceRequests.reasoningEffort,
+        providerConnectionName: inferenceProviderConnections.name,
+        providerAccountLabel: inferenceProviderConnections.accountLabel,
         budgetType: inferenceRequests.budgetType,
         status: inferenceRequests.status,
         credits: inferenceRequests.creditsCharged,
@@ -225,6 +227,10 @@ export class InferenceUsageService {
       })
       .from(inferenceRequests)
       .leftJoin(users, eq(inferenceRequests.userId, users.id))
+      .leftJoin(
+        inferenceProviderConnections,
+        eq(inferenceRequests.connectionId, inferenceProviderConnections.id)
+      )
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(inferenceRequests.createdAt))
       .limit(limit + 1)
