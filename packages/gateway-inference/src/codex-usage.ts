@@ -82,7 +82,13 @@ export function projectCodexRateLimits(usage: GatewayUsage): CodexRateLimitsResp
   const thirtyDay = configuredWindow(usage.subscription['30d'], 30 * 24 * 60);
   const apiMonthly = configuredWindow(usage.api, null);
   const unlimited = !fiveHour && !sevenDay && !thirtyDay && !apiMonthly;
-  const legacy = snapshot('gateway-subscription', 'Gateway subscription', fiveHour, sevenDay, unlimited);
+  const legacy = snapshot(
+    'gateway-subscription',
+    'Gateway subscription',
+    fiveHour ?? sevenDay,
+    fiveHour ? sevenDay : null,
+    unlimited
+  );
   const byLimitId: Record<string, RateLimitSnapshot> = {};
   if (fiveHour || sevenDay) byLimitId['gateway-subscription'] = legacy;
   if (thirtyDay) {

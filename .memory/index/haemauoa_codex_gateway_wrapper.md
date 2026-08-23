@@ -12,8 +12,11 @@
   ],
   "layer": "lite",
   "ref": "mzmjdewo",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1787493437067,
-  "updated_at": 1787493437067
+  "updated_at": 1787497558522
 }
 ---
-[→ mzmjdewo] Codex Gateway usage wrapper contract and safety boundaries
+[→ mzmjdewo] Gateway Codex wrapper, Desktop compatibility, Linux launcher discovery, and inference architecture contracts.

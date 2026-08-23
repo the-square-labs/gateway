@@ -294,6 +294,70 @@ describe('Codex usage component lifecycle', () => {
     expect(repaired.desktop).toMatchObject({ appCommand: appImage, appArgs: ['--ozone-platform=wayland'] });
   });
 
+  it('deduplicates Linux desktop entries that launch the same native command through env hints', async () => {
+    const files = await fixture('linux');
+    const applications = join(files.home, '.local', 'share', 'applications');
+    const executable = join(files.home, 'bin', 'codex-desktop');
+    await mkdir(applications, { recursive: true });
+    await mkdir(join(files.home, 'bin'), { recursive: true });
+    await writeFile(executable, '#!/bin/sh\n');
+    await chmod(executable, 0o700);
+    await writeFile(
+      join(applications, 'a-direct.desktop'),
+      `[Desktop Entry]\nName=Codex Desktop\nExec=${executable}\n`
+    );
+    await writeFile(
+      join(applications, 'b-wayland.desktop'),
+      `[Desktop Entry]\nName=Codex Desktop Wayland\nExec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/codex-desktop.desktop CHROME_DESKTOP=codex-desktop.desktop CODEX_LINUX_RENDERING_MODE=wayland-gpu ${executable}\n`
+    );
+    const service = new CodexUsageComponentService(files.paths, {
+      platform: 'linux',
+      home: files.home,
+      commandRunner: files.commandRunner,
+    });
+
+    const state = await service.setup({
+      profileName: 'default',
+      remoteBaseUrl: 'https://gateway.example/api/inference/v1',
+      realCodexPath: '/usr/bin/codex',
+      realCodexVersion: '0.149.0',
+      desktopUsage: true,
+    });
+
+    expect(state.desktop).toMatchObject({ appCommand: executable, appArgs: [] });
+  });
+
+  it('keeps genuinely distinct Linux desktop commands ambiguous', async () => {
+    const files = await fixture('linux');
+    const applications = join(files.home, '.local', 'share', 'applications');
+    const first = join(files.home, 'bin', 'codex-desktop');
+    const second = join(files.home, 'bin', 'chatgpt');
+    await mkdir(applications, { recursive: true });
+    await mkdir(join(files.home, 'bin'), { recursive: true });
+    await Promise.all([
+      writeFile(first, '#!/bin/sh\n'),
+      writeFile(second, '#!/bin/sh\n'),
+      writeFile(join(applications, 'codex.desktop'), `[Desktop Entry]\nName=Codex Desktop\nExec=${first}\n`),
+      writeFile(join(applications, 'chatgpt.desktop'), `[Desktop Entry]\nName=ChatGPT Desktop\nExec=${second}\n`),
+    ]);
+    await Promise.all([chmod(first, 0o700), chmod(second, 0o700)]);
+    const service = new CodexUsageComponentService(files.paths, {
+      platform: 'linux',
+      home: files.home,
+      commandRunner: files.commandRunner,
+    });
+
+    await expect(
+      service.setup({
+        profileName: 'default',
+        remoteBaseUrl: 'https://gateway.example/api/inference/v1',
+        realCodexPath: '/usr/bin/codex',
+        realCodexVersion: '0.149.0',
+        desktopUsage: true,
+      })
+    ).rejects.toMatchObject({ code: 'CODEX_DESKTOP_AMBIGUOUS' });
+  });
+
   it('removes owned Linux artifacts even when the component state file is missing', async () => {
     const files = await fixture('linux');
     const paths = resolveUsageComponentPaths(files.paths, {}, files.home);

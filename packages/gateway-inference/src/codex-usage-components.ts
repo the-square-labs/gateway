@@ -454,11 +454,15 @@ export class CodexUsageComponentService {
 
   private async discoverLinuxDesktopCommand(): Promise<DesktopCommand> {
     const candidates = new Map<string, DesktopCommand>();
+    const addCandidate = (candidate: DesktopCommand) => {
+      const key = JSON.stringify(effectiveDesktopCommand(candidate) ?? candidate);
+      if (!candidates.has(key)) candidates.set(key, candidate);
+    };
     for (const command of ['chatgpt', 'codex-desktop']) {
       const result = await this.run('/usr/bin/env', ['sh', '-lc', `command -v ${command}`]);
       if (result.code === 0 && result.stdout.trim()) {
         const candidate = { executable: result.stdout.trim(), args: [] };
-        candidates.set(JSON.stringify(candidate), candidate);
+        addCandidate(candidate);
       }
     }
     const dataDirectories = [
@@ -482,7 +486,7 @@ export class CodexUsageComponentService {
         const exec = content.match(/^Exec=(.+)$/m)?.[1];
         if (!exec) continue;
         const candidate = parseDesktopCommand(exec);
-        candidates.set(JSON.stringify(candidate), candidate);
+        addCandidate(candidate);
       }
     }
     const values = [...candidates.values()];
@@ -720,7 +724,11 @@ function shellWords(command: string): string[] {
 }
 
 function effectiveDesktopExecutable(command: DesktopCommand): string | null {
-  if (basename(command.executable) !== 'env') return command.executable;
+  return effectiveDesktopCommand(command)?.executable ?? null;
+}
+
+function effectiveDesktopCommand(command: DesktopCommand): DesktopCommand | null {
+  if (basename(command.executable) !== 'env') return command;
   for (let index = 0; index < command.args.length; index += 1) {
     const value = command.args[index];
     if (value === '-u' || value === '--unset') {
@@ -729,7 +737,7 @@ function effectiveDesktopExecutable(command: DesktopCommand): string | null {
     }
     if (value === '-S' || value === '--split-string') return null;
     if (value.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(value)) continue;
-    return value;
+    return { executable: value, args: command.args.slice(index + 1) };
   }
   return null;
 }
