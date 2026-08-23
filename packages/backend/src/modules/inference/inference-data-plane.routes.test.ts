@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { AppEnv } from '@/types.js';
+import { InferenceUsageService } from './accounting/inference-usage.service.js';
 import { InferenceCoreProxyService } from './core/inference-core-proxy.service.js';
 import { inferenceDataPlaneRoutes } from './inference-data-plane.routes.js';
 import { InferenceTokenService } from './inference-token.service.js';
@@ -26,10 +27,12 @@ function registerRedis() {
       [null, 1],
     ]),
   };
-  container.registerInstance(TOKENS.RedisClient, {
+  const redis = {
     pipeline: vi.fn().mockReturnValue(pipeline),
     eval: vi.fn().mockResolvedValue(1),
-  } as never);
+  };
+  container.registerInstance(TOKENS.RedisClient, redis as never);
+  return redis;
 }
 
 const USER = {
@@ -44,8 +47,8 @@ const USER = {
   isBlocked: false,
 } as const;
 
-function createApp() {
-  registerRedis();
+function createApp(redis?: ReturnType<typeof registerRedis>) {
+  if (!redis) registerRedis();
   const app = new Hono<AppEnv>();
   app.route('/api/inference/v1', inferenceDataPlaneRoutes);
   return app;
@@ -88,6 +91,48 @@ describe('inference data plane routes', () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ object: 'list', data: [{ id: 'gpt-5.5', object: 'model' }] });
+  });
+
+  it('serves current-user usage without consuming inference admission slots', async () => {
+    registerAuth();
+    registerProxy();
+    const usage = {
+      enabled: true,
+      api: { configured: true, percentage: 25, recoveryAt: '2026-09-01T00:00:00.000Z' },
+      subscription: {
+        '5h': { configured: true, percentage: 40, recoveryAt: '2026-08-23T15:00:00.000Z' },
+        '7d': { configured: true, percentage: 20, recoveryAt: '2026-08-30T00:00:00.000Z' },
+        '30d': { configured: false, percentage: 0, recoveryAt: '2026-09-22T00:00:00.000Z' },
+      },
+      tokens: { lifetime: 1234, daily: [{ date: '2026-08-23', tokens: 55 }] },
+    };
+    const clientUsage = vi.fn().mockResolvedValue(usage);
+    container.registerInstance(InferenceUsageService, { clientUsage } as unknown as InferenceUsageService);
+    const redis = registerRedis();
+
+    const response = await createApp(redis).request('/api/inference/v1/usage', {
+      headers: { authorization: 'Bearer gwi_a.token' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(usage);
+    expect(clientUsage).toHaveBeenCalledWith(USER);
+    expect(redis.pipeline).not.toHaveBeenCalled();
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
+  it('requires a valid inference token for current-user usage', async () => {
+    registerAuth(false);
+    registerProxy();
+    container.registerInstance(InferenceUsageService, {
+      clientUsage: vi.fn(),
+    } as unknown as InferenceUsageService);
+
+    const response = await createApp().request('/api/inference/v1/usage', {
+      headers: { authorization: 'Bearer gwi_bad.token' },
+    });
+
+    expect(response.status).toBe(401);
   });
 
   it('dispatches the standard route set to the core proxy', async () => {

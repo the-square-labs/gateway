@@ -1209,16 +1209,17 @@ No global installation or PATH change is required:
 npx -y @wiolett/gateway-inference@latest
 \`\`\`
 
-An administrator must first enable **Inference** in **Settings > General**. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report \`generalSettings.features.inferenceEnabled\`. Without that read permission, do not guess its value: explain that an administrator must confirm it. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
+An administrator must first enable **Inference** in **Settings > General**. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report \`generalSettings.features.inferenceEnabled\`. Without that read permission, do not guess its value: explain that an administrator must confirm it. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. Direct commands are \`login [gateway]\`, \`logout\`, \`setup [harness]\`, and the offline recovery command \`uninstall codex-usage [desktop|cli|all]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
 
 #### Codex CLI and Desktop
 
 \`\`\`bash
 npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
 npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup codex --desktop-usage --cli-usage
 \`\`\`
 
-Codex setup issues a dedicated runtime token, writes only package-managed Codex configuration sections, installs a private helper and loopback proxy, and maintains the authoritative Gateway model catalog. Catalog changes apply after starting a new Codex process. Codex Desktop must also be signed in to an OpenAI account through Codex's normal login flow; after Gateway setup or login changes, fully quit and reopen Codex.
+Codex setup issues a dedicated runtime token, writes only package-managed Codex configuration sections, installs a private helper and loopback proxy, and maintains the authoritative Gateway model catalog. Optional usage flags install Gateway quota views for Codex Desktop and a distinct \`gateway-codex\` CLI without replacing system \`codex\`. Setup verifies the authenticated Gateway usage contract before writing optional activation artifacts; an older Gateway leaves the base integration working and must be updated before retrying the usage flags. Catalog changes apply after starting a new Codex process. Codex Desktop must also be signed in to an OpenAI account through Codex's normal login flow; after Gateway setup or login changes, fully quit and reopen Codex.
 
 #### Claude Code CLI
 

@@ -3,6 +3,7 @@ import { ClaudeCodeIntegrationService } from './claude-code-integration.js';
 import { readVisibleCatalogModels } from './codex-catalog.js';
 import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
 import { CodexIntegrationService, type CommandRunner } from './codex-integration.js';
+import { CodexUsageComponentService } from './codex-usage-components.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, errorPayload } from './errors.js';
 import type { Fetch } from './http.js';
@@ -35,6 +36,8 @@ export interface InteractiveCommandInput {
 interface InteractiveState {
   identity?: SetupIdentity;
   codexConfigured: boolean;
+  codexDesktopUsage: boolean;
+  codexCliUsage: boolean;
   claudeCodeConfigured: boolean;
   models: string[];
 }
@@ -45,6 +48,9 @@ type InferenceAction =
   | 'sync'
   | 'doctor'
   | 'remove'
+  | 'remove-codex-usage-desktop'
+  | 'remove-codex-usage-cli'
+  | 'remove-codex-usage-all'
   | 'doctor-claude-code'
   | 'remove-claude-code'
   | 'logout';
@@ -60,6 +66,7 @@ export async function runInteractiveInferenceCommand(
 ): Promise<number> {
   if (showIntro) input.ui.intro('Wiolett Gateway Inference');
   const codexIntegration = createIntegration(input);
+  const codexUsage = createCodexUsageComponents(input);
   const claudeCodeIntegration = createClaudeCodeIntegration(input);
   const state = await loadInferenceMenuState(input);
   await showState(input, state);
@@ -89,13 +96,13 @@ export async function runInteractiveInferenceCommand(
       }
       return logout(input);
     }
-    if (action === 'setup') return setupHarness(input, codexIntegration, claudeCodeIntegration);
+    if (action === 'setup') return setupHarness(input, codexIntegration, claudeCodeIntegration, codexUsage);
     if (action === 'sync') {
       state.models = await syncModels(input, codexIntegration);
       continue;
     }
     if (action === 'doctor') {
-      await diagnose(input, codexIntegration);
+      await diagnose(input, codexIntegration, codexUsage);
       continue;
     }
     if (action === 'doctor-claude-code') {
@@ -107,6 +114,22 @@ export async function runInteractiveInferenceCommand(
       state.models = [];
       continue;
     }
+    if (action === 'remove-codex-usage-desktop') {
+      await codexUsage.uninstall('desktop');
+      state.codexDesktopUsage = false;
+      continue;
+    }
+    if (action === 'remove-codex-usage-cli') {
+      await codexUsage.uninstall('cli');
+      state.codexCliUsage = false;
+      continue;
+    }
+    if (action === 'remove-codex-usage-all') {
+      await codexUsage.uninstall('all');
+      state.codexDesktopUsage = false;
+      state.codexCliUsage = false;
+      continue;
+    }
     if (action === 'remove-claude-code' && (await removeClaudeCode(input, claudeCodeIntegration))) {
       state.claudeCodeConfigured = false;
     }
@@ -115,7 +138,12 @@ export async function runInteractiveInferenceCommand(
 
 export async function runInteractiveHarnessSetupCommand(input: InteractiveCommandInput): Promise<number> {
   input.ui.intro('Wiolett Gateway Inference · Setup');
-  return setupHarness(input, createIntegration(input), createClaudeCodeIntegration(input));
+  return setupHarness(
+    input,
+    createIntegration(input),
+    createClaudeCodeIntegration(input),
+    createCodexUsageComponents(input)
+  );
 }
 
 async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<InteractiveState> {
@@ -136,9 +164,12 @@ async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<I
   const claudeCode = await inspectClaudeCodeConfiguration({
     paths: resolveClaudeCodePaths(input.paths, input.profileName, input.env, input.home),
   });
+  const usage = await createCodexUsageComponents(input).inspect();
   return {
     identity,
     codexConfigured: config.configured,
+    codexDesktopUsage: usage.desktop,
+    codexCliUsage: usage.cli,
     claudeCodeConfigured: claudeCode.configured,
     models,
   };
@@ -149,6 +180,10 @@ async function showState(input: InteractiveCommandInput, state: InteractiveState
   if (profile) input.ui.info(`Gateway: ${profile.origin}`);
   if (state.identity) showAccount(input.ui, state.identity);
   input.ui.info(state.codexConfigured ? `Codex: configured · ${state.models.length} models` : 'Codex: not configured');
+  if (state.codexConfigured) {
+    input.ui.info(`Codex Desktop usage: ${state.codexDesktopUsage ? 'configured' : 'not configured'}`);
+    input.ui.info(`gateway-codex: ${state.codexCliUsage ? 'configured' : 'not configured'}`);
+  }
   input.ui.info(state.claudeCodeConfigured ? 'Claude Code: configured' : 'Claude Code: not configured');
 }
 
@@ -186,6 +221,15 @@ function inferenceActions(state: InteractiveState): InteractiveOption[] {
         hint: 'Delete only package-managed configuration and credentials',
       }
     );
+    if (state.codexDesktopUsage) {
+      options.push({ value: 'remove-codex-usage-desktop', label: 'Remove Codex Desktop usage' });
+    }
+    if (state.codexCliUsage) {
+      options.push({ value: 'remove-codex-usage-cli', label: 'Remove gateway-codex' });
+    }
+    if (state.codexDesktopUsage || state.codexCliUsage) {
+      options.push({ value: 'remove-codex-usage-all', label: 'Remove all Codex usage components' });
+    }
   }
   if (state.claudeCodeConfigured) {
     options.push(
@@ -263,7 +307,11 @@ async function syncModels(input: InteractiveCommandInput, integration: CodexInte
   }
 }
 
-async function diagnose(input: InteractiveCommandInput, integration: CodexIntegrationService): Promise<void> {
+async function diagnose(
+  input: InteractiveCommandInput,
+  integration: CodexIntegrationService,
+  usage: CodexUsageComponentService
+): Promise<void> {
   let discovery: InferenceDiscovery | undefined;
   let setupCheck: { status: 'ok' | 'error' | 'warning'; message: string } | undefined;
   try {
@@ -281,8 +329,13 @@ async function diagnose(input: InteractiveCommandInput, integration: CodexIntegr
   const spinner = input.ui.spinner('Checking the Codex integration...');
   try {
     const report = await integration.doctor({ profileName: input.profileName, discovery, setupCheck });
-    spinner.stop(report.ok ? 'Integration check complete' : 'Integration needs attention');
+    const runtimeCredential = await input.credentials.getRuntime(input.profileName);
+    const usageReport = await usage.doctor({ token: runtimeCredential?.token, fetch: input.fetch });
+    spinner.stop(report.ok && usageReport.ok ? 'Integration check complete' : 'Integration needs attention');
     for (const check of report.checks) {
+      input.ui.info(`${check.status.toUpperCase()} · ${check.name}: ${check.message}`);
+    }
+    for (const check of usageReport.checks) {
       input.ui.info(`${check.status.toUpperCase()} · ${check.name}: ${check.message}`);
     }
   } catch (error) {
@@ -335,6 +388,7 @@ async function removeHarness(input: InteractiveCommandInput, integration: CodexI
   }
   const spinner = input.ui.spinner('Removing the Codex integration...');
   try {
+    await createCodexUsageComponents(input).uninstall('all');
     const result = await integration.remove({
       profileName: input.profileName,
       removeToken: Boolean(client),
@@ -401,7 +455,8 @@ async function removeClaudeCode(
 async function setupHarness(
   input: InteractiveCommandInput,
   integration: CodexIntegrationService,
-  claudeCodeIntegration: ClaudeCodeIntegrationService
+  claudeCodeIntegration: ClaudeCodeIntegrationService,
+  codexUsage: CodexUsageComponentService
 ): Promise<number> {
   const existing = await input.profiles.get(input.profileName);
   return runInteractiveInferenceSetup({
@@ -440,12 +495,42 @@ async function setupHarness(
       if (harness !== 'codex') {
         throw new CliError('UNSUPPORTED_HARNESS', `Harness ${harness} is not supported by this CLI version.`);
       }
+      const usageChoice =
+        process.platform === 'darwin' || process.platform === 'linux'
+          ? await input.ui.select('Configure Gateway usage surfaces?', [
+              { value: 'none', label: 'Not now' },
+              { value: 'desktop', label: 'Codex Desktop' },
+              { value: 'cli', label: 'gateway-codex CLI' },
+              { value: 'both', label: 'Desktop and gateway-codex' },
+            ])
+          : null;
+      const desktopUsage = usageChoice === 'desktop' || usageChoice === 'both';
+      const cliUsage = usageChoice === 'cli' || usageChoice === 'both';
+      if (desktopUsage || cliUsage) await codexUsage.preflight({ desktopUsage, cliUsage });
       const result = await integration.setup({
         profileName: input.profileName,
         profile: context.profile,
         discovery: context.discovery,
         client: context.client,
       });
+      if (desktopUsage || cliUsage) {
+        const runtime = await input.credentials.getRuntime(input.profileName);
+        if (!runtime)
+          throw new CliError('RUNTIME_TOKEN_MISSING', 'Codex runtime token is missing. Run setup codex again.');
+        await codexUsage.assertGatewayUsageAvailable({
+          remoteBaseUrl: context.discovery.adapters.openai.baseUrl,
+          token: runtime.token,
+          fetch: input.fetch,
+        });
+        await codexUsage.setup({
+          profileName: input.profileName,
+          remoteBaseUrl: context.discovery.adapters.openai.baseUrl,
+          realCodexPath: result.codexCommand,
+          realCodexVersion: result.codexVersion,
+          desktopUsage,
+          cliUsage,
+        });
+      }
       return {
         progress: `Configured Codex ${result.codexVersion}`,
         summary: [
@@ -456,6 +541,15 @@ async function setupHarness(
         ].join('\n'),
       };
     },
+  });
+}
+
+function createCodexUsageComponents(input: InteractiveCommandInput): CodexUsageComponentService {
+  return new CodexUsageComponentService(input.paths, {
+    platform: process.platform,
+    commandRunner: input.commandRunner,
+    env: input.env,
+    home: input.home,
   });
 }
 

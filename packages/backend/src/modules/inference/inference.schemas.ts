@@ -189,6 +189,18 @@ export const InferenceSelfUsageResponseSchema = z.object({
   }),
 });
 
+export const InferenceDataPlaneUsageResponseSchema = InferenceSelfUsageResponseSchema.extend({
+  tokens: z.object({
+    lifetime: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    daily: z.array(
+      z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        tokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      })
+    ),
+  }),
+});
+
 export const InferenceProviderIdParamSchema = z.object({ providerId: z.string().trim().min(1).max(80) });
 
 export const InferenceProviderCatalogSchema = z.object({

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
 import { syncCodexCatalog } from './codex-catalog.js';
+import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, redactText } from './errors.js';
 import {

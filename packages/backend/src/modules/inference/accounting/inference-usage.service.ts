@@ -81,6 +81,29 @@ export class InferenceUsageService {
     };
   }
 
+  async clientUsage(user: User, now = new Date()) {
+    const windowStart = systemUsageWindowStart(now);
+    const ledgerDay = sql<string>`to_char(date_trunc('day', ${inferenceUsageLedger.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD')`;
+    const tokenTotal = sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.cacheWriteTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`;
+    const [usage, lifetimeRows, dailyRows] = await Promise.all([
+      this.self(user),
+      this.db.select({ tokens: tokenTotal }).from(inferenceUsageLedger).where(eq(inferenceUsageLedger.userId, user.id)),
+      this.db
+        .select({ date: ledgerDay, tokens: tokenTotal })
+        .from(inferenceUsageLedger)
+        .where(and(eq(inferenceUsageLedger.userId, user.id), gte(inferenceUsageLedger.occurredAt, windowStart)))
+        .groupBy(ledgerDay)
+        .orderBy(ledgerDay),
+    ]);
+    return {
+      ...usage,
+      tokens: {
+        lifetime: Number(lifetimeRows[0]?.tokens ?? 0),
+        daily: mergeDailyTokenUsage(dailyRows, windowStart, SYSTEM_USAGE_WINDOW_DAYS),
+      },
+    };
+  }
+
   private async availableBudgetTypes(user: User): Promise<{ api: boolean; subscription: boolean }> {
     if (!this.modelAccess) return { api: false, subscription: false };
     const modelIds = [...(await this.modelAccess.allowedModelIds(user))];
@@ -467,6 +490,25 @@ function mergeDailyUsage(
   return [...rows.values()];
 }
 
+function mergeDailyTokenUsage(
+  ledgerRows: Array<{ date: string; tokens: number }>,
+  windowStart: Date,
+  windowDays: number
+): Array<{ date: string; tokens: number }> {
+  const rows = new Map<string, { date: string; tokens: number }>();
+  for (let offset = 0; offset < windowDays; offset += 1) {
+    const date = new Date(windowStart);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const key = date.toISOString().slice(0, 10);
+    rows.set(key, { date: key, tokens: 0 });
+  }
+  for (const row of ledgerRows) {
+    const target = rows.get(row.date);
+    if (target) target.tokens = Number(row.tokens);
+  }
+  return [...rows.values()];
+}
+
 export const __testOnly = {
   percentage,
   subscriptionPercentage,
@@ -476,4 +518,5 @@ export const __testOnly = {
   publicUsage,
   systemUsageWindowStart,
   mergeDailyUsage,
+  mergeDailyTokenUsage,
 };

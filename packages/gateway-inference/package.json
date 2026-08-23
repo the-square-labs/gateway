@@ -1,10 +1,10 @@
 {
   "name": "@wiolett/gateway-inference",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Interactive inference companion for Wiolett Gateway",
   "type": "module",
   "bin": {
-    "gateway-inference": "./dist/cli.js"
+    "gateway-inference": "dist/cli.js"
   },
   "repository": {
     "type": "git",

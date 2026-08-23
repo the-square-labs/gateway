@@ -1,0 +1,35 @@
+{
+  "file_name": "mzmjdewo_codex_gateway_wrapper",
+  "edges": [
+    {
+      "from_id": "mzmjdewo",
+      "to_id": "dcfkgqwx",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both define Gateway Codex/inference integrations, including Codex endpoints, usage behavior, and isolated inference credentials.",
+      "source": "auto",
+      "created_at": 1787493447246,
+      "updated_at": 1787493447246
+    },
+    {
+      "from_id": "mzmjdewo",
+      "to_id": "ifp3c48s",
+      "relation": "related_to",
+      "weight": 0.64,
+      "reason": "The OpenCodex migration describes the inference core and turn lifecycle underlying Codex proxying, including terminal events and accounting.",
+      "source": "auto",
+      "created_at": 1787493447246,
+      "updated_at": 1787493447246
+    },
+    {
+      "from_id": "mzmjdewo",
+      "to_id": "gpx2fdwu",
+      "relation": "related_to",
+      "weight": 0.52,
+      "reason": "Both cover Gateway Inference harness setup and the settings/documentation contract for Codex-related integrations.",
+      "source": "auto",
+      "created_at": 1787493447246,
+      "updated_at": 1787493447246
+    }
+  ]
+}

@@ -60,6 +60,83 @@ describe('inference usage presentation', () => {
     ]);
   });
 
+  it('fills client token usage with ordered UTC daily buckets', () => {
+    expect(
+      __testOnly.mergeDailyTokenUsage(
+        [
+          { date: '2026-08-22', tokens: 90_000 },
+          { date: '2026-08-23', tokens: 125_000 },
+        ],
+        new Date('2026-08-21T00:00:00.000Z'),
+        3
+      )
+    ).toEqual([
+      { date: '2026-08-21', tokens: 0 },
+      { date: '2026-08-22', tokens: 90_000 },
+      { date: '2026-08-23', tokens: 125_000 },
+    ]);
+  });
+
+  it('combines current-user quota with lifetime and 30-day raw token totals', async () => {
+    const lifetimeWhere = vi.fn().mockResolvedValue([{ tokens: 1_000_000 }]);
+    const dailyOrderBy = vi.fn().mockResolvedValue([
+      { date: '2026-08-22', tokens: 10_000 },
+      { date: '2026-08-23', tokens: 20_000 },
+    ]);
+    const dailyGroupBy = vi.fn(() => ({ orderBy: dailyOrderBy }));
+    const dailyWhere = vi.fn(() => ({ groupBy: dailyGroupBy }));
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({ from: vi.fn(() => ({ where: lifetimeWhere })) })
+        .mockReturnValueOnce({ from: vi.fn(() => ({ where: dailyWhere })) }),
+    };
+    const recoveryAt = {
+      credits5h: new Date('2026-08-23T15:00:00.000Z'),
+      credits7d: new Date('2026-08-30T00:00:00.000Z'),
+      credits30d: new Date('2026-09-22T00:00:00.000Z'),
+      apiMonthly: new Date('2026-09-01T00:00:00.000Z'),
+    };
+    const policies = {
+      effective: vi.fn().mockResolvedValue({
+        enabled: false,
+        credits5hEnabled: false,
+        credits5h: 0,
+        credits7dEnabled: false,
+        credits7d: 0,
+        credits30dEnabled: false,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        billingTimezone: 'UTC',
+      }),
+      usage: vi.fn().mockResolvedValue({
+        credits5h: 0,
+        credits7d: 0,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        recoveryAt,
+      }),
+    };
+    const service = new InferenceUsageService(
+      db as unknown as ConstructorParameters<typeof InferenceUsageService>[0],
+      policies as unknown as ConstructorParameters<typeof InferenceUsageService>[1],
+      {} as ConstructorParameters<typeof InferenceUsageService>[2]
+    );
+
+    const result = await service.clientUsage(
+      { id: 'user-1', groupId: 'group-1', scopes: ['feat:ai:use'], isBlocked: false } as never,
+      new Date('2026-08-23T12:00:00.000Z')
+    );
+
+    expect(result.enabled).toBe(false);
+    expect(result.tokens.lifetime).toBe(1_000_000);
+    expect(result.tokens.daily).toHaveLength(30);
+    expect(result.tokens.daily.at(-2)).toEqual({ date: '2026-08-22', tokens: 10_000 });
+    expect(result.tokens.daily.at(-1)).toEqual({ date: '2026-08-23', tokens: 20_000 });
+    expect(lifetimeWhere).toHaveBeenCalledOnce();
+    expect(dailyWhere).toHaveBeenCalledOnce();
+  });
+
   it('stores public policy limits in internal accounting units', async () => {
     const db = policyDb();
     const service = new InferenceUsageService(

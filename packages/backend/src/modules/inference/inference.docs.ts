@@ -7,6 +7,7 @@ import {
   CreateInferenceTokenSchema,
   InferenceActivityQuerySchema,
   InferenceAdminModelResponseSchema,
+  InferenceDataPlaneUsageResponseSchema,
   InferenceLimitPolicyInputSchema,
   InferenceModelConfigurationSchema,
   InferenceOAuthSessionResponseSchema,
@@ -20,6 +21,14 @@ import {
   UpdateInferenceProviderConnectionSchema,
   UpdateInferenceProviderRoutingSchema,
 } from './inference.schemas.js';
+
+export const inferenceDataPlaneUsageRoute = appRoute({
+  method: 'get',
+  path: '/usage',
+  tags: ['Inference'],
+  summary: 'Get current-user Gateway quota percentages and raw token totals for inference clients',
+  responses: okJson(InferenceDataPlaneUsageResponseSchema),
+});
 
 export const listInferenceTokensRoute = appRoute({
   method: 'get',

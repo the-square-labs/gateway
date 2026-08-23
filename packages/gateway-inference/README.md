@@ -31,6 +31,8 @@ OAuth and inference runtime credentials are stored in the operating-system crede
 ```sh
 npx -y @wiolett/gateway-inference@latest setup
 npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup codex --desktop-usage
+npx -y @wiolett/gateway-inference@latest setup codex --cli-usage
 ```
 
 `setup` asks which supported harness to configure when the harness is omitted in an interactive terminal. Outside a terminal, the harness is required. The current release supports Codex and Claude Code.
@@ -42,6 +44,26 @@ Codex must also be signed in to an OpenAI account through its normal login flow.
 Gateway model entries reuse the full model instructions bundled with the installed Codex CLI. The companion does not replace Codex's base prompt with a Gateway-authored prompt; exact Codex model slugs use their matching bundled instructions, while other routed models use the bundled default instructions from that Codex version.
 
 The installed helper owns the loopback proxy, refreshes the catalog at startup, follows Gateway invalidation events, and falls back to conditional polling. Runtime auth, proxy, and MCP lifecycle modes are private implementation details and are not public CLI commands.
+
+Codex setup can also install optional Gateway usage surfaces. Interactive setup offers Codex Desktop, the `gateway-codex` CLI launcher, both, or neither; automation can request them with `--desktop-usage` and `--cli-usage`. There is intentionally no separate usage-wrapper install command.
+
+Before creating any Desktop or CLI usage activation, setup authenticates to Gateway and verifies the current `/usage` contract with the dedicated runtime token. An older or unreachable Gateway leaves the optional wrapper artifacts inactive and returns an actionable error; update Gateway and rerun `setup codex` without removing the working base Codex integration.
+
+The wrapper translates Gateway's authenticated `/usage` response into Codex app-server rate-limit and token-usage messages. Codex therefore keeps its normal model/session behavior while its usage panels show Gateway's 5-hour, 7-day, 30-day, and monthly API limits. Native OpenAI quota notifications are suppressed on wrapped sessions, and an initial Gateway usage failure fails closed instead of showing the OpenAI account quota.
+
+`gateway-codex` does not replace or shadow the system `codex` command. Non-interactive commands such as `gateway-codex exec`, `review`, `login`, and `--version` are passed directly to the installed Codex CLI. Interactive, `resume`, and `fork` sessions run through a private authenticated local app-server bridge so their usage display comes from Gateway.
+
+Desktop usage is supported on macOS and Linux. macOS activates the package-owned wrapper through the user `CODEX_CLI_PATH` environment and refuses to overwrite a conflicting value. Linux creates a separate **ChatGPT (Gateway)** XDG launcher for a compatible native executable or AppImage; Flatpak and Snap builds are not supported. The base Codex integration remains available on Windows, but Desktop/CLI usage wrappers are not installed there. Fully quit and reopen Codex Desktop after enabling or removing its usage wrapper.
+
+Usage components can be removed independently and without contacting Gateway. Omitting the target removes both components while preserving the base Codex integration, model catalog, proxy, and runtime token:
+
+```sh
+npx -y @wiolett/gateway-inference@latest uninstall codex-usage desktop
+npx -y @wiolett/gateway-inference@latest uninstall codex-usage cli
+npx -y @wiolett/gateway-inference@latest uninstall codex-usage
+```
+
+Removal deletes only artifacts carrying the package ownership marker and refuses to overwrite or delete foreign launchers. The interactive manager exposes the same Desktop, CLI, and all-component removal actions.
 
 ## Configure Claude Code
 
