@@ -82,6 +82,7 @@ function createHarness(
     request?: unknown;
     attempt?: unknown;
     attemptLookups?: unknown[];
+    attempts?: unknown[];
     limits?: Record<string, unknown>;
     reserveError?: unknown;
     claimEmpty?: boolean;
@@ -100,6 +101,7 @@ function createHarness(
               .mockResolvedValueOnce(options.attemptLookups[0] ?? null)
               .mockResolvedValueOnce(options.attemptLookups[1] ?? null)
           : vi.fn().mockResolvedValue(options.attempt ?? null),
+        findMany: vi.fn().mockResolvedValue(options.attempts ?? (options.attempt ? [options.attempt] : [])),
       },
       inferenceModels: { findFirst: vi.fn().mockResolvedValue(MODEL) },
       inferenceModelSources: { findFirst: vi.fn().mockResolvedValue(SOURCE) },
@@ -409,6 +411,88 @@ describe('inference core accounting', () => {
     await service.finalizeCoreRequest(REQUEST.id, 'completed');
     expect(requestUpdates[0]).toMatchObject({ status: 'completed' });
     expect(reservations.release).toHaveBeenCalledWith({ id: REQUEST.id, userId: 'user-1' });
+  });
+
+  it('does not overwrite a settled failed root attempt with transport completion', async () => {
+    const { service, requestUpdates } = createHarness({
+      attempts: [{ ...ATTEMPT, status: 'failed', errorCode: 'upstream_server_error' }],
+    });
+
+    await service.finalizeCoreRequest(REQUEST.id, 'completed');
+
+    expect(requestUpdates[0]).toMatchObject({ status: 'failed', errorCode: 'upstream_error' });
+  });
+
+  it('keeps transport completion when a failover root attempt completed', async () => {
+    const { service, requestUpdates } = createHarness({
+      attempts: [
+        { ...ATTEMPT, id: 'failed-attempt', status: 'failed' },
+        { ...ATTEMPT, id: 'completed-attempt', status: 'completed' },
+      ],
+    });
+
+    await service.finalizeCoreRequest(REQUEST.id, 'completed');
+
+    expect(requestUpdates[0]).toMatchObject({ status: 'completed', errorCode: null });
+  });
+
+  it('does not let a failed child attempt override a completed top-level request', async () => {
+    const { service, requestUpdates } = createHarness({
+      attempts: [
+        { ...ATTEMPT, id: 'root-attempt', status: 'completed' },
+        {
+          ...ATTEMPT,
+          id: 'child-attempt',
+          status: 'failed',
+          parentCoreAttemptId: 'att_1',
+          attemptKind: 'subagent',
+        },
+      ],
+    });
+
+    await service.finalizeCoreRequest(REQUEST.id, 'completed');
+
+    expect(requestUpdates[0]).toMatchObject({ status: 'completed', errorCode: null });
+  });
+
+  it('downgrades an already completed request when a failed root settlement arrives later', async () => {
+    const { service, requestUpdates } = createHarness({
+      request: { ...REQUEST, status: 'completed' },
+      attemptLookups: [ATTEMPT, null],
+      selectRows: [
+        [
+          {
+            uncachedInputTokens: 0,
+            cachedInputTokens: 0,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+          },
+        ],
+        [{ credits: '0', apiMicrodollars: 0, estimatedUsage: true }],
+      ],
+    });
+
+    await service.settleCoreAttempt({
+      contractId: 'wiolett-core/v1',
+      rootRequestId: REQUEST.id,
+      attemptId: 'att_1',
+      parentAttemptId: null,
+      attemptKind: 'root',
+      coreAccountId: 'core-conn-1',
+      coreModelId: 'core-conn-1/gpt-5.5',
+      sourceType: 'subscription',
+      terminalStatus: 'failed',
+      upstreamStatus: 502,
+      errorCode: 'upstream_server_error',
+      usage: { uncachedInputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 },
+      usageEstimated: true,
+      emittedOutput: true,
+      startedAt: new Date(Date.now() - 1000).toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    expect(requestUpdates).toContainEqual(expect.objectContaining({ status: 'failed', errorCode: 'upstream_error' }));
   });
 
   it('persists cancellation distinctly from failure', async () => {

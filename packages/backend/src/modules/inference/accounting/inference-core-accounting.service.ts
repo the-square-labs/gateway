@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { injectable } from 'tsyringe';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
@@ -527,6 +527,29 @@ export class InferenceCoreAccountingService {
         });
       }
       await this.refreshRequestAggregates(database, request.id);
+      // The proxy can observe a clean HTTP stream close just after Core has
+      // settled the top-level attempt as failed. Never let that transport-level
+      // completion leave the request recorded as successful. A completed
+      // sibling top-level attempt still wins for legitimate provider failover.
+      if (request.status === 'completed' && input.parentAttemptId === null && input.terminalStatus !== 'completed') {
+        const completedTopLevelAttempt = await database.query.inferenceRequestAttempts.findFirst({
+          where: and(
+            eq(inferenceRequestAttempts.requestId, request.id),
+            isNull(inferenceRequestAttempts.parentCoreAttemptId),
+            eq(inferenceRequestAttempts.status, 'completed'),
+            ne(inferenceRequestAttempts.id, attempt.id)
+          ),
+        });
+        if (!completedTopLevelAttempt) {
+          await database
+            .update(inferenceRequests)
+            .set({
+              status: input.terminalStatus,
+              errorCode: input.terminalStatus === 'failed' ? 'upstream_error' : 'client_cancelled',
+            })
+            .where(eq(inferenceRequests.id, request.id));
+        }
+      }
       return { reservationId: attempt.reservationId, settled: true };
     });
     if (settled && typeof settled === 'object' && settled.reservationId) {
@@ -554,17 +577,36 @@ export class InferenceCoreAccountingService {
     if (!request?.userId) return;
     const userId = request.userId;
     await this.locks.withUserLock(userId, async (database) => {
-      const priorAttempt = await database.query.inferenceRequestAttempts.findFirst({
+      const priorAttempts = await database.query.inferenceRequestAttempts.findMany({
         where: eq(inferenceRequestAttempts.requestId, requestId),
       });
+      const topLevelAttempts = priorAttempts.filter((attempt) => attempt.parentCoreAttemptId === null);
+      const completedAttempt = topLevelAttempts.find((attempt) => attempt.status === 'completed');
+      const failedAttempt = topLevelAttempts.find((attempt) => attempt.status === 'failed');
+      const cancelledAttempt = topLevelAttempts.find((attempt) => attempt.status === 'cancelled');
+      const effectiveOutcome =
+        outcome === 'completed' && !completedAttempt
+          ? failedAttempt
+            ? 'failed'
+            : cancelledAttempt
+              ? 'cancelled'
+              : outcome
+          : outcome;
       const [claimed] = await database
         .update(inferenceRequests)
         .set({
-          status: outcome,
-          errorCode: outcome === 'failed' ? errorCode(error) : outcome === 'cancelled' ? 'client_cancelled' : null,
+          status: effectiveOutcome,
+          errorCode:
+            effectiveOutcome === 'failed'
+              ? outcome === 'failed'
+                ? errorCode(error)
+                : 'upstream_error'
+              : effectiveOutcome === 'cancelled'
+                ? 'client_cancelled'
+                : null,
           // A failure before core admission did not contact a provider and may
           // be retried safely with the same client idempotency key.
-          ...(outcome !== 'completed' && !priorAttempt ? { idempotencyKeyHash: null } : {}),
+          ...(effectiveOutcome !== 'completed' && priorAttempts.length === 0 ? { idempotencyKeyHash: null } : {}),
           completedAt: new Date(),
         })
         .where(and(eq(inferenceRequests.id, requestId), inArray(inferenceRequests.status, ['reserved', 'running'])))
