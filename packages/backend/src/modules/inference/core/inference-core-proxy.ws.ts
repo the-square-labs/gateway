@@ -385,7 +385,7 @@ async function connectTurnAttempt(input: {
         // Already closed.
       }
       if (input.state.active === input.turn) input.state.active = null;
-      finalizeTurn(input.accounting, input.turn, 'completed');
+      finalizeTurn(input.accounting, input.turn, terminalOutcome(parsed));
     }
   });
   upstream.on('close', () => {
@@ -401,6 +401,10 @@ async function connectTurnAttempt(input: {
     retryOrFail();
   });
   upstream.on('error', (error) => retryOrFail(error));
+}
+
+function terminalOutcome(event: Record<string, unknown>): 'completed' | 'failed' {
+  return event.type === 'response.completed' ? 'completed' : 'failed';
 }
 
 function failTurn(

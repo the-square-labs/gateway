@@ -137,6 +137,30 @@ describe('core responses websocket proxy', () => {
     expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
   });
 
+  it.each(['error', 'response.failed', 'response.incomplete'])('%s finalizes the request as failed', async (type) => {
+    const { accounting } = registerCommon();
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
+    );
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    upstream.handlers.message?.(
+      JSON.stringify(
+        type === 'error'
+          ? { type, status: 502, error: { code: 'upstream_server_error', message: 'failed' } }
+          : { type, response: { id: 'resp_1', status: type.slice('response.'.length) } }
+      )
+    );
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+      'failed'
+    );
+  });
+
   it('rejects a second turn while one is active', async () => {
     registerCommon();
     const ws = clientSocket();
