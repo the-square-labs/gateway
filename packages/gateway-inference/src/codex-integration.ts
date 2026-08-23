@@ -110,7 +110,6 @@ export class CodexIntegrationService {
     }
     return {
       codexVersion: codex.version,
-      codexCommand: codex.command,
       providerId: config.providerId,
       mcpId: config.mcpId,
       configFile: config.configFile,

@@ -3,8 +3,7 @@ import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClaudeCodeIntegrationService } from './claude-code-integration.js';
 import { CodexIntegrationService, type CommandRunner } from './codex-integration.js';
-import { CodexUsageComponentService } from './codex-usage-components.js';
-import { runCodexDesktopUsageWrapper, runGatewayCodex } from './codex-usage-runtime.js';
+import { removeLegacyCodexUsageComponents } from './codex-usage-cleanup.js';
 import { type CredentialStore, SecureCredentialStore } from './credentials.js';
 import { CLI_VERSION } from './discovery.js';
 import { CliError, errorPayload } from './errors.js';
@@ -26,8 +25,6 @@ import { authenticatedSetupClient } from './session.js';
 
 interface ParsedArgs {
   command: string[];
-  desktopUsage: boolean;
-  cliUsage: boolean;
 }
 
 interface CliDependencies {
@@ -54,36 +51,22 @@ Commands:
   login [GATEWAY]                  Authorize this device through Gateway
   logout                           Remove Gateway setup authorization
   setup [codex|claude-code]        Configure an inference harness
-  uninstall codex-usage [TARGET]   Remove Desktop/CLI usage components (desktop|cli|all)
 
 Running without a command opens the interactive manager.
 
 Options:
-  --desktop-usage                  Add Gateway usage to Codex Desktop during setup codex
-  --cli-usage                      Install gateway-codex during setup codex
   -h, --help                       Show help
   -v, --version                    Show version`;
 
 function parseArgs(args: string[]): ParsedArgs {
-  if (args[0]?.startsWith('__')) return { command: args, desktopUsage: false, cliUsage: false };
   const command: string[] = [];
-  let desktopUsage = false;
-  let cliUsage = false;
   for (const value of args) {
-    if (value === '--help' || value === '-h') return { command: ['help'], desktopUsage, cliUsage };
-    if (value === '--version' || value === '-v') return { command: ['version'], desktopUsage, cliUsage };
-    if (value === '--desktop-usage') {
-      desktopUsage = true;
-      continue;
-    }
-    if (value === '--cli-usage') {
-      cliUsage = true;
-      continue;
-    }
+    if (value === '--help' || value === '-h') return { command: ['help'] };
+    if (value === '--version' || value === '-v') return { command: ['version'] };
     if (value.startsWith('-')) throw new CliError('INVALID_ARGUMENT', `Unknown option: ${value}`);
     command.push(value);
   }
-  return { command, desktopUsage, cliUsage };
+  return { command };
 }
 
 export async function runCli(args: string[], dependencies: CliDependencies = {}): Promise<number> {
@@ -127,12 +110,6 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       output.write({ version: CLI_VERSION }, () => CLI_VERSION);
       return 0;
     }
-    if (
-      (parsed.desktopUsage || parsed.cliUsage) &&
-      !(parsed.command[0] === 'setup' && parsed.command[1] === 'codex' && parsed.command.length === 2)
-    ) {
-      throw new CliError('INVALID_ARGUMENT', '--desktop-usage and --cli-usage are supported only by setup codex.');
-    }
     if (parsed.command[0] === '__mcp' && parsed.command.length === 1) {
       await runInferenceMcp({
         profileName: CONNECTION_NAME,
@@ -150,12 +127,6 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         credentials,
       });
       return 0;
-    }
-    if (parsed.command[0] === '__desktop_wrapper') {
-      return await runCodexDesktopUsageWrapper({ paths, args: parsed.command.slice(1) });
-    }
-    if (parsed.command[0] === '__gateway_codex') {
-      return await runGatewayCodex({ paths, args: parsed.command.slice(1) });
     }
     if (parsed.command[0] === '__credential' && parsed.command[1] === 'claude-code' && parsed.command.length === 2) {
       const runtime = await credentials.getRuntime(CONNECTION_NAME, 'claude-code');
@@ -214,13 +185,14 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       if (target !== 'desktop' && target !== 'cli' && target !== 'all') {
         throw new CliError('INVALID_ARGUMENT', 'Usage: uninstall codex-usage [desktop|cli|all]');
       }
-      const result = await new CodexUsageComponentService(paths, {
+      const result = await removeLegacyCodexUsageComponents(paths, {
+        target,
         platform: process.platform,
         commandRunner: dependencies.commandRunner,
         env: dependencies.env,
         home: dependencies.home,
-      }).uninstall(target);
-      output.write({ ok: true, ...result }, () => `Removed Codex usage components: ${target}.`);
+      });
+      output.write({ ok: true, ...result }, () => `Removed legacy Codex usage components: ${target}.`);
       return 0;
     }
     if (parsed.command[0] === 'setup') {
@@ -239,17 +211,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         throw new CliError('UNSUPPORTED_HARNESS', `Harness ${harness} is not supported by this CLI version.`);
       }
       return harness === 'codex'
-        ? await setupCodexCommand(
-            input,
-            paths,
-            profiles,
-            credentials,
-            output,
-            interactive,
-            dependencies,
-            parsed.desktopUsage,
-            parsed.cliUsage
-          )
+        ? await setupCodexCommand(input, paths, profiles, credentials, output, interactive, dependencies)
         : await setupClaudeCodeCommand(input, paths, profiles, credentials, output, interactive, dependencies);
     }
     throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${parsed.command.join(' ')}`);
@@ -303,30 +265,14 @@ async function setupCodexCommand(
   credentials: CredentialStore,
   output: Output,
   interactive: boolean,
-  dependencies: CliDependencies,
-  desktopUsage: boolean,
-  cliUsage: boolean
+  dependencies: CliDependencies
 ): Promise<number> {
-  const components = new CodexUsageComponentService(paths, {
+  await removeLegacyCodexUsageComponents(paths, {
     platform: process.platform,
     commandRunner: dependencies.commandRunner,
     env: dependencies.env,
     home: dependencies.home,
   });
-  const usageChoice =
-    interactive && (process.platform === 'darwin' || process.platform === 'linux')
-      ? await input.ui.select('Configure Gateway usage surfaces?', [
-          { value: 'none', label: 'Not now' },
-          { value: 'desktop', label: 'Codex Desktop' },
-          { value: 'cli', label: 'gateway-codex CLI' },
-          { value: 'both', label: 'Desktop and gateway-codex' },
-        ])
-      : null;
-  const enableDesktop = desktopUsage || usageChoice === 'desktop' || usageChoice === 'both';
-  const enableCli = cliUsage || usageChoice === 'cli' || usageChoice === 'both';
-  if (enableDesktop || enableCli) {
-    await components.preflight({ desktopUsage: enableDesktop, cliUsage: enableCli });
-  }
   const context = await setupContext(input, profiles, credentials, output, interactive, dependencies);
   const result = await createIntegration(paths, credentials, dependencies).setup({
     profileName: CONNECTION_NAME,
@@ -334,23 +280,6 @@ async function setupCodexCommand(
     discovery: context.discovery,
     client: context.client,
   });
-  if (enableDesktop || enableCli) {
-    const runtime = await credentials.getRuntime(CONNECTION_NAME);
-    if (!runtime) throw new CliError('RUNTIME_TOKEN_MISSING', 'Codex runtime token is missing. Run setup codex again.');
-    await components.assertGatewayUsageAvailable({
-      remoteBaseUrl: context.discovery.adapters.openai.baseUrl,
-      token: runtime.token,
-      fetch: dependencies.fetch,
-    });
-    await components.setup({
-      profileName: CONNECTION_NAME,
-      remoteBaseUrl: context.discovery.adapters.openai.baseUrl,
-      realCodexPath: result.codexCommand,
-      realCodexVersion: result.codexVersion,
-      desktopUsage: enableDesktop,
-      cliUsage: enableCli,
-    });
-  }
   output.write({ ok: true, ...result }, () =>
     [
       `Configured Codex ${result.codexVersion}.`,
