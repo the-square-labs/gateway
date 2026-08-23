@@ -12,7 +12,11 @@ import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { CloudflareClient, CloudflareDnsRecordInput } from '@/modules/integrations/cloudflare-client.js';
+import type {
+  CloudflareClient,
+  CloudflareDnsRecord,
+  CloudflareDnsRecordInput,
+} from '@/modules/integrations/cloudflare-client.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { getEffectiveNginxIngressAddresses } from '@/modules/nodes/node-service-address.js';
 import type { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
@@ -780,8 +784,9 @@ export class DomainsService {
     }
 
     const probe = await probeDnsRecords(row.domain);
-    const dnsRecords = probe.records;
-    const dnsStatus = await this.computeDomainDnsStatus(row, dnsRecords, probe.addressResolution);
+    const providerRecords = await this.getManagedCloudflareDnsRecords(row);
+    const dnsRecords = this.dnsRecordsForSnapshot(row, probe.records, providerRecords);
+    const dnsStatus = await this.computeDomainDnsStatus(row, probe.records, probe.addressResolution, providerRecords);
     const targetUpdate = await this.externalTargetSnapshotUpdate(row, dnsStatus, dnsRecords);
 
     const [updated] = await this.db
@@ -804,8 +809,9 @@ export class DomainsService {
     const results = await Promise.allSettled(
       allDomains.map(async (d) => {
         const probe = await probeDnsRecords(d.domain);
-        const dnsRecords = probe.records;
-        const dnsStatus = await this.computeDomainDnsStatus(d, dnsRecords, probe.addressResolution);
+        const providerRecords = await this.getManagedCloudflareDnsRecords(d);
+        const dnsRecords = this.dnsRecordsForSnapshot(d, probe.records, providerRecords);
+        const dnsStatus = await this.computeDomainDnsStatus(d, probe.records, probe.addressResolution, providerRecords);
         const targetUpdate = await this.externalTargetSnapshotUpdate(d, dnsStatus, dnsRecords);
         await this.db
           .update(domains)
@@ -1922,7 +1928,8 @@ export class DomainsService {
   private async computeDomainDnsStatus(
     row: typeof domains.$inferSelect,
     resolvedRecords: DnsRecords,
-    addressResolution: DnsAddressResolution = 'resolved'
+    addressResolution: DnsAddressResolution = 'resolved',
+    managedCloudflareRecords?: CloudflareDnsRecord[]
   ): Promise<'valid' | 'invalid' | 'pending' | 'unknown'> {
     if (row.dnsProvider === 'cloudflare' && row.nginxNodeId) {
       const node = await this.getNginxNodeSummary(row.nginxNodeId);
@@ -1940,11 +1947,7 @@ export class DomainsService {
     if (expectedIps.length === 0) return 'unknown';
 
     if (this.integrationsService && row.integrationConnectorId && row.providerZoneId) {
-      const context = await this.integrationsService.getCloudflareDnsContextForRecord(
-        row.integrationConnectorId,
-        row.providerZoneId
-      );
-      const providerRecords = await context.client.listDnsRecords(context.zone.remoteId, row.domain);
+      const providerRecords = managedCloudflareRecords ?? (await this.getManagedCloudflareDnsRecords(row)) ?? [];
       const addressRecords = providerRecords.filter((record) => record.type === 'A' || record.type === 'AAAA');
       const providerIps = addressRecords.map((record) => record.content).sort();
       if (!this.sameStringSet(providerIps, [...expectedIps].sort())) return 'invalid';
@@ -1954,6 +1957,47 @@ export class DomainsService {
     const resolvedIps = [...resolvedRecords.a, ...resolvedRecords.aaaa].sort();
     if (resolvedIps.length === 0) return 'pending';
     return this.sameStringSet(resolvedIps, [...expectedIps].sort()) ? 'valid' : 'pending';
+  }
+
+  private async getManagedCloudflareDnsRecords(
+    row: typeof domains.$inferSelect
+  ): Promise<CloudflareDnsRecord[] | undefined> {
+    if (
+      row.dnsProvider !== 'cloudflare' ||
+      !this.integrationsService ||
+      !row.integrationConnectorId ||
+      !row.providerZoneId
+    ) {
+      return undefined;
+    }
+    const context = await this.integrationsService.getCloudflareDnsContextForRecord(
+      row.integrationConnectorId,
+      row.providerZoneId
+    );
+    return (await context.client.listDnsRecords(context.zone.remoteId, row.domain)).filter(
+      (record) => record.name.toLowerCase() === row.domain.toLowerCase()
+    );
+  }
+
+  private dnsRecordsForSnapshot(
+    row: typeof domains.$inferSelect,
+    resolvedRecords: DnsRecords,
+    managedCloudflareRecords?: CloudflareDnsRecord[]
+  ): DnsRecords {
+    if (row.dnsProvider !== 'cloudflare' || row.dnsProxied !== false || !managedCloudflareRecords) {
+      return resolvedRecords;
+    }
+    return {
+      ...resolvedRecords,
+      a: managedCloudflareRecords
+        .filter((record) => record.type === 'A')
+        .map((record) => record.content)
+        .sort(),
+      aaaa: managedCloudflareRecords
+        .filter((record) => record.type === 'AAAA')
+        .map((record) => record.content)
+        .sort(),
+    };
   }
 
   private async externalTargetSnapshotUpdate(

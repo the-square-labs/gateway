@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
+import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
@@ -73,6 +74,10 @@ const domain: DomainWithUsage = {
 };
 
 describe("DomainDetailDialog", () => {
+  beforeEach(() => {
+    vi.mocked(useRealtime).mockReset();
+  });
+
   it("waits for domain details before opening to avoid resizing the dialog", () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["domains:view"] }),
@@ -138,6 +143,52 @@ describe("DomainDetailDialog", () => {
 
     expect(await screen.findByRole("heading", { name: "app.example.com" })).toBeInTheDocument();
     expect(screen.queryByText("Cloudflare Target")).not.toBeInTheDocument();
+  });
+
+  it("keeps a completed DNS check when an older realtime refresh resolves later", async () => {
+    const user = userEvent.setup();
+    let resolveStaleLoad!: (value: DomainWithUsage) => void;
+    const staleLoad = new Promise<DomainWithUsage>((resolve) => {
+      resolveStaleLoad = resolve;
+    });
+    let domainChanged: ((payload: unknown) => void) | undefined;
+    vi.mocked(useRealtime).mockImplementation((channel, handler) => {
+      if (channel === "domain.changed") domainChanged = handler;
+    });
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["domains:view", "domains:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const emptyRecords: DomainWithUsage = {
+      ...domain,
+      dnsStatus: "pending",
+      dnsProxied: false,
+      dnsRecords: { a: [], aaaa: [], cname: [], caa: [], mx: [], txt: [] },
+    };
+    const checkedDomain: DomainWithUsage = {
+      ...emptyRecords,
+      dnsRecords: { ...emptyRecords.dnsRecords!, a: ["8.8.8.8"] },
+    };
+    vi.spyOn(api, "getDomain").mockResolvedValueOnce(emptyRecords).mockReturnValueOnce(staleLoad);
+    vi.spyOn(api, "checkDomainDns").mockResolvedValue(checkedDomain);
+
+    render(
+      <MemoryRouter>
+        <DomainDetailDialog domainId={domain.id} open onOpenChange={vi.fn()} onUpdated={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("No DNS records found")).toHaveClass("text-sm");
+    act(() => domainChanged?.({ id: domain.id, action: "updated" }));
+    await waitFor(() => expect(api.getDomain).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole("button", { name: "Check" }));
+    expect(await screen.findByText("8.8.8.8")).toBeInTheDocument();
+
+    await act(async () => resolveStaleLoad(emptyRecords));
+    expect(screen.getByText("8.8.8.8")).toBeInTheDocument();
+    expect(screen.queryByText("No DNS records found")).not.toBeInTheDocument();
   });
 
   it("shows Cloudflare migration state as a shared detail row for external DNS", async () => {

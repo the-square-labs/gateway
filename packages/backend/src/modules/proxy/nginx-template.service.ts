@@ -17,6 +17,10 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
 import type { ProxyAdditionalRouteConfig, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
+import {
+  ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER,
+  supportsAdditionalRoutesTemplate,
+} from './additional-route-template.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
 
 const logger = createChildLogger('NginxTemplateService');
@@ -312,7 +316,7 @@ server {
     }
 
 {{/unless}}
-{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}
+${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
 {{#if pagesRouteIncludePath}}
     include {{pagesRouteIncludePath}};
     add_header X-Content-Type-Options nosniff always;
@@ -776,7 +780,6 @@ export class NginxTemplateService {
     if (input.content) {
       this.compileTemplate(input.content);
     }
-
     const [updated] = await this.db
       .update(nginxTemplates)
       .set({ ...input, updatedAt: new Date() })
@@ -884,11 +887,12 @@ export class NginxTemplateService {
 
   async renderForHost(host: ProxyHostConfig, templateId: string | null, hideExternalBranding = false): Promise<string> {
     let content: string;
-    let managedBuiltin = !templateId;
+    let supportsAdditionalRoutes = !templateId;
     if (templateId) {
       const template = await this.getTemplate(templateId);
       content = template.content;
-      managedBuiltin = template.isBuiltin && template.type === 'proxy';
+      supportsAdditionalRoutes =
+        template.type === 'proxy' && (template.isBuiltin || supportsAdditionalRoutesTemplate(template.content));
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
@@ -900,7 +904,7 @@ export class NginxTemplateService {
       this.ensureManagedSecureLinkUpstream(rendered, host),
       host
     );
-    return managedBuiltin
+    return supportsAdditionalRoutes
       ? this.ensureManagedAdditionalRouteUpstreams(withSecureLinkUpstreams, host)
       : withSecureLinkUpstreams;
   }

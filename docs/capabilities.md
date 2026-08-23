@@ -57,7 +57,7 @@ Pages workflows:
 
 ## Route Extensions
 
-Managed Routes can contain Additional Routes for literal path prefixes such as `/api` or `/assets`. Each location can target a manual address, Docker container, Docker deployment, or ready Pages Tag and can carry its own buffering, timeout, WebSocket, prefix-stripping, and advanced location directives. Docker targets own the Secure Link binding created for that location, so retry, edit, and delete follow the Additional Route lifecycle.
+Managed Routes can contain Additional Routes for literal path prefixes such as `/api` or `/assets`. Each location can target a manual address, Docker container, Docker deployment, or ready Pages Tag and can carry its own buffering, timeout, WebSocket, prefix-stripping, and advanced location directives. Custom proxy templates support them when they include `{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}` inside the intended `server` block. Docker targets own the Secure Link binding created for that location, so retry, edit, and delete follow the Additional Route lifecycle.
 
 Additional Secure Link Bindings are separate user-managed Docker bindings intended for upstreams referenced from advanced nginx config. Route-owned bindings remain visible in the binding list but cannot be deleted independently. Both lifecycles are available through the scoped Operations Console, AI Workspace, REST/OAuth, and remote MCP Ingress toolset.
 

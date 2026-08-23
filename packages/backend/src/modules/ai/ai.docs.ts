@@ -163,6 +163,7 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 
 ## Additional Routes And Secure Links
 - Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
+- Custom proxy templates support Additional Routes when the template includes \`{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}\` inside the intended \`server\` block.
 - Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config and pass the parent \`routeId\`. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
 
 ## Nginx Config

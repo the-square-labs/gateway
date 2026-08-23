@@ -310,7 +310,14 @@ function pageTagReady(tag: PageTag | null): boolean {
 export interface AdditionalRoutesPanelProps {
   host: ProxyHost;
   canManage: boolean;
-  selectedTemplate?: { isBuiltin: boolean } | null;
+  selectedTemplate?: { isBuiltin: boolean; content: string } | null;
+}
+
+const ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER_PATTERN =
+  /{{{\s*renderAdditionalRoutes\s+additionalRoutes\s+id\s+accessList\s+rateLimitEnabled\s+rateLimitBurst\s+connectionsPerIp\s*}}}/;
+
+export function supportsAdditionalRoutesTemplate(content: string): boolean {
+  return ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER_PATTERN.test(content);
 }
 
 export function AdditionalRoutesPanel({
@@ -380,7 +387,11 @@ export function AdditionalRoutesPanel({
     if (host.maintenanceEnabled) return "Additional routes are unavailable during maintenance.";
     if (host.rawConfigEnabled) return "Disable Raw Config Mode before adding managed routes.";
     if (!host.nodeId) return "Additional routes require an assigned Nginx node.";
-    if (selectedTemplate && !selectedTemplate.isBuiltin) {
+    if (
+      selectedTemplate &&
+      !selectedTemplate.isBuiltin &&
+      !supportsAdditionalRoutesTemplate(selectedTemplate.content)
+    ) {
       return "Additional routes require the built-in proxy template.";
     }
     return null;

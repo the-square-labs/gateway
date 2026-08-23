@@ -4,6 +4,7 @@ import {
   DEFAULT_ADDITIONAL_ROUTE_OPTIONS,
   normalizeAdditionalRoutePath,
   routeRequestFromDraft,
+  supportsAdditionalRoutesTemplate,
   validateAdditionalRoutePath,
 } from "./AdditionalRoutes";
 
@@ -78,5 +79,18 @@ describe("Additional Routes request mapping", () => {
       requestBuffering: false,
       responseBuffering: false,
     });
+  });
+});
+
+describe("Additional Routes template capability", () => {
+  it("accepts only the canonical unescaped placeholder", () => {
+    expect(
+      supportsAdditionalRoutesTemplate(
+        "{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}"
+      )
+    ).toBe(true);
+    expect(supportsAdditionalRoutesTemplate("{{renderAdditionalRoutes additionalRoutes}}")).toBe(
+      false
+    );
   });
 });

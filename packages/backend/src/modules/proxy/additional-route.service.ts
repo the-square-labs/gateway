@@ -22,6 +22,7 @@ import type { PageTagActivationRequest } from '@/modules/pages/tags/page-tag.ser
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { ProxyAdditionalRouteConfig } from '@/services/nginx-config-generator.service.js';
 import { normalizeAdditionalRoutePath } from './additional-route.validation.js';
+import { supportsAdditionalRoutesTemplate } from './additional-route-template.js';
 import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service.js';
 import type { CreateProxyAdditionalSecureLinkInput, ProxySecureLinkService } from './proxy-secure-link.service.js';
 
@@ -166,7 +167,11 @@ export class AdditionalRouteService {
       const template = await this.db.query.nginxTemplates.findFirst({
         where: eq(nginxTemplates.id, host.nginxTemplateId),
       });
-      if (!template?.isBuiltin || template.type !== 'proxy') {
+      if (
+        !template ||
+        template.type !== 'proxy' ||
+        (!template.isBuiltin && !supportsAdditionalRoutesTemplate(template.content))
+      ) {
         throw new AppError(
           409,
           'ADDITIONAL_ROUTES_TEMPLATE_UNSUPPORTED',
@@ -191,8 +196,22 @@ export class AdditionalRouteService {
       );
     }
     const entersRaw = input.type === 'raw' || input.rawConfigEnabled === true;
-    const customTemplate = input.nginxTemplateId !== undefined && input.nginxTemplateId !== null;
-    if (!entersRaw && !customTemplate) return;
+    if (entersRaw) {
+      throw new AppError(
+        409,
+        'ADDITIONAL_ROUTES_HOST_MODE_BLOCKED',
+        'Remove Additional Routes before switching this host to raw mode or a custom template'
+      );
+    }
+    if (input.nginxTemplateId === undefined || input.nginxTemplateId === null) return;
+    if (typeof input.nginxTemplateId === 'string') {
+      const template = await this.db.query.nginxTemplates.findFirst({
+        where: eq(nginxTemplates.id, input.nginxTemplateId),
+      });
+      if (template?.type === 'proxy' && (template.isBuiltin || supportsAdditionalRoutesTemplate(template.content))) {
+        return;
+      }
+    }
     throw new AppError(
       409,
       'ADDITIONAL_ROUTES_HOST_MODE_BLOCKED',

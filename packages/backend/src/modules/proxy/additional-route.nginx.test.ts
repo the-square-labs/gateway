@@ -183,4 +183,40 @@ describe('managed Additional Route rendering', () => {
     expect(rendered).not.toContain('location = /api');
     expect(rendered).not.toContain('gateway_additional_secure_link_55555555');
   });
+
+  it('renders routes and managed upstreams when a custom template includes the placeholder', async () => {
+    const custom = `server {
+    listen 80;
+    {{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}
+    location / { proxy_pass http://backend; }
+}`;
+    const rendered = await service({ content: custom, isBuiltin: false, type: 'proxy' }).renderForHost(
+      {
+        ...baseHost,
+        additionalRoutes: [
+          {
+            id: '55555555-5555-4555-8555-555555555555',
+            path: '/api',
+            targetKind: 'docker_container',
+            forwardScheme: 'http',
+            forwardHost: '127.0.0.1',
+            forwardPort: 8080,
+            secureLinkUpstream: true,
+            secureLinkSocketPath: '/run/gateway-secure-links/55555555-5555-4555-8555-555555555555.sock',
+            stripPrefix: false,
+            websocketSupport: false,
+            requestBuffering: true,
+            responseBuffering: true,
+            connectTimeoutSeconds: 60,
+            readTimeoutSeconds: 60,
+            sendTimeoutSeconds: 60,
+          },
+        ],
+      },
+      'custom-template'
+    );
+
+    expect(rendered).toContain('location = /api');
+    expect(rendered).toContain('upstream gateway_additional_secure_link_55555555_5555_4555_8555_555555555555');
+  });
 });

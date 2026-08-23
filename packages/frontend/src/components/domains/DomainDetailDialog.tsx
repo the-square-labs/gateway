@@ -130,6 +130,7 @@ export function DomainDetailDialog({
   const [isLoadingIngressMigration, setIsLoadingIngressMigration] = useState(false);
   const [isMigratingIngress, setIsMigratingIngress] = useState(false);
   const loadedDomainIdRef = useRef<string | null>(null);
+  const domainLoadVersionRef = useRef(0);
   const onOpenChangeRef = useRef(onOpenChange);
   const initialIngressMigrationStartedRef = useRef(false);
   onOpenChangeRef.current = onOpenChange;
@@ -137,12 +138,15 @@ export function DomainDetailDialog({
   const loadDomain = useCallback(async () => {
     if (!domainId || !open) return;
     const initialLoad = loadedDomainIdRef.current !== domainId;
+    const loadVersion = ++domainLoadVersionRef.current;
     try {
       const d = await api.getDomain(domainId);
+      if (loadVersion !== domainLoadVersionRef.current) return;
       loadedDomainIdRef.current = domainId;
       setDomain(d);
       setDescription(d.description || "");
     } catch {
+      if (loadVersion !== domainLoadVersionRef.current) return;
       toast.error("Failed to load domain");
       if (initialLoad) onOpenChangeRef.current(false);
     }
@@ -150,6 +154,9 @@ export function DomainDetailDialog({
 
   useEffect(() => {
     void loadDomain();
+    return () => {
+      domainLoadVersionRef.current += 1;
+    };
   }, [loadDomain]);
 
   useRealtime(open ? "domain.changed" : null, (payload) => {
@@ -196,7 +203,10 @@ export function DomainDetailDialog({
     setIsCheckingDns(true);
     try {
       const updated = await api.checkDomainDns(domain.id);
-      setDomain({ ...domain, ...updated, usage: domain.usage });
+      domainLoadVersionRef.current += 1;
+      setDomain((current) =>
+        current?.id === updated.id ? { ...current, ...updated, usage: current.usage } : current
+      );
       toast.success("DNS check complete");
       onUpdated();
     } catch {
@@ -211,7 +221,10 @@ export function DomainDetailDialog({
     setIsUpdatingProxied(true);
     try {
       const updated = await api.updateDomain(domain.id, { proxied });
-      setDomain({ ...domain, ...updated, usage: domain.usage });
+      domainLoadVersionRef.current += 1;
+      setDomain((current) =>
+        current?.id === updated.id ? { ...current, ...updated, usage: current.usage } : current
+      );
       toast.success(proxied ? "Cloudflare proxy enabled" : "Cloudflare proxy disabled");
       onUpdated();
     } catch (err) {
@@ -494,7 +507,7 @@ export function DomainDetailDialog({
                     </SettingsControlRow>
                   ))
                 ) : (
-                  <p className="px-4 py-3 text-xs text-muted-foreground">
+                  <p className="px-4 py-3 text-sm text-muted-foreground">
                     {domain.dnsRecords ? "No DNS records found" : "Run a DNS check to see records"}
                   </p>
                 )}
