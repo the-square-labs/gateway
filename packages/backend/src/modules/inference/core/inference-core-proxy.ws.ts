@@ -131,6 +131,10 @@ export function createCoreResponsesWSHandlers(
         sendError(ws, 400, 'invalid_request_error', 'Unsupported WebSocket event');
         return;
       }
+      if (message.generate === false) {
+        for (const frame of warmupCompletionFrames(message)) send(ws, frame);
+        return;
+      }
       const freshAuth = await revalidateAuth(auth);
       if (!freshAuth) {
         sendError(ws, 401, 'invalid_api_key', 'Invalid or revoked Gateway inference token');
@@ -498,6 +502,21 @@ function cancelledEvent(responseId: string, model: string): Record<string, unkno
       },
     },
   };
+}
+
+function warmupCompletionFrames(message: Record<string, unknown>): Record<string, unknown>[] {
+  const createdAt = Math.floor(Date.now() / 1000);
+  const response = {
+    id: '',
+    object: 'response',
+    created_at: createdAt,
+    model: typeof message.model === 'string' ? message.model : undefined,
+    output: [],
+  };
+  return [
+    { type: 'response.created', sequence_number: 0, response: { ...response, status: 'in_progress' } },
+    { type: 'response.completed', sequence_number: 1, response: { ...response, status: 'completed' } },
+  ];
 }
 
 function errorEvent(status: number, code: string, message: string): Record<string, unknown> {

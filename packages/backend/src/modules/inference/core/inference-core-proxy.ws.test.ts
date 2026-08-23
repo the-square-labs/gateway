@@ -175,6 +175,23 @@ describe('core responses websocket proxy', () => {
     expect(errors.some((frame) => frame.status === 409)).toBe(true);
   });
 
+  it('answers generate:false warmups without creating an accounting row', async () => {
+    const { accounting } = registerCommon();
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', generate: false, model: 'gpt-5.5' }) } as never,
+      ws as never
+    );
+    expect(upstreamInstances).toHaveLength(0);
+    expect(accounting.createCoreRequest).not.toHaveBeenCalled();
+    expect(ws.send.mock.calls.map((call) => JSON.parse(call[0] as string).type)).toEqual([
+      'response.created',
+      'response.completed',
+    ]);
+  });
+
   it('closes unauthorized connections', () => {
     registerCommon();
     const ws = clientSocket();
