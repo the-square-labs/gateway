@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli } from './cli.js';
@@ -119,6 +119,7 @@ describe('@wiolett/gateway-inference CLI', () => {
         anthropic: { baseUrl: 'https://gateway.example.com/api/inference' },
       },
     };
+    let usageSupported = true;
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/.well-known/wiolett-inference')) return json(discovery);
@@ -161,6 +162,19 @@ describe('@wiolett/gateway-inference CLI', () => {
       if (url.endsWith('/api/inference/setup/tokens')) return json({ data: [] });
       if (url.endsWith('/api/inference/v1/models')) {
         return new Response(JSON.stringify(MODELS), { headers: { ETag: '"v1"' } });
+      }
+      if (url.endsWith('/api/inference/v1/usage')) {
+        if (!usageSupported) return json({ code: 'not_found', message: 'Inference endpoint not found' }, 404);
+        return json({
+          enabled: true,
+          api: { configured: false, percentage: 0, recoveryAt: '2026-09-01T00:00:00.000Z' },
+          subscription: {
+            '5h': { configured: true, percentage: 10, recoveryAt: '2026-08-23T18:00:00.000Z' },
+            '7d': { configured: true, percentage: 20, recoveryAt: '2026-08-30T00:00:00.000Z' },
+            '30d': { configured: false, percentage: 0, recoveryAt: '2026-09-22T00:00:00.000Z' },
+          },
+          tokens: { lifetime: 100, daily: [] },
+        });
       }
       if (url.endsWith('/api/oauth/revoke')) return new Response(null, { status: 200 });
       throw new Error(`Unexpected request: ${url}`);
@@ -219,6 +233,13 @@ describe('@wiolett/gateway-inference CLI', () => {
     expect(configured).toContain('"__mcp"');
     expect(configured).not.toContain('--profile');
     await expect(readFile(join(codexHome, 'auth.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    usageSupported = false;
+    expect(await runCli(['setup', 'codex', '--cli-usage'], { ...dependencies, interactive: false })).toBe(1);
+    expect(values.at(-1)).toMatchObject({ error: { code: 'GATEWAY_USAGE_UNSUPPORTED' } });
+    await expect(access(join(root, '.local', 'bin', 'gateway-codex'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(codexHome, 'config.toml'), 'utf8')).toContain('model_provider = "openai"');
+    usageSupported = true;
 
     interactiveUi.info.mockClear();
     interactiveUi.select.mockReset().mockResolvedValueOnce('sync').mockResolvedValueOnce(null);

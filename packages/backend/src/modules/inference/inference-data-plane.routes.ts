@@ -1,7 +1,9 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import type { AppEnv } from '@/types.js';
+import { InferenceUsageService } from './accounting/inference-usage.service.js';
 import { type CoreProxyOperation, InferenceCoreProxyService } from './core/inference-core-proxy.service.js';
+import { inferenceDataPlaneUsageRoute } from './inference.docs.js';
 import { inferenceAuthMiddleware } from './inference-auth.middleware.js';
 import { inferenceErrorResponse } from './inference-error.js';
 import { inferenceConcurrencyMiddleware, inferenceRateLimitMiddleware } from './inference-limit.middleware.js';
@@ -27,8 +29,6 @@ inferenceDataPlaneRoutes.onError((error, c) => {
   );
 });
 inferenceDataPlaneRoutes.use('*', inferenceAuthMiddleware);
-inferenceDataPlaneRoutes.use('*', inferenceRateLimitMiddleware);
-inferenceDataPlaneRoutes.use('*', inferenceConcurrencyMiddleware);
 inferenceDataPlaneRoutes.use('*', async (c, next) => {
   c.header('X-Accel-Buffering', 'no');
   c.header(
@@ -37,6 +37,15 @@ inferenceDataPlaneRoutes.use('*', async (c, next) => {
   );
   await next();
 });
+
+inferenceDataPlaneRoutes.openapi(inferenceDataPlaneUsageRoute, async (c) => {
+  const user = c.get('user');
+  if (!user) return inferenceErrorResponse(c, 401, 'invalid_api_key', 'Authentication required');
+  return c.json(await container.resolve(InferenceUsageService).clientUsage(user));
+});
+
+inferenceDataPlaneRoutes.use('*', inferenceRateLimitMiddleware);
+inferenceDataPlaneRoutes.use('*', inferenceConcurrencyMiddleware);
 
 inferenceDataPlaneRoutes.get('/models', async (c) => {
   const user = c.get('user');

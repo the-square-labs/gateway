@@ -1,4 +1,5 @@
-import { discoverInference } from './discovery.js';
+import { readFile } from 'node:fs/promises';
+import { CLI_VERSION, discoverInference } from './discovery.js';
 
 const enabledDiscovery = {
   schemaVersion: 2,
@@ -34,6 +35,15 @@ const legacyDiscovery = {
 } as const;
 
 describe('inference discovery', () => {
+  it('keeps the runtime version aligned with package.json', async () => {
+    const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+      bin: Record<string, string>;
+    };
+    expect(CLI_VERSION).toBe(packageJson.version);
+    expect(packageJson.bin).toEqual({ 'gateway-inference': 'dist/cli.js' });
+  });
+
   it('accepts the schema version 2 discovery document', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(enabledDiscovery))) as typeof fetch;
     await expect(discoverInference('https://gateway.example.com', fetcher)).resolves.toMatchObject({

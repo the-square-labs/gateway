@@ -71,10 +71,20 @@ The interactive package asks for the Gateway URL, completes resource-isolated OA
 
 ```bash
 npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup codex --desktop-usage
+npx -y @wiolett/gateway-inference@latest setup codex --cli-usage
 npx -y @wiolett/gateway-inference@latest setup claude-code
 ```
 
 Codex setup issues a dedicated runtime token, installs a private stable helper and loopback proxy, and maintains the authoritative Gateway model catalog. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog.
+
+The same Codex setup can optionally install Gateway usage surfaces; there is no separate wrapper installation command. Interactive setup offers Desktop, `gateway-codex`, both, or neither. `--desktop-usage` enables the Desktop integration and `--cli-usage` installs a separate launcher without shadowing the normal `codex` command. Wrapped sessions translate Gateway usage into Codex app-server messages, suppress native OpenAI quota notifications, and fail closed before the first successful Gateway usage read.
+
+Optional activation performs an authenticated `/usage` compatibility preflight before writing a Desktop wrapper, LaunchAgent, XDG entry, or `gateway-codex` launcher. If Gateway is older than this contract or the endpoint cannot be verified, setup leaves optional usage activation absent and preserves the functioning base Codex integration so the administrator can update Gateway and retry safely.
+
+Desktop usage supports macOS and compatible native/AppImage Linux builds. Linux gets a separate **ChatGPT (Gateway)** XDG launcher; Flatpak and Snap are excluded. Windows continues to support the base Codex setup but not these usage wrappers. The CLI wrapper forwards non-interactive commands directly and interposes only interactive, resume, and fork sessions.
+
+Emergency removal is offline and ownership-aware. `uninstall codex-usage desktop` and `uninstall codex-usage cli` remove one surface; `uninstall codex-usage` or `uninstall codex-usage all` removes both while preserving the base integration, proxy, catalog, and runtime token.
 
 Claude Code setup requires Claude Code 2.1.129 or newer. It configures Claude Code's native Anthropic gateway contract through `ANTHROPIC_BASE_URL`, model discovery, and a private `apiKeyHelper`; it does not run a loopback proxy. The integration applies only to the Claude Code CLI, not Claude Desktop or the VS Code extension.
 
@@ -82,6 +92,7 @@ For ChatGPT subscription-backed models whose upstream catalog advertises it, Cod
 
 Supported primary operations include:
 
+- `GET /usage`
 - `GET /models`
 - `POST /responses`
 - `POST /responses/compact`
@@ -94,6 +105,8 @@ Supported primary operations include:
 - `POST /realtime/calls` and `POST /live`
 
 Responses, Chat Completions, and Messages support unary and SSE responses. Responses also supports an end-to-end WebSocket transport: Gateway keeps the client socket open across turns, forwards each turn to the managed core over WebSocket, and issues fresh signed admission context per turn without converting the stream through SSE or disk files. Realtime sideband/audio WebSockets are intentionally excluded from this release. Authentication accepts only a dedicated `gwi_` token through `Authorization: Bearer` or `x-api-key`; browser sessions and regular `gw_`/`gwo_` credentials cannot enter the data plane.
+
+`GET /usage` is authenticated but does not consume inference concurrency or rate-limit admission. It returns user-visible percentage windows plus lifetime and UTC daily token totals used by compatible harness usage views; raw administrator accounting remains on management surfaces.
 
 ## Limits and accounting
 
