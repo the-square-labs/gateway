@@ -4,32 +4,22 @@
     {
       "from_id": "mzmjdewo",
       "to_id": "dcfkgqwx",
-      "relation": "same_area",
-      "weight": 0.78,
-      "reason": "Both define Gateway Codex/inference integrations, including Codex endpoints, usage behavior, and isolated inference credentials.",
+      "relation": "uses_service",
+      "weight": 0.88,
+      "reason": "Codex usage integration routes through the Gateway inference service and its harness-specific endpoint controls.",
       "source": "auto",
-      "created_at": 1787493447246,
-      "updated_at": 1787493447246
-    },
-    {
-      "from_id": "mzmjdewo",
-      "to_id": "ifp3c48s",
-      "relation": "related_to",
-      "weight": 0.64,
-      "reason": "The OpenCodex migration describes the inference core and turn lifecycle underlying Codex proxying, including terminal events and accounting.",
-      "source": "auto",
-      "created_at": 1787493447246,
-      "updated_at": 1787493447246
+      "created_at": 1787497562860,
+      "updated_at": 1787497562860
     },
     {
       "from_id": "mzmjdewo",
       "to_id": "gpx2fdwu",
-      "relation": "related_to",
-      "weight": 0.52,
-      "reason": "Both cover Gateway Inference harness setup and the settings/documentation contract for Codex-related integrations.",
+      "relation": "same_workflow",
+      "weight": 0.72,
+      "reason": "Both define Gateway Inference harness setup and compatibility behavior for embedded Assistant and Codex workflows.",
       "source": "auto",
-      "created_at": 1787493447246,
-      "updated_at": 1787493447246
+      "created_at": 1787497562860,
+      "updated_at": 1787497562860
     }
   ]
 }

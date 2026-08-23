@@ -54,6 +54,22 @@ describe('Codex usage projection', () => {
     expect(result.rateLimitResetCredits).toBeNull();
   });
 
+  it('promotes a standalone weekly subscription window for Codex Desktop', () => {
+    const result = projectCodexRateLimits({
+      ...USAGE,
+      subscription: {
+        ...USAGE.subscription,
+        '5h': { ...USAGE.subscription['5h'], configured: false },
+      },
+    });
+    expect(result.rateLimits).toMatchObject({
+      limitId: 'gateway-subscription',
+      primary: { usedPercent: 51, windowDurationMins: 10_080 },
+      secondary: null,
+    });
+    expect(result.rateLimitsByLimitId['gateway-subscription']).toBe(result.rateLimits);
+  });
+
   it('marks a fully unconfigured Gateway policy as unlimited', () => {
     const result = projectCodexRateLimits({
       ...USAGE,
