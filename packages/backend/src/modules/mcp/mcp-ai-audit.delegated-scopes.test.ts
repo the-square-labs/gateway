@@ -145,7 +145,11 @@ describe('AIService MCP delegated scope audit behavior', () => {
     expect(result.result).toMatchObject({ id: 'proxy-1' });
     expect(proxyService.createProxyHost).toHaveBeenCalledWith(
       expect.objectContaining({ nodeId: 'node-1', domainNames: ['example.com'] }),
-      USER.id
+      USER.id,
+      expect.objectContaining({
+        actorScopes: ['proxy:create:node-1'],
+        bypassAdvancedValidation: false,
+      })
     );
   });
 
@@ -304,6 +308,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
   it('allows delegated MCP proxy edits with matching resource-scoped edit scope', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const proxyService = {
+      getProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1', upstreamKind: 'manual', pageTarget: null }),
       updateProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1' }),
     };
     const service = createService({ nodesService: {}, proxyService, auditService });
