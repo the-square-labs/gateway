@@ -25,6 +25,30 @@ interface UseContainerDetailRealtimeParams {
   pageContextToken?: number | null;
 }
 
+type ContainerChangedEvent = {
+  nodeId?: string;
+  name?: string;
+  id?: string;
+  oldId?: string;
+  oldName?: string;
+  action?: string;
+  transition?: string | null;
+  scopeResourceId?: string;
+};
+
+export function matchesCurrentContainerRecreate(
+  event: ContainerChangedEvent,
+  containerId: string | undefined,
+  routeContainerName: string
+): boolean {
+  return (
+    event.action === "recreated" &&
+    event.name === routeContainerName &&
+    !!event.id &&
+    (event.oldId === containerId || event.id === containerId)
+  );
+}
+
 export function useContainerDetailRealtime({
   nodeId,
   nodeSlug,
@@ -96,16 +120,7 @@ export function useContainerDetailRealtime({
   });
 
   useRealtime("docker.container.changed", (payload) => {
-    const ev = payload as {
-      nodeId?: string;
-      name?: string;
-      id?: string;
-      oldId?: string;
-      oldName?: string;
-      action?: string;
-      transition?: string | null;
-      scopeResourceId?: string;
-    };
+    const ev = payload as ContainerChangedEvent;
     if (!ev || ev.nodeId !== nodeId) return;
 
     if (
@@ -119,25 +134,24 @@ export function useContainerDetailRealtime({
       return;
     }
 
-    if (
-      ev.action === "recreated" &&
-      ev.oldId &&
-      ev.oldId === containerId &&
-      ev.name === routeContainerName &&
-      ev.id &&
-      ev.id !== containerId
-    ) {
+    if (matchesCurrentContainerRecreate(ev, containerId, routeContainerName)) {
+      const replacementId = ev.id;
+      if (!replacementId) return;
       clearMutationTransition();
+      if (replacementId === containerId) {
+        void refreshContainer();
+        return;
+      }
       try {
-        usePinnedContainersStore.getState().migrateId(ev.oldId, ev.id);
+        if (ev.oldId) usePinnedContainersStore.getState().migrateId(ev.oldId, replacementId);
       } catch {
         /* ignore */
       }
-      onContainerIdChange(ev.id);
+      onContainerIdChange(replacementId);
       if (pageContextToken != null && nodeId) {
         useResolvedPageContext.getState().resolve(pageContextToken, {
           resourceType: "docker-container",
-          resourceId: ev.id,
+          resourceId: replacementId,
           nodeId,
           scopeResourceId: ev.scopeResourceId,
           label: routeContainerName,
