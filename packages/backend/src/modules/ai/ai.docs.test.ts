@@ -164,6 +164,18 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
       'do not use a failed create as an image-existence probe'
     );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'target-node registry downloads'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'before stopping the existing container'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'manage_docker_volume` creates only a regular Gateway-managed local volume'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'docker:containers:files:write'
+    );
     expect(getInternalDocumentation('clickhouse', ['databases:view']).content).toContain('native TLS endpoint');
     expect(getInternalDocumentation('troubleshooting', ['feat:ai:use']).content).toContain('Start With Evidence');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('update_ai_settings');
@@ -197,6 +209,13 @@ describe('AI internal docs registry', () => {
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'models whose usable sources are API-only are omitted'
+    );
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+      'reasoningEfforts array order is preserved'
+    );
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('API accounting ignores it');
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+      'current Assistant model tool does not expose reorder'
     );
     expect(getInternalDocumentation('inference', ['inference:providers:manage']).content).toContain(
       'manage_inference_provider'

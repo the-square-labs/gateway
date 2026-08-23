@@ -595,6 +595,8 @@ other stable hint to locate the recreated container and continue with its new ID
 - **Auto-cleanup**: webhook config supports automatic cleanup of old image versions after updates, with configurable retention count.
 - Webhook configuration requires the \`docker:containers:webhooks\` scope.
 - Use \`update_docker_container_image\` tool to change a container's image tag programmatically (pulls + recreates).
+- Image-changing recreate pulls and fully applies the requested image on the target node before stopping the existing container. Pull failure leaves the existing container running.
+- Pulls are target-node registry downloads, not direct image copies from another Docker node. A registry-backed migration may likewise reuse the registry reference instead of streaming image bytes between nodes.
 
 ## Blue/Green Deployments
 - Deployments are Gateway-managed blue/green services with a stable deployment ID, active slot, inactive slot, router, routes, health checks, and release history.
@@ -618,7 +620,7 @@ other stable hint to locate the recreated container and continue with its new ID
 
 ## Images, Volumes, Networks
 - Images: list, pull from registries, remove, prune unused
-- Volumes: create produces a Gateway-managed local volume with no custom driver. New or changed mounts can reference only Gateway-managed local volumes; never propose a host bind path.
+- Volumes: \`manage_docker_volume\` creates only a regular Gateway-managed local volume with no custom driver. Disk-image volumes require a compatible node and Personal-or-higher licensing and are currently created/resized through the Docker Volumes UI or REST API, not this Assistant tool. New or changed mounts can reference only Gateway-managed local volumes; never propose a host bind path.
 - Existing legacy mounts remain unchanged during ordinary updates. A legacy volume can be adopted in the UI only when it uses the local driver, local scope, and no driver options. Orphaned unmanaged volumes are hidden.
 - Networks: list, create, remove, connect/disconnect containers
 
@@ -644,7 +646,7 @@ Long-running operations (stop, restart, kill, recreate, update) create tasks vis
 - Console: interactive terminal (exec) into running containers via xterm.js WebSocket
 - Assistant console command: \`execute_docker_container_console_command({ nodeId, containerId, command: ["sh","-lc","..."], user? })\` runs one command in a container when ordinary Docker tools do not cover the needed inspection or repair. It requires \`docker:containers:console\`, is destructive, is available to MCP only when that OAuth scope is explicitly granted, and blocks catastrophic patterns such as \`rm -rf /\`.
 - Before using container console, resolve the current container through get_current_context or find_resource. Container IDs can change after recreate, so re-check by name when a command reports "No such container".
-- File browser: navigate filesystem, view/edit files inside containers
+- File browser: navigate/read container files with \`docker:containers:files:read\`; create/edit/move/delete/upload requires \`docker:containers:files:write\`.
 
 ## Key Notes
 - Most Docker tools require a nodeId parameter. If the user names a container/image/volume/network, use find_resource first; it returns nodeId with the match. Use list_nodes with type="docker" only when you specifically need to choose or inspect Docker nodes.
@@ -1171,16 +1173,17 @@ Subscription connections can set minimumRemainingPercent. API connections can se
 1. List synchronized provider connections and select a discovered model.
 2. Call \`manage_inference_model({ operation: "save", configuration })\`. Omit modelId to create; include modelId to replace the entire configuration atomically.
 3. A logical model uses exactly one provider template and one upstream model. Multiple sources are accounts/keys for that same provider/model, never a mix of OpenAI, OpenRouter, Anthropic, Kimi, etc.
-4. Configure publicId, displayName, contextWindow, maxInputTokens, optional maxOutputTokens, autoCompactTokenLimit, modalities, capabilities, reasoning efforts, subscriptionMultiplier, sources, pricing, and access.
+4. Configure publicId, displayName, contextWindow, maxInputTokens, optional maxOutputTokens, autoCompactTokenLimit, modalities, capabilities, reasoning efforts, subscriptionMultiplier, sources, pricing, and access. For API-backed models the schema still requires subscriptionMultiplier; pass \`1\`. API accounting ignores it, and the UI intentionally does not expose it.
 5. Access mode is \`everyone\`, \`selected\` with user/group subjects, or \`disabled\`. Never publish without an enabled, available source.
-6. reasoningEffortMap maps client efforts to provider efforts, for example \`{ "ultra": "max" }\`. Every advertised effort must be representable by every enabled source.
+6. reasoningEffortMap maps client efforts to provider efforts, for example \`{ "ultra": "max" }\`. Every advertised effort must be representable by every enabled source. The reasoningEfforts array order is preserved in the backend and determines selector/manifest order.
 7. API pricing is versioned. Pricing values are integer microdollars per million tokens: $5.00 per million tokens is 5,000,000 microdollars. Prefer synchronized/known pricing; use manual pricing only when provider metadata is unavailable.
 
 \`save\` is the only model mutation workflow. Do not attempt partial model/source/pricing/access updates.
+Published model order is persisted separately and controls API catalog, companion manifest, and AI Workspace ordering. The current Assistant model tool does not expose reorder; use the Inference settings UI or the documented reorder REST endpoint.
 
 ## Default And Per-user Limits
 
-\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. When API usage is disabled, models whose usable sources are API-only are omitted from OpenAI, harness, and internal Assistant catalogs for that user. billingTimezone is an IANA timezone. Per-user policies override the default policy.
+\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. One public subscription credit represents 100,000 weighted tokens before model, dynamic-burn, and service-tier multipliers. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. When API usage is disabled, models whose usable sources are API-only are omitted from OpenAI, harness, and internal Assistant catalogs for that user. billingTimezone is an IANA timezone. Per-user policies override the default policy.
 
 ## User Tokens And Harness Setup
 

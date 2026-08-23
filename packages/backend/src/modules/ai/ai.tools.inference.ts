@@ -5,11 +5,26 @@ const POLICY_SCHEMA = {
   properties: {
     enabled: { type: 'boolean', description: 'Allow this user/default policy to use inference.' },
     credits5hEnabled: { type: 'boolean' },
-    credits5h: { type: 'number', minimum: 0 },
+    credits5h: {
+      type: 'number',
+      minimum: 0,
+      description:
+        'Public subscription credits for 5 hours. 1 credit equals 100,000 weighted tokens before multipliers.',
+    },
     credits7dEnabled: { type: 'boolean' },
-    credits7d: { type: 'number', minimum: 0 },
+    credits7d: {
+      type: 'number',
+      minimum: 0,
+      description:
+        'Public subscription credits for 7 days. 1 credit equals 100,000 weighted tokens before multipliers.',
+    },
     credits30dEnabled: { type: 'boolean' },
-    credits30d: { type: 'number', minimum: 0 },
+    credits30d: {
+      type: 'number',
+      minimum: 0,
+      description:
+        'Public subscription credits for 30 days. 1 credit equals 100,000 weighted tokens before multipliers.',
+    },
     apiMonthlyMicrodollars: {
       type: 'number',
       minimum: 0,
@@ -113,10 +128,18 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
                 autoCompactTokenLimit: { type: 'number' },
                 modalities: { type: 'array', items: { type: 'string' } },
                 capabilities: { type: 'object', additionalProperties: { type: 'boolean' } },
-                reasoningEfforts: { type: 'array', items: { type: 'string' } },
+                reasoningEfforts: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Advertised reasoning efforts in the exact order shown by clients and manifests.',
+                },
                 defaultReasoningEffort: { type: ['string', 'null'] },
                 defaultAccessAllowed: { type: 'boolean' },
-                subscriptionMultiplier: { type: 'number' },
+                subscriptionMultiplier: {
+                  type: 'number',
+                  description:
+                    'Subscription credit multiplier. Required by the configuration schema; use 1 for API-backed models, where API accounting ignores it.',
+                },
               },
               required: [
                 'publicId',

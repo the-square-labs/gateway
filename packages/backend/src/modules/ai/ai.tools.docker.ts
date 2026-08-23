@@ -613,7 +613,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create or delete Docker volumes on a node. Create always produces a Gateway-managed local volume and accepts no driver setting. Legacy-volume adoption remains an explicit UI action. Listing is available via list_docker_volumes.',
+      'Create or delete Docker volumes on a node. Create always produces a regular Gateway-managed local volume and accepts no driver setting. Disk-image creation/resizing and legacy-volume adoption remain explicit UI/REST actions. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {
@@ -674,7 +674,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_container_config',
     description:
-      'Manage container env, files, secrets, webhooks, and HTTP health checks. Operation-specific scopes are enforced: environment/files/secrets/webhooks/edit/view.',
+      'Manage container env, files, secrets, webhooks, and HTTP health checks. Container file list/read requires docker:containers:files:read; write requires docker:containers:files:write. Other operation-specific environment/secrets/webhooks/edit/view scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {

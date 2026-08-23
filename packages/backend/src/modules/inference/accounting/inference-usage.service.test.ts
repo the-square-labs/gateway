@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
+import { toInternalCredits, toPublicCredits } from './inference-credit-units.js';
 import { __testOnly, InferenceUsageService } from './inference-usage.service.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from './inference-usage-events.js';
 
@@ -18,15 +19,71 @@ const LIMIT_INPUT = {
 function policyDb() {
   const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
   const where = vi.fn().mockResolvedValue(undefined);
+  const values = vi.fn(() => ({ onConflictDoUpdate }));
   return {
     query: { users: { findFirst: vi.fn().mockResolvedValue({ id: 'user-1' }) } },
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
+    insert: vi.fn(() => ({ values })),
     delete: vi.fn(() => ({ where })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ orderBy: vi.fn().mockResolvedValue([]) })) })),
+    values,
   };
 }
 
 describe('inference usage presentation', () => {
+  it('converts between internal accounting units and public credits', () => {
+    expect(toPublicCredits(2_000_000)).toBe(20_000);
+    expect(toInternalCredits(20_000)).toBe(2_000_000);
+  });
+
+  it('stores public policy limits in internal accounting units', async () => {
+    const db = policyDb();
+    const service = new InferenceUsageService(
+      db as unknown as ConstructorParameters<typeof InferenceUsageService>[0],
+      {} as ConstructorParameters<typeof InferenceUsageService>[1],
+      { log: vi.fn().mockResolvedValue(undefined) } as unknown as ConstructorParameters<typeof InferenceUsageService>[2]
+    );
+
+    await service.setDefault('admin-1', LIMIT_INPUT);
+
+    expect(db.values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credits5h: '100000',
+        credits7d: '400000',
+        credits30d: '1000000',
+      })
+    );
+  });
+
+  it('presents internal limits and usage in public credits', () => {
+    expect(
+      __testOnly.publicLimits({
+        enabled: true,
+        credits5hEnabled: true,
+        credits5h: 100_000,
+        credits7dEnabled: true,
+        credits7d: 400_000,
+        credits30dEnabled: true,
+        credits30d: 1_000_000,
+        apiMonthlyMicrodollars: 10_000_000,
+        billingTimezone: 'UTC',
+      })
+    ).toMatchObject({ credits5h: 1_000, credits7d: 4_000, credits30d: 10_000 });
+    expect(
+      __testOnly.publicUsage({
+        credits5h: 12_500,
+        credits7d: 25_000,
+        credits30d: 50_000,
+        apiMonthlyMicrodollars: 100,
+        recoveryAt: {
+          credits5h: new Date(0),
+          credits7d: new Date(0),
+          credits30d: new Date(0),
+          apiMonthly: new Date(0),
+        },
+      })
+    ).toMatchObject({ credits5h: 125, credits7d: 250, credits30d: 500 });
+  });
+
   it('publishes global and user-scoped invalidations when limit policies change', async () => {
     const db = policyDb();
     const audit = { log: vi.fn().mockResolvedValue(undefined) };

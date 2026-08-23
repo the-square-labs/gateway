@@ -117,11 +117,13 @@ weighted tokens =
   + output
   + reasoning
 
-credits = weighted tokens / 1000
+credits = weighted tokens / 100000
   × model multiplier
   × frozen dynamic burn multiplier
   × frozen service-tier multiplier
 ```
+
+One public subscription credit therefore represents 100,000 weighted tokens before multipliers. Gateway keeps the legacy internal accounting scale private and converts limits and usage at management and activity boundaries, so existing policies, ledger entries, and active reservations require no migration.
 
 Admission first reserves a conservative input-plus-output estimate without assuming a future cache hit; settlement replaces it with the weighted actual usage above. Dynamic burn compares remaining quota with the fraction of time left in each reported window, enforces a 30% quota-pressure floor, and caps the result at 8x. Stale, exhausted, or invalid quota data fails closed at 8x. The multiplier is frozen at admission. Codex Fast adds a separate fixed 2x service-tier multiplier for eligible ChatGPT subscription sources; API dollar accounting is unaffected.
 

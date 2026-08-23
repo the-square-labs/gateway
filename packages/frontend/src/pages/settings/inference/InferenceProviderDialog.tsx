@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { formatDate, formatRelativeDate } from "@/lib/utils";
+import { formatDateTime, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
   InferenceProviderCatalogItem,
@@ -416,9 +416,7 @@ function QuotaWindowValue({ quota }: { quota: InferenceQuotaWindow }) {
         {quota.stale || quota.status === "stale" ? " · stale" : ""}
       </p>
       {quota.resetAt && (
-        <p className="text-xs text-muted-foreground">
-          Resets {formatRelativeDate(quota.resetAt)} · {formatDate(quota.resetAt)}
-        </p>
+        <p className="text-xs text-muted-foreground">Resets {formatDateTime(quota.resetAt)}</p>
       )}
     </div>
   );

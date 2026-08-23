@@ -216,6 +216,32 @@ describe("InferenceProviderDialog", () => {
     expect(screen.getByText("$49.95 of $50.00 remaining")).toBeInTheDocument();
     expect(screen.getByText("100% remaining")).toBeInTheDocument();
   });
+
+  it("shows the absolute reset date and time for subscription quota windows", () => {
+    render(
+      <InferenceProviderDialog
+        open
+        connection={{
+          ...connection,
+          quota: [
+            {
+              dimension: "7d",
+              status: "fresh",
+              remainingFraction: 0.07,
+              resetAt: "2026-08-24T12:30:00.000Z",
+            },
+          ],
+        }}
+        provider={provider}
+        canManage
+        onOpenChange={vi.fn()}
+        onChanged={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.getByText(/^Resets 24 Aug 2026,/)).toBeInTheDocument();
+    expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
+  });
 });
 
 const provider: InferenceProviderCatalogItem = {

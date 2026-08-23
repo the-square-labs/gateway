@@ -16,7 +16,13 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import type { InferenceModelAccessService } from '../models/inference-model-access.service.js';
-import { type InferenceBudgetPolicyService, SUBSCRIPTION_CHAT_BUDGET_FRACTION } from './inference-budget-policy.js';
+import {
+  type EffectiveInferenceLimits,
+  type InferenceBudgetPolicyService,
+  type InferenceBudgetUsage,
+  SUBSCRIPTION_CHAT_BUDGET_FRACTION,
+} from './inference-budget-policy.js';
+import { toInternalCredits, toPublicCredits, toPublicCreditString } from './inference-credit-units.js';
 import { publishInferenceUsageChanged } from './inference-usage-events.js';
 
 export interface InferenceLimitPolicyInput {
@@ -122,11 +128,13 @@ export class InferenceUsageService {
       requestTotals: requestTotals.map((row) => ({
         ...row,
         requests: Number(row.requests),
+        credits: toPublicCreditString(row.credits),
         apiMicrodollars: Number(row.apiMicrodollars),
         tokens: Number(row.tokens),
       })),
       ledgerTotals: ledgerTotals.map((row) => ({
         ...row,
+        credits: toPublicCreditString(row.credits),
         apiMicrodollars: Number(row.apiMicrodollars),
         tokens: Number(row.tokens),
       })),
@@ -143,7 +151,7 @@ export class InferenceUsageService {
         try {
           const limits = await this.policies.effective(user.id);
           const usage = await this.policies.usage(user.id, limits);
-          return { ...user, limits, usage };
+          return { ...user, limits: publicLimits(limits), usage: publicUsage(usage) };
         } catch {
           return { ...user, limits: null, usage: null };
         }
@@ -161,7 +169,7 @@ export class InferenceUsageService {
     return Promise.all(
       rows.map(async (user) => {
         try {
-          return { ...user, limits: await this.policies.effective(user.id), usage: null };
+          return { ...user, limits: publicLimits(await this.policies.effective(user.id)), usage: null };
         } catch {
           return { ...user, limits: null, usage: null };
         }
@@ -227,10 +235,7 @@ export class InferenceUsageService {
       })
       .from(inferenceRequests)
       .leftJoin(users, eq(inferenceRequests.userId, users.id))
-      .leftJoin(
-        inferenceProviderConnections,
-        eq(inferenceRequests.connectionId, inferenceProviderConnections.id)
-      )
+      .leftJoin(inferenceProviderConnections, eq(inferenceRequests.connectionId, inferenceProviderConnections.id))
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(inferenceRequests.createdAt))
       .limit(limit + 1)
@@ -239,7 +244,7 @@ export class InferenceUsageService {
     return {
       data: rows.slice(0, limit).map((row) => ({
         ...row,
-        credits: Number(row.credits),
+        credits: toPublicCredits(row.credits),
         startedAt: row.startedAt.toISOString(),
         completedAt: row.completedAt?.toISOString() ?? null,
       })),
@@ -271,7 +276,13 @@ export class InferenceUsageService {
   }
 
   async listPolicies() {
-    return this.db.select().from(inferenceLimitPolicies).orderBy(inferenceLimitPolicies.policyType);
+    const rows = await this.db.select().from(inferenceLimitPolicies).orderBy(inferenceLimitPolicies.policyType);
+    return rows.map((row) => ({
+      ...row,
+      credits5h: toPublicCreditString(row.credits5h),
+      credits7d: toPublicCreditString(row.credits7d),
+      credits30d: toPublicCreditString(row.credits30d),
+    }));
   }
 
   async setDefault(userId: string, input: InferenceLimitPolicyInput) {
@@ -363,14 +374,32 @@ function dbPolicy(input: InferenceLimitPolicyInput) {
   return {
     enabled: input.enabled,
     credits5hEnabled: input.credits5hEnabled,
-    credits5h: String(input.credits5h),
+    credits5h: String(toInternalCredits(input.credits5h)),
     credits7dEnabled: input.credits7dEnabled,
-    credits7d: String(input.credits7d),
+    credits7d: String(toInternalCredits(input.credits7d)),
     credits30dEnabled: input.credits30dEnabled,
-    credits30d: String(input.credits30d),
+    credits30d: String(toInternalCredits(input.credits30d)),
     apiMonthlyMicrodollars: input.apiMonthlyMicrodollars,
     billingTimezone: input.billingTimezone,
   };
 }
 
-export const __testOnly = { percentage, subscriptionPercentage, validatePolicy };
+function publicLimits(limits: EffectiveInferenceLimits): EffectiveInferenceLimits {
+  return {
+    ...limits,
+    credits5h: toPublicCredits(limits.credits5h),
+    credits7d: toPublicCredits(limits.credits7d),
+    credits30d: toPublicCredits(limits.credits30d),
+  };
+}
+
+function publicUsage(usage: InferenceBudgetUsage): InferenceBudgetUsage {
+  return {
+    ...usage,
+    credits5h: toPublicCredits(usage.credits5h),
+    credits7d: toPublicCredits(usage.credits7d),
+    credits30d: toPublicCredits(usage.credits30d),
+  };
+}
+
+export const __testOnly = { percentage, subscriptionPercentage, validatePolicy, dbPolicy, publicLimits, publicUsage };
