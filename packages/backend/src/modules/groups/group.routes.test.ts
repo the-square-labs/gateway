@@ -78,6 +78,33 @@ afterEach(() => {
 });
 
 describe('group route permissions', () => {
+  it('accepts a custom group without direct scopes', async () => {
+    registerSession(['admin:groups']);
+    const assertCanCreateGroup = vi.fn().mockResolvedValue(undefined);
+    const createGroup = vi.fn().mockResolvedValue({
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'empty-group',
+      scopes: [],
+    });
+    container.registerInstance(GroupService, {
+      assertCanCreateGroup,
+      createGroup,
+    } as unknown as GroupService);
+    container.registerInstance(AuditService, { log: vi.fn() } as unknown as AuditService);
+
+    const response = await createApp().request('/api/admin/groups', {
+      method: 'POST',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ name: 'empty-group', scopes: [] }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(assertCanCreateGroup).toHaveBeenCalledWith(expect.objectContaining({ name: 'empty-group', scopes: [] }), [
+      'admin:groups',
+    ]);
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({ name: 'empty-group', scopes: [] }));
+  });
+
   it('does not delete groups when delete authorization rejects affected scopes', async () => {
     registerSession(['admin:groups', 'nodes:details']);
     const assertCanDeleteGroup = vi

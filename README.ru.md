@@ -42,7 +42,7 @@ Installer запускает Gateway и выводит одноразовый к
 | `3000/tcp` | UI/API порт приложения Gateway. Для установок за NAT откройте его только в локальной сети и направьте внешний reverse proxy на него. |
 | `443/tcp` | Опциональный публичный HTTPS endpoint вашего reverse proxy. Сам Gateway слушает `3000/tcp`. |
 | `80/tcp` | HTTP и ACME HTTP-01 challenge, только если используется этот challenge mode. |
-| `9443/tcp` | gRPC control plane для подключений managed daemons. |
+| `9443/tcp` | Публичный relay-backed gRPC endpoint для control и tunnel connections managed daemons. gRPC listener приложения Gateway остаётся внутренним. |
 
 За NAT или существующим внешним reverse proxy публикуйте `3000/tcp` только в локальной сети и настройте внешний proxy на передачу публичного домена Gateway к выбранному HTTP- или HTTPS-транспорту на `<gateway-lan-ip>:3000`. Managed nodes все равно подключаются исходяще к Gateway на `9443/tcp`; входящие management-порты им не нужны.
 
@@ -99,6 +99,8 @@ Installer запускает Gateway и выводит одноразовый к
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits, search, storage caps и health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint с discoverable scoped toolsets для Ingress, Pages, Databases, Docker и других подсистем, CI/CD webhooks, webhook notifications и status pages. |
+| Integrations | GitLab workflows для projects, repositories, CI/CD, variables, webhooks, registry и sandbox; GitHub repositories и Actions; generic Git connectors; external SSH connectors; Cloudflare DNS/ACME automation. Credentials connectors шифруются, а доступ ограничен scopes. |
+| Relay | Long-lived local relay владеет публичным `9443/tcp` для daemon control и managed tunnel traffic. Relay Pool добавляет remote supervisor/worker pairs, явное placement и rebalancing, drain и rolling signed updates, сохраняя один логический Secure Link. |
 | AI Workspace | Опциональные intent-driven operations с готовыми Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, отслеживанием прогресса и финальной проверкой. До явного подтверждения планирование не выполняет изменений. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
@@ -170,6 +172,9 @@ Gateway уже ориентирован на production operations, а не на
 - [ ] Storage connections для S3, R2, MinIO, FTP, FTPS, SFTP и SMB.
 - [ ] Managed storages с Secure Links и backup/restore управляемых баз после Storage foundation.
 - [ ] Vulnerability and security scanning для Business и Enterprise.
+- [ ] Горизонтальное масштабирование приложений для Business и Enterprise: объединение нескольких Docker nodes в кластер и deployment приложения на этот кластер. **In development.**
+- [ ] Вертикальное масштабирование workloads для Business и Enterprise: несколько managed instances одного workload на одной машине. **In development.**
+- [ ] Deployment и lifecycle Compose applications для Business и Enterprise. **In development.** Текущее распознавание Compose labels, protected grouping и aggregated logs не является этой deployment-функцией.
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
@@ -237,8 +242,8 @@ Community предназначен только для некоммерческ�
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. Pages недоступны. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченный масштаб, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages, Pages static-site hosting и registry discovery. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal (включая Pages), а также Docker Secure Runtime, structured logging, audit export, guided onboarding и security scanning после выпуска. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченные plan quotas для managed nodes/users/groups, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages, Pages static-site hosting и registry discovery. Находящиеся в разработке application-cluster функции сюда не входят. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal (включая Pages), а также Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning после выпуска и находящиеся в разработке application clusters, same-node multi-instance и Compose applications. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business (включая Pages), а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
 
 Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).

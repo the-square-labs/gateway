@@ -342,8 +342,8 @@ export function AdminGroups({
     const finalScopes = buildFinalScopes(formBaseScopes, formResources);
     const normalizedName = formatGroupName(formName);
     setFormName(normalizedName);
-    if (!normalizedName || finalScopes.length === 0) {
-      toast.error("Name and at least one scope are required");
+    if (!normalizedName) {
+      toast.error("Name is required");
       return;
     }
     setSaving(true);

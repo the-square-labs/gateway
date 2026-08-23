@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -22,7 +22,7 @@ import {
   type InferenceBudgetUsage,
   SUBSCRIPTION_CHAT_BUDGET_FRACTION,
 } from './inference-budget-policy.js';
-import { toInternalCredits, toPublicCredits, toPublicCreditString } from './inference-credit-units.js';
+import { toInternalCredits, toPublicCreditString, toPublicCredits } from './inference-credit-units.js';
 import { publishInferenceUsageChanged } from './inference-usage-events.js';
 
 export interface InferenceLimitPolicyInput {
@@ -38,6 +38,7 @@ export interface InferenceLimitPolicyInput {
 }
 
 const GATEWAY_SYSTEM_OIDC_SUBJECT = 'system:gateway-setup';
+const SYSTEM_USAGE_WINDOW_DAYS = 30;
 
 @injectable()
 export class InferenceUsageService {
@@ -103,7 +104,10 @@ export class InferenceUsageService {
   }
 
   async adminOverview() {
-    const [requestTotals, ledgerTotals] = await Promise.all([
+    const windowStart = systemUsageWindowStart();
+    const requestDay = sql<string>`to_char(date_trunc('day', ${inferenceRequests.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`;
+    const ledgerDay = sql<string>`to_char(date_trunc('day', ${inferenceUsageLedger.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD')`;
+    const [requestTotals, ledgerTotals, requestDaily, ledgerDaily] = await Promise.all([
       this.db
         .select({
           status: inferenceRequests.status,
@@ -113,6 +117,7 @@ export class InferenceUsageService {
           tokens: sql<number>`COALESCE(SUM(${inferenceRequests.uncachedInputTokens} + ${inferenceRequests.cachedInputTokens} + ${inferenceRequests.outputTokens} + ${inferenceRequests.reasoningTokens}), 0)`,
         })
         .from(inferenceRequests)
+        .where(gte(inferenceRequests.createdAt, windowStart))
         .groupBy(inferenceRequests.status),
       this.db
         .select({
@@ -122,9 +127,31 @@ export class InferenceUsageService {
           tokens: sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`,
         })
         .from(inferenceUsageLedger)
+        .where(gte(inferenceUsageLedger.occurredAt, windowStart))
         .groupBy(inferenceUsageLedger.budgetType),
+      this.db
+        .select({
+          date: requestDay,
+          requests: sql<number>`COUNT(*)::int`,
+        })
+        .from(inferenceRequests)
+        .where(gte(inferenceRequests.createdAt, windowStart))
+        .groupBy(requestDay)
+        .orderBy(requestDay),
+      this.db
+        .select({
+          date: ledgerDay,
+          credits: sql<string>`COALESCE(SUM(${inferenceUsageLedger.credits}), 0)`,
+          apiMicrodollars: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)`,
+          tokens: sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`,
+        })
+        .from(inferenceUsageLedger)
+        .where(gte(inferenceUsageLedger.occurredAt, windowStart))
+        .groupBy(ledgerDay)
+        .orderBy(ledgerDay),
     ]);
     return {
+      windowDays: SYSTEM_USAGE_WINDOW_DAYS,
       requestTotals: requestTotals.map((row) => ({
         ...row,
         requests: Number(row.requests),
@@ -138,6 +165,7 @@ export class InferenceUsageService {
         apiMicrodollars: Number(row.apiMicrodollars),
         tokens: Number(row.tokens),
       })),
+      dailyUsage: mergeDailyUsage(requestDaily, ledgerDaily, windowStart, SYSTEM_USAGE_WINDOW_DAYS),
     };
   }
 
@@ -402,4 +430,50 @@ function publicUsage(usage: InferenceBudgetUsage): InferenceBudgetUsage {
   };
 }
 
-export const __testOnly = { percentage, subscriptionPercentage, validatePolicy, dbPolicy, publicLimits, publicUsage };
+function systemUsageWindowStart(now = new Date()): Date {
+  const start = new Date(now);
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - (SYSTEM_USAGE_WINDOW_DAYS - 1));
+  return start;
+}
+
+function mergeDailyUsage(
+  requestRows: Array<{ date: string; requests: number }>,
+  ledgerRows: Array<{ date: string; credits: string; apiMicrodollars: number; tokens: number }>,
+  windowStart: Date,
+  windowDays: number
+) {
+  const rows = new Map<
+    string,
+    { date: string; requests: number; credits: number; apiMicrodollars: number; tokens: number }
+  >();
+  for (let offset = 0; offset < windowDays; offset += 1) {
+    const date = new Date(windowStart);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const key = date.toISOString().slice(0, 10);
+    rows.set(key, { date: key, requests: 0, credits: 0, apiMicrodollars: 0, tokens: 0 });
+  }
+  for (const row of requestRows) {
+    const target = rows.get(row.date);
+    if (target) target.requests = Number(row.requests);
+  }
+  for (const row of ledgerRows) {
+    const target = rows.get(row.date);
+    if (!target) continue;
+    target.credits = toPublicCredits(row.credits);
+    target.apiMicrodollars = Number(row.apiMicrodollars);
+    target.tokens = Number(row.tokens);
+  }
+  return [...rows.values()];
+}
+
+export const __testOnly = {
+  percentage,
+  subscriptionPercentage,
+  validatePolicy,
+  dbPolicy,
+  publicLimits,
+  publicUsage,
+  systemUsageWindowStart,
+  mergeDailyUsage,
+};

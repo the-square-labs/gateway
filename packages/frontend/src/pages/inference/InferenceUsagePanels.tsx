@@ -364,6 +364,7 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
         usage?.ledgerTotals.reduce((sum, row) => sum + Number(row.apiMicrodollars), 0) ?? 0,
     };
   }, [usage]);
+  const history = usage?.dailyUsage ?? [];
 
   if (error && !usage) {
     return (
@@ -388,24 +389,36 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
         label="API cost"
         value={`$${(totals.apiMicrodollars / 1_000_000).toFixed(2)}`}
         icon={CircleDollarSign}
+        history={history.map((row) => row.apiMicrodollars / 1_000_000)}
+        color="#22c55e"
+        subtitle="Last 30 days"
         appearance="dashboard"
       />
       <StatCard
         label="Tokens"
         value={totals.tokens.toLocaleString()}
         icon={Sigma}
+        history={history.map((row) => row.tokens)}
+        color="#3b82f6"
+        subtitle="Last 30 days"
         appearance="dashboard"
       />
       <StatCard
         label="Credits"
-        value={totals.credits.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        value={Math.round(totals.credits).toLocaleString()}
         icon={Gauge}
+        history={history.map((row) => row.credits)}
+        color="#8b5cf6"
+        subtitle="Last 30 days"
         appearance="dashboard"
       />
       <StatCard
         label="Requests"
         value={totals.requests.toLocaleString()}
         icon={Server}
+        history={history.map((row) => row.requests)}
+        color="#f59e0b"
+        subtitle="Last 30 days"
         appearance="dashboard"
       />
     </div>

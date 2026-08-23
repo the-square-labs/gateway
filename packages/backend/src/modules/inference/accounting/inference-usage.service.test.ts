@@ -31,8 +31,33 @@ function policyDb() {
 
 describe('inference usage presentation', () => {
   it('converts between internal accounting units and public credits', () => {
-    expect(toPublicCredits(2_000_000)).toBe(20_000);
-    expect(toInternalCredits(20_000)).toBe(2_000_000);
+    expect(toPublicCredits(2_000_000)).toBe(2_000);
+    expect(toInternalCredits(2_000)).toBe(2_000_000);
+  });
+
+  it('fills the system overview with ordered daily buckets', () => {
+    expect(
+      __testOnly.mergeDailyUsage(
+        [
+          { date: '2026-08-21', requests: 2 },
+          { date: '2026-08-23', requests: 5 },
+        ],
+        [
+          {
+            date: '2026-08-22',
+            credits: '2500',
+            apiMicrodollars: 1_500_000,
+            tokens: 90_000,
+          },
+        ],
+        new Date('2026-08-21T00:00:00.000Z'),
+        3
+      )
+    ).toEqual([
+      { date: '2026-08-21', requests: 2, credits: 0, apiMicrodollars: 0, tokens: 0 },
+      { date: '2026-08-22', requests: 0, credits: 2.5, apiMicrodollars: 1_500_000, tokens: 90_000 },
+      { date: '2026-08-23', requests: 5, credits: 0, apiMicrodollars: 0, tokens: 0 },
+    ]);
   });
 
   it('stores public policy limits in internal accounting units', async () => {
@@ -47,9 +72,9 @@ describe('inference usage presentation', () => {
 
     expect(db.values).toHaveBeenCalledWith(
       expect.objectContaining({
-        credits5h: '100000',
-        credits7d: '400000',
-        credits30d: '1000000',
+        credits5h: '1000000',
+        credits7d: '4000000',
+        credits30d: '10000000',
       })
     );
   });
@@ -59,20 +84,20 @@ describe('inference usage presentation', () => {
       __testOnly.publicLimits({
         enabled: true,
         credits5hEnabled: true,
-        credits5h: 100_000,
+        credits5h: 1_000_000,
         credits7dEnabled: true,
-        credits7d: 400_000,
+        credits7d: 4_000_000,
         credits30dEnabled: true,
-        credits30d: 1_000_000,
+        credits30d: 10_000_000,
         apiMonthlyMicrodollars: 10_000_000,
         billingTimezone: 'UTC',
       })
     ).toMatchObject({ credits5h: 1_000, credits7d: 4_000, credits30d: 10_000 });
     expect(
       __testOnly.publicUsage({
-        credits5h: 12_500,
-        credits7d: 25_000,
-        credits30d: 50_000,
+        credits5h: 125_000,
+        credits7d: 250_000,
+        credits30d: 500_000,
         apiMonthlyMicrodollars: 100,
         recoveryAt: {
           credits5h: new Date(0),

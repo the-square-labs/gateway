@@ -17,4 +17,9 @@ describe('group schemas', () => {
     expect(CreateGroupSchema.safeParse(VALID_GROUP).success).toBe(true);
     expect(UpdateGroupSchema.safeParse({ scopes: ['logs:schemas:view:schema-1'] }).success).toBe(true);
   });
+
+  it('allows custom groups without direct scopes', () => {
+    expect(CreateGroupSchema.safeParse({ ...VALID_GROUP, scopes: [] }).success).toBe(true);
+    expect(UpdateGroupSchema.safeParse({ scopes: [] }).success).toBe(true);
+  });
 });

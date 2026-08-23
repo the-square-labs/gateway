@@ -61,6 +61,12 @@ Managed Routes can contain Additional Routes for literal path prefixes such as `
 
 Additional Secure Link Bindings are separate user-managed Docker bindings intended for upstreams referenced from advanced nginx config. Route-owned bindings remain visible in the binding list but cannot be deleted independently. Both lifecycles are available through the scoped Operations Console, AI Workspace, REST/OAuth, and remote MCP Ingress toolset.
 
+## Relay And Secure Links
+
+The installed local relay is a long-lived data-plane service and the sole public owner of `9443/tcp`; the Gateway app keeps only an internal gRPC listener. Managed daemons use the relay for authenticated control connections and tunnel traffic, including private managed-database bindings and Docker-to-nginx Secure Links.
+
+Gateway can extend the local relay into a Relay Pool without exposing pool topology to applications. Operators enroll remote supervisor/worker pairs, verify distinct physical fault domains, explicitly rebalance placement, drain members, and apply signed rolling updates one member at a time. Remote supervisor management remains outbound-only, while each worker's advertised data endpoint must be reachable from assigned managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network; the product continues to present one logical Secure Link.
+
 ## Docker
 
 Gateway manages Docker through the `docker-daemon` installed on container hosts.
@@ -79,6 +85,7 @@ Container workflows:
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. New and changed mounts accept only Gateway-managed local volumes; new host bind mounts are rejected. Existing legacy mounts are preserved during normal image, environment, and webhook updates.
 - Browse container logs with search and follow mode.
+- Recognize externally created Docker Compose projects from canonical Compose labels, keep their containers in protected project folders, and stream aggregated project logs. Compose-managed resources are not eligible for Gateway cross-node migration. This is read/organization support for existing Compose workloads, not Gateway-managed Compose application deployment.
 - Open an interactive container console.
 - Browse and edit container files when permitted.
 - Keep sanitized inventory snapshots so read views can show the last synchronized Docker state while a node is offline or refreshing; mutations remain unavailable until the node reconnects.
@@ -258,12 +265,25 @@ Gateway includes connector and operational communication surfaces:
 
 - Cloudflare connectors for managed A/AAAA records, DNS inspection, and automated DNS-01 certificate workflows.
 - GitLab connectors with project/group allowlists, scheduled project synchronization, repository and CI operations, variables, webhooks, and sandbox clone support. Automatic container-registry discovery and import requires Personal or higher; ordinary Git integration remains available on Community.
+- GitHub connectors for repository discovery, tree/file operations, branches, commits, Actions workflows and secrets, using the built-in Device Flow or an explicitly configured token.
+- Generic Git connectors for authenticated repository access outside the first-class GitLab and GitHub providers.
+- External SSH connectors with encrypted credentials, host-key verification, explicit scopes, and controlled command/file operations against administrator-configured hosts. This is distinct from the future Gateway-managed bastion daemon.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
 - Enterprise SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
-- Threshold and event alert rules for nodes, containers, routes, certificates, PostgreSQL, and Redis resources. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
+- Threshold and event alert rules for nodes, containers, routes, Pages, Gateway/relay health, logging, integrations, certificates, security events, PostgreSQL, ClickHouse, and Redis. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
 - Public status pages on Personal and higher with managed services, incidents, incident updates, proxy templates, and preview.
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.
+
+## Application Scaling And Compose
+
+The following application-orchestration capabilities are **In development** for Business and Enterprise. They are included in those plan positions when released, but they are not generally available runtime features today:
+
+- **Horizontal application scaling:** group multiple Docker nodes as one application cluster and deploy an application to that cluster.
+- **Vertical workload scaling:** run multiple managed instances of one workload on the same managed machine.
+- **Compose applications:** deploy and manage a multi-service application from a Compose definition.
+
+Existing multi-node resource management, cross-node migration, blue/green deployments, and Compose-label discovery/log aggregation do not constitute these scaling or Compose deployment capabilities.
 
 ## Vulnerability And Security Scanning
 

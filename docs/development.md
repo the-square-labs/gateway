@@ -89,10 +89,15 @@ gateway/
 |   +-- frontend/         # React + Vite Gateway UI
 |   +-- status-page/      # Public status page frontend
 |   +-- logging-sdk/      # TypeScript structured logging client
+|   +-- gateway-inference/ # Interactive Codex/Claude Code inference companion
+|   +-- relay/            # Local long-lived Gateway relay worker
 |   +-- daemons/
 |       +-- nginx/        # nginx management daemon
 |       +-- docker/       # Docker management daemon
 |       +-- monitoring/   # host metrics daemon
+|       +-- relay/        # remote Relay Pool supervisor
+|       +-- database-connector/    # managed-database private-network sidecar
+|       +-- secure-link-connector/ # Docker-to-nginx Secure Link sidecar
 |       +-- shared/       # shared Go packages and generated protobuf
 +-- proto/                # protobuf service definitions
 +-- scripts/              # Gateway and daemon installers
@@ -160,14 +165,19 @@ Go daemons live under `packages/daemons`.
 | `packages/daemons/nginx` | nginx management daemon. |
 | `packages/daemons/docker` | Docker management daemon. |
 | `packages/daemons/monitoring` | metrics daemon. |
+| `packages/daemons/relay` | remote Relay Pool supervisor. |
+| `packages/daemons/database-connector` | managed-database connector sidecar. |
+| `packages/daemons/secure-link-connector` | Docker-to-nginx Secure Link connector sidecar. |
 | `packages/daemons/shared` | shared Go packages. |
 | `packages/daemons/go.work` | Go workspace. |
+
+The local public relay worker is a separate Go module under `packages/relay`; it is built, tested, vetted, versioned, and released independently from the node daemons.
 
 Run daemon tests:
 
 ```bash
 cd packages/daemons
-go test ./docker/... ./monitoring/... ./nginx/... ./shared/...
+go test ./docker/... ./monitoring/... ./nginx/... ./relay/... ./shared/... ./database-connector/... ./secure-link-connector/...
 ```
 
 ## Protobuf
@@ -180,7 +190,7 @@ Regenerate stubs:
 pnpm proto
 ```
 
-Generated Go stubs are committed under `packages/daemons/shared/gatewayv1`.
+Generated Go stubs are committed under `packages/daemons/shared/gatewayv1` and `packages/daemons/shared/relayv1`.
 
 ## Database Migrations
 
@@ -221,7 +231,7 @@ pnpm test:daemon
 pnpm lint:daemon
 ```
 
-Run `pnpm proto` whenever `proto/gateway/v1/nginx-daemon.proto` changes. The daemon update command schema is part of the signed update trust boundary, so keep generated Go stubs and backend TypeScript command types aligned.
+Run `pnpm proto` whenever the Gateway daemon or Relay protobuf contracts change. The daemon update command schema is part of the signed update trust boundary, so keep generated Go stubs and backend TypeScript command types aligned.
 
 For full release confidence:
 

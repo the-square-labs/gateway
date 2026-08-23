@@ -1,4 +1,4 @@
-export const PUBLIC_CREDIT_SCALE = 100;
+export const PUBLIC_CREDIT_SCALE = 1_000;
 
 export function toPublicCredits(value: string | number): number {
   return Number(value) / PUBLIC_CREDIT_SCALE;

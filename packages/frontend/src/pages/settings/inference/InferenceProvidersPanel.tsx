@@ -2,6 +2,8 @@ import {
   closestCenter,
   DndContext,
   type DragEndEvent,
+  DragOverlay,
+  type DragStartEvent,
   PointerSensor,
   useSensor,
   useSensors,
@@ -13,25 +15,29 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { motion } from "framer-motion";
 import {
   ChevronDown,
   ChevronRight,
   CornerDownRight,
   Folder,
-  GripVertical,
   Loader2,
   Plus,
   RefreshCw,
 } from "lucide-react";
 import {
-  createContext,
+  Children,
+  type ComponentPropsWithoutRef,
+  forwardRef,
+  isValidElement,
+  type ReactNode,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import {
@@ -52,10 +58,6 @@ import { connectionIdentity, formatWorstQuota, HealthBadge } from "./inference-p
 
 const PROVIDER_CATALOG_CACHE_KEY = "req:/api/inference/providers/catalog";
 const PROVIDER_CONNECTIONS_CACHE_KEY = "req:/api/inference/providers/connections";
-type ProviderSortable = ReturnType<typeof useSortable>;
-const ProviderDragHandleContext = createContext<
-  Pick<ProviderSortable, "attributes" | "listeners" | "setActivatorNodeRef"> | undefined
->(undefined);
 
 interface ProviderGroupRow {
   kind: "group";
@@ -69,6 +71,7 @@ interface ProviderConnectionRow {
   id: string;
   connection: InferenceProviderConnection;
   grouped: boolean;
+  collapsed: boolean;
 }
 
 type ProviderTableRow = ProviderGroupRow | ProviderConnectionRow;
@@ -108,7 +111,9 @@ export function groupProviderConnections(
   return [...groups.entries()].flatMap(([providerId, providerConnections]) => {
     if (providerConnections.length === 1) {
       const connection = providerConnections[0]!;
-      return [{ kind: "connection", id: connection.id, connection, grouped: false }];
+      return [
+        { kind: "connection", id: connection.id, connection, grouped: false, collapsed: false },
+      ];
     }
     const group: ProviderGroupRow = {
       kind: "group",
@@ -116,7 +121,6 @@ export function groupProviderConnections(
       providerId,
       connections: providerConnections,
     };
-    if (collapsedProviderIds.has(providerId)) return [group];
     return [
       group,
       ...providerConnections.map(
@@ -125,6 +129,7 @@ export function groupProviderConnections(
           id: connection.id,
           connection,
           grouped: true,
+          collapsed: collapsedProviderIds.has(providerId),
         })
       ),
     ];
@@ -157,6 +162,9 @@ export function InferenceProvidersPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [dragOverlayWidth, setDragOverlayWidth] = useState<number | null>(null);
+  const [dragOverlayColumnWidths, setDragOverlayColumnWidths] = useState<number[]>([]);
   const [collapsedProviderIds, setCollapsedProviderIds] = useState<Set<string>>(() => new Set());
   const initializedRef = useRef(hasCachedData);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -173,8 +181,11 @@ export function InferenceProvidersPanel({
     [collapsedProviderIds, connections]
   );
   const sortableConnectionIds = rows.flatMap((row) =>
-    row.kind === "connection" && row.grouped ? [row.id] : []
+    row.kind === "connection" && row.grouped && !row.collapsed ? [row.id] : []
   );
+  const activeDragConnection = activeDragId
+    ? (connections.find((connection) => connection.id === activeDragId) ?? null)
+    : null;
   const hasReorderableGroups = connections.some(
     (connection, index) =>
       connections.findIndex((candidate) => candidate.providerId === connection.providerId) !== index
@@ -271,24 +282,37 @@ export function InferenceProvidersPanel({
     }
   };
 
+  const startReorder = ({ active }: DragStartEvent) => {
+    const activeId = String(active.id);
+    const sourceRow = [
+      ...document.querySelectorAll<HTMLTableRowElement>("tr[data-provider-row-id]"),
+    ].find((row) => row.dataset.providerRowId === activeId);
+    setActiveDragId(activeId);
+    setDragOverlayWidth(active.rect.current.initial?.width ?? null);
+    setDragOverlayColumnWidths(
+      sourceRow ? [...sourceRow.cells].map((cell) => cell.getBoundingClientRect().width) : []
+    );
+  };
+
+  const finishReorder = (event: DragEndEvent) => {
+    setActiveDragId(null);
+    setDragOverlayWidth(null);
+    setDragOverlayColumnWidths([]);
+    void reorderConnections(event);
+  };
+
+  const cancelReorder = () => {
+    setActiveDragId(null);
+    setDragOverlayWidth(null);
+    setDragOverlayColumnWidths([]);
+  };
+
   const columns: SimpleTableColumn<ProviderTableRow>[] = [
-    ...(canManage && hasReorderableGroups
-      ? [
-          {
-            id: "reorder",
-            header: <span className="sr-only">Order</span>,
-            className: "w-10 pr-0",
-            cellClassName: "w-10 pr-0",
-            render: (row: ProviderTableRow) =>
-              row.kind === "connection" && row.grouped ? (
-                <ProviderDragHandle connection={row.connection} disabled={reordering} />
-              ) : null,
-          },
-        ]
-      : []),
     {
       id: "provider",
       header: "Provider",
+      className: "w-[29%]",
+      cellClassName: "w-[29%]",
       render: (row) => {
         if (row.kind === "group") {
           const provider = providers.get(row.providerId);
@@ -297,7 +321,7 @@ export function InferenceProvidersPanel({
           return (
             <Button
               variant="ghost"
-              className="h-auto max-w-full justify-start gap-2 p-0 font-normal hover:bg-transparent"
+              className="h-auto w-max max-w-none justify-start gap-2 p-0 font-normal hover:bg-transparent"
               aria-label={`${collapsed ? "Expand" : "Collapse"} ${label}`}
               onClick={(event) => {
                 event.stopPropagation();
@@ -306,7 +330,7 @@ export function InferenceProvidersPanel({
             >
               {collapsed ? <ChevronRight /> : <ChevronDown />}
               <Folder />
-              <span className="truncate font-medium">{label}</span>
+              <span className="whitespace-nowrap font-medium">{label}</span>
               <Badge variant="secondary" size="inline">
                 {row.connections.length}
               </Badge>
@@ -314,10 +338,22 @@ export function InferenceProvidersPanel({
           );
         }
         if (row.grouped) {
+          const provider = providers.get(row.connection.providerId);
           return (
-            <span className="flex pl-6 text-muted-foreground" aria-hidden="true">
-              <CornerDownRight className="h-4 w-4" />
-            </span>
+            <div className="flex items-center gap-2 pl-6">
+              <CornerDownRight
+                className="h-4 w-4 shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {provider?.label ?? row.connection.providerId}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {provider?.subscription ? "Subscription" : "API"}
+                </p>
+              </div>
+            </div>
           );
         }
         const provider = providers.get(row.connection.providerId);
@@ -334,6 +370,8 @@ export function InferenceProvidersPanel({
     {
       id: "account",
       header: "Account / key",
+      className: "w-[19%]",
+      cellClassName: "w-[19%]",
       render: (row) =>
         row.kind === "connection" ? (
           <div>
@@ -345,6 +383,8 @@ export function InferenceProvidersPanel({
     {
       id: "health",
       header: "Health",
+      className: "w-[13%]",
+      cellClassName: "w-[13%]",
       render: (row) =>
         row.kind === "connection" ? (
           <HealthBadge status={row.connection.enabled ? row.connection.status : "disabled"} />
@@ -353,11 +393,15 @@ export function InferenceProvidersPanel({
     {
       id: "quota",
       header: "Quota / balance",
+      className: "w-[18%]",
+      cellClassName: "w-[18%]",
       render: (row) => (row.kind === "connection" ? formatWorstQuota([row.connection]) : null),
     },
     {
       id: "sync",
       header: "Last sync",
+      className: "w-[12%]",
+      cellClassName: "w-[12%]",
       render: (row) =>
         row.kind === "connection"
           ? row.connection.lastSyncedAt
@@ -369,8 +413,8 @@ export function InferenceProvidersPanel({
       id: "actions",
       header: "Actions",
       align: "right",
-      className: "w-20",
-      cellClassName: "w-20",
+      className: "w-[9%]",
+      cellClassName: "w-[9%]",
       render: (row) =>
         canManage && row.kind === "connection" ? (
           <div
@@ -416,7 +460,9 @@ export function InferenceProvidersPanel({
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
-            onDragEnd={(event) => void reorderConnections(event)}
+            onDragStart={startReorder}
+            onDragEnd={finishReorder}
+            onDragCancel={cancelReorder}
           >
             <SortableContext items={sortableConnectionIds} strategy={verticalListSortingStrategy}>
               <SimpleTable
@@ -433,11 +479,25 @@ export function InferenceProvidersPanel({
                   row.kind === "group" ? "bg-muted/40" : row.grouped ? "bg-card" : undefined
                 }
                 rowRenderer={(props) => (
-                  <ProviderTableRowRenderer {...props} disabled={reordering} />
+                  <ProviderTableRowRenderer {...props} disabled={reordering} sortable />
                 )}
-                tableClassName="min-w-[900px]"
+                tableClassName="table-fixed min-w-[860px]"
               />
             </SortableContext>
+            {typeof document !== "undefined" &&
+              createPortal(
+                <DragOverlay dropAnimation={null} style={{ zIndex: 100 }}>
+                  {activeDragConnection ? (
+                    <ProviderDragOverlayRow
+                      connection={activeDragConnection}
+                      provider={providers.get(activeDragConnection.providerId)}
+                      width={dragOverlayWidth}
+                      columnWidths={dragOverlayColumnWidths}
+                    />
+                  ) : null}
+                </DragOverlay>,
+                document.body
+              )}
           </DndContext>
         ) : (
           <SimpleTable
@@ -450,8 +510,13 @@ export function InferenceProvidersPanel({
               if (row.kind === "group") toggleProviderGroup(row.providerId);
               else setSelectedId(row.connection.id);
             }}
-            rowClassName={(row) => (row.kind === "group" ? "bg-muted/40" : undefined)}
-            tableClassName="min-w-[860px]"
+            rowClassName={(row) =>
+              row.kind === "group" ? "bg-muted/40" : row.grouped ? "bg-card" : undefined
+            }
+            rowRenderer={(props) => (
+              <ProviderTableRowRenderer {...props} disabled={reordering} sortable={false} />
+            )}
+            tableClassName="table-fixed min-w-[860px]"
           />
         )}
       </PanelShell>
@@ -481,7 +546,8 @@ function ProviderTableRowRenderer({
   onClick,
   children,
   disabled,
-}: SimpleTableRowRenderProps<ProviderTableRow> & { disabled: boolean }) {
+  sortable,
+}: SimpleTableRowRenderProps<ProviderTableRow> & { disabled: boolean; sortable: boolean }) {
   if (row.kind !== "connection" || !row.grouped) {
     return (
       <tr className={className} onClick={onClick}>
@@ -489,8 +555,20 @@ function ProviderTableRowRenderer({
       </tr>
     );
   }
+  if (!sortable) {
+    return (
+      <AnimatedProviderRow row={row} className={className} onClick={onClick}>
+        {children}
+      </AnimatedProviderRow>
+    );
+  }
   return (
-    <SortableProviderRow row={row} className={className} onClick={onClick} disabled={disabled}>
+    <SortableProviderRow
+      row={row}
+      className={className}
+      onClick={onClick}
+      disabled={disabled || row.collapsed}
+    >
       {children}
     </SortableProviderRow>
   );
@@ -511,57 +589,143 @@ function SortableProviderRow({
     data: { providerId: row.connection.providerId },
   });
   return (
-    <ProviderDragHandleContext.Provider
-      value={{
-        attributes: sortable.attributes,
-        listeners: sortable.listeners,
-        setActivatorNodeRef: sortable.setActivatorNodeRef,
+    <AnimatedProviderRow
+      ref={sortable.setNodeRef}
+      row={row}
+      data-provider-row-id={row.id}
+      style={{
+        transform: CSS.Transform.toString(sortable.transform),
+        transition: sortable.transition,
       }}
-    >
-      <tr
-        ref={sortable.setNodeRef}
-        style={{
-          transform: CSS.Transform.toString(sortable.transform),
-          transition: sortable.transition,
-        }}
-        className={cn(
-          className,
-          "touch-none cursor-grab active:cursor-grabbing",
-          sortable.isDragging && "relative z-10 bg-accent opacity-70"
-        )}
-        onClick={onClick}
-        {...sortable.attributes}
-        {...sortable.listeners}
-      >
-        {children}
-      </tr>
-    </ProviderDragHandleContext.Provider>
-  );
-}
-
-function ProviderDragHandle({
-  connection,
-  disabled,
-}: {
-  connection: InferenceProviderConnection;
-  disabled: boolean;
-}) {
-  const sortable = useContext(ProviderDragHandleContext);
-  if (!sortable) return null;
-  return (
-    <Button
-      ref={sortable.setActivatorNodeRef}
-      variant="ghost"
-      size="icon"
-      className="h-8 w-8 cursor-grab text-muted-foreground active:cursor-grabbing"
-      disabled={disabled}
-      aria-label={`Reorder ${connection.name}`}
-      title={`Reorder ${connection.name}`}
-      onClick={(event) => event.stopPropagation()}
+      className={cn(
+        className,
+        "touch-none cursor-grab active:cursor-grabbing",
+        sortable.isDragging && "bg-accent opacity-30"
+      )}
+      onClick={onClick}
       {...sortable.attributes}
       {...sortable.listeners}
     >
-      <GripVertical />
-    </Button>
+      {children}
+    </AnimatedProviderRow>
+  );
+}
+
+const AnimatedProviderRow = forwardRef<
+  HTMLTableRowElement,
+  Omit<ComponentPropsWithoutRef<"tr">, "children"> & {
+    row: ProviderConnectionRow;
+    children: ReactNode;
+  }
+>(function AnimatedProviderRow({ row, children, ...props }, ref) {
+  const [collapsedComplete, setCollapsedComplete] = useState(row.collapsed);
+
+  useEffect(() => {
+    if (!row.collapsed) setCollapsedComplete(false);
+  }, [row.collapsed]);
+
+  return (
+    <tr
+      {...props}
+      ref={ref}
+      aria-hidden={row.collapsed || undefined}
+      style={{
+        ...props.style,
+        display: row.collapsed && collapsedComplete ? "none" : undefined,
+      }}
+      className={cn(
+        props.className,
+        "transition-colors duration-200",
+        row.collapsed && "pointer-events-none border-transparent"
+      )}
+    >
+      {Children.map(children, (child) => {
+        if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) return child;
+        return (
+          <td key={child.key} className={cn(child.props.className, "py-0")}>
+            <motion.div
+              initial={false}
+              animate={{ height: row.collapsed ? 0 : "auto", opacity: row.collapsed ? 0 : 1 }}
+              transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+              className="overflow-hidden"
+              onAnimationComplete={() => {
+                if (row.collapsed) setCollapsedComplete(true);
+              }}
+            >
+              <div className="py-3">{child.props.children}</div>
+            </motion.div>
+          </td>
+        );
+      })}
+    </tr>
+  );
+});
+
+function ProviderDragOverlayRow({
+  connection,
+  provider,
+  width,
+  columnWidths,
+}: {
+  connection: InferenceProviderConnection;
+  provider: InferenceProviderCatalogItem | undefined;
+  width: number | null;
+  columnWidths: number[];
+}) {
+  return (
+    <div
+      className="max-w-[calc(100vw-2rem)] overflow-hidden border border-border bg-card shadow-lg"
+      style={{ width: width ?? 860 }}
+    >
+      <table className="w-full table-fixed text-sm">
+        {columnWidths.length > 0 && (
+          <colgroup>
+            {columnWidths.map((columnWidth, index) => (
+              <col key={index} style={{ width: columnWidth }} />
+            ))}
+          </colgroup>
+        )}
+        <tbody>
+          <tr>
+            <td className="px-4 py-3 align-middle">
+              <div className="flex items-center gap-2 pl-6">
+                <CornerDownRight
+                  className="h-4 w-4 shrink-0 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{provider?.label ?? connection.providerId}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {provider?.subscription ? "Subscription" : "API"}
+                  </p>
+                </div>
+              </div>
+            </td>
+            <td className="px-4 py-3 align-middle">
+              <div className="min-w-0">
+                <p className="truncate">{connection.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {connectionIdentity(connection)}
+                </p>
+              </div>
+            </td>
+            <td className="px-4 py-3 align-middle">
+              <HealthBadge status={connection.enabled ? connection.status : "disabled"} />
+            </td>
+            <td className="px-4 py-3 align-middle">{formatWorstQuota([connection])}</td>
+            <td className="px-4 py-3 align-middle">
+              {connection.lastSyncedAt ? formatRelativeDate(connection.lastSyncedAt) : "Never"}
+            </td>
+            <td className="px-4 py-3 text-right align-middle">
+              <div className="flex justify-end">
+                <Button variant="outline" size="icon" tabIndex={-1}>
+                  <RefreshCw />
+                </Button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }

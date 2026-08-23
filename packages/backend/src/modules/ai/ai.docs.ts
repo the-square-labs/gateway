@@ -624,6 +624,11 @@ other stable hint to locate the recreated container and continue with its new ID
 - Existing legacy mounts remain unchanged during ordinary updates. A legacy volume can be adopted in the UI only when it uses the local driver, local scope, and no driver options. Orphaned unmanaged volumes are hidden.
 - Networks: list, create, remove, connect/disconnect containers
 
+## Compose Boundaries
+- Gateway recognizes existing Compose projects by canonical Docker labels, keeps their containers in protected project folders, and can stream aggregated project logs. Compose-managed resources cannot use Gateway cross-node migration.
+- Gateway-managed Compose application deployment is still in development for Business and Enterprise. Do not claim that Gateway can create or roll out an application from a Compose file today.
+- Multi-node application clusters and multiple managed instances of one workload on one machine are also in development for Business and Enterprise. Do not confuse them with current cross-node migration or blue/green deployment slots.
+
 ## Inventory Availability
 - Gateway keeps sanitized container, deployment, image, volume, and network inventory snapshots. Read views can show the last synchronized state while a Docker node is offline or refreshing.
 - Treat snapshot availability metadata as authoritative. Do not attempt mutations against unavailable resources; explain that the node must reconnect before Gateway can change them.
@@ -1183,7 +1188,7 @@ Published model order is persisted separately and controls API catalog, companio
 
 ## Default And Per-user Limits
 
-\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. One public subscription credit represents 100,000 weighted tokens before model, dynamic-burn, and service-tier multipliers. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. When API usage is disabled, models whose usable sources are API-only are omitted from OpenAI, harness, and internal Assistant catalogs for that user. billingTimezone is an IANA timezone. Per-user policies override the default policy.
+\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. One public subscription credit represents 1,000,000 weighted tokens before model, dynamic-burn, and service-tier multipliers. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. When API usage is disabled, models whose usable sources are API-only are omitted from OpenAI, harness, and internal Assistant catalogs for that user. billingTimezone is an IANA timezone. Per-user policies override the default policy.
 
 ## User Tokens And Harness Setup
 
@@ -1340,7 +1345,7 @@ The notification system sends HTTP webhook notifications when alert conditions a
 
 ## Alert Rules
 Each alert rule defines:
-- **Category**: node, container, proxy, certificate, database_postgres, database_clickhouse, or database_redis
+- **Category**: node, container, proxy, pages, gateway, logging, integration, certificate, security, database_postgres, database_clickhouse, or database_redis
 - **Type**: threshold (metric breaches a value) or event (something happens)
 - **Threshold fields** (for threshold type): metric, metricTarget (optional sub-target such as a specific node disk mount), operator (>, >=, <, <=), thresholdValue, durationSeconds (fire observation window), fireThresholdPercent (percent of probes in that window that must breach), resolveAfterSeconds (resolve observation window, default 60s), resolveThresholdPercent (percent of probes in that window that must be clear)
 - **Event fields** (for event type): eventPattern (offline, stopped, oom_killed, etc.)
@@ -1444,14 +1449,17 @@ Available in all templates:
 - \`GET /api/notifications/deliveries/stats\` — delivery statistics`,
   overview: `# Gateway Overview
 
-Gateway is a self-hosted infrastructure control plane. It combines secure access management with operations for reverse proxies, certificates, compute, databases, observability, and integrations.
+Gateway is a self-hosted infrastructure control plane. It combines secure access management with operations for reverse proxies, Pages, certificates, compute, databases, observability, and integrations.
 
 ## Main Capabilities
 - **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.
-- **Traffic and certificates**: nginx ingress nodes, proxy/redirect/404 routes, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
+- **Traffic, Pages, and certificates**: nginx ingress nodes, proxy/redirect/404 routes, Pages Projects/Deployments/Tags, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
 - **Compute**: Docker nodes, containers, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
 - **Databases and logging**: saved PostgreSQL, Redis, and ClickHouse connections; dedicated nodes for Gateway-managed database instances; optional structured logging in managed or external ClickHouse.
-- **Operations**: daemon health, notifications, housekeeping, status pages, updates, licensing, GitLab and Cloudflare integrations, and a separate Gateway Inference service.
+- **Operations**: daemon and Relay Pool health, notifications, housekeeping, status pages, updates, licensing, GitLab/GitHub/generic Git/external SSH/Cloudflare integrations, and a separate Gateway Inference service.
+
+## Availability Boundaries
+Horizontal application clusters, multiple instances of one workload on one machine, and Gateway-managed Compose application deployment are in development for Business and Enterprise. Existing cross-node migration, blue/green slots, and Compose-label discovery/log aggregation must not be described as those unreleased capabilities.
 
 ## How To Guide A User
 Start with the user goal, then read the focused topic before explaining a workflow or calling tools. Use installation for a new deployment, authentication for access/sign-in questions, gateway-settings for control-plane settings and MCP, and troubleshooting for failures. A feature being described here does not grant permission to view or change it; always respect the user's scopes and confirm destructive changes.

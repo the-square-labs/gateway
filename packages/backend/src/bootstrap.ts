@@ -1350,6 +1350,7 @@ export async function initializeContainer(): Promise<void> {
   groupService.setEventBus(eventBus);
   groupService.setSandboxService(aiSandboxService);
   groupService.setLicenseQuotaService(licenseQuotaService);
+  container.registerInstance(GroupService, groupService);
   const permissionGroupFolderService = new PermissionGroupFolderService(db, auditService);
   permissionGroupFolderService.setEventBus(eventBus);
   container.registerInstance(PermissionGroupFolderService, permissionGroupFolderService);

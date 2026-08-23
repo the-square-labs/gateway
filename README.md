@@ -42,7 +42,7 @@ Expose the ports that match your deployment:
 | `3000/tcp` | Gateway app UI/API port. For behind-NAT installs, expose this on the local network and point your external reverse proxy to it. |
 | `443/tcp` | Optional public HTTPS endpoint supplied by your own reverse proxy. Gateway itself listens on `3000/tcp`. |
 | `80/tcp` | HTTP and ACME HTTP-01 challenge, only if that challenge mode is used. |
-| `9443/tcp` | gRPC control plane for managed daemon connections. |
+| `9443/tcp` | Public relay-backed gRPC endpoint for managed daemon control and tunnel connections. The Gateway app's gRPC listener is internal. |
 
 Behind NAT or an existing external reverse proxy, publish `3000/tcp` only on the local network and configure the external proxy to forward the public Gateway domain to the selected native HTTP or HTTPS transport on `<gateway-lan-ip>:3000`. Managed nodes still connect outbound to Gateway on `9443/tcp`; they do not need inbound management ports.
 
@@ -99,6 +99,8 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint with discoverable Ingress, Pages, Databases, Docker, and other scoped toolsets, CI/CD webhooks, webhook notifications, and status pages. |
+| Integrations | GitLab project, repository, CI/CD, variable, webhook, registry, and sandbox workflows; GitHub repository and Actions workflows; generic Git connectors; external SSH connectors; and Cloudflare DNS/ACME automation. Connector credentials are encrypted and access is scope-gated. |
+| Relay | A long-lived local relay owns public `9443/tcp` for daemon control and managed tunnel traffic. Relay Pool can add remote supervisor/worker pairs, explicit placement and rebalancing, draining, and rolling signed updates while preserving one logical Secure Link. |
 | AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
@@ -170,6 +172,9 @@ Planned work:
 - [ ] Storage connections for S3, R2, MinIO, FTP, FTPS, SFTP, and SMB.
 - [ ] Managed storages with Secure Links and managed-database backup/restore after the Storage foundation.
 - [ ] Vulnerability and security scanning for Business and Enterprise.
+- [ ] Horizontal application scaling for Business and Enterprise: group multiple Docker nodes into a cluster and deploy an application to that cluster. **In development.**
+- [ ] Vertical workload scaling for Business and Enterprise: run multiple managed instances of one workload on the same machine. **In development.**
+- [ ] Compose application deployment and lifecycle management for Business and Enterprise. **In development.** Existing Compose-label discovery, protected grouping, and aggregated logs are not this deployment feature.
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
@@ -237,8 +242,8 @@ Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LIC
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. Pages unavailable. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited scale, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Pages) plus Docker Secure Runtime, structured logging, audit export, guided onboarding, and security scanning when released. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited managed-node/user/group plan quotas, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. This does not include the in-development application-cluster features. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Pages) plus Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning when released, and the in-development application cluster, same-node multi-instance, and Compose application features. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business (including Pages) plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.

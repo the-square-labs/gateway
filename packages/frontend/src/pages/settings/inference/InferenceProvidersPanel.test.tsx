@@ -35,15 +35,16 @@ describe("InferenceProvidersPanel", () => {
 
     render(<InferenceProvidersPanel />);
 
-    expect(await screen.findAllByText("Kimi subscription")).toHaveLength(1);
+    expect(await screen.findAllByText("Kimi subscription")).toHaveLength(3);
     expect(screen.queryByText("OpenRouter")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reorder account-a" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reorder account-b" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reorder account-a" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reorder account-b" })).not.toBeInTheDocument();
     expect(screen.getByText("account-a").closest("tr")).toHaveClass("cursor-grab");
     await user.click(screen.getByRole("button", { name: "Collapse Kimi subscription" }));
-    expect(screen.queryByText("account-a")).not.toBeInTheDocument();
-    expect(screen.queryByText("account-b")).not.toBeInTheDocument();
+    expect(screen.getByText("account-a").closest("tr")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByText("account-b").closest("tr")).toHaveAttribute("aria-hidden", "true");
     await user.click(screen.getByRole("button", { name: "Expand Kimi subscription" }));
+    expect(screen.getByText("account-a").closest("tr")).not.toHaveAttribute("aria-hidden");
     expect(
       screen.getByText(
         /Higher connections are used first by Sequential routing; Balanced distributes evenly/
@@ -233,9 +234,11 @@ describe("InferenceProvidersPanel", () => {
       "kimi-b",
       "router",
     ]);
-    expect(groupProviderConnections(connections, new Set(["kimi"])).map((row) => row.id)).toEqual([
-      "provider-group:kimi",
-      "router",
+    expect(groupProviderConnections(connections, new Set(["kimi"]))).toEqual([
+      expect.objectContaining({ id: "provider-group:kimi" }),
+      expect.objectContaining({ id: "kimi-a", collapsed: true }),
+      expect.objectContaining({ id: "kimi-b", collapsed: true }),
+      expect.objectContaining({ id: "router" }),
     ]);
   });
 });

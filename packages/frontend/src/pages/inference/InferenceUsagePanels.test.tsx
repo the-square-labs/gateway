@@ -280,20 +280,31 @@ describe("InferenceUsage", () => {
 
   it("renders system totals without duplicating the provider health table", async () => {
     vi.mocked(api.getInferenceSystemUsage).mockResolvedValue({
+      windowDays: 30,
       requestTotals: [
         { status: "completed", requests: 4, credits: "2", apiMicrodollars: 0, tokens: 0 },
       ],
       ledgerTotals: [
         {
           budgetType: "api",
-          credits: "0",
+          credits: "123.6",
           apiMicrodollars: 10_000,
           tokens: "14564765420" as unknown as number,
         },
       ],
+      dailyUsage: Array.from({ length: 30 }, (_, index) => ({
+        date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+        requests: index,
+        credits: index / 10,
+        apiMicrodollars: index * 1_000,
+        tokens: index * 100,
+      })),
     });
     render(<InferenceOverview />);
     expect(await screen.findByText("14,564,765,420")).toBeInTheDocument();
+    expect(screen.getByText("124")).toBeInTheDocument();
+    expect(screen.getAllByText("Last 30 days")).toHaveLength(4);
+    expect(document.querySelectorAll('svg[preserveAspectRatio="none"]')).toHaveLength(4);
     expect(screen.getByText("4")).toBeInTheDocument();
     expect(screen.queryByText("Error rate")).not.toBeInTheDocument();
     expect(screen.getByText("Tokens")).toHaveClass("text-sm");
@@ -305,6 +316,7 @@ describe("InferenceUsage", () => {
     vi.mocked(api.getCached).mockImplementation((key) =>
       key === "req:/api/inference/usage/system"
         ? {
+            windowDays: 30,
             requestTotals: [
               {
                 status: "completed",
@@ -322,6 +334,7 @@ describe("InferenceUsage", () => {
                 tokens: 9_876,
               },
             ],
+            dailyUsage: [],
           }
         : undefined
     );

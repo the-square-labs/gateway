@@ -574,14 +574,14 @@ function budgetCell(used = 0, limit = 0, currency = false, configured = true) {
     return (
       <div>
         <p>Unlimited</p>
-        <p className="text-xs text-muted-foreground">{used.toFixed(2)} used</p>
+        <p className="text-xs text-muted-foreground">{Math.round(used).toLocaleString()} used</p>
       </div>
     );
   }
   const percentage = limit > 0 ? Math.min(100, (used / limit) * 100) : used > 0 ? 100 : 0;
   const raw = currency
     ? `$${(used / 1_000_000).toFixed(2)} / $${(limit / 1_000_000).toFixed(2)}`
-    : `${used.toFixed(2)} / ${limit.toFixed(2)}`;
+    : `${Math.round(used).toLocaleString()} / ${Math.round(limit).toLocaleString()}`;
   return (
     <div>
       <p>{Math.round(percentage)}%</p>
@@ -592,5 +592,9 @@ function budgetCell(used = 0, limit = 0, currency = false, configured = true) {
 
 function policyCell(limit = 0, currency = false, configured = true) {
   if (!configured || limit <= 0) return <span>Unlimited</span>;
-  return <span>{currency ? `$${(limit / 1_000_000).toFixed(2)}` : limit.toFixed(2)}</span>;
+  return (
+    <span>
+      {currency ? `$${(limit / 1_000_000).toFixed(2)}` : Math.round(limit).toLocaleString()}
+    </span>
+  );
 }

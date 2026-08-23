@@ -15,7 +15,7 @@ export const CreateGroupSchema = z.object({
     .regex(/^[a-z0-9][a-z0-9-]*$/, 'Name must be lowercase alphanumeric with hyphens')
     .refine((name) => !BUILTIN_GROUP_NAMES.includes(name), 'Cannot use a built-in group name'),
   description: z.string().max(500).optional(),
-  scopes: z.array(scopeString).min(1, 'At least one scope is required'),
+  scopes: z.array(scopeString),
   parentId: z.string().uuid().nullable().optional(),
   requireGateway2fa: z.boolean().optional(),
 });
@@ -29,7 +29,7 @@ export const UpdateGroupSchema = z.object({
     .refine((name) => !BUILTIN_GROUP_NAMES.includes(name), 'Cannot use a built-in group name')
     .optional(),
   description: z.string().max(500).nullable().optional(),
-  scopes: z.array(scopeString).min(1, 'At least one scope is required').optional(),
+  scopes: z.array(scopeString).optional(),
   parentId: z.string().uuid().nullable().optional(),
   requireGateway2fa: z.boolean().optional(),
 });

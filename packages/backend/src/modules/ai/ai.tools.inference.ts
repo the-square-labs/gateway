@@ -9,21 +9,21 @@ const POLICY_SCHEMA = {
       type: 'number',
       minimum: 0,
       description:
-        'Public subscription credits for 5 hours. 1 credit equals 100,000 weighted tokens before multipliers.',
+        'Public subscription credits for 5 hours. 1 credit equals 1,000,000 weighted tokens before multipliers.',
     },
     credits7dEnabled: { type: 'boolean' },
     credits7d: {
       type: 'number',
       minimum: 0,
       description:
-        'Public subscription credits for 7 days. 1 credit equals 100,000 weighted tokens before multipliers.',
+        'Public subscription credits for 7 days. 1 credit equals 1,000,000 weighted tokens before multipliers.',
     },
     credits30dEnabled: { type: 'boolean' },
     credits30d: {
       type: 'number',
       minimum: 0,
       description:
-        'Public subscription credits for 30 days. 1 credit equals 100,000 weighted tokens before multipliers.',
+        'Public subscription credits for 30 days. 1 credit equals 1,000,000 weighted tokens before multipliers.',
     },
     apiMonthlyMicrodollars: {
       type: 'number',

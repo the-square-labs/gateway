@@ -265,7 +265,7 @@ export function DockerVolumeDetail({
   }, [nodeId, usedBy]);
 
   const fetchMetrics = useCallback(async () => {
-    if (!nodeId || !decodedVolumeName || activeTab !== "settings" || unavailable) return;
+    if (!nodeId || !decodedVolumeName || unavailable) return;
     const identity = `${nodeId}:${decodedVolumeName}`;
     if (metricsRequestRef.current === identity) return;
     metricsRequestRef.current = identity;
@@ -283,12 +283,16 @@ export function DockerVolumeDetail({
     } finally {
       if (metricsRequestRef.current === identity) metricsRequestRef.current = null;
     }
-  }, [activeTab, decodedVolumeName, nodeId, unavailable]);
+  }, [decodedVolumeName, nodeId, unavailable]);
+
+  useEffect(() => {
+    setMetrics(null);
+    setMetricHistory({ space: [], inodes: [], attachments: [] });
+    void fetchMetrics();
+  }, [fetchMetrics]);
 
   useEffect(() => {
     if (activeTab !== "settings") return;
-    setMetrics(null);
-    setMetricHistory({ space: [], inodes: [], attachments: [] });
     void fetchMetrics();
     const interval = window.setInterval(() => void fetchMetrics(), 30_000);
     return () => window.clearInterval(interval);
@@ -316,6 +320,7 @@ export function DockerVolumeDetail({
     if (event.kind !== "volume-detail" || event.nodeId !== nodeId) return;
     if (event.key && event.key !== decodedVolumeName) return;
     void fetchVolume(true);
+    void fetchMetrics();
   });
 
   useEffect(() => {
@@ -698,6 +703,7 @@ export function DockerVolumeDetail({
                     }
                     icon={HardDrive}
                     history={metricHistory.space.length ? metricHistory.space : [0]}
+                    color="#3b82f6"
                     sparklineMax={metrics?.capacityBytes ?? undefined}
                     progress={
                       metrics?.usedBytes != null && metrics.capacityBytes
@@ -726,6 +732,7 @@ export function DockerVolumeDetail({
                     }
                     icon={Hash}
                     history={metricHistory.inodes.length ? metricHistory.inodes : [0]}
+                    color="#8b5cf6"
                     sparklineMax={metrics?.totalInodes ?? undefined}
                     subtitle={
                       isDiskImage
@@ -735,9 +742,14 @@ export function DockerVolumeDetail({
                   />
                   <StatCard
                     label="Attached containers"
-                    value={String(metrics?.runningAttachmentCount ?? 0)}
+                    value={
+                      metrics?.runningAttachmentCount == null
+                        ? "N/A"
+                        : String(metrics.runningAttachmentCount)
+                    }
                     icon={Boxes}
                     history={metricHistory.attachments.length ? metricHistory.attachments : [0]}
+                    color="#22c55e"
                     subtitle="Running containers only"
                   />
                 </div>

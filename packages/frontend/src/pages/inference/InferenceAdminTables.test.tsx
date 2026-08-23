@@ -260,7 +260,7 @@ describe("InferenceUsersTable", () => {
           credits5hEnabled: false,
           credits5h: 0,
           credits7dEnabled: true,
-          credits7d: 500,
+          credits7d: 500.6,
           credits30dEnabled: false,
           credits30d: 0,
           apiMonthlyMicrodollars: 10_000_000,
@@ -275,7 +275,7 @@ describe("InferenceUsersTable", () => {
 
     expect(await screen.findByText("Limits Admin Target")).toBeInTheDocument();
     expect(screen.getByText("$10.00")).toBeInTheDocument();
-    expect(screen.getByText("500.00")).toBeInTheDocument();
+    expect(screen.getByText("501")).toBeInTheDocument();
     expect(listUsage).not.toHaveBeenCalled();
   });
 });

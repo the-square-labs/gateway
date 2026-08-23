@@ -285,6 +285,7 @@ export interface InferenceActivityFilters {
 }
 
 export interface InferenceSystemUsage {
+  windowDays: number;
   requestTotals: Array<{
     status: string;
     requests: number;
@@ -295,6 +296,13 @@ export interface InferenceSystemUsage {
   ledgerTotals: Array<{
     budgetType: string;
     credits: string;
+    apiMicrodollars: number;
+    tokens: number;
+  }>;
+  dailyUsage: Array<{
+    date: string;
+    requests: number;
+    credits: number;
     apiMicrodollars: number;
     tokens: number;
   }>;

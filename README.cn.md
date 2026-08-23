@@ -42,7 +42,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | `3000/tcp` | Gateway app UI/API 端口。对于 behind-NAT installs，请只在本地网络开放，并让外部 reverse proxy 指向它。 |
 | `443/tcp` | 由你自己的 reverse proxy 提供的可选 public HTTPS endpoint。Gateway 本身监听 `3000/tcp`。 |
 | `80/tcp` | HTTP 和 ACME HTTP-01 challenge，仅在使用该 challenge mode 时需要。 |
-| `9443/tcp` | managed daemon connections 使用的 gRPC control plane。 |
+| `9443/tcp` | managed daemon control 与 tunnel connections 使用的公开 relay-backed gRPC endpoint。Gateway app 的 gRPC listener 仅在内部使用。 |
 
 在 NAT 或已有外部 reverse proxy 后面时，只在本地网络发布 `3000/tcp`，并配置外部 proxy 将 Gateway 公共域名转发到选定的 HTTP 或 HTTPS transport（`<gateway-lan-ip>:3000`）。Managed nodes 仍会 outbound 连接 Gateway 的 `9443/tcp`；它们不需要入站 management ports。
 
@@ -99,6 +99,8 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
 | Automation | API tokens、OAuth 2.0 PKCE、带有 Ingress、Pages、Databases、Docker 等 discoverable scoped toolsets 的 remote MCP endpoint、CI/CD webhooks、webhook notifications 和 status pages。 |
+| Integrations | GitLab project、repository、CI/CD、variable、webhook、registry 和 sandbox workflows；GitHub repository 与 Actions workflows；generic Git connectors；external SSH connectors；以及 Cloudflare DNS/ACME automation。Connector credentials 会加密保存，访问受 scopes 限制。 |
+| Relay | Long-lived local relay 负责公开 `9443/tcp` 上的 daemon control 与 managed tunnel traffic。Relay Pool 可增加 remote supervisor/worker pairs、显式 placement/rebalancing、drain 与 rolling signed updates，同时保持一个逻辑 Secure Link。 |
 | AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
@@ -170,6 +172,9 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [ ] S3、R2、MinIO、FTP、FTPS、SFTP 和 SMB storage connections。
 - [ ] Storage foundation 完成后的带 Secure Links 的 managed storages 和 managed-database backup/restore。
 - [ ] Business 和 Enterprise 的 vulnerability and security scanning。
+- [ ] Business 和 Enterprise 的横向应用扩展：把多个 Docker nodes 组成 cluster，并把 application 部署到该 cluster。**In development.**
+- [ ] Business 和 Enterprise 的纵向 workload 扩展：在同一台机器上运行同一 workload 的多个 managed instances。**In development.**
+- [ ] Business 和 Enterprise 的 Compose application deployment 与 lifecycle management。**In development.** 当前的 Compose label discovery、protected grouping 和 aggregated logs 不等同于该 deployment feature。
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
@@ -237,8 +242,8 @@ Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商�
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 仅限非商业使用的核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；Pages 不可用。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权、规模不限，并包含 container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery。 |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Pages）的全部功能，并增加 Docker Secure Runtime、structured logging、audit export、guided onboarding，以及发布后的 security scanning。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权，managed nodes/users/groups 的 plan quotas 不限，并包含 container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；不包含正在开发的 application-cluster 功能。 |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Pages）的全部功能，并增加 Docker Secure Runtime、structured logging、audit export、guided onboarding、发布后的 security scanning，以及正在开发的 application cluster、same-node multi-instance 和 Compose application 功能。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business（包括 Pages）的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。

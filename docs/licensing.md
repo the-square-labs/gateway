@@ -17,8 +17,8 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 | Plan | Best fit | Scale | Support |
 |---|---|---|---|
 | **Community** | Noncommercial personal, hobby, educational, research, and qualifying noncommercial use | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
-| **Personal** | Commercially operated installations that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
-| **Business** | Teams that need Secure Runtime isolation, security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
+| **Personal** | Commercially operated installations that need unlimited node/user/group quotas and current workload lifecycle features, without the in-development application-cluster capabilities | Unlimited nodes, users, and custom permission groups | Standard |
+| **Business** | Teams that need Secure Runtime isolation, security scanning, structured logging, audit export, guided onboarding, and the planned application scaling/Compose capabilities | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
 ## Feature Availability
@@ -61,6 +61,9 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
 | Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
+| Horizontal Application Clusters Across Multiple Nodes | In development | — | — | ✅ | ✅ |
+| Multiple Instances of One Workload on One Machine | In development | — | — | ✅ | ✅ |
+| Compose Application Deployment and Lifecycle | In development | — | — | ✅ | ✅ |
 | Guided Onboarding and Configuration Review | Plan benefit | — | — | ✅ | ✅ |
 | Internal PKI | Ready | — | — | — | ✅ |
 | SIEM Audit Export | Ready, opt-in | — | — | — | ✅ |
