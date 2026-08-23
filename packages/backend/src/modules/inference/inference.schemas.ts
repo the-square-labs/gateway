@@ -29,7 +29,7 @@ export const UpdateInferenceProviderConnectionSchema = z
     enabled: z.boolean().optional(),
     name: z.string().trim().min(1).max(255).optional(),
     routingOrder: z.number().int().min(0).max(100_000).optional(),
-    minimumRemainingPercent: z.number().int().min(0).max(100).optional(),
+    minimumRemainingPercent: z.number().int().min(1).max(100).optional(),
     apiMonthlyLimitMicrodollars: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
@@ -246,7 +246,7 @@ export const InferenceProviderConnectionResponseSchema = z.object({
   accountLabel: z.string().nullable(),
   enabled: z.boolean(),
   routingOrder: z.number().int(),
-  minimumRemainingPercent: z.number().int().min(0).max(100),
+  minimumRemainingPercent: z.number().int().min(1).max(100),
   apiMonthlyLimitMicrodollars: z.number().int().nonnegative().nullable(),
   apiMonthlySpentMicrodollars: z.number().int().nonnegative(),
   status: z.enum([

@@ -1168,10 +1168,10 @@ Always inspect current state before mutation. Use \`internal_documentation({ top
 
 Each connection row is one account or API key. There is no Pool resource. Gateway groups compatible connections automatically per provider/model:
 
-- \`balanced\`: distributes new threads across available connections while retaining thread affinity;
+- \`balanced\`: distributes new threads across every connection whose reported quota is above its configured minimum, weighted by remaining quota, while retaining thread affinity;
 - \`sequential\`: uses the lowest routingOrder connection until unavailable, then moves down the list.
 
-Subscription connections can set minimumRemainingPercent. API connections can set apiMonthlyLimitUsd; null means no per-connection cap. Disconnecting or disabling is blocked when it would leave a published model without a route.
+Subscription connections can set minimumRemainingPercent from 1 to 100. The same configured threshold applies to new and existing threads; a connection is routable only while every reported quota window remains strictly above it. API connections can set apiMonthlyLimitUsd; null means no per-connection cap. Disconnecting or disabling is blocked when it would leave a published model without a route.
 
 ## Model Workflow
 

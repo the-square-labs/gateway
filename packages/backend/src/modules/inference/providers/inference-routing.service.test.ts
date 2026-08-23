@@ -10,7 +10,7 @@ describe('inference routing policy', () => {
     order: 0,
     status: 'healthy',
     remainingFraction: 0.5,
-    minimumRemainingFraction: 0,
+    minimumRemainingFraction: 0.01,
   };
 
   it('keeps even routing deterministic and approximately equal', () => {
@@ -54,36 +54,34 @@ describe('inference routing policy', () => {
     );
   });
 
-  it('uses the new-thread floor as a preference while honoring the configured reserve', () => {
-    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.099 }, false)).toBe(false);
-    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.099 }, true)).toBe(true);
-    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.029 }, true)).toBe(true);
-    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0 }, true)).toBe(false);
-    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.029, minimumRemainingFraction: 0.03 }, true)).toBe(
-      false
-    );
-    expect(__testOnly.isUsable({ ...healthy, status: 'cooldown' }, true)).toBe(false);
+  it('uses the configured reserve equally for new and existing threads', () => {
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.099 })).toBe(true);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.011 })).toBe(true);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.01 })).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.009 })).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0 })).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, status: 'cooldown' })).toBe(false);
   });
 
-  it('falls back below the new-thread floor when all accounts still have emergency capacity', () => {
+  it('keeps every account above its configured reserve in the routing pool', () => {
     const lowAccounts = [
       { ...healthy, id: 'connection-a', status: 'quota_hot', remainingFraction: 0.07 },
       { ...healthy, id: 'connection-b', status: 'quota_hot', remainingFraction: 0.04 },
     ];
 
-    expect(__testOnly.usableCandidates(lowAccounts, false).map((candidate) => candidate.id)).toEqual([
+    expect(__testOnly.usableCandidates(lowAccounts).map((candidate) => candidate.id)).toEqual([
       'connection-a',
       'connection-b',
     ]);
   });
 
-  it('keeps low-quota accounts out of new threads while normal capacity exists', () => {
+  it('excludes only accounts at or below their own reserve', () => {
     const candidates = [
       { ...healthy, id: 'connection-normal', remainingFraction: 0.2 },
-      { ...healthy, id: 'connection-low', status: 'quota_hot', remainingFraction: 0.07 },
+      { ...healthy, id: 'connection-low', status: 'quota_hot', remainingFraction: 0.01 },
     ];
 
-    expect(__testOnly.usableCandidates(candidates, false).map((candidate) => candidate.id)).toEqual([
+    expect(__testOnly.usableCandidates(candidates).map((candidate) => candidate.id)).toEqual([
       'connection-normal',
     ]);
   });
@@ -98,11 +96,11 @@ describe('inference routing policy', () => {
     ).toBe('connection-first');
   });
 
-  it('enforces a connection reserve above the hard safety floors', () => {
+  it('enforces the configured reserve as a strict lower bound', () => {
     const reserved = { ...healthy, remainingFraction: 0.2, minimumRemainingFraction: 0.25 };
-    expect(__testOnly.isUsable(reserved, false)).toBe(false);
-    expect(__testOnly.isUsable(reserved, true)).toBe(false);
-    expect(__testOnly.isUsable({ ...reserved, remainingFraction: 0.25 }, false)).toBe(true);
+    expect(__testOnly.isUsable(reserved)).toBe(false);
+    expect(__testOnly.isUsable({ ...reserved, remainingFraction: 0.25 })).toBe(false);
+    expect(__testOnly.isUsable({ ...reserved, remainingFraction: 0.251 })).toBe(true);
   });
 
   it('uses only quota windows reported by the latest synchronization', () => {

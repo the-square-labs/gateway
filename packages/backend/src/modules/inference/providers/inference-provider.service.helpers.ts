@@ -25,13 +25,13 @@ export function validateBaseUrl(value: string, required: boolean): string {
   }
 }
 
-export function classifyStatus(windows: InferenceQuotaWindow[], minimumRemainingFraction = 0) {
+export function classifyStatus(windows: InferenceQuotaWindow[], minimumRemainingFraction = 0.01) {
   const fractions = windows.flatMap((window) =>
     window.remainingFraction === undefined ? [] : [window.remainingFraction]
   );
   if (fractions.length === 0) return 'healthy' as const;
   const minimum = Math.min(...fractions);
-  if (minimum <= 0 || minimum < minimumRemainingFraction) return 'unavailable' as const;
+  if (minimum <= minimumRemainingFraction) return 'unavailable' as const;
   if (minimum < 0.1) return 'quota_hot' as const;
   return 'healthy' as const;
 }

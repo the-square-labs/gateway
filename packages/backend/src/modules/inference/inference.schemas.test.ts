@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CreateInferenceModelSourceSchema } from './inference.schemas';
+import { CreateInferenceModelSourceSchema, UpdateInferenceProviderConnectionSchema } from './inference.schemas';
 
 describe('CreateInferenceModelSourceSchema', () => {
   const source = {
@@ -24,5 +24,12 @@ describe('CreateInferenceModelSourceSchema', () => {
         manualMetadata: { autoCompactTokenLimit: 256_000 },
       }).manualMetadata
     ).toEqual({ autoCompactTokenLimit: 256_000 });
+  });
+});
+
+describe('UpdateInferenceProviderConnectionSchema', () => {
+  it('requires at least a one percent subscription reserve', () => {
+    expect(UpdateInferenceProviderConnectionSchema.safeParse({ minimumRemainingPercent: 1 }).success).toBe(true);
+    expect(UpdateInferenceProviderConnectionSchema.safeParse({ minimumRemainingPercent: 0 }).success).toBe(false);
   });
 });

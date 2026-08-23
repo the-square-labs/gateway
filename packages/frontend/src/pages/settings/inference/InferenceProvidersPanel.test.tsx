@@ -47,7 +47,7 @@ describe("InferenceProvidersPanel", () => {
     expect(screen.getByText("account-a").closest("tr")).not.toHaveAttribute("aria-hidden");
     expect(
       screen.getByText(
-        /Higher connections are used first by Sequential routing; Balanced distributes evenly/
+        /Sequential follows connection order; Balanced weights new threads by remaining quota/
       )
     ).toBeInTheDocument();
     const syncAction = screen.getByRole("button", { name: "Sync account-a" });
@@ -64,7 +64,7 @@ describe("InferenceProvidersPanel", () => {
     expect(within(dialog).getByText("50% remaining")).toBeInTheDocument();
     expect(within(dialog).queryByText("Monthly")).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Minimum remaining percentage" })).toHaveValue(0);
+    expect(screen.getByRole("spinbutton", { name: "Minimum remaining percentage" })).toHaveValue(1);
 
     await user.click(screen.getByRole("button", { name: "Sync now" }));
     await waitFor(() => expect(sync).toHaveBeenCalledTimes(2));
@@ -272,7 +272,7 @@ function connection(
     accountLabel: `${id}@example.test`,
     enabled: true,
     routingOrder: 0,
-    minimumRemainingPercent: 0,
+    minimumRemainingPercent: 1,
     apiMonthlyLimitMicrodollars: null,
     apiMonthlySpentMicrodollars: 0,
     routingStrategy: "balanced",

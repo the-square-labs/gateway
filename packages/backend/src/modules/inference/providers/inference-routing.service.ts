@@ -9,7 +9,6 @@ import type { InferenceConnectionStatus, InferenceRoutingStrategy } from '@/db/s
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 
 const AFFINITY_TTL_SECONDS = 24 * 60 * 60;
-const NEW_THREAD_FLOOR = 0.1;
 
 export interface InferenceRoutingInput {
   providerId: string;
@@ -44,7 +43,7 @@ export class InferenceRoutingService {
   async select(input: InferenceRoutingInput): Promise<InferenceRoutingSelection> {
     const candidates = await this.loadCandidates(input);
     const preferred = await this.preferred(input);
-    const usable = usableCandidates(candidates, input.existingThread || Boolean(preferred));
+    const usable = usableCandidates(candidates);
     if (usable.length === 0) {
       throw new InferenceProtocolError(
         503,
@@ -165,19 +164,14 @@ export class InferenceRoutingService {
   }
 }
 
-function isUsable(candidate: Candidate, existingThread: boolean): boolean {
+function isUsable(candidate: Candidate): boolean {
   if (['disabled', 'unavailable', 'reauth_required', 'cooldown', 'stale'].includes(candidate.status)) return false;
   if (candidate.remainingFraction === null) return true;
-  if (candidate.remainingFraction <= 0) return false;
-  return (
-    candidate.remainingFraction >= Math.max(candidate.minimumRemainingFraction, existingThread ? 0 : NEW_THREAD_FLOOR)
-  );
+  return candidate.remainingFraction > candidate.minimumRemainingFraction;
 }
 
-function usableCandidates(candidates: Candidate[], continuingThread: boolean): Candidate[] {
-  const preferred = candidates.filter((candidate) => isUsable(candidate, continuingThread));
-  if (preferred.length > 0 || continuingThread) return preferred;
-  return candidates.filter((candidate) => isUsable(candidate, true));
+function usableCandidates(candidates: Candidate[]): Candidate[] {
+  return candidates.filter(isUsable);
 }
 
 function latestQuotaWindows(rows: Array<typeof inferenceQuotaSnapshots.$inferSelect>) {
@@ -251,5 +245,4 @@ export const __testOnly = {
   usableCandidates,
   statusAfterCooldown,
   latestQuotaWindows,
-  NEW_THREAD_FLOOR,
 };

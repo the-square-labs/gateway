@@ -1072,6 +1072,13 @@
       "when": 1787424492490,
       "tag": "0152_smiling_clint_barton",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1787504125513,
+      "tag": "0153_unique_prodigy",
+      "breakpoints": true
     }
   ]
 }

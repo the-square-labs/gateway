@@ -285,7 +285,7 @@ function connection(
     accountLabel: null,
     enabled: true,
     routingOrder: 0,
-    minimumRemainingPercent: 0,
+    minimumRemainingPercent: 1,
     apiMonthlyLimitMicrodollars: null,
     apiMonthlySpentMicrodollars: 0,
     routingStrategy: "balanced",

@@ -59,7 +59,7 @@ export function InferenceProviderDialog({
   const [routingStrategy, setRoutingStrategy] = useState<"even" | "balanced" | "sequential">(
     "balanced"
   );
-  const [minimumRemainingPercent, setMinimumRemainingPercent] = useState("0");
+  const [minimumRemainingPercent, setMinimumRemainingPercent] = useState("1");
   const [apiMonthlyLimitUsd, setApiMonthlyLimitUsd] = useState("");
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -285,12 +285,12 @@ export function InferenceProviderDialog({
           {subscription && (
             <SettingsControlRow
               title="Minimum remaining"
-              description="Stop routing when any quota window falls below this reserve"
+              description="Stop routing when any quota window reaches this reserve"
             >
               <div className="flex items-center gap-2">
                 <Input
                   type="number"
-                  min="0"
+                  min="1"
                   max="100"
                   step="1"
                   value={minimumRemainingPercent}
@@ -370,7 +370,7 @@ export function InferenceProviderDialog({
 function parseMinimumRemainingPercent(value: string): number | undefined {
   if (!value.trim()) return undefined;
   const percent = Number(value);
-  if (!Number.isInteger(percent) || percent < 0 || percent > 100) return undefined;
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) return undefined;
   return percent;
 }
 

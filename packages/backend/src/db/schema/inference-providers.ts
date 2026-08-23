@@ -55,7 +55,7 @@ export const inferenceProviderConnections = pgTable(
     accountLabel: text('account_label'),
     enabled: boolean('enabled').notNull().default(true),
     routingOrder: integer('routing_order').notNull().default(0),
-    minimumRemainingPercent: integer('minimum_remaining_percent').notNull().default(0),
+    minimumRemainingPercent: integer('minimum_remaining_percent').notNull().default(1),
     apiMonthlyLimitMicrodollars: bigint('api_monthly_limit_microdollars', { mode: 'number' }),
     status: varchar('status', { length: 32 }).$type<InferenceConnectionStatus>().notNull().default('pending'),
     healthReason: text('health_reason'),
@@ -75,7 +75,7 @@ export const inferenceProviderConnections = pgTable(
     index('inference_provider_connections_sync_idx').on(table.syncStatus, table.nextSyncAt),
     check(
       'inference_provider_connections_minimum_remaining_range',
-      sql`${table.minimumRemainingPercent} >= 0 AND ${table.minimumRemainingPercent} <= 100`
+      sql`${table.minimumRemainingPercent} >= 1 AND ${table.minimumRemainingPercent} <= 100`
     ),
     check(
       'inference_provider_connections_api_monthly_limit_nonnegative',

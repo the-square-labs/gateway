@@ -84,7 +84,7 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
         termsVersion: { type: 'string', description: 'Exact terms version returned by list_templates.' },
         enabled: { type: 'boolean' },
         routingOrder: { type: 'number', description: 'Connection order used by sequential routing.' },
-        minimumRemainingPercent: { type: 'number', minimum: 0, maximum: 100 },
+        minimumRemainingPercent: { type: 'number', minimum: 1, maximum: 100 },
         apiMonthlyLimitUsd: {
           type: ['number', 'null'],
           minimum: 0,

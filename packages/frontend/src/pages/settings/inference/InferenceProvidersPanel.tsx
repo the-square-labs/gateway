@@ -446,7 +446,7 @@ export function InferenceProvidersPanel({
       {loading && <Skeleton />}
       <PanelShell
         title="Providers"
-        description="Connected accounts and API credentials. Higher connections are used first by Sequential routing; Balanced distributes evenly."
+        description="Connected accounts and API credentials. Sequential follows connection order; Balanced weights new threads by remaining quota."
         actions={
           canManage ? (
             <Button onClick={() => setConnectOpen(true)}>

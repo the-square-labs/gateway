@@ -8,9 +8,12 @@ describe('InferenceProviderService policy helpers', () => {
     expect(__testOnly.classifyStatus([])).toBe('healthy');
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.5 }])).toBe('healthy');
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.09 }])).toBe('quota_hot');
-    expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.029 }])).toBe('quota_hot');
+    expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.011 }])).toBe('quota_hot');
+    expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.01 }])).toBe('unavailable');
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0 }])).toBe('unavailable');
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.029 }], 0.03)).toBe('unavailable');
+    expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.03 }], 0.03)).toBe('unavailable');
+    expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.031 }], 0.03)).toBe('quota_hot');
   });
 
   it('validates custom endpoints without accepting embedded credentials', () => {
