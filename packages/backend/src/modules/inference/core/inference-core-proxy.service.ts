@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { and, asc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { injectable } from 'tsyringe';
@@ -76,6 +77,8 @@ const CORE_ADMITTED: ReadonlySet<CoreProxyOperation> = new Set([
 ]);
 
 type ProxyRequestBody = string | ArrayBuffer | FormData;
+
+const MAX_DECOMPRESSED_JSON_BODY_BYTES = 256 * 1024 * 1024;
 
 function requireAuth(c: Context<AppEnv>): { user: User; tokenId: string } {
   const user = c.get('user');
@@ -447,14 +450,7 @@ export class InferenceCoreProxyService {
         rewrite: () => rawBody,
       };
     }
-    let body: Record<string, unknown>;
-    try {
-      const value = await c.req.json();
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
-      body = value as Record<string, unknown>;
-    } catch {
-      throw new InferenceProtocolError(400, 'invalid_request_error', 'Request body must be a JSON object');
-    }
+    const body = await readJsonObject(c);
     const model = requiredModel(body.model);
     const units = operation === 'images/generations' ? positiveUnits(Number(body.n ?? 1)) : 1;
     const reasoningEffort =
@@ -530,6 +526,55 @@ export class InferenceCoreProxyService {
     }
     return amount;
   }
+}
+
+async function readJsonObject(c: Context<AppEnv>): Promise<Record<string, unknown>> {
+  let decoded: Uint8Array;
+  try {
+    const raw = new Uint8Array(await c.req.arrayBuffer());
+    decoded = decodeRequestBody(raw, c.req.header('content-encoding'));
+  } catch (error) {
+    if (error instanceof InferenceProtocolError) throw error;
+    throw new InferenceProtocolError(400, 'invalid_request_error', 'Request body compression is invalid');
+  }
+
+  try {
+    const value = JSON.parse(new TextDecoder().decode(decoded)) as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
+    return value as Record<string, unknown>;
+  } catch {
+    throw new InferenceProtocolError(400, 'invalid_request_error', 'Request body must be a JSON object');
+  }
+}
+
+function decodeRequestBody(raw: Uint8Array, contentEncoding: string | undefined): Uint8Array {
+  const encoding = (contentEncoding ?? '').trim().toLowerCase();
+  if (!encoding || encoding === 'identity') return raw;
+  if (encoding.includes(',')) {
+    throw new InferenceProtocolError(400, 'invalid_request_error', `Unsupported content-encoding: ${encoding}`);
+  }
+
+  const input = raw as Uint8Array<ArrayBuffer>;
+  const options = { maxOutputLength: MAX_DECOMPRESSED_JSON_BODY_BYTES };
+  try {
+    if (encoding === 'zstd') return zstdDecompressSync(input, options);
+    if (encoding === 'gzip' || encoding === 'x-gzip') return gunzipSync(input, options);
+    if (encoding === 'deflate') {
+      try {
+        return inflateSync(input, options);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw error;
+        return inflateRawSync(input, options);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') {
+      throw new InferenceProtocolError(413, 'request_too_large', 'Decompressed request body is too large');
+    }
+    throw error;
+  }
+
+  throw new InferenceProtocolError(400, 'invalid_request_error', `Unsupported content-encoding: ${encoding}`);
 }
 
 function exactCoreAccountId(selected: SourceCandidate): string {

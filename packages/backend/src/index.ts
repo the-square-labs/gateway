@@ -262,12 +262,10 @@ async function main() {
         drainUserWork: async (deadline) => {
           await Promise.allSettled([
             ...userDrainPromises,
-            drainWebSocketsForRestart(wss.clients, deadline),
             container.resolve(AIRunService).waitForIdle(deadline),
           ]);
         },
         forceCloseUserWork: async () => {
-          terminateRemainingWebSockets(wss.clients);
           forceUserPromise ??= container.resolve(AIRunService).stopAllForShutdown();
           await forceUserPromise;
         },
@@ -281,6 +279,9 @@ async function main() {
           await loggingClosePromise;
         },
         closeHttp: async (deadline) => {
+          // Keep established sessions alive through the expensive drain phases.
+          // Signal restart only at the final transport shutdown boundary.
+          await drainWebSocketsForRestart(wss.clients, deadline);
           terminateRemainingWebSockets(wss.clients);
           await closeWebSocketServer(wss);
           await closeHttpServer(server, deadline);

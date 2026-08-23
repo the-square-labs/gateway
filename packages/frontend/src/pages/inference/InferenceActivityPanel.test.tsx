@@ -59,7 +59,9 @@ describe("InferenceActivityPanel", () => {
 
     expect(await screen.findByText("User recent-5")).toBeInTheDocument();
     expect(screen.getAllByText("gpt-5.6 high")).toHaveLength(6);
-    await user.hover(screen.getAllByText("gpt-5.6 high")[0]!);
+    const modelTrigger = screen.getAllByText("gpt-5.6 high")[0]!;
+    expect(modelTrigger).toHaveClass("inline-block", "max-w-full", "truncate");
+    await user.hover(modelTrigger);
     expect((await screen.findAllByText("Primary ChatGPT")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("a***@example.com").length).toBeGreaterThan(0);
     expect(api.listInferenceActivity).toHaveBeenCalledWith({ page: 1, limit: 6 });

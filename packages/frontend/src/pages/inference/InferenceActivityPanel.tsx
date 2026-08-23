@@ -390,7 +390,7 @@ function ActivityModel({ row }: { row: InferenceActivity }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="block min-w-0 cursor-help truncate">
+        <span className="inline-block max-w-full cursor-help truncate align-bottom">
           {row.publicModelId}
           {row.reasoningEffort ? ` ${row.reasoningEffort}` : ""}
         </span>

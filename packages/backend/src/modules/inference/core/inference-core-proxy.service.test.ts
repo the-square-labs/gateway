@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { zstdCompressSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 
@@ -51,7 +52,7 @@ function selectChain(rows: unknown[]) {
 }
 
 function createContext(
-  body: string | FormData | null,
+  body: string | FormData | Buffer | null,
   headers: Record<string, string> = {},
   query: Record<string, string> = {}
 ) {
@@ -169,6 +170,24 @@ describe('inference core proxy', () => {
     expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(
       expect.objectContaining({ userId: USER.id, model: MODEL })
     );
+  });
+
+  it('decodes Codex zstd-compressed Responses HTTP fallback bodies', async () => {
+    const { service, fetchStub } = createService();
+    const compressed = zstdCompressSync(Buffer.from(JSON.stringify({ model: 'gpt-5.5', input: 'continue' })));
+    const c = createContext(compressed, {
+      'content-type': 'application/json',
+      'content-encoding': 'zstd',
+    });
+
+    const response = await service.proxy(c, 'responses');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      model: 'core-conn-1/gpt-5.5',
+      input: 'continue',
+    });
   });
 
   it('fails closed with a stable gateway error when the core is unavailable', async () => {
