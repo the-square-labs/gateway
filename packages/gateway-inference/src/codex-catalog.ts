@@ -22,6 +22,11 @@ interface CodexCatalog {
   models: Array<Record<string, unknown>>;
 }
 
+export interface CodexBaseInstructionsCatalog {
+  bySlug: Readonly<Record<string, string>>;
+  fallback: string;
+}
+
 /** Standard model entry served by `GET {adapters.openai.baseUrl}/models`. */
 export interface GatewayInferenceModel {
   id: string;
@@ -36,9 +41,6 @@ export interface GatewayInferenceModel {
   default_reasoning_effort: string | null;
   supported_service_tiers?: string[];
 }
-
-const CODEX_BASE_INSTRUCTIONS = `You are Codex, a coding agent working with the user in their workspace.
-Use the provided tools to inspect and modify the workspace when the task requires it. Keep tool calls and reasoning separate from user-visible answers, preserve existing user work, and continue until the requested outcome is handled.`;
 
 const CODEX_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const EFFORT_DESCRIPTIONS: Record<string, string> = {
@@ -60,6 +62,7 @@ export async function syncCodexCatalog(input: {
   lockFile: string;
   fetch?: Fetch;
   now?: () => Date;
+  baseInstructions?: CodexBaseInstructionsCatalog;
 }): Promise<CatalogSyncResult> {
   return withFileLock(input.lockFile, async () => {
     const existing = await readCatalog(input.catalogFile);
@@ -119,7 +122,14 @@ export async function syncCodexCatalog(input: {
     } catch (error) {
       throw new CliError('CATALOG_INVALID', 'Gateway returned invalid Codex catalog JSON.', { cause: error });
     }
-    const catalog = codexCatalogFromModels(parseGatewayModels(payload));
+    const baseInstructions = input.baseInstructions ?? (existing ? codexBaseInstructionsFromCatalog(existing) : null);
+    if (!baseInstructions) {
+      throw new CliError(
+        'CODEX_BASE_INSTRUCTIONS_MISSING',
+        'Codex bundled model instructions are unavailable; update or repair the Codex installation.'
+      );
+    }
+    const catalog = codexCatalogFromModels(parseGatewayModels(payload), baseInstructions);
     const catalogVersion = stripEtag(response.headers.get('etag'));
     const now = (input.now?.() ?? new Date()).toISOString();
     await atomicJsonWrite(input.catalogFile, catalog, 0o600);
@@ -175,7 +185,10 @@ function parseGatewayModels(value: unknown): GatewayInferenceModel[] {
  * endpoint; the single stable /api/inference/v1 prefix serves only the
  * standard list, so the CLI performs the conversion locally.
  */
-export function codexCatalogFromModels(models: GatewayInferenceModel[]): CodexCatalog {
+export function codexCatalogFromModels(
+  models: GatewayInferenceModel[],
+  baseInstructions: CodexBaseInstructionsCatalog
+): CodexCatalog {
   return {
     models: models.map((model, index) => {
       const supported = model.supported_reasoning_efforts.filter((effort) => CODEX_EFFORTS.has(effort));
@@ -204,7 +217,7 @@ export function codexCatalogFromModels(models: GatewayInferenceModel[]): CodexCa
         default_service_tier: null,
         availability_nux: null,
         upgrade: null,
-        base_instructions: CODEX_BASE_INSTRUCTIONS,
+        base_instructions: baseInstructions.bySlug[model.id] ?? baseInstructions.fallback,
         model_messages: null,
         include_skills_usage_instructions: false,
         supports_reasoning_summary_parameter: reasoning,
@@ -240,6 +253,28 @@ export function codexCatalogFromModels(models: GatewayInferenceModel[]): CodexCa
       };
     }),
   };
+}
+
+export function codexBaseInstructionsFromCatalog(value: unknown): CodexBaseInstructionsCatalog {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as CodexCatalog).models)) {
+    throw new CliError('CODEX_BUNDLED_CATALOG_INVALID', 'Codex bundled model catalog is invalid.');
+  }
+  const bySlug: Record<string, string> = {};
+  let fallback = '';
+  for (const model of (value as CodexCatalog).models) {
+    const slug = typeof model.slug === 'string' ? model.slug : '';
+    const instructions = typeof model.base_instructions === 'string' ? model.base_instructions : '';
+    if (!instructions.trim()) continue;
+    if (slug) bySlug[slug] = instructions;
+    if (!fallback) fallback = instructions;
+  }
+  if (!fallback) {
+    throw new CliError(
+      'CODEX_BUNDLED_CATALOG_INVALID',
+      'Codex bundled model catalog does not contain base instructions.'
+    );
+  }
+  return { bySlug, fallback };
 }
 
 export function assertCodexCatalog(value: unknown): asserts value is CodexCatalog {

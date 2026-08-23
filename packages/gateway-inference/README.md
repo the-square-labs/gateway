@@ -39,6 +39,8 @@ Codex setup performs Gateway login when needed, issues a dedicated `gwi_` runtim
 
 Codex must also be signed in to an OpenAI account through its normal login flow. Setup checks `codex login status` and prints a warning when that account login is missing, because Codex Desktop does not expose custom model catalogs until its own account session exists. After setup or login, fully quit and reopen Codex so its startup-only catalog snapshot is replaced.
 
+Gateway model entries reuse the full model instructions bundled with the installed Codex CLI. The companion does not replace Codex's base prompt with a Gateway-authored prompt; exact Codex model slugs use their matching bundled instructions, while other routed models use the bundled default instructions from that Codex version.
+
 The installed helper owns the loopback proxy, refreshes the catalog at startup, follows Gateway invalidation events, and falls back to conditional polling. Runtime auth, proxy, and MCP lifecycle modes are private implementation details and are not public CLI commands.
 
 ## Configure Claude Code

@@ -39,7 +39,7 @@ const CATALOG = {
       description: 'Test',
       visibility: 'list',
       supported_in_api: true,
-      base_instructions: 'Use tools.',
+      base_instructions: 'Official bundled test instructions.',
       context_window: 128_000,
       auto_compact_token_limit: 100_000,
       input_modalities: ['text'],
@@ -176,7 +176,15 @@ describe('CodexIntegrationService', () => {
     expect(config).toContain(`openai_base_url = "${inferenceProxyBaseUrl(files.paths, 'work')}"`);
     expect(config).not.toContain('cli_auth_credentials_store');
     expect(config).not.toContain('gwi_runtime-secret');
+    expect(JSON.parse(await readFile(result.catalogFile, 'utf8')).models[0].base_instructions).toBe(
+      'Official bundled test instructions.'
+    );
     await expect(readFile(join(files.root, 'codex', 'auth.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(commandRunner).toHaveBeenCalledWith(
+      'codex',
+      ['debug', 'models', '--bundled'],
+      expect.objectContaining({ CODEX_HOME: join(files.root, 'codex') })
+    );
     expect(commandRunner).toHaveBeenCalledWith(
       'codex',
       ['debug', 'models'],

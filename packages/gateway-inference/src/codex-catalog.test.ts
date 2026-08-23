@@ -1,7 +1,12 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { codexCatalogFromModels, syncCodexCatalog, withFileLock } from './codex-catalog.js';
+import {
+  codexBaseInstructionsFromCatalog,
+  codexCatalogFromModels,
+  syncCodexCatalog,
+  withFileLock,
+} from './codex-catalog.js';
 
 const MODELS = {
   object: 'list',
@@ -44,6 +49,14 @@ const EXISTING_CATALOG = {
   ],
 };
 
+const BUNDLED_CATALOG = {
+  models: [
+    { slug: 'gateway-model', base_instructions: 'Official instructions for the exact model.' },
+    { slug: 'fallback-model', base_instructions: 'Official fallback instructions.' },
+  ],
+};
+const BASE_INSTRUCTIONS = codexBaseInstructionsFromCatalog(BUNDLED_CATALOG);
+
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'gateway-codex-catalog-'));
   return {
@@ -56,7 +69,10 @@ async function fixture() {
 
 describe('Codex catalog synchronization', () => {
   it('advertises Gateway Fast mode using the Codex priority service tier', () => {
-    const [model] = codexCatalogFromModels([{ ...MODELS.data[0], supported_service_tiers: ['priority'] }]).models;
+    const [model] = codexCatalogFromModels(
+      [{ ...MODELS.data[0], supported_service_tiers: ['priority'] }],
+      BASE_INSTRUCTIONS
+    ).models;
 
     expect(model).toMatchObject({
       service_tiers: [{ id: 'priority', name: 'Fast' }],
@@ -79,7 +95,7 @@ describe('Codex catalog synchronization', () => {
       display_name: 'Second Model',
     };
 
-    const catalog = codexCatalogFromModels([first, second]);
+    const catalog = codexCatalogFromModels([first, second], BASE_INSTRUCTIONS);
 
     expect(catalog.models.map((model) => [model.slug, model.priority])).toEqual([
       ['first-model', 0],
@@ -94,13 +110,24 @@ describe('Codex catalog synchronization', () => {
   });
 
   it('advertises deferred code-mode tools for tool-capable routed models', () => {
-    const [enabled] = codexCatalogFromModels([MODELS.data[0]]).models;
-    const [disabled] = codexCatalogFromModels([
-      { ...MODELS.data[0], capabilities: { ...MODELS.data[0].capabilities, tools: false } },
-    ]).models;
+    const [enabled] = codexCatalogFromModels([MODELS.data[0]], BASE_INSTRUCTIONS).models;
+    const [disabled] = codexCatalogFromModels(
+      [{ ...MODELS.data[0], capabilities: { ...MODELS.data[0].capabilities, tools: false } }],
+      BASE_INSTRUCTIONS
+    ).models;
 
     expect(enabled).toMatchObject({ supports_search_tool: true, tool_mode: 'code_mode_only' });
     expect(disabled).toMatchObject({ supports_search_tool: false, tool_mode: null });
+  });
+
+  it('uses Codex bundled instructions instead of a Gateway replacement prompt', () => {
+    const [exact, fallback] = codexCatalogFromModels(
+      [MODELS.data[0], { ...MODELS.data[0], id: 'third-party-model' }],
+      BASE_INSTRUCTIONS
+    ).models;
+
+    expect(exact.base_instructions).toBe('Official instructions for the exact model.');
+    expect(fallback.base_instructions).toBe('Official instructions for the exact model.');
   });
 
   it('downloads the standard model list, converts it, and then uses If-None-Match', async () => {
@@ -119,6 +146,7 @@ describe('Codex catalog synchronization', () => {
       ...files,
       fetch: fetcher,
       now: () => new Date('2026-07-28T00:00:00Z'),
+      baseInstructions: BASE_INSTRUCTIONS,
     };
 
     await expect(syncCodexCatalog(input)).resolves.toMatchObject({
@@ -142,6 +170,7 @@ describe('Codex catalog synchronization', () => {
       auto_compact_token_limit: 100_000,
       input_modalities: ['text'],
       default_reasoning_level: 'medium',
+      base_instructions: 'Official instructions for the exact model.',
       supported_reasoning_levels: [
         { effort: 'medium', description: expect.any(String) },
         { effort: 'high', description: expect.any(String) },

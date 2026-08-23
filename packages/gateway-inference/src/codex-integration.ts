@@ -1,7 +1,13 @@
 import { spawn } from 'node:child_process';
 import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { assertCodexCatalog, readCatalog, readCatalogMetadata, syncCodexCatalog } from './codex-catalog.js';
+import {
+  assertCodexCatalog,
+  codexBaseInstructionsFromCatalog,
+  readCatalog,
+  readCatalogMetadata,
+  syncCodexCatalog,
+} from './codex-catalog.js';
 import {
   configureCodex,
   hasOtherManagedCodexHome,
@@ -56,6 +62,7 @@ export class CodexIntegrationService {
     client: InferenceSetupClient;
   }) {
     const codex = await this.requireCodex();
+    const baseInstructions = await this.readBundledBaseInstructions(codex.command);
     const integrationPaths = resolveCodexPaths(this.paths, input.profileName, this.options.env, this.options.home);
     const codexAccountReady = await this.hasCodexAccountLogin(codex.command, integrationPaths.codexHome);
     const runtimeCredential = await this.ensureRuntimeToken(input.profileName, input.profile, input.client);
@@ -71,6 +78,7 @@ export class CodexIntegrationService {
       lockFile: integrationPaths.lockFile,
       fetch: this.options.fetch,
       now: this.options.now,
+      baseInstructions,
     });
 
     const previousState = await readOptionalFile(integrationPaths.stateFile);
@@ -120,7 +128,8 @@ export class CodexIntegrationService {
     // could successfully update the catalog itself while every subsequent MCP
     // process kept executing an older bundled implementation indefinitely.
     await this.installRuntime();
-    await this.requireCodex();
+    const codex = await this.requireCodex();
+    const baseInstructions = await this.readBundledBaseInstructions(codex.command);
     const runtime = await this.requireRuntimeCredential(input.profileName);
     const integrationPaths = resolveCodexPaths(this.paths, input.profileName, this.options.env, this.options.home);
     const config = await inspectCodexConfiguration({ paths: integrationPaths, profile: input.profileName });
@@ -135,6 +144,7 @@ export class CodexIntegrationService {
       lockFile: integrationPaths.lockFile,
       fetch: this.options.fetch,
       now: this.options.now,
+      baseInstructions,
     });
     await (this.options.proxyDaemon ?? inferenceProxyDaemonManager).ensure({
       paths: this.paths,
@@ -355,6 +365,27 @@ export class CodexIntegrationService {
       CODEX_HOME: codexHome,
     });
     return result.code === 0;
+  }
+
+  private async readBundledBaseInstructions(command: string) {
+    const result = await this.run(command, ['debug', 'models', '--bundled'], {
+      ...process.env,
+      ...this.options.env,
+    });
+    if (result.code !== 0) {
+      throw new CliError(
+        'CODEX_BUNDLED_CATALOG_UNAVAILABLE',
+        `Codex could not provide its bundled model instructions: ${result.stderr || `exit ${result.code}`}`
+      );
+    }
+    try {
+      return codexBaseInstructionsFromCatalog(JSON.parse(result.stdout));
+    } catch (error) {
+      if (error instanceof CliError) throw error;
+      throw new CliError('CODEX_BUNDLED_CATALOG_INVALID', 'Codex returned invalid bundled model JSON.', {
+        cause: error,
+      });
+    }
   }
 
   private async smoke(command: string, version: string, catalogFile: string, codexHome: string): Promise<void> {
