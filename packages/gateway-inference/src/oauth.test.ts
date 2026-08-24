@@ -3,7 +3,13 @@ import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CredentialStore } from './credentials.js';
-import { createLoopbackReceiver, type LoopbackReceiver, loginWithBrowser, refreshCredential } from './oauth.js';
+import {
+  createLoopbackReceiver,
+  type LoopbackReceiver,
+  loginWithBrowser,
+  refreshCredential,
+  resolveBrowserLaunchCommand,
+} from './oauth.js';
 import type { InferenceDiscovery, OAuthCredential, OAuthMetadata, RuntimeCredential } from './types.js';
 
 const discovery: InferenceDiscovery = {
@@ -59,6 +65,16 @@ function jsonResponse(value: unknown, status = 200) {
 }
 
 describe('OAuth PKCE login', () => {
+  it('passes the complete OAuth URL to Windows without cmd.exe parsing ampersands', () => {
+    const url =
+      'https://gateway.example.com/api/oauth/authorize?response_type=code&client_id=goc_cli&code_challenge=test';
+
+    expect(resolveBrowserLaunchCommand('win32', url)).toEqual({
+      command: 'explorer.exe',
+      args: [url],
+    });
+  });
+
   it('registers the random loopback redirect and exchanges the state-validated code', async () => {
     const credentials = new MemoryCredentials();
     let opened: URL | undefined;

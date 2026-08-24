@@ -25,7 +25,7 @@ export async function runInteractiveInferenceSetup(input: {
   ui: InteractiveCliUi;
   showIntro?: boolean;
   session: () => Promise<InteractiveSetupSession>;
-  authorize: (gateway: string) => Promise<void>;
+  authorize: (gateway: string) => Promise<boolean | undefined>;
   configure: (harness: string, session: InteractiveSetupSession) => Promise<{ progress: string; summary: string }>;
 }): Promise<number> {
   if (input.showIntro !== false) {
@@ -43,8 +43,8 @@ export async function runInteractiveInferenceSetup(input: {
       input.ui.cancel('Setup cancelled.');
       return 0;
     }
-    input.ui.info('Complete authorization in your browser...');
-    await input.authorize(gateway);
+    const authorized = await input.authorize(gateway);
+    if (authorized === false) return 0;
     input.ui.info('Gateway authorization complete');
     session = await input.session();
   }

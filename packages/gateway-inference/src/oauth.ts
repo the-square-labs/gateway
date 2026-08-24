@@ -32,6 +32,11 @@ export interface LoginOptions {
   persistCredential?: boolean;
 }
 
+export interface BrowserLaunchCommand {
+  command: string;
+  args: string[];
+}
+
 function base64Url(value: Buffer): string {
   return value.toString('base64url');
 }
@@ -114,11 +119,16 @@ export async function createLoopbackReceiver(): Promise<LoopbackReceiver> {
   };
 }
 
+export function resolveBrowserLaunchCommand(platform: NodeJS.Platform, url: string): BrowserLaunchCommand {
+  if (platform === 'darwin') return { command: 'open', args: [url] };
+  if (platform === 'win32') return { command: 'explorer.exe', args: [url] };
+  return { command: 'xdg-open', args: [url] };
+}
+
 export async function openBrowser(url: string): Promise<void> {
-  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  const { command, args } = resolveBrowserLaunchCommand(process.platform, url);
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    const child = spawn(command, args, { detached: true, shell: false, stdio: 'ignore', windowsHide: true });
     child.once('error', reject);
     child.once('spawn', () => {
       child.unref();
