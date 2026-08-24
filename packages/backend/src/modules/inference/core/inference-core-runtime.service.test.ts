@@ -62,11 +62,13 @@ interface FakeContainer {
 
 function makeDocker() {
   const containers = new Map<string, FakeContainer>();
+  const images: Array<{ Id: string; RepoTags?: string[]; RepoDigests?: string[] }> = [];
   let sequence = 0;
   const calls: string[] = [];
   const docker = {
     calls,
     containers,
+    images,
     failNextReplace: false,
     failBackup: false,
     inspectSelf: async (): Promise<DockerContainerFullInspect> => ({
@@ -103,6 +105,7 @@ function makeDocker() {
         }));
     },
     imageExists: async () => false,
+    listImages: async () => images,
     pullImageRefStreaming: async (_ref: string, onProgress?: (p: object) => void) => {
       calls.push('pull');
       onProgress?.({ downloadedBytes: 10, totalBytes: 10, layersCompleted: 1, layersTotal: 1 });
@@ -173,6 +176,10 @@ function makeDocker() {
     },
     removeImageTag: async (ref: string) => {
       calls.push(`removeImage:${ref}`);
+      const index = images.findIndex(
+        (image) => image.Id === ref || image.RepoTags?.includes(ref) || image.RepoDigests?.includes(ref)
+      );
+      if (index >= 0) images.splice(index, 1);
     },
     inspectContainer: async (id: string) => {
       const c = containers.get(id);
@@ -485,6 +492,10 @@ describe('update', () => {
   });
 
   it('pulls first, drains, backs up, replaces, and accepts the new version', async () => {
+    docker.images.push(
+      { Id: NEW_DIGEST, RepoDigests: [`${IMAGE}@${NEW_DIGEST}`] },
+      { Id: `sha256:${'33'.repeat(32)}`, RepoDigests: [`${IMAGE}@sha256:${'33'.repeat(32)}`] }
+    );
     await service.update(NEW_VERSION);
     await waitFor(() => operations.ops[0]?.status === 'succeeded');
 
@@ -501,6 +512,8 @@ describe('update', () => {
     expect(stopAt).toBeGreaterThan(backupAt);
     // Old image pruned only after acceptance.
     expect(docker.calls).toContain(`removeImage:${IMAGE}@${OLD_DIGEST}`);
+    expect(docker.calls).toContain(`removeImage:sha256:${'33'.repeat(32)}`);
+    expect(docker.calls).not.toContain(`removeImage:${NEW_DIGEST}`);
     // The old container is gone; exactly one core container runs.
     const cores = [...docker.containers.values()].filter((c) => c.name === '/gw-inference-core');
     expect(cores).toHaveLength(1);
@@ -600,6 +613,39 @@ describe('reconcileOnStartup', () => {
     await service.reconcileOnStartup();
     expect(docker.containers.has('core-a')).toBe(true);
     expect(docker.containers.has('core-b')).toBe(false);
+  });
+
+  it('removes abandoned labeled helper containers during startup reconciliation', async () => {
+    store.setRow(installedRow({ containerId: 'core-a' }));
+    docker.containers.set('core-a', {
+      id: 'core-a',
+      name: '/gw-inference-core',
+      image: `${IMAGE}@${OLD_DIGEST}`,
+      labels: {
+        'com.wiolett.inference-core.owned': 'true',
+        'com.wiolett.inference-core.project': 'gw',
+        'com.wiolett.inference-core.digest': OLD_DIGEST,
+      },
+      running: true,
+      config: { Image: `${IMAGE}@${OLD_DIGEST}` },
+    });
+    docker.containers.set('helper-a', {
+      id: 'helper-a',
+      name: '/abandoned-helper',
+      image: `${IMAGE}@${OLD_DIGEST}`,
+      labels: {
+        'com.wiolett.inference-core.owned': 'true',
+        'com.wiolett.inference-core.project': 'gw',
+        'com.wiolett.inference-core.role': 'helper',
+      },
+      running: false,
+      config: { Image: `${IMAGE}@${OLD_DIGEST}` },
+    });
+
+    await service.reconcileOnStartup();
+
+    expect(docker.containers.has('core-a')).toBe(true);
+    expect(docker.containers.has('helper-a')).toBe(false);
   });
 
   it('resumes the unchanged core and restores ready state after an interrupted update', async () => {

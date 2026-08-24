@@ -27,6 +27,20 @@ afterEach(async () => {
 });
 
 describe('Docker archive streaming', () => {
+  it('removes disposable containers together with their anonymous volumes', async () => {
+    let requestUrl = '';
+    const socket = await listen((req, res) => {
+      requestUrl = req.url ?? '';
+      res.statusCode = 204;
+      res.end();
+    });
+    const docker = new DockerService(socket, '');
+
+    await docker.removeContainer('helper', { removeAnonymousVolumes: true });
+
+    expect(requestUrl).toBe('/v1.46/containers/helper?force=true&v=true');
+  });
+
   it('downloads an archive directly to a file and enforces the streaming byte ceiling', async () => {
     const payload = Buffer.alloc(128 * 1024, 0x61);
     const socket = await listen((_req, res) => {

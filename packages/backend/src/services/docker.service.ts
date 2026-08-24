@@ -456,6 +456,14 @@ export class DockerService {
     throw new Error(`Docker image inspect failed (${res.statusCode}): ${res.body}`);
   }
 
+  async listImages(): Promise<DockerImageSummary[]> {
+    const res = await this.request('GET', `${API_VERSION}/images/json?all=true`);
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker image list failed (${res.statusCode}): ${res.body}`);
+    }
+    return JSON.parse(res.body) as DockerImageSummary[];
+  }
+
   async tagImage(sourceRef: string, targetRepo: string, targetTag: string): Promise<void> {
     const res = await this.request(
       'POST',
@@ -555,8 +563,10 @@ export class DockerService {
   /**
    * Remove a container by ID.
    */
-  async removeContainer(id: string): Promise<void> {
-    const res = await this.request('DELETE', `${API_VERSION}/containers/${encodeURIComponent(id)}?force=true`);
+  async removeContainer(id: string, options: { removeAnonymousVolumes?: boolean } = {}): Promise<void> {
+    const params = new URLSearchParams({ force: 'true' });
+    if (options.removeAnonymousVolumes) params.set('v', 'true');
+    const res = await this.request('DELETE', `${API_VERSION}/containers/${encodeURIComponent(id)}?${params}`);
     if (res.statusCode !== 204 && res.statusCode !== 404) {
       throw new Error(`Docker container remove failed (${res.statusCode}): ${res.body}`);
     }
@@ -752,7 +762,7 @@ export class DockerService {
       const output = this.stripDockerStreamHeaders(logRes.bodyRaw);
       return { exitCode, output };
     } finally {
-      await this.removeContainer(id).catch(() => {});
+      await this.removeContainer(id, { removeAnonymousVolumes: true }).catch(() => {});
     }
   }
 
@@ -882,4 +892,11 @@ export interface DockerContainerListItem {
   NetworkSettings?: {
     Networks?: Record<string, { IPAddress?: string; GlobalIPv6Address?: string }>;
   };
+}
+
+export interface DockerImageSummary {
+  Id: string;
+  RepoTags?: string[] | null;
+  RepoDigests?: string[] | null;
+  Size?: number;
 }

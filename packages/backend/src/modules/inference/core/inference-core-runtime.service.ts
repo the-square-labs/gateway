@@ -50,6 +50,9 @@ const LABEL_OWNED = 'com.wiolett.inference-core.owned';
 const LABEL_PROJECT = 'com.wiolett.inference-core.project';
 const LABEL_DIGEST = 'com.wiolett.inference-core.digest';
 const LABEL_VERSION = 'com.wiolett.inference-core.version';
+const LABEL_ROLE = 'com.wiolett.inference-core.role';
+const ROLE_RUNTIME = 'runtime';
+const ROLE_HELPER = 'helper';
 
 const BACKUP_DIR = '/var/lib/gateway/inference-core-backups';
 
@@ -348,6 +351,19 @@ export class InferenceCoreRuntimeService {
       (c) => c.Labels?.[LABEL_PROJECT] === layout.project && c.Names.includes(`/${layout.containerName}`)
     );
 
+    for (const helper of owned.filter(
+      (c) => c.Labels?.[LABEL_PROJECT] === layout.project && c.Labels?.[LABEL_ROLE] === ROLE_HELPER
+    )) {
+      logger.warn('Removing abandoned inference core helper container', { id: helper.Id.slice(0, 12) });
+      if (helper.State === 'running') await this.docker.stopContainer(helper.Id).catch(() => {});
+      await this.docker.removeContainer(helper.Id, { removeAnonymousVolumes: true }).catch((error) => {
+        logger.warn('Inference core helper cleanup failed', {
+          id: helper.Id.slice(0, 12),
+          error: redactedCoreError(error),
+        });
+      });
+    }
+
     // Never run two cores on one state volume: keep the recorded container,
     // remove owned duplicates that do not match it.
     for (const duplicate of matching) {
@@ -412,6 +428,10 @@ export class InferenceCoreRuntimeService {
       }
     }
     await this.probeHealth(layout);
+    const reconciled = await this.loadStateRow();
+    if (reconciled?.state === 'ready' && reconciled.installedImageRef) {
+      await this.pruneOldCoreImages(reconciled.installedImageRef);
+    }
   }
 
   /** Periodic health probe between steady states; started from bootstrap. */
@@ -543,6 +563,7 @@ export class InferenceCoreRuntimeService {
           [LABEL_PROJECT]: layout.project,
           [LABEL_DIGEST]: artifact.digest,
           [LABEL_VERSION]: artifact.version,
+          [LABEL_ROLE]: ROLE_RUNTIME,
         },
         NetworkingConfig: {
           EndpointsConfig: { [layout.network]: { Aliases: [CORE_CONTAINER_ALIAS] } },
@@ -666,7 +687,7 @@ export class InferenceCoreRuntimeService {
 
       const current = await this.requireStateRow();
       await this.transition(current, 'ready', null);
-      await this.pruneOldImage(previous.imageRef);
+      await this.pruneOldCoreImages(artifact.imageRef, previous.imageRef);
       await this.pruneOldBackups();
     } catch (error) {
       if (!replaced) {
@@ -840,12 +861,13 @@ export class InferenceCoreRuntimeService {
     const tar = buildSingleFileTar('credentials.json', Buffer.from(payload, 'utf8'), 0o600, 10001, 10001);
     const helper = await this.docker.createContainer({
       Image: imageRef,
+      Labels: { [LABEL_OWNED]: 'true', [LABEL_PROJECT]: layout.project, [LABEL_ROLE]: ROLE_HELPER },
       HostConfig: { Binds: [`${layout.secretVolume}:/secrets`] },
     });
     try {
       await this.docker.putContainerArchive(helper, '/secrets', tar);
     } finally {
-      await this.docker.removeContainer(helper).catch(() => {});
+      await this.docker.removeContainer(helper, { removeAnonymousVolumes: true }).catch(() => {});
     }
   }
 
@@ -868,6 +890,7 @@ export class InferenceCoreRuntimeService {
 
     const helper = await this.docker.createContainer({
       Image: imageRef,
+      Labels: { [LABEL_OWNED]: 'true', [LABEL_PROJECT]: layout.project, [LABEL_ROLE]: ROLE_HELPER },
       HostConfig: { Binds: [`${layout.stateVolume}:/state:ro`] },
     });
     try {
@@ -883,7 +906,7 @@ export class InferenceCoreRuntimeService {
         throw error;
       }
     } finally {
-      await this.docker.removeContainer(helper).catch(() => {});
+      await this.docker.removeContainer(helper, { removeAnonymousVolumes: true }).catch(() => {});
     }
   }
 
@@ -900,6 +923,7 @@ export class InferenceCoreRuntimeService {
     const helper = await this.docker.createContainer({
       Image: imageRef,
       User: '0',
+      Labels: { [LABEL_OWNED]: 'true', [LABEL_PROJECT]: layout.project, [LABEL_ROLE]: ROLE_HELPER },
       HostConfig: { Binds: [`${layout.stateVolume}:/state`] },
     });
     try {
@@ -908,7 +932,7 @@ export class InferenceCoreRuntimeService {
       // overlay that could retain files created by the failed version.
       await this.docker.putContainerArchiveFromFile(helper, '/', backupFile);
     } finally {
-      await this.docker.removeContainer(helper).catch(() => {});
+      await this.docker.removeContainer(helper, { removeAnonymousVolumes: true }).catch(() => {});
     }
   }
 
@@ -921,11 +945,35 @@ export class InferenceCoreRuntimeService {
     }
   }
 
-  private async pruneOldImage(previousImageRef: string): Promise<void> {
-    // The previous image stays available until update acceptance; after a
-    // successful stability window it may be removed. Removal is best-effort:
-    // a tagged or otherwise referenced image is left alone.
-    await this.docker.removeImageTag(previousImageRef).catch(() => {});
+  private async pruneOldCoreImages(currentImageRef: string, previousImageRef?: string): Promise<void> {
+    const repository = imageRepositoryFromRef(currentImageRef);
+    const currentDigest = currentImageRef.includes('@')
+      ? currentImageRef.slice(currentImageRef.indexOf('@') + 1)
+      : null;
+    const attempted = new Set<string>();
+    const remove = async (ref: string): Promise<void> => {
+      if (attempted.has(ref)) return;
+      attempted.add(ref);
+      await this.docker.removeImageTag(ref).catch((error) => {
+        logger.warn('Old inference core image cleanup failed', { image: ref, error: redactedCoreError(error) });
+      });
+    };
+
+    if (previousImageRef !== currentImageRef && previousImageRef) await remove(previousImageRef);
+
+    let images: Awaited<ReturnType<DockerService['listImages']>>;
+    try {
+      images = await this.docker.listImages();
+    } catch (error) {
+      logger.warn('Inference core image inventory failed during cleanup', { error: redactedCoreError(error) });
+      return;
+    }
+    for (const image of images) {
+      const refs = [...(image.RepoTags ?? []), ...(image.RepoDigests ?? [])];
+      if (!refs.some((ref) => ref.startsWith(`${repository}:`) || ref.startsWith(`${repository}@`))) continue;
+      if (image.Id === currentDigest || refs.includes(currentImageRef)) continue;
+      await remove(image.Id);
+    }
   }
 
   // --------------------------------------------------------------- helpers
