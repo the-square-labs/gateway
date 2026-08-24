@@ -8,9 +8,10 @@ import type { CredentialStore } from './credentials.js';
 import { CliError, errorPayload } from './errors.js';
 import type { Fetch } from './http.js';
 import type { InferenceProxyDaemonManager } from './inference-proxy-daemon.js';
+import { runInteractiveLogin } from './interactive-login.js';
 import { isAuthorizationRequired, runInteractiveInferenceSetup } from './interactive-setup.js';
 import type { InteractiveCliUi, InteractiveOption } from './interactive-ui.js';
-import { loginCommand, logoutCommand } from './login-command.js';
+import { logoutCommand } from './login-command.js';
 import type { Output } from './output.js';
 import type { CliPaths } from './paths.js';
 import type { ProfileStore } from './profiles.js';
@@ -228,16 +229,17 @@ async function authenticate(input: InteractiveCommandInput): Promise<SetupIdenti
     input.ui.cancel('Login cancelled.');
     return null;
   }
-  input.ui.info('Complete authorization in your browser...');
-  await loginCommand(
-    { gateway, command: ['login'] },
-    input.profileName,
-    input.profiles,
-    input.credentials,
-    SILENT_OUTPUT,
-    input.fetch,
-    input.openBrowser
-  );
+  const completed = await runInteractiveLogin({
+    gateway,
+    profileName: input.profileName,
+    profiles: input.profiles,
+    credentials: input.credentials,
+    output: SILENT_OUTPUT,
+    ui: input.ui,
+    fetch: input.fetch,
+    openBrowser: input.openBrowser,
+  });
+  if (!completed) return null;
   const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
   const identity = await context.client.me();
   input.ui.info('Gateway authorization complete');
@@ -418,15 +420,17 @@ async function setupHarness(
     showIntro: false,
     session: () => authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch),
     authorize: (gateway) =>
-      loginCommand(
-        { gateway, command: ['login'] },
-        input.profileName,
-        input.profiles,
-        input.credentials,
-        SILENT_OUTPUT,
-        input.fetch,
-        input.openBrowser
-      ),
+      runInteractiveLogin({
+        gateway,
+        profileName: input.profileName,
+        profiles: input.profiles,
+        credentials: input.credentials,
+        output: SILENT_OUTPUT,
+        ui: input.ui,
+        fetch: input.fetch,
+        openBrowser: input.openBrowser,
+        cancelMessage: 'Setup cancelled.',
+      }),
     configure: async (harness, context) => {
       if (harness === 'claude-code') {
         const result = await claudeCodeIntegration.setup({

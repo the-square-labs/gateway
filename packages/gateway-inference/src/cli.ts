@@ -15,6 +15,7 @@ import {
   runInteractiveHarnessSetupCommand,
   runInteractiveRootCommand,
 } from './interactive-command.js';
+import { runInteractiveLogin } from './interactive-login.js';
 import { isAuthorizationRequired } from './interactive-setup.js';
 import { createInteractiveCliUi, type InteractiveCliUi } from './interactive-ui.js';
 import { loginCommand, loginWithInferenceTokenCommand, logoutCommand } from './login-command.js';
@@ -205,6 +206,18 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
           output,
           dependencies.fetch
         );
+      } else if (interactive) {
+        const completed = await runInteractiveLogin({
+          gateway,
+          profileName: CONNECTION_NAME,
+          profiles,
+          credentials,
+          output,
+          ui: input.ui,
+          fetch: dependencies.fetch,
+          openBrowser: dependencies.openBrowser,
+        });
+        if (!completed) return 0;
       } else {
         await loginCommand(
           { gateway, command: ['login'] },

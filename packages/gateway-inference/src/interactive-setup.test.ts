@@ -32,6 +32,7 @@ describe('interactive inference setup', () => {
     let authorized = false;
     const authorize = vi.fn(async () => {
       authorized = true;
+      return true;
     });
     const configure = vi.fn(async () => ({ progress: 'Configured Codex', summary: 'Ready' }));
 
@@ -55,7 +56,6 @@ describe('interactive inference setup', () => {
     expect(configure).toHaveBeenCalledWith('codex', SESSION);
     expect(ui.events).toEqual([
       'intro:Wiolett Gateway Inference · Setup',
-      'info:Complete authorization in your browser...',
       'info:Gateway authorization complete',
       'select',
       'spinner:Configuring Codex CLI...',
@@ -126,6 +126,9 @@ class FakeUi implements InteractiveCliUi {
   }
   async gatewayOrigin() {
     return 'https://gateway.example.com';
+  }
+  async inferenceToken() {
+    return 'gwi_test';
   }
   async select(_message: string, options: InteractiveOption[]) {
     this.options = options;
