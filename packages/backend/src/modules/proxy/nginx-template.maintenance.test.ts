@@ -172,9 +172,10 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain('ssl_trusted_certificate /etc/nginx/certs/example.chain.crt;');
   });
 
-  it('renders the two-hour Secure Link inactivity timeout through the production template path', async () => {
+  it('renders two-hour inactivity timeouts for Secure Link and WebSocket routes', async () => {
     const secure = await service().renderForHost({ ...host, secureLinkUpstream: true }, null);
-    const regular = await service().renderForHost(host, null);
+    const websocket = await service().renderForHost(host, null);
+    const regular = await service().renderForHost({ ...host, websocketSupport: false }, null);
 
     expect(secure).toContain('proxy_send_timeout 2h;');
     expect(secure).toContain('proxy_read_timeout 2h;');
@@ -183,9 +184,11 @@ describe('canonical Gateway nginx pages', () => {
     expect(secure).toContain('server unix:/run/gateway-secure-links/11111111-1111-4111-8111-111111111111.sock;');
     expect(secure).toContain('keepalive 64;');
     expect(secure).toContain('proxy_pass http://gateway_secure_link_11111111_1111_4111_8111_111111111111;');
+    expect(websocket).toContain('proxy_send_timeout 2h;');
+    expect(websocket).toContain('proxy_read_timeout 2h;');
+    expect(websocket).not.toContain('# gateway-managed-secure-link-upstream');
     expect(regular).toContain('proxy_send_timeout 60s;');
     expect(regular).toContain('proxy_read_timeout 60s;');
-    expect(regular).not.toContain('# gateway-managed-secure-link-upstream');
   });
 
   it('adds the managed Secure Link upstream to legacy custom templates', async () => {

@@ -410,8 +410,8 @@ ${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
 {{/if}}
 
         proxy_connect_timeout 60s;
-        proxy_send_timeout {{#if secureLinkUpstream}}2h{{else}}60s{{/if}};
-        proxy_read_timeout {{#if secureLinkUpstream}}2h{{else}}60s{{/if}};
+        proxy_send_timeout {{#if websocketSupport}}2h{{else}}{{#if secureLinkUpstream}}2h{{else}}60s{{/if}}{{/if}};
+        proxy_read_timeout {{#if websocketSupport}}2h{{else}}{{#if secureLinkUpstream}}2h{{else}}60s{{/if}}{{/if}};
 
 {{#if websocketSupport}}
         proxy_http_version 1.1;

@@ -287,7 +287,7 @@ export class NginxConfigGenerator {
     }
     lines.push('');
     lines.push('        proxy_connect_timeout 60s;');
-    const proxyInactivityTimeout = host.secureLinkUpstream ? '2h' : '60s';
+    const proxyInactivityTimeout = host.secureLinkUpstream || host.websocketSupport ? '2h' : '60s';
     lines.push(`        proxy_send_timeout ${proxyInactivityTimeout};`);
     lines.push(`        proxy_read_timeout ${proxyInactivityTimeout};`);
     lines.push('');
