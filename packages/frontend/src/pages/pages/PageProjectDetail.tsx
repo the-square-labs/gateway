@@ -7,7 +7,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -248,6 +248,7 @@ export function PageProjectDetail({
   const [migrateOpen, setMigrateOpen] = useState(false);
   const [migrationAvailable, setMigrationAvailable] = useState(false);
   const [latestPreviewHostname, setLatestPreviewHostname] = useState<string | null>(null);
+  const deletingRef = useRef(false);
   const [activeTab, setActiveTab] = useUrlTab(
     [...PROJECT_TABS],
     "deployments",
@@ -255,11 +256,15 @@ export function PageProjectDetail({
   );
 
   const load = useCallback(async () => {
+    if (deletingRef.current) return;
     try {
       const next = await api.getPageProject(projectId);
+      if (deletingRef.current) return;
       setProject(next);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load Page Project");
+      if (!deletingRef.current) {
+        toast.error(error instanceof Error ? error.message : "Failed to load Page Project");
+      }
     } finally {
       setLoading(false);
     }
@@ -319,10 +324,12 @@ export function PageProjectDetail({
       return;
     }
     try {
+      deletingRef.current = true;
       await api.deletePageProject(project.id);
       toast.success("Page Project deleted");
       navigate("/pages");
     } catch (error) {
+      deletingRef.current = false;
       toast.error(error instanceof Error ? error.message : "Failed to delete Page Project");
     }
   };
