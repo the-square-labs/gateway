@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { api } from "@/services/api";
 import {
   buildContainerMutationSnapshot,
+  hasContainerRuntimeIdentityChanged,
   inspectContainerAfterMutation,
   shouldSettleMutationTransition,
 } from "./DockerContainerDetail";
@@ -91,6 +92,13 @@ describe("DockerContainerDetail mutation snapshot helpers", () => {
 });
 
 describe("DockerContainerDetail post-mutation identity recovery", () => {
+  it("requires an immediate inspect refresh after adopting a replacement runtime id", () => {
+    expect(hasContainerRuntimeIdentityChanged("container-2", makeContainer())).toBe(true);
+    expect(
+      hasContainerRuntimeIdentityChanged("container-2", makeContainer({ Id: "container-2" }))
+    ).toBe(false);
+  });
+
   it("falls back to the stable name when recreate invalidates the runtime ID", async () => {
     vi.spyOn(api, "inspectContainer").mockRejectedValueOnce(new Error("not found"));
     vi.spyOn(api, "inspectContainerByName").mockResolvedValueOnce(

@@ -16,6 +16,7 @@ import { hasGpuMetric, hasGpuMonitoringMetrics, type NodeGpuDevice } from "@/typ
 import { formatBytes, type InspectData } from "./helpers";
 
 const MAX_HISTORY = 30;
+type ProcessLoadStatus = "loading" | "ready" | "error";
 
 interface ContainerStats {
   cpuPercent: number;
@@ -47,6 +48,22 @@ function normalizeStats(raw: Record<string, any>): ContainerStats {
 
 function hasMemoryStats(stats: ContainerStats | null): stats is ContainerStats {
   return !!stats && (stats.memoryUsageBytes > 0 || stats.memoryLimitBytes > 0);
+}
+
+function timestampMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function isMonitoringSampleForRuntime(
+  sample: Record<string, unknown>,
+  runtimeStartedAtMs: number | null
+) {
+  if (runtimeStartedAtMs === null) return true;
+  const sampleAt = timestampMs(sample.timestamp);
+  return sampleAt !== null && sampleAt >= runtimeStartedAtMs;
 }
 
 function attachedGpuDevices(data: InspectData, gpuDevices: NodeGpuDevice[]) {
@@ -89,6 +106,7 @@ export function StatsTab({
     totalProcesses?: number;
     limit?: number;
   } | null>(null);
+  const [processStatus, setProcessStatus] = useState<ProcessLoadStatus>("loading");
 
   const [cpuHist, setCpuHist] = useState<number[]>([]);
   const [memHist, setMemHist] = useState<number[]>([]);
@@ -103,6 +121,10 @@ export function StatsTab({
     diskR: number;
     diskW: number;
   } | null>(null);
+  const runtimeStartedAtMs = timestampMs(data.State?.StartedAt);
+  const monitoringIdentity = `${nodeId}:${containerId}:${runtimeStartedAtMs ?? "unknown"}`;
+  const monitoringIdentityRef = useRef(monitoringIdentity);
+  monitoringIdentityRef.current = monitoringIdentity;
 
   const pushStats = useCallback((s: ContainerStats) => {
     setCurrent(s);
@@ -139,13 +161,35 @@ export function StatsTab({
     };
   }, []);
 
+  useEffect(() => {
+    monitoringIdentityRef.current = monitoringIdentity;
+    setCurrent(null);
+    setGpuDevices([]);
+    setGpuHistory([]);
+    setProcesses(null);
+    setProcessStatus("loading");
+    setCpuHist([]);
+    setMemHist([]);
+    setNetRxHist([]);
+    setNetTxHist([]);
+    setDiskReadHist([]);
+    setDiskWriteHist([]);
+    setPidsHist([]);
+    prevCountersRef.current = null;
+  }, [monitoringIdentity]);
+
   // Load history from Redis on mount, then connect to SSE
   useEffect(() => {
+    const identity = monitoringIdentity;
     // 1. Load saved history
     api
       .getContainerStatsHistory(nodeId, containerId)
       .then((history) => {
-        if (!history || history.length === 0) return;
+        if (monitoringIdentityRef.current !== identity) return;
+        const runtimeHistory = (history ?? []).filter((entry) =>
+          isMonitoringSampleForRuntime(entry, runtimeStartedAtMs)
+        );
+        if (runtimeHistory.length === 0) return;
         const cpus: number[] = [],
           mems: number[] = [],
           pidsList: number[] = [];
@@ -157,8 +201,8 @@ export function StatsTab({
           pTx = 0,
           pDR = 0,
           pDW = 0;
-        for (let i = 0; i < history.length; i++) {
-          const s = normalizeStats(history[i] as any);
+        for (let i = 0; i < runtimeHistory.length; i++) {
+          const s = normalizeStats(runtimeHistory[i] as any);
           cpus.push(s.cpuPercent);
           if (hasMemoryStats(s)) mems.push(s.memoryUsageBytes);
           pidsList.push(s.pids);
@@ -181,7 +225,7 @@ export function StatsTab({
         setDiskReadHist(drD);
         setDiskWriteHist(dwD);
         prevCountersRef.current = { netRx: pRx, netTx: pTx, diskR: pDR, diskW: pDW };
-        const last = normalizeStats(history[history.length - 1] as any);
+        const last = normalizeStats(runtimeHistory[runtimeHistory.length - 1] as any);
         setCurrent(last);
       })
       .catch(() => {
@@ -192,6 +236,12 @@ export function StatsTab({
     const es = api.createNodeMonitoringStream(nodeId);
 
     const findContainerStats = (snapshot: any): ContainerStats | null => {
+      if (
+        monitoringIdentityRef.current !== identity ||
+        !isMonitoringSampleForRuntime(snapshot ?? {}, runtimeStartedAtMs)
+      ) {
+        return null;
+      }
       const stats = snapshot?.health?.containerStats as any[] | undefined;
       if (!stats) return null;
       const match = stats.find(
@@ -236,22 +286,30 @@ export function StatsTab({
     });
 
     return () => es.close();
-  }, [nodeId, containerId, pushStats]);
+  }, [nodeId, containerId, monitoringIdentity, pushStats, runtimeStartedAtMs]);
 
   // Fetch process list (separate from SSE — needs direct call)
   useEffect(() => {
+    const identity = monitoringIdentity;
+    let cancelled = false;
     const fetchTop = async () => {
       try {
         const p = await api.getContainerTop(nodeId, containerId);
+        if (cancelled || monitoringIdentityRef.current !== identity) return;
         setProcesses(p as any);
+        setProcessStatus("ready");
       } catch {
-        /* */
+        if (cancelled || monitoringIdentityRef.current !== identity) return;
+        setProcessStatus("error");
       }
     };
-    fetchTop();
+    void fetchTop();
     const interval = setInterval(fetchTop, 10000);
-    return () => clearInterval(interval);
-  }, [nodeId, containerId]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [nodeId, containerId, monitoringIdentity]);
 
   // Uptime — ticks every second
   const state = data.State ?? {};
@@ -380,17 +438,17 @@ export function StatsTab({
           ))}
 
           {/* Process List */}
-          {filteredProcesses.length > 0 && (
-            <PanelShell
-              title="Process List"
-              description={
-                processes?.truncated
-                  ? `Showing first ${processes.limit ?? filteredProcesses.length} of ${
-                      processes.totalProcesses ?? "many"
-                    } processes.`
-                  : undefined
-              }
-            >
+          <PanelShell
+            title="Process List"
+            description={
+              processes?.truncated
+                ? `Showing first ${processes.limit ?? filteredProcesses.length} of ${
+                    processes.totalProcesses ?? "many"
+                  } processes.`
+                : undefined
+            }
+          >
+            {filteredProcesses.length > 0 ? (
               <div className="overflow-x-auto">
                 <div className="max-h-[calc(2rem*9+2.25rem+4px)] overflow-auto">
                   <table className="w-full">
@@ -420,8 +478,16 @@ export function StatsTab({
                   </table>
                 </div>
               </div>
-            </PanelShell>
-          )}
+            ) : (
+              <div className="px-4 py-6 text-sm text-muted-foreground">
+                {processStatus === "loading"
+                  ? "Loading processes..."
+                  : processStatus === "error"
+                    ? "Process list is temporarily unavailable. Retrying automatically."
+                    : "No running processes reported. Retrying automatically."}
+              </div>
+            )}
+          </PanelShell>
         </>
       )}
     </div>

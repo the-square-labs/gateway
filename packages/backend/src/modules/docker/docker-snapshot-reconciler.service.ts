@@ -77,6 +77,7 @@ export class DockerSnapshotReconciler {
   private readonly failures = new Map<string, FailureState>();
   private readonly cancelledJobs = new Set<string>();
   private readonly detailCursors = new Map<string, number>();
+  private readonly activeContainerTransitions = new Set<string>();
   private readonly activeLanes = new Set<string>();
   private activeCount = 0;
   private activeVolumeMetricCount = 0;
@@ -97,9 +98,7 @@ export class DockerSnapshotReconciler {
     this.running = true;
     this.unsubscribers.push(
       this.eventBus.subscribe('node.changed', (payload) => this.onNodeChanged(payload)),
-      this.eventBus.subscribe('docker.container.changed', (payload) =>
-        this.onResourceChanged('containers', 'container-detail', payload)
-      ),
+      this.eventBus.subscribe('docker.container.changed', (payload) => this.onContainerChanged(payload)),
       this.eventBus.subscribe('docker.image.changed', (payload) =>
         this.onResourceChanged('images', undefined, payload)
       ),
@@ -291,6 +290,50 @@ export class DockerSnapshotReconciler {
     }
   }
 
+  private containerTransitionKeys(nodeId: string, event: Record<string, unknown>) {
+    const keys: string[] = [];
+    for (const field of ['id', 'oldId', 'name', 'oldName'] as const) {
+      const value = event[field];
+      if (typeof value === 'string' && value) keys.push(`${nodeId}:${value}`);
+    }
+    return keys;
+  }
+
+  private onContainerChanged(payload: unknown) {
+    if (!payload || typeof payload !== 'object') return;
+    const event = payload as Record<string, unknown>;
+    const nodeId = typeof event.nodeId === 'string' ? event.nodeId : null;
+    if (!nodeId) return;
+
+    this.enqueue({ nodeId, kind: 'containers' }, { urgent: true });
+    const transitionKeys = this.containerTransitionKeys(nodeId, event);
+    const action = typeof event.action === 'string' ? event.action : '';
+
+    if (action === 'transitioning') {
+      if (event.transition) {
+        for (const key of transitionKeys) this.activeContainerTransitions.add(key);
+        return;
+      }
+      for (const key of transitionKeys) this.activeContainerTransitions.delete(key);
+    } else if (action === 'recreated' || action === 'removed' || action === 'deleted') {
+      for (const key of transitionKeys) this.activeContainerTransitions.delete(key);
+    } else if (transitionKeys.some((key) => this.activeContainerTransitions.has(key))) {
+      // Preserve the last stable inspect snapshot while a restart/recreate is
+      // active. Docker can report the old runtime as exited during replacement,
+      // but that transient state must not become the page's durable detail.
+      return;
+    }
+
+    if (action === 'removed' || action === 'deleted') return;
+    const detailKey =
+      action === 'recreated'
+        ? event.id
+        : [event.name, event.id, event.ref].find((value): value is string => typeof value === 'string');
+    if (typeof detailKey === 'string' && detailKey) {
+      this.enqueue({ nodeId, kind: 'container-detail', key: detailKey }, { urgent: true });
+    }
+  }
+
   private cancelNode(nodeId: string): void {
     this.snapshots.markNodeDeleted(nodeId);
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
@@ -311,6 +354,9 @@ export class DockerSnapshotReconciler {
     }
     for (const key of this.detailCursors.keys()) {
       if (key.startsWith(`${nodeId}:`)) this.detailCursors.delete(key);
+    }
+    for (const key of this.activeContainerTransitions) {
+      if (key.startsWith(`${nodeId}:`)) this.activeContainerTransitions.delete(key);
     }
   }
 
