@@ -162,7 +162,7 @@ export function hasAllScopes(scopes: string[], requiredScopes: string[]): boolea
 
 /** Check if a user can use the AI assistant */
 export function canUseAI(scopes: string[]): boolean {
-  return hasScope(scopes, 'feat:ai:use');
+  return hasScope(scopes, 'ai:workspace:use');
 }
 
 /** Check if all requested scopes are a subset of the allowed scopes */

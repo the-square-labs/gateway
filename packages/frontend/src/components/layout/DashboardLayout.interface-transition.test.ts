@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveAIWorkspaceEntry, resolveInterfaceTransition } from "./DashboardLayout";
+import {
+  resolveAccessibleInterface,
+  resolveAIWorkspaceEntry,
+  resolveInterfaceTransition,
+  shouldOpenAIConversationInConsole,
+} from "./DashboardLayout";
 
 describe("resolveInterfaceTransition", () => {
   it("opens Operations Console with the current conversation in the AI side panel", () => {
@@ -21,6 +26,38 @@ describe("resolveInterfaceTransition", () => {
       path: "/",
       aiPanelOpen: false,
     });
+  });
+});
+
+describe("shouldOpenAIConversationInConsole", () => {
+  it("preserves a persisted chat after the user wrote in it", () => {
+    expect(
+      shouldOpenAIConversationInConsole("conversation-1", [
+        { role: "user", content: "Check the node" },
+        { role: "assistant", content: "Working on it" },
+      ])
+    ).toBe(true);
+  });
+
+  it("does not open the panel for an empty or merely opened chat", () => {
+    expect(shouldOpenAIConversationInConsole(null, [])).toBe(false);
+    expect(
+      shouldOpenAIConversationInConsole("conversation-1", [
+        { role: "assistant", content: "Welcome" },
+      ])
+    ).toBe(false);
+  });
+});
+
+describe("resolveAccessibleInterface", () => {
+  it("forces Operations Console when the Workspace scope is missing", () => {
+    expect(resolveAccessibleInterface(null, false)).toBe("operations_console");
+    expect(resolveAccessibleInterface("ai_workspace", false)).toBe("operations_console");
+  });
+
+  it("preserves the stored choice for users with Workspace access", () => {
+    expect(resolveAccessibleInterface("ai_workspace", true)).toBe("ai_workspace");
+    expect(resolveAccessibleInterface(null, true)).toBeNull();
   });
 });
 

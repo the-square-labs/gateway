@@ -137,6 +137,7 @@ export const ALL_SCOPES = [
   'license:view',
   'license:manage',
   // ── Features ─────────────────────────────────────────────────────
+  'ai:workspace:use',
   'feat:ai:use',
   'feat:ai:configure',
   'ai:skills:manage',
@@ -244,6 +245,7 @@ export const ALL_SCOPES = [
 export type Scope = (typeof ALL_SCOPES)[number];
 
 export const USER_ONLY_SCOPES = [
+  'ai:workspace:use',
   'feat:ai:use',
   'feat:ai:configure',
   'ai:skills:manage',
@@ -413,6 +415,7 @@ export const ADMIN_SCOPES: readonly string[] = [
   'housekeeping:run',
   'license:view',
   'license:manage',
+  'ai:workspace:use',
   'feat:ai:use',
   'feat:ai:configure',
   'ai:sandbox:use',
@@ -545,6 +548,7 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'nodes:files:write',
   'nodes:rename',
   'nodes:folders:manage',
+  'ai:workspace:use',
   'feat:ai:use',
   'ai:sandbox:use',
   'mcp:use',
@@ -627,6 +631,7 @@ export const VIEWER_SCOPES: readonly string[] = [
   'integrations:gitlab:view',
   'integrations:gitlab:projects:view',
   'integrations:cloudflare:view',
+  'ai:workspace:use',
 ];
 
 /** Guest group: authenticated account access without infrastructure permissions. */

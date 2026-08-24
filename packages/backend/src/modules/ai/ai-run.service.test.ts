@@ -1456,7 +1456,7 @@ describe('AIRunService runtime snapshots', () => {
       avatarUrl: null,
       groupId: 'group-1',
       groupName: 'users',
-      scopes: ['feat:ai:use'],
+      scopes: ['ai:workspace:use'],
       isBlocked: false,
     };
 

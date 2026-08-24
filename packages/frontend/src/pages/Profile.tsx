@@ -62,7 +62,14 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
-import type { BrowserSession, DatabaseConnection, LoggingSchema, Node, ProxyHost } from "@/types";
+import {
+  AI_SCOPE,
+  type BrowserSession,
+  type DatabaseConnection,
+  type LoggingSchema,
+  type Node,
+  type ProxyHost,
+} from "@/types";
 import { InferenceTokensSection } from "./inference/InferenceTokensSection";
 import { InferenceUsage } from "./inference/InferenceUsagePanels";
 import { ApiTokensSection } from "./settings/ApiTokensSection";
@@ -96,7 +103,7 @@ export function Profile() {
   const activeTab: ProfileTab = isProfileTab(tabParam) ? tabParam : "preferences";
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
 
-  const canUseAI = hasScope("feat:ai:use");
+  const canUseAI = hasScope(AI_SCOPE);
   const canUseInference = inferenceEnabled && hasScope("feat:ai:use");
   const canViewInferenceUsage = hasScope("feat:ai:use");
   const canManageInferenceTokens = hasScope("inference:tokens:manage");

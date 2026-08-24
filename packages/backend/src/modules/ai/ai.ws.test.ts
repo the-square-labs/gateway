@@ -22,9 +22,9 @@ const USER: User = {
   groupId: 'group-1',
   groupName: 'admin',
   requireGateway2fa: false,
-  groupScopes: ['feat:ai:use'],
+  groupScopes: ['ai:workspace:use'],
   additionalScopes: [],
-  scopes: ['feat:ai:use'],
+  scopes: ['ai:workspace:use'],
   isBlocked: false,
   isDeleted: false,
   authMethod: undefined,
@@ -186,8 +186,8 @@ describe('AI websocket authentication', () => {
       email: 'actor@example.com',
       groupId: 'actor-group',
       groupName: 'system-admin',
-      groupScopes: ['admin:users:impersonate', 'feat:ai:use'],
-      scopes: ['admin:users:impersonate', 'feat:ai:use'],
+      groupScopes: ['admin:users:impersonate', 'ai:workspace:use'],
+      scopes: ['admin:users:impersonate', 'ai:workspace:use'],
     };
     const subject = {
       ...USER,

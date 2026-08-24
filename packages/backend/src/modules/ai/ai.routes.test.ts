@@ -22,7 +22,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
-  scopes: ['feat:ai:use', 'feat:ai:configure', 'ai:skills:manage'],
+  scopes: ['ai:workspace:use', 'feat:ai:configure', 'ai:skills:manage'],
   isBlocked: false,
 };
 
@@ -34,7 +34,7 @@ const SESSION: SessionData = {
   expiresAt: Date.now() + 60_000,
 };
 
-function createDb(): DrizzleClient {
+function createDb(scopes: string[] = USER.scopes): DrizzleClient {
   return {
     query: {
       users: {
@@ -54,7 +54,7 @@ function createDb(): DrizzleClient {
             id: USER.groupId,
             parentId: null,
             name: USER.groupName,
-            scopes: USER.scopes,
+            scopes,
           },
         ]),
       },
@@ -74,14 +74,14 @@ function createApp() {
   return app;
 }
 
-function registerServices(aiSettings?: Partial<AISettingsService>) {
+function registerServices(aiSettings?: Partial<AISettingsService>, scopes: string[] = USER.scopes) {
   container.registerInstance(SessionService, {
     getSession: vi.fn().mockResolvedValue(SESSION),
     validateCsrfToken: vi.fn().mockResolvedValue(true),
     updateSession: vi.fn().mockResolvedValue(undefined),
     refreshSession: vi.fn().mockResolvedValue(false),
   } as unknown as SessionService);
-  container.registerInstance(TOKENS.DrizzleClient, createDb());
+  container.registerInstance(TOKENS.DrizzleClient, createDb(scopes));
   container.registerInstance(AISettingsService, {
     isEnabled: vi.fn().mockResolvedValue(true),
     getConfig: vi.fn().mockResolvedValue({
@@ -134,6 +134,16 @@ describe('AI routes session-only authentication', () => {
     expect(await response.json()).toEqual({
       message: 'This endpoint requires browser session authentication.',
     });
+  });
+
+  it('does not let Gateway Inference access substitute for AI Workspace access', async () => {
+    registerServices(undefined, ['feat:ai:use']);
+
+    const response = await createApp().request('/api/ai/conversations', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(403);
   });
 
   it('loads conversations for the authenticated user', async () => {

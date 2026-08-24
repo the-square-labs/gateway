@@ -57,7 +57,7 @@ function authHeaders() {
   };
 }
 
-function registerBrowserSession(service: Partial<IntegrationsService>, scopes = ['feat:ai:use']) {
+function registerBrowserSession(service: Partial<IntegrationsService>, scopes = ['ai:workspace:use']) {
   container.registerInstance(SessionService, {
     getSession: vi.fn().mockResolvedValue(SESSION),
     validateCsrfToken: vi.fn().mockResolvedValue(true),

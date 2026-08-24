@@ -17,7 +17,7 @@ const CONFIG_USER = {
 
 const TOKEN_USER = {
   ...CONFIG_USER,
-  scopes: ['feat:ai:use', 'nodes:details', 'proxy:view'] as string[],
+  scopes: ['ai:workspace:use', 'nodes:details', 'proxy:view'] as string[],
 };
 
 function createService({

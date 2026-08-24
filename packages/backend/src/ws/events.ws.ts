@@ -253,6 +253,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === INFERENCE_SETUP_EVENT_CHANNEL) {
     return (
+      hasScope(scopes, 'ai:workspace:use') ||
       hasScope(scopes, 'feat:ai:use') ||
       hasScope(scopes, 'inference:providers:view') ||
       hasScope(scopes, 'inference:models:manage') ||
@@ -262,6 +263,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
     return (
+      hasScope(scopes, 'ai:workspace:use') ||
       hasScope(scopes, 'feat:ai:use') ||
       hasScope(scopes, 'inference:usage:view') ||
       hasScope(scopes, 'inference:limits:manage')

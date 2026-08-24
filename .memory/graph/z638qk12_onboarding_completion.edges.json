@@ -3,23 +3,23 @@
   "edges": [
     {
       "from_id": "z638qk12",
-      "to_id": "dcfkgqwx",
+      "to_id": "8zbznen7",
       "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "Gateway Inference is nested in the AI Workspace onboarding flow, while this memory defines its product contract.",
+      "weight": 0.94,
+      "reason": "Both define the AI Workspace setup flow and how connector or Gateway-node prerequisites are handled without routing through Finalize Setup.",
       "source": "auto",
-      "created_at": 1786405036882,
-      "updated_at": 1786405036882
+      "created_at": 1787582921782,
+      "updated_at": 1787582921782
     },
     {
       "from_id": "z638qk12",
-      "to_id": "gahvf5k5",
-      "relation": "same_area",
-      "weight": 0.72,
-      "reason": "The onboarding checklist includes MFA and triggers a post-completion MFA reminder governed by the gateway MFA policy.",
+      "to_id": "dcfkgqwx",
+      "relation": "uses_service",
+      "weight": 0.78,
+      "reason": "The onboarding contract embeds Gateway Inference in AI Workspace, which relies on the standalone Gateway inference service and its availability settings.",
       "source": "auto",
-      "created_at": 1786405036882,
-      "updated_at": 1786405036882
+      "created_at": 1787582921782,
+      "updated_at": 1787582921782
     }
   ]
 }

@@ -918,7 +918,7 @@ export function AIConfigSection() {
       >
         <SettingsControlRow
           title="Enabled"
-          description="Enable AI Workspace for operators and admins."
+          description="Enable AI Workspace for users who have Workspace access."
           controlsClassName="flex justify-end justify-self-end !w-auto !min-w-0 !max-w-none"
         >
           <Switch

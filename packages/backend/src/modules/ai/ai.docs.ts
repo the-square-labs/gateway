@@ -1198,7 +1198,7 @@ Published model order is persisted separately and controls API catalog, companio
 
 ## User Tokens And Harness Setup
 
-Users need \`feat:ai:use\`, which grants both AI Workspace and Gateway Inference access, including personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`.
+Users need \`feat:ai:use\` for Gateway Inference access and personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`. AI Workspace access is controlled separately by \`ai:workspace:use\`.
 
 Token options:
 
@@ -1588,7 +1588,7 @@ If evidence is insufficient, state what could be verified and direct an administ
 
 /** Map doc topics to the scope required to read them */
 export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
-  discovery: 'feat:ai:use',
+  discovery: 'ai:workspace:use',
   pki: 'pki:ca:view:root',
   ssl: 'ssl:cert:view',
   proxy: 'proxy:view',
@@ -1616,7 +1616,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'node-files': ['nodes:files:read', 'nodes:files:write'],
   docker: 'docker:containers:view',
   sandbox: 'ai:sandbox:use',
-  conversations: 'feat:ai:use',
+  conversations: 'ai:workspace:use',
   databases: 'databases:view',
   postgres: 'databases:view',
   redis: 'databases:view',
@@ -1624,11 +1624,12 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'ai-settings': 'feat:ai:configure',
   'status-page': 'status-page:view',
   housekeeping: 'housekeeping:view',
-  permissions: 'feat:ai:use',
-  api: 'feat:ai:use',
+  permissions: 'ai:workspace:use',
+  api: 'ai:workspace:use',
   'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
   'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
   inference: [
+    'ai:workspace:use',
     'feat:ai:use',
     'inference:tokens:manage',
     'inference:providers:view',
@@ -1640,13 +1641,13 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   ],
   gitlab: 'integrations:gitlab:view',
   notifications: ['notifications:view', 'audit:siem:view'],
-  overview: 'feat:ai:use',
-  installation: 'feat:ai:use',
-  authentication: 'feat:ai:use',
+  overview: 'ai:workspace:use',
+  installation: 'ai:workspace:use',
+  authentication: 'ai:workspace:use',
   cloudflare: 'integrations:cloudflare:view',
   'docker-registries': 'docker:registries:view',
   clickhouse: 'databases:view',
-  troubleshooting: 'feat:ai:use',
+  troubleshooting: 'ai:workspace:use',
 };
 
 export function getInternalDocumentation(topic: string, userScopes: string[]): { topic: string; content: string } {

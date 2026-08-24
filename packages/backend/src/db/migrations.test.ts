@@ -198,6 +198,16 @@ describe('drizzle migration metadata', () => {
     expect(migration).not.toContain('UPDATE "oauth_refresh_tokens"');
   });
 
+  it('preserves existing AI Workspace grants when splitting inference access', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0155_split_ai_workspace_access.sql'), 'utf8');
+
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain("'feat:ai:use'");
+    expect(migration).toContain("'ai:workspace:use'");
+    expect(migration).not.toContain('UPDATE "api_tokens"');
+  });
+
   it('adds the inference core runtime tables without touching existing inference rows', () => {
     const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0139_inference_core_runtime.sql'), 'utf8');
 

@@ -175,7 +175,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `housekeeping:configure` |  |
 | `license:view` |  |
 | `license:manage` |  |
-| `feat:ai:use` | Use AI Workspace and Gateway Inference, including personal inference usage. |
+| `ai:workspace:use` | Use AI Workspace. Granted to the built-in viewer group and above. |
+| `feat:ai:use` | Use Gateway Inference, including personal inference usage. |
 | `feat:ai:configure` |  |
 | `ai:skills:manage` | Manage shared user-defined AI Workspace skills. |
 | `ai:sandbox:use` |  |
@@ -273,7 +274,8 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 
 | Scope | Reason |
 |-------|--------|
-| `feat:ai:use` | User/session-only AI Workspace and Gateway Inference access. |
+| `ai:workspace:use` | User/session-only AI Workspace access. |
+| `feat:ai:use` | User/session-only Gateway Inference access. |
 | `feat:ai:configure` | User/session-only AI configuration. |
 | `ai:skills:manage` | User/session-only shared AI skill management. |
 | `ai:sandbox:use` | User/session-only sandbox runner access. |

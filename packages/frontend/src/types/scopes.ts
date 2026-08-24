@@ -1,5 +1,5 @@
 /** The scope that grants access to AI Workspace — must match backend canUseAI() */
-export const AI_SCOPE = "feat:ai:use" as const;
+export const AI_SCOPE = "ai:workspace:use" as const;
 
 export const RESOURCE_SCOPABLE_SCOPES = [
   "pki:ca:create:intermediate",
@@ -927,9 +927,15 @@ const RAW_TOKEN_SCOPES = [
   },
   // Features
   {
+    value: "ai:workspace:use",
+    label: "Use AI Workspace",
+    desc: "Use the AI Workspace interface and embedded assistant",
+    group: "Features",
+  },
+  {
     value: "feat:ai:use",
-    label: "Use AI",
-    desc: "Use AI Workspace, Gateway Inference, and view personal inference usage",
+    label: "Use Gateway Inference",
+    desc: "Use Gateway Inference and view personal inference usage",
     group: "Features",
   },
   {
@@ -1378,6 +1384,7 @@ const RAW_TOKEN_SCOPES = [
 export const TOKEN_SCOPES = RAW_TOKEN_SCOPES;
 
 const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
+  "ai:workspace:use",
   "feat:ai:use",
   "feat:ai:configure",
   "ai:skills:manage",

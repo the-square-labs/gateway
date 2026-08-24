@@ -316,9 +316,14 @@ describe('canonical scope definitions', () => {
       expect(OPERATOR_SCOPES).not.toContain(scope);
     }
 
+    for (const scopes of [SYSTEM_ADMIN_SCOPES, ADMIN_SCOPES, OPERATOR_SCOPES, VIEWER_SCOPES]) {
+      expect(scopes).toContain('ai:workspace:use');
+    }
+
     expect(SYSTEM_ADMIN_SCOPES).toContain('feat:ai:use');
     expect(ADMIN_SCOPES).toContain('feat:ai:use');
     expect(OPERATOR_SCOPES).toContain('feat:ai:use');
+    expect(VIEWER_SCOPES).not.toContain('feat:ai:use');
 
     expect(isValidBaseScope('inference:tokens:create')).toBe(false);
     expect(isValidBaseScope('inference:tokens:revoke')).toBe(false);

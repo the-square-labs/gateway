@@ -16,7 +16,7 @@ export const AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS = new Set([
 
 export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
   find_resource: [
-    'feat:ai:use',
+    'ai:workspace:use',
     'nodes:details',
     'proxy:view',
     'proxy:templates:view',

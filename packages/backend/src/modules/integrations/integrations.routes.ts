@@ -66,7 +66,7 @@ integrationsRoutes.use('*', authMiddleware);
 
 const requireGitLabUserCredentialAccess: MiddlewareHandler<AppEnv> = async (c, next) => {
   await sessionOnly(c, async () => {
-    await requireScope('feat:ai:use')(c, next);
+    await requireScope('ai:workspace:use')(c, next);
   });
 };
 

@@ -14,7 +14,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
-  scopes: ['feat:ai:use'],
+  scopes: ['ai:workspace:use'],
   isBlocked: false,
 };
 
@@ -396,7 +396,7 @@ describe('AIRunExecutor live assistant draft streaming', () => {
             gate: 'question',
             classification: 'system-never-ask',
             approvalPolicy: 'system_skipped',
-            requiredScopes: ['feat:ai:use'],
+            requiredScopes: ['ai:workspace:use'],
           },
           {
             id: 'call-approval',

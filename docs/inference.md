@@ -47,7 +47,7 @@ There is no user-visible or administrator-managed Pool entity. One logical model
 
 ## User setup
 
-Users need `feat:ai:use`, which grants both AI Workspace and Gateway Inference access, including personal usage visibility. Token creation and revocation additionally require `inference:tokens:manage`.
+Users need `feat:ai:use` for Gateway Inference access and personal usage visibility. Token creation and revocation additionally require `inference:tokens:manage`. AI Workspace access is controlled separately by `ai:workspace:use`.
 
 Create a token under **Profile > Authorizations > Inference API tokens**. The `gwi_` secret is shown once.
 
