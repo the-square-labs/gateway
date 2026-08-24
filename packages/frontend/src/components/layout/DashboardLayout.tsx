@@ -55,6 +55,25 @@ export function resolveInterfaceTransition(
   return { path: null, aiPanelOpen: null };
 }
 
+export function shouldOpenAIConversationInConsole(
+  activeConversationId: string | null,
+  messages: readonly { role: string; content?: string; attachments?: readonly unknown[] }[]
+): boolean {
+  if (!activeConversationId || messages.length === 0) return false;
+  return messages.some(
+    (message) =>
+      message.role === "user" &&
+      ((message.content?.trim().length ?? 0) > 0 || (message.attachments?.length ?? 0) > 0)
+  );
+}
+
+export function resolveAccessibleInterface(
+  preferredInterface: "ai_workspace" | "operations_console" | null,
+  canUseAIWorkspace: boolean
+): "ai_workspace" | "operations_console" | null {
+  return canUseAIWorkspace ? preferredInterface : "operations_console";
+}
+
 export function resolveAIWorkspaceEntry(
   configured: boolean,
   canUse: boolean,
@@ -147,7 +166,8 @@ export function DashboardLayout() {
       !interfaceChoiceDismissed &&
       preferredInterface === null &&
       uiBootstrap &&
-      ((aiWorkspaceConfigured && canUseAIWorkspace) || uiBootstrap.aiWorkspace.installationOwner)
+      canUseAIWorkspace &&
+      (aiWorkspaceConfigured || uiBootstrap.aiWorkspace.installationOwner)
   );
 
   const savePreferredInterface = useCallback(
@@ -209,7 +229,11 @@ export function DashboardLayout() {
       setAIWorkspaceAvailability(entry);
     };
     const openOperationsConsole = () => {
-      void savePreferredInterface("operations_console", true);
+      const ai = useAIStore.getState();
+      void savePreferredInterface(
+        "operations_console",
+        shouldOpenAIConversationInConsole(ai.activeConversationId, ai.messages)
+      );
     };
     window.addEventListener("gateway:open-ai-workspace", openAIWorkspace);
     window.addEventListener("gateway:open-operations-console", openOperationsConsole);
@@ -223,6 +247,24 @@ export function DashboardLayout() {
     canConfigureAIWorkspace,
     canUseAIWorkspace,
     savePreferredInterface,
+  ]);
+
+  useEffect(() => {
+    if (!interfacePreferenceLoaded || !uiBootstrap) return;
+    const accessibleInterface = resolveAccessibleInterface(preferredInterface, canUseAIWorkspace);
+    if (accessibleInterface === preferredInterface || accessibleInterface === null) return;
+
+    setPreferredInterface(accessibleInterface);
+    setInterfaceChoiceDismissed(true);
+    void api
+      .updateUserPreferences({ preferredInterface: accessibleInterface })
+      .catch(() => undefined);
+  }, [
+    canUseAIWorkspace,
+    interfacePreferenceLoaded,
+    preferredInterface,
+    setPreferredInterface,
+    uiBootstrap,
   ]);
 
   // Project each refreshed shell atomically into the existing feature stores.

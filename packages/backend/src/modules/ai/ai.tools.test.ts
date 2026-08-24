@@ -106,7 +106,7 @@ describe('AI tool scope filtering', () => {
   });
 
   it('exposes concrete connector and node setup handoffs without the Finalize Setup route', () => {
-    expect(toolNames(['feat:ai:use'])).toEqual(
+    expect(toolNames(['ai:workspace:use'])).toEqual(
       expect.arrayContaining(['open_connector_setup', 'open_node_enrollment'])
     );
     expect(
@@ -200,7 +200,7 @@ describe('AI tool scope filtering', () => {
     const names = getOpenAITools(
       [],
       [
-        'feat:ai:use',
+        'ai:workspace:use',
         'domains:view',
         'domains:manage',
         'integrations:github:view',
@@ -382,13 +382,13 @@ describe('AI tool scope filtering', () => {
     expect(TOOL_STORE_INVALIDATION_MAP.update_ai_settings).toEqual(['settings']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_license).toEqual(['settings']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_housekeeping).toEqual(['settings']);
-    expect(toolNames(['feat:ai:use'])).toContain('set_resource_pin');
-    expect(toolNames(['feat:ai:use'])).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
+    expect(toolNames(['ai:workspace:use'])).toContain('set_resource_pin');
+    expect(toolNames(['ai:workspace:use'])).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
     expect(
-      getOpenAITools([], ['feat:ai:use'], false, { discoveredToolsets: [] }).map((tool) => tool.function.name)
+      getOpenAITools([], ['ai:workspace:use'], false, { discoveredToolsets: [] }).map((tool) => tool.function.name)
     ).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
     expect(
-      getOpenAITools(['read_tool_output', 'search_tool_output'], ['feat:ai:use'], false).map(
+      getOpenAITools(['read_tool_output', 'search_tool_output'], ['ai:workspace:use'], false).map(
         (tool) => tool.function.name
       )
     ).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
@@ -461,7 +461,7 @@ describe('AI tool scope filtering', () => {
     expect(toolNames(['admin:groups'])).toEqual(
       expect.arrayContaining(['list_groups', 'create_group', 'update_group', 'delete_group'])
     );
-    expect(toolNames(['feat:ai:use'])).toEqual(
+    expect(toolNames(['ai:workspace:use'])).toEqual(
       expect.arrayContaining([
         'discover_tools',
         'get_current_context',
@@ -573,14 +573,19 @@ describe('AI tool scope filtering', () => {
     expect(isDestructiveTool('create_alert_rule')).toBe(true);
     expect(isDestructiveTool('test_webhook')).toBe(false);
 
-    expect(toolNames(['feat:ai:use'])).not.toContain('web_search');
-    expect(getOpenAITools([], ['feat:ai:use'], true).map((tool) => tool.function.name)).toContain('web_search');
+    expect(toolNames(['ai:workspace:use'])).not.toContain('web_search');
+    expect(getOpenAITools([], ['ai:workspace:use'], true).map((tool) => tool.function.name)).toContain('web_search');
   });
 
   it('can narrow model-visible tools to base tools plus discovered categories', () => {
-    const baseToolNames = getOpenAITools([], ['feat:ai:use', 'logs:schemas:view', 'docker:containers:view'], true, {
-      discoveredToolsets: [],
-    }).map((tool) => tool.function.name);
+    const baseToolNames = getOpenAITools(
+      [],
+      ['ai:workspace:use', 'logs:schemas:view', 'docker:containers:view'],
+      true,
+      {
+        discoveredToolsets: [],
+      }
+    ).map((tool) => tool.function.name);
 
     expect(baseToolNames).toEqual(
       expect.arrayContaining([
@@ -597,9 +602,14 @@ describe('AI tool scope filtering', () => {
     expect(baseToolNames).not.toContain('manage_logging');
     expect(baseToolNames).not.toContain('list_docker_containers');
 
-    const loggingToolNames = getOpenAITools([], ['feat:ai:use', 'logs:schemas:view', 'docker:containers:view'], false, {
-      discoveredToolsets: ['Logging'],
-    }).map((tool) => tool.function.name);
+    const loggingToolNames = getOpenAITools(
+      [],
+      ['ai:workspace:use', 'logs:schemas:view', 'docker:containers:view'],
+      false,
+      {
+        discoveredToolsets: ['Logging'],
+      }
+    ).map((tool) => tool.function.name);
 
     expect(loggingToolNames).toContain('manage_logging');
     expect(loggingToolNames).not.toContain('list_docker_containers');
@@ -637,7 +647,7 @@ describe('AI tool scope filtering', () => {
   });
 
   it('exposes fetch as a base tool for direct URLs when sandbox access is enabled', () => {
-    const baseToolNames = getOpenAITools([], ['feat:ai:use', 'ai:sandbox:use'], false, {
+    const baseToolNames = getOpenAITools([], ['ai:workspace:use', 'ai:sandbox:use'], false, {
       discoveredToolsets: [],
       sandboxEnabled: true,
     }).map((tool) => tool.function.name);
@@ -654,7 +664,7 @@ describe('AI tool scope filtering', () => {
 
     expect(inferred).toEqual(['Sandbox']);
 
-    const toolNames = getOpenAITools([], ['feat:ai:use', 'ai:sandbox:use'], false, {
+    const toolNames = getOpenAITools([], ['ai:workspace:use', 'ai:sandbox:use'], false, {
       discoveredToolsets: inferred,
       sandboxEnabled: true,
     }).map((tool) => tool.function.name);
@@ -692,7 +702,7 @@ describe('AI tool scope filtering', () => {
       'get_sandbox_runtime_status',
     ]);
     expect(toolNames(['feat:ai:configure'])).toEqual(expect.arrayContaining(aiToolNames));
-    expect(toolNames(['feat:ai:use'])).not.toEqual(expect.arrayContaining(aiToolNames));
+    expect(toolNames(['ai:workspace:use'])).not.toEqual(expect.arrayContaining(aiToolNames));
     expect(isDestructiveTool('get_ai_settings')).toBe(false);
     expect(isDestructiveTool('list_ai_tools')).toBe(false);
     expect(isDestructiveTool('get_sandbox_runtime_status')).toBe(false);
@@ -706,7 +716,7 @@ describe('AI tool scope filtering', () => {
     expect(AI_TOOLS.filter((tool) => tool.category === 'OAuth').map((tool) => tool.name)).toEqual([
       'manage_oauth_authorization',
     ]);
-    expect(toolNames(['feat:ai:use'])).toEqual(
+    expect(toolNames(['ai:workspace:use'])).toEqual(
       expect.arrayContaining(['manage_ai_conversation', 'manage_oauth_authorization', 'manage_api_token'])
     );
     expect(isDestructiveTool('manage_ai_conversation')).toBe(true);
@@ -735,7 +745,7 @@ describe('AI tool scope filtering', () => {
       expect.arrayContaining(['get_gateway_settings', 'update_gateway_settings'])
     );
     expect(toolNames(['admin:update'])).toContain('manage_system_updates');
-    expect(toolNames(['feat:ai:use'])).not.toEqual(expect.arrayContaining(maintenanceToolNames));
+    expect(toolNames(['ai:workspace:use'])).not.toEqual(expect.arrayContaining(maintenanceToolNames));
     expect(isDestructiveTool('get_license_status')).toBe(false);
     expect(isDestructiveTool('get_gateway_settings')).toBe(false);
     expect(isDestructiveTool('manage_license')).toBe(true);

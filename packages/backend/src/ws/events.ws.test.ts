@@ -240,12 +240,12 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
-  it('authorizes catalog invalidations for inference users', async () => {
+  it('authorizes catalog invalidations for AI Workspace users', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['feat:ai:use'] },
-      effectiveScopes: ['feat:ai:use'],
+      user: { ...USER, scopes: ['ai:workspace:use'] },
+      effectiveScopes: ['ai:workspace:use'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();

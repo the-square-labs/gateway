@@ -51,7 +51,7 @@ function setAuthenticatedUser() {
       email: "user@example.com",
       name: "User One",
       groupName: "admin",
-      scopes: ["feat:ai:use"],
+      scopes: ["ai:workspace:use"],
       isBlocked: false,
     } as any,
     isAuthenticated: true,

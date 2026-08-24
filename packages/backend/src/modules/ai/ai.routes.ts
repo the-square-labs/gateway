@@ -165,7 +165,7 @@ aiRoutes.openapi(aiStatusRoute, async (c) => {
   });
 });
 
-aiRoutes.get('/conversations', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.get('/conversations', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AIConversationService);
   const user = c.get('user')!;
   const data = await service.listConversations(user.id);
@@ -174,7 +174,7 @@ aiRoutes.get('/conversations', requireScope('feat:ai:use'), async (c) => {
 
 // Scenario catalogue for the full AI Workspace start screen. The server owns
 // visibility so a card is never an alternate way around a permission check.
-aiRoutes.get('/scenarios', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.get('/scenarios', requireScope('ai:workspace:use'), async (c) => {
   const rawContext = c.req.query('context');
   let parsed: ReturnType<typeof PageContextSchema.safeParse> | null = null;
   if (rawContext) {
@@ -193,14 +193,14 @@ aiRoutes.get('/scenarios', requireScope('feat:ai:use'), async (c) => {
   return c.json({ data: scenarios });
 });
 
-aiRoutes.get('/conversation-folders', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.get('/conversation-folders', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AIConversationFolderService);
   const user = c.get('user')!;
   const data = await service.listFolders(user.id);
   return c.json({ data });
 });
 
-aiRoutes.post('/conversation-folders', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.post('/conversation-folders', requireScope('ai:workspace:use'), async (c) => {
   const parsed = CreateAIConversationFolderSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -210,7 +210,7 @@ aiRoutes.post('/conversation-folders', requireScope('feat:ai:use'), async (c) =>
   return c.json({ data }, 201);
 });
 
-aiRoutes.patch('/conversation-folders/:id', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.patch('/conversation-folders/:id', requireScope('ai:workspace:use'), async (c) => {
   const parsed = UpdateAIConversationFolderSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -220,14 +220,14 @@ aiRoutes.patch('/conversation-folders/:id', requireScope('feat:ai:use'), async (
   return c.json({ data });
 });
 
-aiRoutes.delete('/conversation-folders/:id', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.delete('/conversation-folders/:id', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AIConversationFolderService);
   const user = c.get('user')!;
   await service.deleteFolder(user.id, c.req.param('id'));
   return c.json({ data: { deleted: true } });
 });
 
-aiRoutes.put('/conversation-folders/reorder', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.put('/conversation-folders/reorder', requireScope('ai:workspace:use'), async (c) => {
   const parsed = ReorderAIConversationFoldersSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -237,7 +237,7 @@ aiRoutes.put('/conversation-folders/reorder', requireScope('feat:ai:use'), async
   return c.json({ data });
 });
 
-aiRoutes.put('/conversation-folders/move-conversations', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.put('/conversation-folders/move-conversations', requireScope('ai:workspace:use'), async (c) => {
   const parsed = MoveAIConversationsToFolderSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -247,7 +247,7 @@ aiRoutes.put('/conversation-folders/move-conversations', requireScope('feat:ai:u
   return c.json({ data });
 });
 
-aiRoutes.get('/conversations/:id', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.get('/conversations/:id', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AIConversationService);
   const user = c.get('user')!;
   const data = await service.getConversation(user.id, c.req.param('id'));
@@ -255,7 +255,7 @@ aiRoutes.get('/conversations/:id', requireScope('feat:ai:use'), async (c) => {
   return c.json({ data });
 });
 
-aiRoutes.patch('/conversations/:id', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.patch('/conversations/:id', requireScope('ai:workspace:use'), async (c) => {
   const parsed = UpdateAIConversationSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -266,7 +266,7 @@ aiRoutes.patch('/conversations/:id', requireScope('feat:ai:use'), async (c) => {
   return c.json({ data });
 });
 
-aiRoutes.patch('/conversations/:id/provider', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.patch('/conversations/:id/provider', requireScope('ai:workspace:use'), async (c) => {
   const parsed = UpdateAIConversationProviderSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -332,7 +332,7 @@ aiRoutes.patch('/conversations/:id/provider', requireScope('feat:ai:use'), async
   return c.json({ data });
 });
 
-aiRoutes.delete('/conversations/:id', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.delete('/conversations/:id', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AIConversationService);
   const user = c.get('user')!;
   const deleted = await service.deleteConversation(user.id, c.req.param('id'));
@@ -340,7 +340,7 @@ aiRoutes.delete('/conversations/:id', requireScope('feat:ai:use'), async (c) => 
   return c.json({ data: { deleted: true } });
 });
 
-aiRoutes.post('/conversations/:id/rollback', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.post('/conversations/:id/rollback', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AIConversationService);
   const user = c.get('user')!;
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -355,7 +355,7 @@ aiRoutes.post('/conversations/:id/rollback', requireScope('feat:ai:use'), async 
   return c.json({ data: result });
 });
 
-aiRoutes.post('/context-estimate', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.post('/context-estimate', requireScope('ai:workspace:use'), async (c) => {
   const parsed = AIContextEstimateRequestSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
 
@@ -551,7 +551,7 @@ aiRoutes.get('/sandbox/jobs/:id/output', requireScope('ai:sandbox:use'), async (
 
 const MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024;
 
-aiRoutes.post('/sandbox/artifacts', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.post('/sandbox/artifacts', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AISandboxArtifactService);
   const user = c.get('user')!;
   const body = await c.req.parseBody();
@@ -585,7 +585,7 @@ aiRoutes.post('/sandbox/artifacts', requireScope('feat:ai:use'), async (c) => {
   });
 });
 
-aiRoutes.get('/sandbox/artifacts', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.get('/sandbox/artifacts', requireScope('ai:workspace:use'), async (c) => {
   const artifactService = container.resolve(AISandboxArtifactService);
   const conversationService = container.resolve(AIConversationService);
   const user = c.get('user')!;
@@ -607,14 +607,14 @@ aiRoutes.get('/sandbox/artifacts', requireScope('feat:ai:use'), async (c) => {
   });
 });
 
-aiRoutes.delete('/sandbox/artifacts/:id', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.delete('/sandbox/artifacts/:id', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AISandboxArtifactService);
   const user = c.get('user')!;
   await service.delete(user.id, c.req.param('id'));
   return c.json({ data: { deleted: true } });
 });
 
-aiRoutes.get('/sandbox/artifacts/:id/download', requireScope('feat:ai:use'), async (c) => {
+aiRoutes.get('/sandbox/artifacts/:id/download', requireScope('ai:workspace:use'), async (c) => {
   const service = container.resolve(AISandboxArtifactService);
   const user = c.get('user')!;
   const artifact = await service.getDownload(user.id, c.req.param('id'));

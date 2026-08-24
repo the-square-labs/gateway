@@ -136,12 +136,16 @@ describe('Scope-based permissions', () => {
   });
 
   describe('canUseAI', () => {
-    it('user with feat:ai:use can use AI', () => {
-      expect(canUseAI(['feat:ai:use', 'cert:read'])).toBe(true);
+    it('user with ai:workspace:use can use AI Workspace', () => {
+      expect(canUseAI(['ai:workspace:use', 'cert:read'])).toBe(true);
     });
 
-    it('user without feat:ai:use cannot use AI', () => {
+    it('user without ai:workspace:use cannot use AI Workspace', () => {
       expect(canUseAI(['cert:read', 'cert:issue'])).toBe(false);
+    });
+
+    it('does not treat inference access as AI Workspace access', () => {
+      expect(canUseAI(['feat:ai:use'])).toBe(false);
     });
   });
 

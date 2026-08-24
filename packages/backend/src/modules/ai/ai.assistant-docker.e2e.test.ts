@@ -43,7 +43,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
-  scopes: ['feat:ai:use', 'docker:containers:create:node-1', 'docker:containers:environment:node-1'],
+  scopes: ['ai:workspace:use', 'docker:containers:create:node-1', 'docker:containers:environment:node-1'],
   isBlocked: false,
   aiApprovalMode: 'normal',
 };

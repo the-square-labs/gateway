@@ -36,7 +36,7 @@ describe("Profile", () => {
         name: "Alex Gateway",
         email: "alex@example.com",
         authMethod: "oidc",
-        scopes: ["feat:ai:use", "inference:tokens:manage"],
+        scopes: ["ai:workspace:use", "feat:ai:use", "inference:tokens:manage"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -99,6 +99,20 @@ describe("Profile", () => {
     renderProfile("/profile");
 
     expect(screen.queryByText("Inference endpoints panel")).not.toBeInTheDocument();
+  });
+
+  it("keeps inference preferences but hides AI Workspace controls without Workspace access", () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["feat:ai:use", "inference:tokens:manage"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderProfile("/profile");
+
+    expect(screen.getByText("Inference endpoints panel")).toBeInTheDocument();
+    expect(screen.getByText("Inference usage panel")).toBeInTheDocument();
+    expect(screen.queryByText("AI approval mode")).not.toBeInTheDocument();
   });
 
   it("groups API, OAuth, inference credentials, and sessions on the Authorizations tab", async () => {

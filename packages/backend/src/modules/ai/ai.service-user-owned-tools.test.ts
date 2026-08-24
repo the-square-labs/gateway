@@ -12,7 +12,7 @@ const BASE_USER = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'operators',
-  scopes: ['feat:ai:use'] as string[],
+  scopes: ['ai:workspace:use'] as string[],
   isBlocked: false,
 };
 

@@ -11,7 +11,7 @@ const BASE_USER = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
-  scopes: ['feat:ai:use'] as string[],
+  scopes: ['ai:workspace:use'] as string[],
   isBlocked: false,
 };
 
@@ -72,7 +72,7 @@ describe('AIService discovery tools', () => {
     const service = createService({ disabledTools: ['get_current_context'], webSearchEnabled: true });
 
     const recommendation = await service.executeTool(
-      { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:create', 'logs:schemas:view'] },
+      { ...BASE_USER, scopes: ['ai:workspace:use', 'logs:schemas:create', 'logs:schemas:view'] },
       'discover_tools',
       { query: 'schema' }
     );
@@ -89,7 +89,7 @@ describe('AIService discovery tools', () => {
     ).toBeLessThanOrEqual(3);
 
     const activation = await service.executeTool(
-      { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:create', 'logs:schemas:view'] },
+      { ...BASE_USER, scopes: ['ai:workspace:use', 'logs:schemas:create', 'logs:schemas:view'] },
       'discover_tools',
       { categories: ['Logging'], includeTools: true }
     );
@@ -124,7 +124,7 @@ describe('AIService discovery tools', () => {
     const service = createService();
 
     await service.executeTool(
-      { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:view'] },
+      { ...BASE_USER, scopes: ['ai:workspace:use', 'logs:schemas:view'] },
       'discover_tools',
       { categories: ['Logging'], includeTools: true },
       {
@@ -147,7 +147,7 @@ describe('AIService discovery tools', () => {
     const service = createService();
 
     const recommendation = await service.executeTool(
-      { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:view'] },
+      { ...BASE_USER, scopes: ['ai:workspace:use', 'logs:schemas:view'] },
       'discover_tools',
       { query: 'schema' },
       { conversationId: 'conversation-1' }

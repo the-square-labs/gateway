@@ -1086,6 +1086,13 @@
       "when": 1787516192476,
       "tag": "0154_remove_inference_setup_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1787581989539,
+      "tag": "0155_split_ai_workspace_access",
+      "breakpoints": true
     }
   ]
 }

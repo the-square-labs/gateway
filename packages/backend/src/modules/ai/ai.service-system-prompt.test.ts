@@ -71,8 +71,8 @@ describe('AIService system prompt', () => {
       monitoringService,
     });
 
-    const disabledPrompt = await disabledService.buildSystemPrompt({ ...BASE_USER, scopes: ['feat:ai:use'] });
-    const enabledPrompt = await enabledService.buildSystemPrompt({ ...BASE_USER, scopes: ['feat:ai:use'] });
+    const disabledPrompt = await disabledService.buildSystemPrompt({ ...BASE_USER, scopes: ['ai:workspace:use'] });
+    const enabledPrompt = await enabledService.buildSystemPrompt({ ...BASE_USER, scopes: ['ai:workspace:use'] });
 
     expect(disabledPrompt).not.toContain('The web_search tool is configured and available');
     expect(enabledPrompt).toContain('The web_search tool is configured and available');
@@ -84,7 +84,7 @@ describe('AIService system prompt', () => {
     const service = createService({});
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['feat:ai:use'] }, 'open_connector_setup', {
+      service.executeTool({ ...BASE_USER, scopes: ['ai:workspace:use'] }, 'open_connector_setup', {
         connector: 'git',
         baseUrl: 'https://git.example.test',
         repositoryUrl: 'https://git.example.test/team/api',
@@ -214,7 +214,7 @@ describe('AIService system prompt', () => {
     const prompt = await service.buildSystemPrompt(
       {
         ...BASE_USER,
-        scopes: ['feat:ai:use'],
+        scopes: ['ai:workspace:use'],
       },
       undefined,
       'conversation-1'
@@ -240,7 +240,7 @@ describe('AIService system prompt', () => {
 
     const prompt = await service.buildSystemPrompt({
       ...BASE_USER,
-      scopes: ['feat:ai:use'],
+      scopes: ['ai:workspace:use'],
     });
 
     expect(prompt).not.toContain('## Conversation Retrieval');
@@ -284,7 +284,7 @@ describe('AIService system prompt', () => {
       ],
     });
 
-    const prompt = await service.buildSystemPrompt({ ...BASE_USER, scopes: ['feat:ai:use'] });
+    const prompt = await service.buildSystemPrompt({ ...BASE_USER, scopes: ['ai:workspace:use'] });
 
     expect(prompt).toContain('id="skill-enabled"');
     expect(prompt).toContain('description="Deploy Acme services safely"');
@@ -389,7 +389,7 @@ describe('AIService system prompt', () => {
 
     const prompt = await service.buildSystemPrompt({
       ...BASE_USER,
-      scopes: ['feat:ai:use', ...resourceScopes],
+      scopes: ['ai:workspace:use', ...resourceScopes],
     });
 
     expect(prompt).toContain('Scopes: 251 total scopes.');
@@ -415,7 +415,7 @@ describe('AIService system prompt', () => {
     });
 
     const estimate = await service.getContextEstimate(
-      { ...BASE_USER, scopes: ['feat:ai:use'] },
+      { ...BASE_USER, scopes: ['ai:workspace:use'] },
       { route: '/docker/containers/container-1', resourceType: 'docker container', resourceId: 'container-1' }
     );
 

@@ -65,7 +65,7 @@ function docRequiredScopes(topic: string): string[] {
   const requiredScope = DOC_TOPIC_SCOPES[topic];
   if (!requiredScope) return [];
   const scopes = Array.isArray(requiredScope) ? requiredScope : [requiredScope];
-  return scopes.filter((scope) => scope !== 'feat:ai:use');
+  return scopes.filter((scope) => scope !== 'ai:workspace:use' && scope !== 'feat:ai:use');
 }
 
 function accessibleDocTopics(scopes: string[]) {
