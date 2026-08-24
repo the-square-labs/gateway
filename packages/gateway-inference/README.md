@@ -57,7 +57,7 @@ Gateway model entries reuse the full model instructions bundled with the install
 
 The installed helper owns the loopback proxy, refreshes the catalog at startup, follows Gateway invalidation events, and falls back to conditional polling. Runtime auth, proxy, and MCP lifecycle modes are private implementation details and are not public CLI commands.
 
-Codex usage and quota displays are not overridden. View Gateway limits in the Gateway UI; Codex Desktop and CLI continue to show their native account usage. Version 0.3.6 removes the experimental usage wrappers from 0.3.4 and 0.3.5. Running `setup codex` cleans up package-owned legacy wrapper artifacts automatically. The offline cleanup command remains available for affected installations:
+Codex usage and quota displays are not overridden. View Gateway limits in the Gateway UI; Codex Desktop and CLI continue to show their native account usage. Version 0.3.6 and later remove the experimental usage wrappers from 0.3.4 and 0.3.5. Running `setup codex` cleans up package-owned legacy wrapper artifacts automatically. The offline cleanup command remains available for affected installations:
 
 ```sh
 npx -y @wiolett/gateway-inference@latest uninstall codex-usage
