@@ -77,6 +77,7 @@ describe('OAuth PKCE login', () => {
 
   it('registers the random loopback redirect and exchanges the state-validated code', async () => {
     const credentials = new MemoryCredentials();
+    let displayedUrl: string | undefined;
     let opened: URL | undefined;
     const receiver: LoopbackReceiver = {
       redirectUri: 'http://127.0.0.1:45123/callback',
@@ -107,7 +108,11 @@ describe('OAuth PKCE login', () => {
       credentials,
       fetch: fetcher,
       createReceiver: async () => receiver,
+      showAuthorizationUrl: (url) => {
+        displayedUrl = url;
+      },
       openBrowser: async (url) => {
+        expect(displayedUrl).toBe(url);
         opened = new URL(url);
       },
       now: () => new Date('2026-07-28T00:00:00.000Z'),
@@ -115,6 +120,7 @@ describe('OAuth PKCE login', () => {
 
     const registration = JSON.parse(String(calls[0].init?.body));
     expect(registration.redirect_uris).toEqual([receiver.redirectUri]);
+    expect(displayedUrl).toBe(opened?.href);
     expect(opened?.searchParams.get('code_challenge_method')).toBe('S256');
     expect(opened?.searchParams.get('resource')).toBe(discovery.oauth.resource);
     expect(String(calls[1].init?.body)).toContain('code_verifier=');
