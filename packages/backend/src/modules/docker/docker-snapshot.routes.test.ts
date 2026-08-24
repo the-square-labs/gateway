@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { errorHandler } from '@/middleware/error-handler.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { AppEnv } from '@/types.js';
@@ -10,6 +11,7 @@ import { registerContainerRoutes } from './docker-container.routes.js';
 import { registerDockerSnapshotRoutes } from './docker-snapshot.routes.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
+import { registerVolumeRoutes } from './docker-volume.routes.js';
 
 const NODE_1 = '11111111-1111-4111-8111-111111111111';
 const NODE_2 = '22222222-2222-4222-8222-222222222222';
@@ -17,6 +19,7 @@ const NODE_2 = '22222222-2222-4222-8222-222222222222';
 class MemoryCache {
   strings = new Map<string, string>();
   sets = new Map<string, Set<string>>();
+  hashes = new Map<string, Map<string, string>>();
   async get<T>(key: string): Promise<T | null> {
     const value = this.strings.get(key);
     return value ? (JSON.parse(value) as T) : null;
@@ -29,7 +32,16 @@ class MemoryCache {
     return values.length;
   }
   getClient() {
-    return { hget: vi.fn(), hset: vi.fn(), del: vi.fn() };
+    return {
+      hget: async (key: string, field: string) => this.hashes.get(key)?.get(field) ?? null,
+      hset: async (key: string, field: string, value: string) => {
+        const hash = this.hashes.get(key) ?? new Map<string, string>();
+        hash.set(field, value);
+        this.hashes.set(key, hash);
+        return 1;
+      },
+      del: vi.fn(),
+    };
   }
 }
 
@@ -84,6 +96,7 @@ async function setup() {
 
 function appWithScopes(scopes: string[]) {
   const app = new OpenAPIHono<AppEnv>();
+  app.onError(errorHandler);
   app.use('*', async (c, next) => {
     c.set('effectiveScopes', scopes);
     await next();
@@ -160,6 +173,48 @@ describe('Docker snapshot routes', () => {
     expect(response.status).toBe(200);
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(1, NODE_1, 'containers');
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(2, NODE_1, 'container-detail', 'one');
+  });
+
+  it('serves volume metrics from the snapshot cache without live daemon dispatch', async () => {
+    const { snapshots, dispatch, reconciler } = await setup();
+    const metrics = {
+      storageKind: 'regular',
+      usedBytes: 42,
+      capacityBytes: null,
+      availableBytes: null,
+      usedInodes: null,
+      totalInodes: null,
+      runningAttachmentCount: 1,
+      collectedAt: '2026-08-24T12:00:00.000Z',
+    };
+    await snapshots.replaceList(NODE_1, 'volumes', [{ name: 'data' }]);
+    await snapshots.replaceDetail(NODE_1, 'volume-metrics', 'data', metrics);
+    const app = appWithScopes([`docker:volumes:view:${NODE_1}`]);
+    registerVolumeRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/volumes/data/metrics`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: metrics });
+    expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalled();
+    expect(reconciler.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('queues a missing volume metrics snapshot and returns immediately', async () => {
+    const { snapshots, dispatch, reconciler } = await setup();
+    await snapshots.replaceList(NODE_1, 'volumes', [{ name: 'data' }]);
+    const app = appWithScopes([`docker:volumes:view:${NODE_1}`]);
+    registerVolumeRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/volumes/data/metrics`);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ code: 'DOCKER_VOLUME_METRICS_PENDING' });
+    expect(reconciler.enqueue).toHaveBeenCalledWith(
+      { nodeId: NODE_1, kind: 'volume-metrics', key: 'data' },
+      { urgent: true }
+    );
+    expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalled();
   });
 
   it('returns GPU users only for containers visible to the caller', async () => {

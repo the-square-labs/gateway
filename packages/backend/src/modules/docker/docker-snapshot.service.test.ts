@@ -1,7 +1,12 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
 import { EventBusService } from '@/services/event-bus.service.js';
-import { DockerSnapshotService, sanitizeContainerInspect, sanitizeVolumeSnapshot } from './docker-snapshot.service.js';
+import {
+  DockerSnapshotService,
+  sanitizeContainerInspect,
+  sanitizeVolumeMetricsSnapshot,
+  sanitizeVolumeSnapshot,
+} from './docker-snapshot.service.js';
 
 class MemoryCache {
   strings = new Map<string, string>();
@@ -175,6 +180,39 @@ describe('DockerSnapshotService', () => {
       scope: 'local',
       usedBy: ['web'],
     });
+  });
+
+  it('stores volume metrics as an independent sanitized detail snapshot', async () => {
+    const { service } = createService();
+    const raw = {
+      storageKind: 'disk-image',
+      usedBytes: 42,
+      capacityBytes: 100,
+      availableBytes: 58,
+      usedInodes: 5,
+      totalInodes: 10,
+      runningAttachmentCount: 2,
+      collectedAt: '2026-08-24T12:00:00.000Z',
+      secret: 'not-persisted',
+    };
+
+    expect(sanitizeVolumeMetricsSnapshot(raw)).toEqual({
+      storageKind: 'disk-image',
+      usedBytes: 42,
+      capacityBytes: 100,
+      availableBytes: 58,
+      usedInodes: 5,
+      totalInodes: 10,
+      runningAttachmentCount: 2,
+      collectedAt: '2026-08-24T12:00:00.000Z',
+    });
+
+    await service.replaceDetail('node-1', 'volume-metrics', 'data', raw);
+
+    expect((await service.getDetail<any>('node-1', 'volume-metrics', 'data'))?.data).toEqual(
+      sanitizeVolumeMetricsSnapshot(raw)
+    );
+    expect(await service.getDetail('node-1', 'volume-detail', 'data')).toBeNull();
   });
 
   it('does not resolve a replaced container name to a stale detail snapshot', async () => {

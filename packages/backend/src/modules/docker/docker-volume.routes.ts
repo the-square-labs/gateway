@@ -2,6 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { sanitizeFilename } from '@/lib/utils.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
@@ -43,6 +44,7 @@ import {
 import { DockerManagementService } from './docker.service.js';
 import { resolveDockerVolumeByName } from './docker-route-resolvers.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
+import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
 
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_VOLUME_USED_BY_PREVIEW_MAX = 100;
@@ -413,10 +415,25 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...getVolumeMetricsRoute, middleware: requireScopeForResource('docker:volumes:view', 'nodeId') },
     async (c) => {
-      const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
-      return c.json({ data: await service.getVolumeMetrics(nodeId, name) });
+      const snapshots = container.resolve(DockerSnapshotService);
+      await snapshots.assertDockerNode(nodeId);
+      const volumes = await snapshots.getList<Array<Record<string, unknown>>>(nodeId, 'volumes');
+      const exists = volumes.data.some((volume) => String(volume.name ?? volume.Name ?? '') === name);
+      if (!exists) throw new AppError(404, 'VOLUME_NOT_FOUND', 'Volume not found');
+      const metrics = await snapshots.getDetail(nodeId, 'volume-metrics', name);
+      if (!metrics?.data) {
+        container
+          .resolve(DockerSnapshotReconciler)
+          .enqueue({ nodeId, kind: 'volume-metrics', key: name }, { urgent: true });
+        throw new AppError(
+          503,
+          'DOCKER_VOLUME_METRICS_PENDING',
+          'Volume metrics are being collected in the background'
+        );
+      }
+      return c.json({ data: metrics.data });
     }
   );
 
