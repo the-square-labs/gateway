@@ -63,6 +63,7 @@ interface ActiveTurn {
 /** Responses WS events that end a turn. */
 const TERMINAL_EVENTS = new Set(['response.completed', 'response.failed', 'response.incomplete', 'error']);
 const MAX_PENDING_PRELUDE_FRAMES = 4;
+const UPSTREAM_CLOSE_BEFORE_RETRY_MS = 1_000;
 
 /**
  * Per-turn WebSocket proxy (plan T5). The client-facing contract is unchanged:
@@ -329,10 +330,19 @@ async function connectTurnAttempt(input: {
   }
   input.turn.upstream = upstream;
   let ended = false;
+  let retryAfterClose = false;
+  let closeWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+  const clearCloseWatchdog = () => {
+    if (!closeWatchdog) return;
+    clearTimeout(closeWatchdog);
+    closeWatchdog = null;
+  };
 
   const retryOrFail = (error?: unknown, allowConnectionFailover = true) => {
     if (ended) return;
     ended = true;
+    clearCloseWatchdog();
     if (input.state.active !== input.turn || input.turn.cancelled || input.turn.finalized) return;
     if (allowConnectionFailover && !input.turn.emittedOutput && resolved.candidateConnectionIds.length > 1) {
       input.turn.pendingPreludeFrames = [];
@@ -344,6 +354,28 @@ async function connectTurnAttempt(input: {
       return;
     }
     failTurn(input.state, input.ws, input.accounting, input.turn, error);
+  };
+
+  const retryOnceClosed = () => {
+    if (ended || retryAfterClose) return;
+    retryAfterClose = true;
+    closeWatchdog = setTimeout(() => {
+      if (ended || !retryAfterClose) return;
+      retryAfterClose = false;
+      try {
+        upstream.terminate();
+      } catch {
+        // The connection may already be gone without emitting close.
+      }
+      retryOrFail();
+    }, UPSTREAM_CLOSE_BEFORE_RETRY_MS);
+    closeWatchdog.unref?.();
+    try {
+      upstream.close();
+    } catch {
+      retryAfterClose = false;
+      retryOrFail();
+    }
   };
 
   upstream.on('open', () => upstreamSend(upstream, JSON.stringify(rewritten)));
@@ -369,12 +401,7 @@ async function connectTurnAttempt(input: {
       resolved.candidateConnectionIds.length > 1 &&
       shouldFailOverWsEvent(parsed)
     ) {
-      try {
-        upstream.close();
-      } catch {
-        // Already closed.
-      }
-      retryOrFail();
+      retryOnceClosed();
       return;
     }
     if (terminal) {
@@ -408,6 +435,12 @@ async function connectTurnAttempt(input: {
   });
   upstream.on('close', () => {
     if (ended) return;
+    if (retryAfterClose) {
+      retryAfterClose = false;
+      clearCloseWatchdog();
+      retryOrFail();
+      return;
+    }
     if (input.turn.cancelled) {
       ended = true;
       if (input.state.active === input.turn) input.state.active = null;

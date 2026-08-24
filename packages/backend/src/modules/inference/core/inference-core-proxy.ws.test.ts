@@ -230,6 +230,8 @@ describe('core responses websocket proxy', () => {
       JSON.stringify({ type: 'error', status: 502, error: { code: 'upstream_server_error', message: 'failed' } })
     );
 
+    expect(upstreamInstances).toHaveLength(1);
+    first.handlers.close?.();
     await vi.waitFor(() => expect(upstreamInstances).toHaveLength(2));
     const second = upstreamInstances[1]!;
     second.handlers.open?.();
