@@ -200,6 +200,63 @@ describe('DockerSnapshotReconciler', () => {
     reconciler.stop();
   });
 
+  it('does not persist a transient exited inspect while a container recreate is active', async () => {
+    const { reconciler, dispatch, snapshots, eventBus } = createReconciler();
+    reconciler.start();
+
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-old',
+      name: 'web',
+      action: 'transitioning',
+      transition: 'recreating',
+    });
+    await vi.waitFor(() =>
+      expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'list', {}, 10_000)
+    );
+    dispatch.sendDockerContainerCommand.mockClear();
+
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-old',
+      name: 'web',
+      action: 'updated',
+      state: 'exited',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalledWith(
+      'node-1',
+      'inspect',
+      expect.anything(),
+      10_000
+    );
+    expect(snapshots.replaceDetail).not.toHaveBeenCalledWith(
+      'node-1',
+      'container-detail',
+      expect.anything(),
+      expect.anything()
+    );
+
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-new',
+      oldId: 'container-old',
+      name: 'web',
+      action: 'recreated',
+    });
+
+    await vi.waitFor(() =>
+      expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith(
+        'node-1',
+        'inspect',
+        { containerId: 'container-new' },
+        10_000
+      )
+    );
+    reconciler.stop();
+  });
+
   it('purges on explicit deletion and refreshes all inventory kinds on reconnect', async () => {
     const { reconciler, dispatch, snapshots, eventBus } = createReconciler();
     reconciler.start();

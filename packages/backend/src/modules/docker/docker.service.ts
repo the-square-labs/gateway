@@ -885,11 +885,25 @@ export class DockerManagementService {
   async decorateContainerDetailSnapshot(nodeId: string, data: any, gpuInventory?: unknown[]) {
     if (!data) return data;
     const cName = ((data.Name ?? data.name ?? '') as string).replace(/^\/+/, '');
+    const runtimeId = String(data.Id ?? data.id ?? '');
+    const liveContainerStats = (this.nodeRegistry.getNode(nodeId)?.lastHealthReport as any)?.containerStats;
+    if (Array.isArray(liveContainerStats)) {
+      const liveState =
+        liveContainerStats.find((entry: any) => String(entry.containerId ?? entry.container_id ?? '') === runtimeId) ??
+        liveContainerStats.find((entry: any) => String(entry.name ?? '').replace(/^\/+/, '') === cName);
+      const status = typeof liveState?.state === 'string' ? liveState.state.toLowerCase() : '';
+      if (status) {
+        data.State = {
+          ...(data.State ?? data.state ?? {}),
+          Status: status,
+          Running: status === 'running',
+        };
+      }
+    }
     const transition = cName ? this.getTransition(nodeId, cName) : undefined;
     if (transition) data._transition = transition;
     else delete data._transition;
     data.gpuAttachment = deriveDockerGpuAttachment(data, gpuInventory ?? (await this.gpuInventoryForNode(nodeId)));
-    const runtimeId = String(data.Id ?? data.id ?? '');
     const labels = (data.Config?.Labels ?? data.config?.labels ?? {}) as Record<string, string>;
     const deploymentId = labels[DOCKER_DEPLOYMENT_ID_LABEL];
     if (labels[DOCKER_DEPLOYMENT_MANAGED_LABEL] === 'true' && deploymentId) {

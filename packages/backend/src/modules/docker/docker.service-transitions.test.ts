@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DockerManagementService } from './docker.service.js';
 
-function createService() {
+function createService(node: Record<string, unknown> | undefined = undefined) {
   return new DockerManagementService(
     {} as never,
     { log: vi.fn().mockResolvedValue(undefined) } as never,
     {} as never,
-    { getNode: vi.fn() } as never
+    { getNode: vi.fn(() => node) } as never
   );
 }
 
@@ -52,5 +52,22 @@ describe('DockerManagementService container transitions', () => {
     await service.decorateContainerDetailSnapshot('node-1', detail);
 
     expect(detail).toEqual({ Name: '/api', gpuAttachment: { mode: 'none', deviceIds: [] } });
+  });
+
+  it('reconciles stale cached state with the latest daemon health report', async () => {
+    const service = createService({
+      lastHealthReport: {
+        containerStats: [{ containerId: 'container-new', name: 'api', state: 'running' }],
+      },
+    });
+    const detail = {
+      Id: 'container-old',
+      Name: '/api',
+      State: { Status: 'exited', Running: false },
+    };
+
+    await service.decorateContainerDetailSnapshot('node-1', detail);
+
+    expect(detail.State).toMatchObject({ Status: 'running', Running: true });
   });
 });
