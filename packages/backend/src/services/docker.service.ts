@@ -1,4 +1,8 @@
+import { createReadStream, createWriteStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import http from 'node:http';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createChildLogger } from '@/lib/logger.js';
 
 const logger = createChildLogger('DockerService');
@@ -640,6 +644,96 @@ export class DockerService {
       throw new Error(`Docker get archive failed (${res.statusCode}): ${res.body}`);
     }
     return res.bodyRaw;
+  }
+
+  /**
+   * Stream a container archive directly to a host file. The byte ceiling is
+   * enforced while reading the Docker response so a misleading/missing
+   * Content-Length can never turn a backup into unbounded process memory or
+   * disk usage.
+   */
+  async getContainerArchiveToFile(
+    id: string,
+    containerPath: string,
+    destinationPath: string,
+    maxBytes: number
+  ): Promise<number> {
+    const params = new URLSearchParams({ path: containerPath });
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          socketPath: this.socketPath,
+          method: 'GET',
+          path: `${API_VERSION}/containers/${encodeURIComponent(id)}/archive?${params}`,
+          timeout: 300_000,
+        },
+        (res) => {
+          if (res.statusCode !== 200) {
+            res.resume();
+            reject(new Error(`Docker get archive failed (${res.statusCode ?? 0})`));
+            return;
+          }
+
+          let received = 0;
+          const limiter = new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+              received += chunk.byteLength;
+              if (received > maxBytes) {
+                callback(new Error(`Docker archive exceeds the ${maxBytes}-byte limit`));
+                return;
+              }
+              callback(null, chunk);
+            },
+          });
+          const output = createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 });
+          void pipeline(res, limiter, output).then(() => resolve(received), reject);
+        }
+      );
+      req.on('timeout', () => req.destroy(new Error('Docker API request timed out after 300000ms')));
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  /** Stream a host tar file into a container without materializing it as a Buffer. */
+  async putContainerArchiveFromFile(id: string, containerPath: string, archivePath: string): Promise<void> {
+    const archiveStat = await stat(archivePath);
+    const params = new URLSearchParams({ path: containerPath });
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request(
+        {
+          socketPath: this.socketPath,
+          method: 'PUT',
+          path: `${API_VERSION}/containers/${encodeURIComponent(id)}/archive?${params}`,
+          timeout: 300_000,
+          headers: {
+            'Content-Type': 'application/x-tar',
+            'Content-Length': archiveStat.size,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          res.on('data', (chunk: Buffer) => {
+            if (bytes < 64 * 1024) chunks.push(chunk.subarray(0, Math.max(0, 64 * 1024 - bytes)));
+            bytes += chunk.byteLength;
+          });
+          res.on('end', () => {
+            if (res.statusCode === 200) resolve();
+            else {
+              const detail = Buffer.concat(chunks).toString('utf8');
+              reject(new Error(`Docker put archive failed (${res.statusCode ?? 0}): ${detail}`));
+            }
+          });
+          res.on('error', reject);
+        }
+      );
+      req.on('timeout', () => req.destroy(new Error('Docker API request timed out after 300000ms')));
+      req.on('error', reject);
+      const input = createReadStream(archivePath);
+      input.on('error', (error) => req.destroy(error));
+      input.pipe(req);
+    });
   }
 
   /**

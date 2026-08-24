@@ -68,6 +68,7 @@ function makeDocker() {
     calls,
     containers,
     failNextReplace: false,
+    failBackup: false,
     inspectSelf: async (): Promise<DockerContainerFullInspect> => ({
       Id: 'self',
       Name: '/gw-app-1',
@@ -152,9 +153,19 @@ function makeDocker() {
     putContainerArchive: async () => {
       calls.push('putContainerArchive');
     },
+    putContainerArchiveFromFile: async () => {
+      calls.push('putContainerArchive');
+    },
     getContainerArchive: async () => {
       calls.push('backupArchive');
       return Buffer.from('tar-bytes');
+    },
+    getContainerArchiveToFile: async (_id: string, _path: string, destination: string) => {
+      calls.push('backupArchive');
+      if (docker.failBackup) throw new Error('injected backup failure');
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(destination, 'tar-bytes');
+      return 9;
     },
     runOneShot: async (config: DockerCreateContainerConfig) => {
       if (config.Cmd?.join(' ').includes('find /state')) calls.push('clearStateVolume');
@@ -264,28 +275,31 @@ const vault = {
 
 /** The fake core answers readiness with the version of the running container. */
 function stubCoreFetch(docker: ReturnType<typeof makeDocker>): void {
-  vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const running = [...docker.containers.values()].find((c) => c.running);
-    const version = running?.labels['com.wiolett.inference-core.version'] ?? OLD_VERSION;
-    if (url.endsWith('/readyz')) {
-      return Response.json({
-        status: 'ready',
-        service: 'opencodex',
-        version: `v${version}`,
-        contractId: 'wiolett-core/v1',
-        coreProtocolMajor: 1,
-        stateSchemaVersion: 1,
-        instanceId: 'ocx-inst-test',
-        startedAt: new Date().toISOString(),
-      });
-    }
-    if (url.endsWith('/api/wiolett/status')) return Response.json({ draining: true });
-    if (url.endsWith('/api/wiolett/drain') || url.endsWith('/api/wiolett/resume')) {
-      return Response.json({ success: true });
-    }
-    throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
-  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const running = [...docker.containers.values()].find((c) => c.running);
+      const version = running?.labels['com.wiolett.inference-core.version'] ?? OLD_VERSION;
+      if (url.endsWith('/readyz')) {
+        return Response.json({
+          status: 'ready',
+          service: 'opencodex',
+          version: `v${version}`,
+          contractId: 'wiolett-core/v1',
+          coreProtocolMajor: 1,
+          stateSchemaVersion: 1,
+          instanceId: 'ocx-inst-test',
+          startedAt: new Date().toISOString(),
+        });
+      }
+      if (url.endsWith('/api/wiolett/status')) return Response.json({ draining: true });
+      if (url.endsWith('/api/wiolett/drain') || url.endsWith('/api/wiolett/resume')) {
+        return Response.json({ success: true });
+      }
+      throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
+    })
+  );
 }
 
 function installedRow(dockerRow: Partial<InferenceCoreStateRow> = {}): InferenceCoreStateRow {
@@ -493,6 +507,21 @@ describe('update', () => {
     expect(cores[0].labels['com.wiolett.inference-core.digest']).toBe(NEW_DIGEST);
   });
 
+  it('resumes the old core when streaming backup fails before replacement', async () => {
+    docker.failBackup = true;
+
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/wiolett/resume'),
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(docker.containers.get('core-old')?.running).toBe(true);
+    expect(docker.calls).not.toContain('stopContainer');
+    expect(store.row?.state).toBe('degraded');
+  });
+
   it('rolls back to the previous digest and state when the new core never becomes ready', async () => {
     // The fake readiness probe reports the RUNNING container's version; force the
     // new container to report the old version (identity mismatch = never ready).
@@ -571,6 +600,32 @@ describe('reconcileOnStartup', () => {
     await service.reconcileOnStartup();
     expect(docker.containers.has('core-a')).toBe(true);
     expect(docker.containers.has('core-b')).toBe(false);
+  });
+
+  it('resumes the unchanged core and restores ready state after an interrupted update', async () => {
+    store.setRow(installedRow({ state: 'updating', containerId: 'core-a' }));
+    docker.containers.set('core-a', {
+      id: 'core-a',
+      name: '/gw-inference-core',
+      image: `${IMAGE}@${OLD_DIGEST}`,
+      labels: {
+        'com.wiolett.inference-core.owned': 'true',
+        'com.wiolett.inference-core.project': 'gw',
+        'com.wiolett.inference-core.digest': OLD_DIGEST,
+        'com.wiolett.inference-core.version': OLD_VERSION,
+      },
+      running: true,
+      config: { Image: `${IMAGE}@${OLD_DIGEST}` },
+    });
+
+    await service.reconcileOnStartup();
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/wiolett/resume'),
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(store.row?.state).toBe('ready');
+    expect(store.row?.healthStatus).toBe('healthy');
   });
 
   it('marks interrupted operations as failed', async () => {

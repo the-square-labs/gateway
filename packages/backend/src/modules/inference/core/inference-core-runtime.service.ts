@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, unlink } from 'node:fs/promises';
 import { injectable } from 'tsyringe';
 import type { Env } from '@/config/env.js';
 import type { InferenceCoreStateRow } from '@/db/schema/inference-core.js';
@@ -392,6 +392,25 @@ export class InferenceCoreRuntimeService {
         logger.warn('Core container restart during reconciliation failed', { error: redactedCoreError(error) });
       });
     }
+
+    // A Gateway process can die after draining the old core but before replacing
+    // it (for example while backing up its state volume). When the recorded
+    // digest still matches, the old core is authoritative and safe to resume.
+    if (row.state === 'updating' && row.installedVersion) {
+      try {
+        const credentials = this.openCredentials(row);
+        const client = new InferenceCoreClient(this.coreBaseUrl(), credentials.managementCredential);
+        await client.resume();
+        await this.awaitReadyIdentity(layout, row.installedVersion);
+        const current = await this.requireStateRow();
+        await this.transition(current, 'ready', null);
+        await this.publishNow();
+      } catch (error) {
+        logger.warn('Interrupted core update could not resume the previous container', {
+          error: redactedCoreError(error),
+        });
+      }
+    }
     await this.probeHealth(layout);
   }
 
@@ -631,12 +650,13 @@ export class InferenceCoreRuntimeService {
     await client.drain().catch(() => {});
     await this.awaitDrain(client);
 
-    // Bounded state backup before any destructive step.
-    await this.operations.updatePhase(operationId, 'updating', { stage: STAGE.preparingStorage });
-    const backupFile = await this.backupStateVolume(layout, row.installedImageRef!);
-
     let replaced = false;
+    let backupFile: string | null = null;
     try {
+      // Bounded state backup before any destructive step. This is inside the
+      // recovery guard because the old core has already entered drain mode.
+      await this.operations.updatePhase(operationId, 'updating', { stage: STAGE.preparingStorage });
+      backupFile = await this.backupStateVolume(layout, row.installedImageRef!);
       await this.replaceContainer(layout, row, artifact, credentials);
       replaced = true;
       await this.operations.updatePhase(operationId, 'starting', { stage: STAGE.checkingReadiness });
@@ -649,7 +669,14 @@ export class InferenceCoreRuntimeService {
       await this.pruneOldImage(previous.imageRef);
       await this.pruneOldBackups();
     } catch (error) {
-      if (!replaced) throw error;
+      if (!replaced) {
+        // Backup/pre-replacement failures leave the old container intact. It
+        // must resume immediately or every later request sees a drained core.
+        await client.resume().catch((resumeError) => {
+          logger.warn('Core resume after aborted update failed', { error: redactedCoreError(resumeError) });
+        });
+        throw error;
+      }
       await this.operations.updatePhase(operationId, 'rolling_back', { stage: STAGE.rollingBack }).catch(() => {});
       await this.rollbackToPrevious(layout, row, previous, backupFile, error);
       // The update failed even when the rollback restored the previous version;
@@ -846,16 +873,21 @@ export class InferenceCoreRuntimeService {
     try {
       await mkdir(this.backupDir, { recursive: true, mode: 0o700 });
       const file = `${this.backupDir}/state-${Date.now()}.tar`;
-      const archive = await this.docker.getContainerArchive(helper, '/state');
-      await writeFile(file, archive, { mode: 0o600 });
-      return file;
+      const temporaryFile = `${file}.tmp`;
+      try {
+        await this.docker.getContainerArchiveToFile(helper, '/state', temporaryFile, CORE_BACKUP_MAX_BYTES);
+        await rename(temporaryFile, file);
+        return file;
+      } catch (error) {
+        await unlink(temporaryFile).catch(() => {});
+        throw error;
+      }
     } finally {
       await this.docker.removeContainer(helper).catch(() => {});
     }
   }
 
   private async restoreStateVolume(layout: CoreLayout, imageRef: string, backupFile: string): Promise<void> {
-    const archive = await readFile(backupFile);
     const cleared = await this.docker.runOneShot({
       Image: imageRef,
       User: '0',
@@ -874,7 +906,7 @@ export class InferenceCoreRuntimeService {
       // The archive contains the `state/` prefix, so extracting at / restores
       // /state after the target was cleared. This is an exact restore, not an
       // overlay that could retain files created by the failed version.
-      await this.docker.putContainerArchive(helper, '/', archive);
+      await this.docker.putContainerArchiveFromFile(helper, '/', backupFile);
     } finally {
       await this.docker.removeContainer(helper).catch(() => {});
     }
