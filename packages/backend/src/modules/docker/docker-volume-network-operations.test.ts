@@ -3,7 +3,6 @@ import {
   adoptVolume,
   createVolume,
   exportVolume,
-  getVolumeMetrics,
   listVolumes,
   resizeVolume,
 } from './docker-volume-network-operations.js';
@@ -70,18 +69,6 @@ describe('managed volume inventory', () => {
         capacityBytes: 5 * 1024 ** 3,
       })
     );
-  });
-
-  it('returns direct daemon metrics without snapshot conversion', async () => {
-    const metrics = { storageKind: 'regular', usedBytes: 42, runningAttachmentCount: 1 };
-    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: JSON.stringify(metrics) });
-    const context = {
-      nodeDispatch: { sendDockerVolumeCommand },
-      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
-    };
-
-    await expect(getVolumeMetrics(context as never, 'node-1', 'data')).resolves.toEqual(metrics);
-    expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'metrics', { name: 'data' }, 60_000);
   });
 
   it('grows only registered disk-image volumes and persists the new capacity', async () => {

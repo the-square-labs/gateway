@@ -61,6 +61,25 @@ describe('DockerSnapshotReconciler', () => {
     expect(snapshots.replaceList).toHaveBeenCalledWith('node-1', 'containers', []);
   });
 
+  it('collects volume metrics through the snapshot reconciler instead of the request path', async () => {
+    const metrics = {
+      storageKind: 'regular',
+      usedBytes: 42,
+      runningAttachmentCount: 1,
+      collectedAt: '2026-08-24T12:00:00.000Z',
+    };
+    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify(metrics),
+    });
+    const { reconciler, snapshots } = createReconciler({ sendDockerVolumeCommand });
+
+    await reconciler.refreshNow('node-1', 'volume-metrics', 'data');
+
+    expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'metrics', { name: 'data' }, 60_000);
+    expect(snapshots.replaceDetail).toHaveBeenCalledWith('node-1', 'volume-metrics', 'data', metrics);
+  });
+
   it('coalesces an in-flight duplicate into exactly one follow-up refresh', async () => {
     const first = deferred<{ success: boolean; detail: string }>();
     const send = vi
@@ -112,6 +131,47 @@ describe('DockerSnapshotReconciler', () => {
     expect(imageSend).not.toHaveBeenCalled();
     first.resolve({ success: true, detail: '[]' });
     await vi.waitFor(() => expect(imageSend).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not let slow volume metrics block inventory refreshes for the same node', async () => {
+    const metrics = deferred<{ success: boolean; detail: string }>();
+    const sendDockerVolumeCommand = vi.fn(() => metrics.promise);
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '[]' });
+    const { reconciler, snapshots } = createReconciler({
+      sendDockerVolumeCommand,
+      sendDockerContainerCommand,
+    });
+
+    reconciler.enqueue({ nodeId: 'node-1', kind: 'volume-metrics', key: 'data' });
+    await vi.waitFor(() => expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(1));
+    reconciler.enqueue({ nodeId: 'node-1', kind: 'containers' });
+
+    await vi.waitFor(() => expect(sendDockerContainerCommand).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(snapshots.replaceList).toHaveBeenCalledWith('node-1', 'containers', []));
+    expect(snapshots.replaceDetail).not.toHaveBeenCalledWith('node-1', 'volume-metrics', 'data', expect.anything());
+
+    metrics.resolve({ success: true, detail: '{"usedBytes":42}' });
+    await vi.waitFor(() =>
+      expect(snapshots.replaceDetail).toHaveBeenCalledWith('node-1', 'volume-metrics', 'data', { usedBytes: 42 })
+    );
+  });
+
+  it('reserves global refresh capacity while slow volume metrics are running', async () => {
+    const pendingMetrics = Array.from({ length: 4 }, () => deferred<{ success: boolean; detail: string }>());
+    const sendDockerVolumeCommand = vi.fn((nodeId: string) => pendingMetrics[Number(nodeId.slice(-1)) - 1]!.promise);
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '[]' });
+    const { reconciler } = createReconciler({ sendDockerVolumeCommand, sendDockerContainerCommand });
+
+    for (let index = 1; index <= 4; index += 1) {
+      reconciler.enqueue({ nodeId: `node-${index}`, kind: 'volume-metrics', key: 'data' });
+    }
+    reconciler.enqueue({ nodeId: 'node-5', kind: 'containers' });
+
+    await vi.waitFor(() => expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(sendDockerContainerCommand).toHaveBeenCalledTimes(1));
+
+    for (const pending of pendingMetrics) pending.resolve({ success: true, detail: '{}' });
+    await vi.waitFor(() => expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(4));
   });
 
   it('turns a write event into targeted list/detail refreshes without purging old data', async () => {
@@ -291,6 +351,26 @@ describe('DockerSnapshotReconciler', () => {
       { containerId: 'container-2' },
       { containerId: 'container-3' },
     ]);
+  });
+
+  it('background-refreshes volume metrics from the volume inventory', async () => {
+    const sendDockerVolumeCommand = vi.fn((_nodeId: string, action: string) =>
+      Promise.resolve({ success: true, detail: action === 'metrics' ? '{"usedBytes":42}' : '{}' })
+    );
+    const { reconciler, snapshots, registry } = createReconciler({ sendDockerVolumeCommand });
+    registry.getNodesByType.mockReturnValue([{ nodeId: 'node-1' }]);
+    snapshots.getList.mockImplementation(async (_nodeId: string, kind: string) => ({
+      data: kind === 'volumes' ? [{ name: 'data' }] : [],
+    }));
+
+    await reconciler.enqueueDueDetails();
+
+    await vi.waitFor(() =>
+      expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'metrics', { name: 'data' }, 60_000)
+    );
+    await vi.waitFor(() =>
+      expect(snapshots.replaceDetail).toHaveBeenCalledWith('node-1', 'volume-metrics', 'data', { usedBytes: 42 })
+    );
   });
 
   it('does not grow the background detail backlog across ticks on a slow node', async () => {

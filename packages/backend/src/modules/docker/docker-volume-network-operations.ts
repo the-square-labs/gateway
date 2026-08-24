@@ -536,11 +536,6 @@ export async function createVolume(
   return data;
 }
 
-export async function getVolumeMetrics(context: DockerVolumeNetworkOperationContext, nodeId: string, name: string) {
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'metrics', { name }, 60_000);
-  return context.parseResult(result);
-}
-
 export async function resizeVolume(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,

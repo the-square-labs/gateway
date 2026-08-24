@@ -12,7 +12,9 @@ import {
 
 const logger = createChildLogger('DockerSnapshotReconciler');
 const DAEMON_TIMEOUT_MS = 10_000;
+const VOLUME_METRICS_TIMEOUT_MS = 60_000;
 const MAX_GLOBAL_REFRESHES = 4;
+const MAX_VOLUME_METRIC_REFRESHES = 2;
 const BACKOFF_MS = [10_000, 30_000, 60_000] as const;
 const DETAIL_BATCH_PER_KIND_PER_NODE = 2;
 
@@ -46,6 +48,10 @@ function jobPriority(job: RefreshJob, urgent: boolean): JobPriority {
   return DOCKER_SNAPSHOT_KINDS.includes(job.kind as DockerSnapshotKind) ? 1 : 2;
 }
 
+function refreshLane(job: RefreshJob) {
+  return job.kind === 'volume-metrics' ? `${job.nodeId}:volume-metrics` : job.nodeId;
+}
+
 function resultData(result: { success: boolean; detail?: string; error?: string }) {
   if (!result.success) throw new Error(result.error || result.detail || 'Docker daemon command failed');
   if (!result.detail) return null;
@@ -71,8 +77,9 @@ export class DockerSnapshotReconciler {
   private readonly failures = new Map<string, FailureState>();
   private readonly cancelledJobs = new Set<string>();
   private readonly detailCursors = new Map<string, number>();
-  private readonly activeNodes = new Set<string>();
+  private readonly activeLanes = new Set<string>();
   private activeCount = 0;
+  private activeVolumeMetricCount = 0;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private unsubscribers: Array<() => void> = [];
   private running = true;
@@ -97,7 +104,7 @@ export class DockerSnapshotReconciler {
         this.onResourceChanged('images', undefined, payload)
       ),
       this.eventBus.subscribe('docker.volume.changed', (payload) =>
-        this.onResourceChanged('volumes', 'volume-detail', payload)
+        this.onResourceChanged('volumes', ['volume-detail', 'volume-metrics'], payload)
       ),
       this.eventBus.subscribe('docker.network.changed', (payload) =>
         this.onResourceChanged('networks', undefined, payload)
@@ -178,6 +185,7 @@ export class DockerSnapshotReconciler {
     for (const node of this.registry.getNodesByType('docker')) {
       await this.enqueueStaleDetails(node.nodeId, 'container-detail', 'containers');
       await this.enqueueStaleDetails(node.nodeId, 'volume-detail', 'volumes');
+      await this.enqueueStaleDetails(node.nodeId, 'volume-metrics', 'volumes');
     }
   }
 
@@ -265,7 +273,11 @@ export class DockerSnapshotReconciler {
     }
   }
 
-  private onResourceChanged(kind: DockerSnapshotKind, detailKind: DockerDetailKind | undefined, payload: unknown) {
+  private onResourceChanged(
+    kind: DockerSnapshotKind,
+    detailKind: DockerDetailKind | readonly DockerDetailKind[] | undefined,
+    payload: unknown
+  ) {
     if (!payload || typeof payload !== 'object') return;
     const event = payload as Record<string, unknown>;
     const nodeId = typeof event.nodeId === 'string' ? event.nodeId : null;
@@ -273,7 +285,10 @@ export class DockerSnapshotReconciler {
     this.enqueue({ nodeId, kind }, { urgent: true });
     if (!detailKind || event.action === 'removed' || event.action === 'deleted') return;
     const key = [event.name, event.id, event.ref].find((value): value is string => typeof value === 'string');
-    if (key) this.enqueue({ nodeId, kind: detailKind, key }, { urgent: true });
+    if (!key) return;
+    for (const detail of Array.isArray(detailKind) ? detailKind : [detailKind]) {
+      this.enqueue({ nodeId, kind: detail, key }, { urgent: true });
+    }
   }
 
   private cancelNode(nodeId: string): void {
@@ -312,7 +327,9 @@ export class DockerSnapshotReconciler {
       for (let candidateIndex = 0; candidateIndex < this.queue.length; candidateIndex += 1) {
         const id = this.queue[candidateIndex]!;
         const state = this.states.get(id);
-        if (!state || state.status !== 'queued' || this.activeNodes.has(state.job.nodeId)) continue;
+        if (!state || state.status !== 'queued' || this.activeLanes.has(refreshLane(state.job))) continue;
+        if (state.job.kind === 'volume-metrics' && this.activeVolumeMetricCount >= MAX_VOLUME_METRIC_REFRESHES)
+          continue;
         if ((this.failures.get(id)?.retryAt ?? 0) > now) continue;
         if (state.priority < bestPriority) {
           index = candidateIndex;
@@ -326,7 +343,8 @@ export class DockerSnapshotReconciler {
       if (!state) continue;
       state.status = 'inflight';
       this.activeCount += 1;
-      this.activeNodes.add(state.job.nodeId);
+      if (state.job.kind === 'volume-metrics') this.activeVolumeMetricCount += 1;
+      this.activeLanes.add(refreshLane(state.job));
       void this.run(state.job)
         .catch(() => {})
         .finally(() => this.finish(id));
@@ -355,7 +373,8 @@ export class DockerSnapshotReconciler {
     const state = this.states.get(id);
     if (!state) return;
     this.activeCount -= 1;
-    this.activeNodes.delete(state.job.nodeId);
+    if (state.job.kind === 'volume-metrics') this.activeVolumeMetricCount -= 1;
+    this.activeLanes.delete(refreshLane(state.job));
     if (!this.running) {
       this.states.delete(id);
       if (this.activeCount === 0) {
@@ -465,7 +484,12 @@ export class DockerSnapshotReconciler {
     const result =
       kind === 'container-detail'
         ? await this.dispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId: key }, DAEMON_TIMEOUT_MS)
-        : await this.dispatch.sendDockerVolumeCommand(nodeId, 'inspect', { name: key }, DAEMON_TIMEOUT_MS);
+        : await this.dispatch.sendDockerVolumeCommand(
+            nodeId,
+            kind === 'volume-metrics' ? 'metrics' : 'inspect',
+            { name: key },
+            kind === 'volume-metrics' ? VOLUME_METRICS_TIMEOUT_MS : DAEMON_TIMEOUT_MS
+          );
     if (this.snapshots.isNodeDeleted(nodeId) || this.cancelledJobs.has(id)) return;
     await this.snapshots.replaceDetail(nodeId, kind, key, resultData(result));
   }

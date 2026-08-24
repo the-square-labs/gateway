@@ -88,7 +88,6 @@ import {
   deleteVolumeFile as deleteDockerVolumeFile,
   disconnectContainerFromNetwork as disconnectDockerContainerFromNetwork,
   exportVolume as exportDockerVolume,
-  getVolumeMetrics as getDockerVolumeMetrics,
   initVolumeFileUpload as initDockerVolumeFileUpload,
   inspectVolume as inspectDockerVolume,
   listNetworks as listDockerNetworks,
@@ -1247,11 +1246,6 @@ export class DockerManagementService {
     }
     await this.validateDockerNode(nodeId);
     return createDockerVolume(this.volumeNetworkOperationContext(), nodeId, config, userId);
-  }
-
-  async getVolumeMetrics(nodeId: string, name: string) {
-    await this.validateDockerNode(nodeId);
-    return getDockerVolumeMetrics(this.volumeNetworkOperationContext(), nodeId, name);
   }
 
   async resizeVolume(nodeId: string, name: string, capacityBytes: number, userId: string) {

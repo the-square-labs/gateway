@@ -10,7 +10,7 @@ import { dockerScopedNodeIds } from './docker-access-resource.service.js';
 
 export const DOCKER_SNAPSHOT_KINDS = ['containers', 'images', 'volumes', 'networks'] as const;
 export type DockerSnapshotKind = (typeof DOCKER_SNAPSHOT_KINDS)[number];
-export type DockerDetailKind = 'container-detail' | 'volume-detail';
+export type DockerDetailKind = 'container-detail' | 'volume-detail' | 'volume-metrics';
 export type DockerRefreshKind = DockerSnapshotKind | DockerDetailKind;
 export type DockerAvailability = 'available' | 'unavailable';
 
@@ -113,6 +113,25 @@ export function sanitizeVolumeSnapshot(value: unknown): Record<string, unknown> 
       ? { createdAt: readString(record, 'createdAt', 'CreatedAt') }
       : {}),
     usedBy: Array.isArray(usedBy) ? usedBy.filter((item): item is string => typeof item === 'string') : [],
+  };
+}
+
+function nullableMetric(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** Persist only the stable metrics contract returned by the Docker daemon. */
+export function sanitizeVolumeMetricsSnapshot(value: unknown): Record<string, unknown> {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return {
+    storageKind: record.storageKind === 'disk-image' ? 'disk-image' : 'regular',
+    usedBytes: nullableMetric(record.usedBytes),
+    capacityBytes: nullableMetric(record.capacityBytes),
+    availableBytes: nullableMetric(record.availableBytes),
+    usedInodes: nullableMetric(record.usedInodes),
+    totalInodes: nullableMetric(record.totalInodes),
+    runningAttachmentCount: nullableMetric(record.runningAttachmentCount) ?? 0,
+    collectedAt: typeof record.collectedAt === 'string' ? record.collectedAt : '',
   };
 }
 
@@ -261,7 +280,12 @@ export class DockerSnapshotService {
     if (this.isNodeDeleted(nodeId)) return current;
     const now = new Date().toISOString();
     const next: DockerSnapshotEnvelope<unknown> = {
-      data: kind === 'container-detail' ? sanitizeContainerInspect(data) : sanitizeVolumeSnapshot(data),
+      data:
+        kind === 'container-detail'
+          ? sanitizeContainerInspect(data)
+          : kind === 'volume-metrics'
+            ? sanitizeVolumeMetricsSnapshot(data)
+            : sanitizeVolumeSnapshot(data),
       revision: (current?.revision ?? 0) + 1,
       observedAt: now,
       lastAttemptAt: now,
@@ -353,6 +377,7 @@ export class DockerSnapshotService {
       ...DOCKER_SNAPSHOT_KINDS.map((kind) => this.listKey(nodeId, kind)),
       this.detailKey(nodeId, 'container-detail'),
       this.detailKey(nodeId, 'volume-detail'),
+      this.detailKey(nodeId, 'volume-metrics'),
     ];
     await this.cache.getClient().del(...keys);
     await this.cache.srem(NODE_INDEX_KEY, nodeId);
