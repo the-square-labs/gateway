@@ -14,9 +14,9 @@ const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const CONNECTOR_ID = '22222222-2222-4222-8222-222222222222';
 const PROJECT_ID = '33333333-3333-4333-8333-333333333333';
 
-function app(requireMinimumPlan = vi.fn().mockResolvedValue(undefined)) {
+function app(requireFeature = vi.fn().mockResolvedValue(undefined)) {
   const router = new OpenAPIHono<AppEnv>();
-  container.registerInstance(LicensePolicyService, { requireMinimumPlan } as never);
+  container.registerInstance(LicensePolicyService, { requireFeature } as never);
   router.onError(errorHandler);
   router.use('*', async (c, next) => {
     c.set('effectiveScopes', [`docker:containers:create:${NODE_ID}`]);
@@ -127,18 +127,18 @@ describe('Docker source resource route', () => {
     container.registerInstance(DockerDeploymentService, {} as never);
     const management = { listContainers: vi.fn() };
     container.registerInstance(DockerManagementService, management as never);
-    const requireMinimumPlan = vi
+    const requireFeature = vi
       .fn()
       .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required'));
 
-    const response = await app(requireMinimumPlan).request(`/nodes/${NODE_ID}/source-resources`, {
+    const response = await app(requireFeature).request(`/nodes/${NODE_ID}/source-resources`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body()),
     });
 
     expect(response.status).toBe(403);
-    expect(requireMinimumPlan).toHaveBeenCalledWith('business');
+    expect(requireFeature).toHaveBeenCalledWith('git-push-to-deploy');
     expect(management.listContainers).not.toHaveBeenCalled();
     expect(source.upsert).not.toHaveBeenCalled();
     expect(source.createBuild).not.toHaveBeenCalled();

@@ -61,12 +61,11 @@ describe("Docker Git delivery UI structure", () => {
     );
     expect(containerTabs).toContain('"source"');
     expect(containerTabs).not.toContain('"builds"');
-    expect(containerTabs).not.toContain('"config"');
+    expect(containerTabs).toContain('"config"');
     expect(containerDetail).toContain("includeBuilds");
     expect(containerDetail).toContain('className="pb-6"');
     expect(containerDetail).toContain('label: "View config"');
     expect(containerDetail).toContain("alwaysOverflow: true");
-    expect(containerDetail).not.toContain('<TabsTrigger value="config"');
     expect(containerDetail).not.toContain('<TabsTrigger value="builds"');
 
     const deploymentTabs = deploymentDetail.slice(
