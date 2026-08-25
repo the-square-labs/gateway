@@ -35,6 +35,13 @@ describe("DockerDeployDialog runtime section", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api, "listDockerImages").mockResolvedValue([]);
+    vi.spyOn(api, "listGitLabConnectors").mockResolvedValue([]);
+    vi.spyOn(api, "listGitConnectors").mockResolvedValue([]);
+    vi.spyOn(api, "getDockerBuildAdmission").mockResolvedValue({
+      ready: true,
+      code: null,
+      message: null,
+    });
     useAuthStore.setState({
       user: { id: "user-1", scopes: ["docker:containers:create"] } as never,
       isAuthenticated: true,
@@ -57,6 +64,26 @@ describe("DockerDeployDialog runtime section", () => {
 
     expect(screen.queryByText("GPU")).not.toBeInTheDocument();
     expect(screen.queryByText("Select a node to see its GPUs.")).not.toBeInTheDocument();
+  });
+
+  it("keeps entered values mounted until the close animation finishes", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    renderWithRouter(
+      <DockerDeployDialog
+        open
+        onOpenChange={onOpenChange}
+        nodeId={baseNode.id}
+        dockerNodes={[baseNode]}
+      />
+    );
+
+    const imageInput = screen.getByPlaceholderText("Select or enter an image");
+    await user.type(imageInput, "nginx:alpine");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(imageInput).toHaveValue("nginx:alpine");
   });
 
   it("hides the GPU section when the selected node has no GPUs", async () => {
@@ -127,7 +154,7 @@ describe("DockerDeployDialog runtime section", () => {
       />
     );
 
-    const runtimeSelect = screen.getAllByRole("combobox")[1]!;
+    const runtimeSelect = screen.getByRole("combobox", { name: "Runtime" });
     fireEvent.keyDown(runtimeSelect, { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
     const imageInput = screen.getByPlaceholderText("Select or enter an image");
@@ -146,7 +173,6 @@ describe("DockerDeployDialog runtime section", () => {
   });
 
   it("intercepts unavailable runtime and blue-green choices with the shared paywall", async () => {
-    const user = userEvent.setup();
     const secureNode = {
       ...baseNode,
       capabilities: { dockerRuntimeStatus: { state: "healthy" } },
@@ -166,7 +192,7 @@ describe("DockerDeployDialog runtime section", () => {
       />
     );
 
-    const runtimeSelect = screen.getAllByRole("combobox")[1]!;
+    const runtimeSelect = screen.getByRole("combobox", { name: "Runtime" });
     fireEvent.keyDown(runtimeSelect, { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
     expect(useLicensePaywallStore.getState().request).toMatchObject({
@@ -175,7 +201,9 @@ describe("DockerDeployDialog runtime section", () => {
     });
 
     useLicensePaywallStore.setState({ request: null });
-    await user.click(screen.getByRole("tab", { name: "Blue/green" }));
+    const resourceTypeSelect = screen.getByRole("combobox", { name: "Resource type" });
+    fireEvent.keyDown(resourceTypeSelect, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /Blue\/green/ }));
     expect(useLicensePaywallStore.getState().request).toMatchObject({
       capability: "Blue/green deployments",
       requiredPlan: "personal",
@@ -214,7 +242,7 @@ describe("DockerDeployDialog runtime section", () => {
       }
     );
 
-    const runtimeSelect = screen.getAllByRole("combobox")[1]!;
+    const runtimeSelect = screen.getByRole("combobox", { name: "Runtime" });
     fireEvent.keyDown(runtimeSelect, { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
 
@@ -223,5 +251,65 @@ describe("DockerDeployDialog runtime section", () => {
 
     await user.click(screen.getByRole("button", { name: "Open node settings" }));
     expect(await screen.findByText("Node settings destination")).toBeInTheDocument();
+  });
+
+  it("allows repository configuration and enforces Business only on Create and build", async () => {
+    const user = userEvent.setup();
+    useUIBootstrapStore.setState({
+      snapshot: {
+        license: { plan: "community", entitlements: { features: [] } },
+      } as never,
+    });
+    vi.mocked(api.listGitConnectors).mockImplementation(async (provider) =>
+      provider === "github"
+        ? ([
+            {
+              id: "github-1",
+              provider: "github",
+              name: "GitHub production",
+              baseUrl: "https://github.com",
+              enabled: true,
+            },
+          ] as never)
+        : []
+    );
+    vi.spyOn(api, "listDockerBuildRepositories").mockResolvedValue([
+      {
+        connectorId: "github-1",
+        connectorName: "GitHub production",
+        projectId: "repo-1",
+        provider: "github",
+        remoteId: "repo-1",
+        fullPath: "acme/api",
+        name: "api",
+        webUrl: "https://github.com/acme/api",
+        defaultBranch: "main",
+        archived: false,
+      },
+    ]);
+    const create = vi.spyOn(api, "createDockerSourceResource");
+
+    renderWithRouter(
+      <DockerDeployDialog
+        open
+        onOpenChange={vi.fn()}
+        nodeId={baseNode.id}
+        dockerNodes={[baseNode]}
+      />
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Repository" }));
+    await user.click(await screen.findByPlaceholderText("Select Git integration"));
+    await user.click(await screen.findByRole("button", { name: "GitHub production" }));
+    await user.click(await screen.findByPlaceholderText("Select allowlisted repository"));
+    await user.click(await screen.findByRole("button", { name: "acme/api" }));
+    await user.type(screen.getAllByPlaceholderText("my-container").at(-1)!, "payments-api");
+    await user.click(screen.getByRole("button", { name: "Create and build" }));
+
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      capability: "Git push-to-deploy",
+      requiredPlan: "business",
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });

@@ -21,6 +21,14 @@ The disk figures are free capacity after the operating system is installed. When
 
 Gateway mounts the host Docker socket for self-updates and optional managed local ClickHouse. Run it in an isolated VM or on a dedicated trusted host.
 
+The control-plane stack also includes a Gateway-managed Docker Distribution registry with a persistent volume and no host-published port. Reserve registry capacity in addition to the base figures above when Git-source builds are enabled; retention keeps three successful artifacts per source plus active, rollback, in-progress, and manual pins.
+
+## Build Worker Requirements
+
+Git-source builds are available on Business and Enterprise and require at least one separate Linux node enrolled with `setup-docker-node.sh --mode builder`. A Build Worker uses the existing `docker-daemon` binary but does not install or connect to Docker Engine. The Docker-daemon release includes a version-matched, checksum-verified builder runtime bundle with dedicated containerd, BuildKit, runsc, Syft, Grype, and CNI binaries; the installer downloads and installs it automatically before enrollment. System packages such as Git and iptables are installed through the host package manager. Builder mode is supported on Linux amd64 and arm64 and fails closed when the matching release bundle or any required binary is unavailable.
+
+The builder profile writes and starts dedicated egress-policy, containerd, and BuildKit units, private Unix sockets, a dedicated containerd namespace, a Gateway-managed runsc OCI wrapper, and a Git askpass helper. The wrapper pins explicit gVisor isolation flags and makes only the already-stopped sandbox kill path idempotent for BuildKit cleanup. `--builder-egress internet` is the default and permits public dependency downloads while blocking metadata, private/control-plane ranges, host-control endpoints, and the configured Gateway gRPC endpoint; `--builder-egress offline` disables build-step egress. Repository mode remains unavailable when the internal registry is not writable or no online worker reports the full isolated execution and resource-enforcement capabilities. Do not colocate unrelated workloads or credentials on Build Worker hosts.
+
 ## Install
 
 ```bash

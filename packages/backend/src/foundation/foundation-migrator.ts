@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -7,6 +8,9 @@ const SANDBOX_VOLUME_START = '# gateway-managed:start sandbox-workspace';
 const SANDBOX_VOLUME_END = '# gateway-managed:end sandbox-workspace';
 const RELAY_SERVICE_START = '# gateway-managed:start relay-service';
 const RELAY_SERVICE_END = '# gateway-managed:end relay-service';
+const REGISTRY_SERVICE_START = '# gateway-managed:start registry-service';
+const REGISTRY_SERVICE_END = '# gateway-managed:end registry-service';
+const DEFAULT_REGISTRY_IMAGE_REF = 'registry:3';
 
 export interface FoundationMigrationOptions {
   hostDir: string;
@@ -77,6 +81,9 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
     ...(effectiveRelayBuildVersion ? { GATEWAY_RELAY_BUILD_VERSION: effectiveRelayBuildVersion } : {}),
     GATEWAY_RELAY_PROTOCOL_MAJOR: String(effectiveRelayProtocolMajor),
     SANDBOX_RUNNER_WORKSPACE_DIR: envValue(envContent, 'SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir,
+    GATEWAY_REGISTRY_IMAGE_REF: envValue(envContent, 'GATEWAY_REGISTRY_IMAGE_REF') ?? DEFAULT_REGISTRY_IMAGE_REF,
+    GATEWAY_REGISTRY_HTTP_SECRET:
+      envValue(envContent, 'GATEWAY_REGISTRY_HTTP_SECRET') ?? randomBytes(32).toString('hex'),
   });
 
   const composeContent = await fs.readFile(composePath, 'utf8');
@@ -189,7 +196,8 @@ export function patchCompose(content: string): string {
   const environmentPatched = removeLegacyAppEnvironment(healthcheckPatched);
   const clickHousePatched = removeLegacyClickHouseService(environmentPatched);
   const relayPatched = patchRelayFoundation(clickHousePatched);
-  return `${relayPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+  const registryPatched = patchRegistryFoundation(relayPatched);
+  return `${registryPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
 }
 
 function patchAppStopGracePeriod(lines: string[]): string[] {
@@ -562,6 +570,91 @@ function relayServiceBlock(): string[] {
     '      retries: 2',
     '      start_period: 20s',
     `  ${RELAY_SERVICE_END}`,
+  ];
+}
+
+function patchRegistryFoundation(lines: string[]): string[] {
+  const canonical = registryServiceBlock();
+  const markerStart = findLineInRange(lines, 0, lines.length, REGISTRY_SERVICE_START);
+  const markerEnd = findLineInRange(lines, 0, lines.length, REGISTRY_SERVICE_END);
+  let next: string[];
+  if (markerStart >= 0 || markerEnd >= 0) {
+    if (markerStart < 0 || markerEnd < markerStart) {
+      throw new Error('foundation migration failed: malformed registry service managed block');
+    }
+    next = [...lines.slice(0, markerStart), ...canonical, ...lines.slice(markerEnd + 1)];
+  } else {
+    const registry = findServiceBlock(lines, 'registry');
+    if (registry) {
+      const owned = lines
+        .slice(registry.start, registry.end)
+        .some((line) => /com\.wiolett\.gateway\.managed-service\s*[:=]\s*registry/.test(line));
+      if (!owned) throw new Error('foundation migration failed: existing registry service is not installer-managed');
+      next = [...lines.slice(0, registry.start), ...canonical, ...lines.slice(registry.end)];
+    } else {
+      const services = findTopLevelBlock(lines, 'services');
+      if (!services) throw new Error('foundation migration failed: services block not found');
+      next = [...lines.slice(0, services.end), '', ...canonical, ...lines.slice(services.end)];
+    }
+  }
+  next = upsertAppRegistryAuthVolume(next);
+  next = ensureTopLevelVolume(next, 'gateway_registry_data');
+  return ensureTopLevelVolume(next, 'gateway_registry_auth');
+}
+
+function upsertAppRegistryAuthVolume(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  const volumes = app ? findNestedBlock(lines, app, 'volumes') : null;
+  if (!volumes) throw new Error('foundation migration failed: services.app.volumes block not found');
+  const indent = volumes.indent + 2;
+  const next = lines.filter((line, index) => {
+    if (index <= volumes.start || index >= volumes.end) return true;
+    return !/^\s*-\s*[^#]*:\/var\/lib\/gateway-registry-auth(?::(?:ro|rw))?\s*(?:#.*)?$/.test(line);
+  });
+  const refreshedApp = findServiceBlock(next, 'app');
+  const refreshed = refreshedApp ? findNestedBlock(next, refreshedApp, 'volumes') : null;
+  if (!refreshed) throw new Error('foundation migration failed: services.app.volumes block disappeared');
+  return [
+    ...next.slice(0, refreshed.end),
+    `${' '.repeat(indent)}- gateway_registry_auth:/var/lib/gateway-registry-auth`,
+    ...next.slice(refreshed.end),
+  ];
+}
+
+function registryServiceBlock(): string[] {
+  return [
+    `  ${REGISTRY_SERVICE_START}`,
+    '  registry:',
+    `    image: \${GATEWAY_REGISTRY_IMAGE_REF}`,
+    '    restart: unless-stopped',
+    '    labels:',
+    '      com.wiolett.gateway.managed-service: registry',
+    '    environment:',
+    '      REGISTRY_HTTP_ADDR: 0.0.0.0:5000',
+    '      REGISTRY_HTTP_DEBUG_ADDR: 127.0.0.1:5001',
+    `      REGISTRY_HTTP_SECRET: \${GATEWAY_REGISTRY_HTTP_SECRET}`,
+    '      REGISTRY_AUTH: token',
+    `      REGISTRY_AUTH_TOKEN_REALM: \${GATEWAY_REGISTRY_TOKEN_REALM:-https://gateway.invalid/api/docker/registry/token}`,
+    '      REGISTRY_AUTH_TOKEN_SERVICE: gateway-internal-registry',
+    '      REGISTRY_AUTH_TOKEN_ISSUER: gateway-internal-registry',
+    '      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /var/lib/gateway-registry-auth/token-cert.pem',
+    '      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry',
+    '      REGISTRY_STORAGE_DELETE_ENABLED: "true"',
+    '      REGISTRY_HEALTH_STORAGEDRIVER_ENABLED: "true"',
+    '      REGISTRY_HEALTH_STORAGEDRIVER_INTERVAL: 10s',
+    '      REGISTRY_HEALTH_STORAGEDRIVER_THRESHOLD: "3"',
+    '    expose:',
+    '      - "5000"',
+    '    volumes:',
+    '      - gateway_registry_data:/var/lib/registry',
+    '      - gateway_registry_auth:/var/lib/gateway-registry-auth:ro',
+    '    healthcheck:',
+    '      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5001/debug/health >/dev/null"]',
+    '      interval: 10s',
+    '      timeout: 5s',
+    '      retries: 6',
+    '      start_period: 20s',
+    `  ${REGISTRY_SERVICE_END}`,
   ];
 }
 

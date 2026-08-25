@@ -405,6 +405,211 @@ export class DockerDeploymentService {
     return this.loadDeployment(nodeId, deploymentId);
   }
 
+  async createPending(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
+    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('blue-green');
+    await assertNodeAllowsServiceCreation(this.db, nodeId, 'docker');
+    await this.validateDockerNode(nodeId);
+    normalizeRoutes(input.routes);
+    const health = normalizeHealth(input.health);
+    await this.assertNameAvailable(nodeId, input.name);
+
+    const id = randomUUID();
+    const suffix = shortId(id);
+    const desiredConfig: DockerDeploymentDesiredConfig = {
+      image: input.image,
+      env: input.env,
+      mounts: input.mounts,
+      command: input.command,
+      entrypoint: input.entrypoint,
+      workingDir: input.workingDir,
+      user: input.user,
+      labels: input.labels,
+      restartPolicy: input.restartPolicy,
+      runtimeProfile: input.runtimeProfile ?? 'default',
+      runtime: input.runtime,
+      gpu: input.gpu,
+    };
+    await this.assertRuntimeProfile(nodeId, desiredConfig);
+    assertDockerMountChangeAllowed({ nodeId, actorScopes, nextConfig: desiredConfig, currentDefinitions: [] });
+
+    await this.db.transaction(async (tx) => {
+      await tx.insert(dockerDeployments).values({
+        id,
+        nodeId,
+        name: input.name,
+        desiredConfig,
+        activeSlot: 'blue',
+        status: 'creating',
+        routerName: `gwdep-${suffix}-router`,
+        routerImage: input.routerImage,
+        networkName: `gwdep-${suffix}-net`,
+        healthConfig: health,
+        drainSeconds: input.drainSeconds,
+        createdById: userId,
+        updatedById: userId,
+      });
+      await tx.insert(dockerDeploymentRoutes).values(
+        input.routes.map((route) => ({
+          deploymentId: id,
+          hostPort: route.hostPort,
+          containerPort: route.containerPort,
+          isPrimary: route.isPrimary,
+        }))
+      );
+      await tx.insert(dockerDeploymentSlots).values([
+        {
+          deploymentId: id,
+          slot: 'blue',
+          containerName: `gwdep-${suffix}-blue`,
+          status: 'empty',
+          health: 'unknown',
+        },
+        {
+          deploymentId: id,
+          slot: 'green',
+          containerName: `gwdep-${suffix}-green`,
+          status: 'empty',
+          health: 'unknown',
+        },
+      ]);
+    });
+    await this.healthCheckService?.ensureDeploymentDefault(nodeId, id);
+    await this.audit.log({
+      action: 'docker.deployment.create_pending_source',
+      userId,
+      resourceType: 'docker-deployment',
+      resourceId: id,
+      details: { nodeId, name: input.name },
+    });
+    this.emit('created', id, nodeId, { pendingSourceBuild: true });
+    return this.loadDeployment(nodeId, id);
+  }
+
+  async activatePending(
+    nodeId: string,
+    deploymentId: string,
+    image: string,
+    userId: string | null,
+    source = 'git_push_to_deploy'
+  ) {
+    await this.validateDockerNode(nodeId);
+    const deployment = await this.loadDeployment(nodeId, deploymentId);
+    if (deployment.status !== 'creating' || deployment.slots.some((slot) => Boolean(slot.containerId))) {
+      throw new AppError(409, 'DEPLOYMENT_NOT_PENDING_SOURCE', 'Deployment is not awaiting its first source build');
+    }
+    const desiredConfig = { ...deployment.desiredConfig, image };
+    await this.assertRuntimeProfile(nodeId, desiredConfig, deployment.desiredConfig.runtimeProfile);
+    const daemonDesiredConfig = await this.desiredConfigWithSecrets(nodeId, deploymentId, desiredConfig);
+    const registryAuthCandidates = await this.registry.resolveAuthCandidatesForImagePull(nodeId, image, undefined, {
+      actorScopes: [],
+    });
+    const registryAttempts = registryAuthCandidates.length ? registryAuthCandidates : [null];
+    let data: any = null;
+    let successfulRegistryId: string | undefined;
+    let deployedDesiredConfig = daemonDesiredConfig;
+
+    try {
+      for (const registryAuth of registryAttempts) {
+        const attemptDesiredConfig = desiredConfigForRegistryAttempt(daemonDesiredConfig, registryAuth);
+        try {
+          const result = await this.dispatch.sendDockerDeploymentCommand(nodeId, 'create', {
+            deploymentId,
+            slot: 'blue',
+            configJson: JSON.stringify({
+              deploymentId,
+              name: deployment.name,
+              activeSlot: 'blue',
+              routerName: deployment.routerName,
+              routerImage: deployment.routerImage,
+              networkName: deployment.networkName,
+              slots: Object.fromEntries(deployment.slots.map((slot) => [slot.slot, slot.containerName])),
+              routes: deployment.routes,
+              health: deployment.healthConfig,
+              desiredConfig: attemptDesiredConfig,
+              registryAuthJson: registryAuth?.authJson,
+              labels: dockerDeploymentLabels(deploymentId, 'app', 'blue'),
+            }),
+          });
+          data = this.parseResult(result) ?? {};
+          successfulRegistryId = registryAuth?.registryId;
+          deployedDesiredConfig = attemptDesiredConfig;
+          break;
+        } catch (error) {
+          if (registryAuth === registryAttempts.at(-1) || !isRegistryRetryableError(error)) throw error;
+        }
+      }
+
+      await this.registry.rememberImageRegistry(nodeId, image, successfulRegistryId);
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(dockerDeployments)
+          .set({ status: 'ready', desiredConfig, updatedAt: new Date(), updatedById: userId })
+          .where(eq(dockerDeployments.id, deploymentId));
+        await tx
+          .update(dockerDeploymentSlots)
+          .set({
+            containerId: data.blueContainerId ?? data.containerId ?? null,
+            image,
+            desiredConfig,
+            status: 'running',
+            health: 'healthy',
+            updatedAt: new Date(),
+          })
+          .where(and(eq(dockerDeploymentSlots.deploymentId, deploymentId), eq(dockerDeploymentSlots.slot, 'blue')));
+        await tx
+          .update(dockerDeploymentSlots)
+          .set({
+            containerId: data.greenContainerId ?? null,
+            image,
+            desiredConfig,
+            status: 'created',
+            health: 'unknown',
+            updatedAt: new Date(),
+          })
+          .where(and(eq(dockerDeploymentSlots.deploymentId, deploymentId), eq(dockerDeploymentSlots.slot, 'green')));
+        await tx.insert(dockerDeploymentReleases).values({
+          deploymentId,
+          toSlot: 'blue',
+          image,
+          triggerSource: source,
+          status: 'succeeded',
+          createdById: userId,
+          completedAt: new Date(),
+        });
+      });
+      await this.audit.log({
+        action: 'docker.deployment.activate_source',
+        userId,
+        resourceType: 'docker-deployment',
+        resourceId: deploymentId,
+        details: { nodeId, image: deployedDesiredConfig.image },
+      });
+      this.emit('created', deploymentId, nodeId, { source });
+      return this.loadDeployment(nodeId, deploymentId);
+    } catch (error) {
+      await this.audit
+        .log({
+          action: 'docker.deployment.activate_source_failed',
+          userId,
+          resourceType: 'docker-deployment',
+          resourceId: deploymentId,
+          details: { nodeId, image, failureCode: this.failureCode(error) },
+        })
+        .catch(() => undefined);
+      this.emit('failed', deploymentId, nodeId, { operation: 'source_activation', error });
+      throw error;
+    }
+  }
+
+  async discardPending(nodeId: string, deploymentId: string): Promise<boolean> {
+    const deployment = await this.loadDeployment(nodeId, deploymentId).catch(() => null);
+    if (!deployment || deployment.status !== 'creating' || deployment.slots.some((slot) => Boolean(slot.containerId))) {
+      return false;
+    }
+    await this.db.delete(dockerDeployments).where(eq(dockerDeployments.id, deploymentId));
+    return true;
+  }
+
   async create(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
     // LICENSE ENFORCEMENT: New blue/green deployments require Personal under the project license/TOS.
     await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('blue-green');

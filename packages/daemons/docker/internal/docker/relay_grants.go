@@ -125,6 +125,9 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 	if p.cfg.Docker.Mode == "databases" {
 		return "", nil
 	}
+	if p.registryProxy != nil {
+		p.registryProxy.reconcileGrants()
+	}
 	detail, err := json.Marshal(map[string]string{"socketPath": databaseTunnelSocketPath(p.cfg.StateDir)})
 	return string(detail), err
 }

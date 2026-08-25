@@ -870,6 +870,9 @@ function RealtimeBridge() {
       [auth.hasScopedAccess("docker:networks:view"), "docker.network.changed"],
       [auth.hasScopedAccess("docker:tasks"), "docker.task.changed"],
       [auth.hasScopedAccess("docker:registries:view"), "docker.registry.changed"],
+      [auth.hasScopedAccess("docker:containers:view"), "docker.build.changed"],
+      [auth.hasScopedAccess("docker:containers:view"), "docker.build.artifact.changed"],
+      [auth.hasScopedAccess("docker:containers:view"), "docker.build.log"],
       [auth.hasScope("housekeeping:view"), "logging.health.changed"],
       [auth.hasScope("housekeeping:view"), "system.relay.health.changed"],
       [auth.hasScope("status-page:view"), "status-page.changed"],
@@ -1147,7 +1150,7 @@ function RealtimeBridge() {
   return null;
 }
 
-export default function App() {
+function GatewayApp() {
   const [startupChecked, setStartupChecked] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
   const user = useAuthStore((s) => s.user);
@@ -1432,4 +1435,8 @@ export default function App() {
       </ThemeProvider>
     </ErrorBoundary>
   );
+}
+
+export default function App() {
+  return <GatewayApp />;
 }

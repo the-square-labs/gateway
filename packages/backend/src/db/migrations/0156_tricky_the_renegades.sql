@@ -1,0 +1,1 @@
+ALTER TABLE "docker_builds" ADD CONSTRAINT "docker_builds_superseded_by_build_id_docker_builds_id_fk" FOREIGN KEY ("superseded_by_build_id") REFERENCES "public"."docker_builds"("id") ON DELETE set null ON UPDATE no action;

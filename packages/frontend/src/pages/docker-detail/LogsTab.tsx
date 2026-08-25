@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { AnsiText } from "@/components/ui/ansi-text";
 import { Button } from "@/components/ui/button";
-import { VirtualLogList } from "@/components/ui/virtual-log-list";
 import { api } from "@/services/api";
+import { DockerLogViewport } from "./DockerLogViewport";
 
 const CHANNEL_PREFIX = "docker-logs:";
 const MAX_LOG_LINES = 10000;
@@ -397,15 +397,11 @@ export function LogsTab(props: LogsTabProps) {
         </>
       }
     >
-      <VirtualLogList
+      <DockerLogViewport
         lines={lines}
         keyFn={(_, i) => i}
         prependVersion={historyPrependVersion}
-        renderLine={(line) => (
-          <div className="whitespace-pre-wrap break-all leading-5 px-4 font-mono text-xs text-foreground/80">
-            <AnsiText text={line as string} />
-          </div>
-        )}
+        renderContent={(line) => <AnsiText text={line as string} />}
         onLoadMore={requestMoreLines}
         hasMore={hasMore}
         loadingMore={loadingMore}

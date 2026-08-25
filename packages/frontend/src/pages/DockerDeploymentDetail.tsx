@@ -2,6 +2,8 @@ import {
   Activity,
   Code2,
   Folder,
+  GitBranch,
+  Hammer,
   LayoutDashboard,
   ListTodo,
   Pin,
@@ -61,6 +63,7 @@ import {
 } from "./docker-deployment-detail/DeploymentPanels";
 import { DeploymentSettings } from "./docker-deployment-detail/DeploymentSettings";
 import { ConsoleTab } from "./docker-detail/ConsoleTab";
+import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { EnvironmentTab } from "./docker-detail/EnvironmentTab";
 import { FilesTab } from "./docker-detail/FilesTab";
 import type { InspectData } from "./docker-detail/helpers";
@@ -156,7 +159,19 @@ export function DockerDeploymentDetail({
     usePinnedContainersStore();
 
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "logs", "console", "files", "stats", "environment", "slots", "settings", "config"],
+    [
+      "overview",
+      "source",
+      "builds",
+      "logs",
+      "console",
+      "files",
+      "stats",
+      "environment",
+      "slots",
+      "settings",
+      "config",
+    ],
     "overview",
     (tab) => dockerDeploymentRoute(nodeSlug, routeDeploymentName, tab)
   );
@@ -440,6 +455,8 @@ export function DockerDeploymentDetail({
   const visibleTabs = useMemo(
     () => [
       "overview",
+      "source",
+      "builds",
       ...(canViewContainer ? ["logs"] : []),
       ...(canUseConsole ? ["console"] : []),
       ...(canReadFiles ? ["files"] : []),
@@ -724,6 +741,14 @@ export function DockerDeploymentDetail({
               <LayoutDashboard className="h-3.5 w-3.5" />
               Overview
             </TabsTrigger>
+            <TabsTrigger value="source" className="gap-1.5">
+              <GitBranch className="h-3.5 w-3.5" />
+              Source
+            </TabsTrigger>
+            <TabsTrigger value="builds" className="gap-1.5">
+              <Hammer className="h-3.5 w-3.5" />
+              Builds
+            </TabsTrigger>
             {canViewContainer && (
               <TabsTrigger value="logs" disabled={isTabDisabled("logs")} className="gap-1.5">
                 <ScrollText className="h-3.5 w-3.5" />
@@ -777,6 +802,18 @@ export function DockerDeploymentDetail({
               serviceState={serviceState}
               activeState={activeState}
               primaryRoute={primaryRoute}
+            />
+          </TabsContent>
+          <TabsContent value="source" className="pb-0">
+            <DockerResourceGitTabs
+              target={{ kind: "deployment", nodeId, deploymentId }}
+              view="source"
+            />
+          </TabsContent>
+          <TabsContent value="builds" className="pb-0">
+            <DockerResourceGitTabs
+              target={{ kind: "deployment", nodeId, deploymentId }}
+              view="builds"
             />
           </TabsContent>
           {canViewContainer && activeContainerId && !unavailable && (

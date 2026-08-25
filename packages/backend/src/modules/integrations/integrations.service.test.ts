@@ -136,6 +136,55 @@ function createToolProjectsDb(input: { connector: unknown; projects: unknown[]; 
   return { select };
 }
 
+function createDockerSourceListDb(input: { connector: unknown; projects: unknown[]; allowlistEntries: unknown[] }) {
+  const select = vi.fn();
+  select
+    .mockReturnValueOnce({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([input.connector]),
+        })),
+      })),
+    })
+    .mockReturnValueOnce({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          orderBy: vi.fn().mockResolvedValue(input.projects),
+        })),
+      })),
+    })
+    .mockReturnValueOnce({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          orderBy: vi.fn().mockResolvedValue(input.allowlistEntries),
+        })),
+      })),
+    });
+  return { select };
+}
+
+function createDockerSourceResolveDb(input: { connector: unknown; project: unknown; allowlistEntries: unknown[] }) {
+  const select = vi.fn();
+  select
+    .mockReturnValueOnce({
+      from: vi.fn(() => ({
+        innerJoin: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([{ connector: input.connector, project: input.project }]),
+          })),
+        })),
+      })),
+    })
+    .mockReturnValueOnce({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          orderBy: vi.fn().mockResolvedValue(input.allowlistEntries),
+        })),
+      })),
+    });
+  return { select };
+}
+
 function createProjectActionDb(input: { connector: unknown; project: unknown; allowlistEntries: unknown[] }) {
   const select = vi.fn();
   select
@@ -896,6 +945,82 @@ describe('IntegrationsService', () => {
       details: expect.objectContaining({ reason: 'missing' }),
     });
     expect(decryptString).not.toHaveBeenCalled();
+  });
+
+  it('lists allowlisted Docker build repositories with the connector-owned GitLab credential model', async () => {
+    const connector = connectorRow({ capabilities: { projectsView: true, repoRead: true } });
+    const project = projectRow();
+    const db = createDockerSourceListDb({
+      connector,
+      projects: [project, projectRow({ remoteId: '29', fullPath: 'blocked/app', name: 'blocked' })],
+      allowlistEntries: [
+        { entryType: 'project', remoteId: project.remoteId, fullPath: project.fullPath, name: null, webUrl: null },
+      ],
+    });
+    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, {} as never);
+    const credentials = (
+      service as unknown as { gitLabUserCredentials: { resolveAuth: (...args: unknown[]) => Promise<unknown> } }
+    ).gitLabUserCredentials;
+    const resolveAuth = vi.spyOn(credentials, 'resolveAuth');
+
+    await expect(
+      service.listDockerBuildSourceRepositories(
+        { ...BASE_USER, scopes: ['integrations:gitlab:repo:read'] },
+        connector.id
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        connectorId: connector.id,
+        projectId: project.id,
+        provider: 'gitlab',
+        remoteId: project.remoteId,
+        fullPath: project.fullPath,
+      }),
+    ]);
+    expect(resolveAuth).not.toHaveBeenCalled();
+  });
+
+  it('resolves an immutable Docker build commit with the connector-owned GitLab credential', async () => {
+    const connector = connectorRow({
+      capabilities: { projectsView: true, repoRead: true },
+      encryptedToken: JSON.stringify({ encryptedKey: 'key', encryptedDek: 'dek' }),
+    });
+    const project = projectRow();
+    const db = createDockerSourceResolveDb({
+      connector,
+      project,
+      allowlistEntries: [
+        { entryType: 'project', remoteId: project.remoteId, fullPath: project.fullPath, name: null, webUrl: null },
+      ],
+    });
+    const provider = vcsProvider({
+      getBranchAccess: vi.fn().mockResolvedValue({
+        exists: true,
+        canPush: false,
+        commitSha: 'a'.repeat(40),
+      }),
+    });
+    const decryptString = vi.fn(() => 'glpat-system-token');
+    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, { decryptString } as never);
+    service.registerProvider(provider as never);
+
+    await expect(
+      service.resolveDockerBuildSource(
+        { ...BASE_USER, scopes: ['integrations:gitlab:repo:read'] },
+        { connectorId: connector.id, projectId: project.id, branch: 'main' }
+      )
+    ).resolves.toMatchObject({
+      connectorId: connector.id,
+      projectId: project.id,
+      branch: 'main',
+      commitSha: 'a'.repeat(40),
+      cloneUrl: 'https://gitlab.example.com/general/balanceify.git',
+    });
+    expect(provider.getBranchAccess).toHaveBeenCalledWith(
+      { baseUrl: 'https://gitlab.example.com', token: 'glpat-system-token' },
+      expect.objectContaining({ remoteId: project.remoteId, fullPath: project.fullPath }),
+      'main'
+    );
   });
 
   it('intersects cached allowlisted projects with projects visible to the personal PAT', async () => {

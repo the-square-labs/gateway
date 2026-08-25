@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { and, eq, isNull } from 'drizzle-orm';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
 import { parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
@@ -73,6 +74,11 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         }
 
         const nodeId = matchedNode.id;
+        const profileError = validateEnrollmentDaemonProfile(matchedNode.type, req.daemonType);
+        if (profileError) {
+          callback({ code: 7, message: profileError });
+          return;
+        }
         if (matchedNode.type === 'relay' && req.daemonType !== 'relay') {
           callback({ code: 7, message: 'Relay node enrollment requires relay supervisor identity' });
           return;

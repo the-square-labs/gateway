@@ -428,13 +428,14 @@ Nodes are remote servers running Gateway daemons. Each daemon type manages diffe
 ## Node Types
 - **nginx**: Ingress node — runs nginx and manages route configs, TLS replicas, access lists, public traffic, logs, and stats. Requires nginx installed on the server.
 - **monitoring**: Lightweight system monitoring agent — reports CPU, memory, disk, load, network. No nginx required. Useful for any server you want to monitor.
-- **docker**: Container management node — manages Docker containers, images, volumes, networks. Requires Docker installed. Provides container console (exec), file browser, log streaming, environment/secrets management.
+- **docker**: Container runtime node — manages Docker containers, deployments, images, volumes, and networks. Requires Docker Engine. Provides console, files, logs, environment, and secret management.
+- **builder**: Restricted Build Worker profile of the existing \`docker-daemon\`. It has no Docker Engine socket and accepts only Git build, cancellation, and registry-binding commands. It supervises dedicated BuildKit and containerd services using the runsc shim and must advertise isolated execution and enforced-resource-profile capabilities before Repository mode is admitted.
 - **databases**: Restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse only. It runs as root, validates ext4 image storage before enrollment, and rejects generic Docker workloads.
 
 ## How to Enroll a New Node (Step by Step)
 
 ### Step 1: Create the node in Gateway UI
-Go to **Nodes** page → click **Enroll Node** → select the node type (nginx, docker, databases, or monitoring) → optionally set a display name → click **Create**. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands.
+Go to **Nodes** page → click **Enroll Node** → select the node type (nginx, docker, builder, databases, or monitoring) → optionally set a display name → click **Create**. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands.
 
 ### Step 2: Run the setup script on the target server
 The UI shows ready-to-copy commands. Run one of these on the target server as root:
@@ -450,6 +451,8 @@ For **docker** nodes:
 curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-docker-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
+
+For **builder** nodes, use the same installer with \`--mode builder\`. The host must use systemd and already contain the Gateway builder runtime bundle (\`containerd\`, \`buildkitd\`, \`buildctl\`, \`runsc\`, \`containerd-shim-runsc-v1\`, \`git\`, \`syft\`, \`grype\`, and \`oras\`). The installer fails closed when the runtime is incomplete; do not add a Docker socket or convert it to a generic Docker profile as a workaround.
 
 For **database** nodes, run setup-database-node.sh with the generated Gateway address, enrollment token, and certificate fingerprint. The interactive installer selects an eligible local storage root before enrollment. For automation, pass --storage-root <path> and --yes; database nodes always run the restricted docker-daemon profile as root. Before enrollment, the installer verifies the local Docker Engine and the complete fixed-size ext4 image lifecycle, including loop attach, mount/write, growth, resize, unmount, and detach. An LXC host must receive loop-control, a loop-device pool, and mount permission from its outer host; there is no unbounded-volume fallback.
 
@@ -561,6 +564,18 @@ Automated cleanup tasks, configurable in Settings.
 
 ## Overview
 Gateway provides Portainer-like Docker container management through a daemon running on Docker hosts. Docker tools still require a nodeId, while container permissions can be granted for the whole node or narrowed to one standalone container or blue/green deployment.
+
+## Git Source Builds And Push-To-Deploy
+- Git push-to-deploy, source mutation and automation, new build admission, and optional external Docker-client access to the internal registry require Business or Enterprise. The private internal registry itself remains available and operational on every plan. Let operators configure Repository mode fully, but explain that **Create and build** is the enforcement point when the current plan is below Business. After downgrade, existing source and build history remains readable and source bindings or Build Secrets may be removed, but edits, polling, webhooks, and new builds remain blocked.
+- A Git source is attached directly to an existing container or blue/green deployment; there is no separate application entity. Repository mode in the Deploy dialog can also reserve the Docker resource and queue its first build.
+- Use \`list_docker_builds\` to inspect visible build status, exact commit, Build Worker, immutable artifact digest, and policy result.
+- Use \`manage_docker_source\` with \`get\`, \`upsert\`, \`remove\`, \`resolve\`, or \`build\` for an existing Docker resource. Use \`admission\` before promising a new build; it reports whether the internal registry and an isolated Build Worker are ready.
+- Repository and integration IDs must come from an enabled allowlisted GitLab, GitHub, or generic Git connector. Gateway resolves the configured branch to an exact commit SHA and deduplicates ordinary builds by source binding plus commit.
+- Automatic deployment never runs a mutable Git-derived tag. An approved artifact is stored in the internal registry and addressed by digest; standalone containers recreate from that digest, while deployments use the existing health-checked blue/green path.
+- Build admission fails closed when the registry is read-only or in maintenance, or when no online worker advertises BuildKit execution, runsc isolation, and enforced resource limits. Image-based deployment remains available separately.
+- The current Build Worker profile accepts one isolated runsc job at a time, enforces the installed CPU/RAM/disk profile, and clears BuildKit/containerd state between jobs. Internet egress is the default installer profile while metadata, private/control-plane destinations, and the Gateway gRPC endpoint are blocked; an offline profile is also available.
+- Build Secrets are encrypted, source-scoped, write-only values exposed only through explicit BuildKit secret mounts. Never suggest passing secrets as build arguments or copying them into the build context.
+- Internal registry operation requires no public domain and is not itself a paid module. Optional Business+ external Docker-client access is configured under Settings > Features and uses an explicit nginx node, domain, TLS certificate, and repository/action-scoped token. Entitlement loss disables the external binding, and every public registry token request rechecks Business.
 
 ## Granular Access
 - Every standalone container has a Gateway-managed stable access identity; every blue/green deployment uses its stable deployment ID.
@@ -1049,6 +1064,13 @@ Programmatic clients can use validated \`advancedConfig\`, but cannot set or rea
 
 ### Docker
 - \`GET /api/docker/nodes/:nodeId/containers\` — list containers
+- \`GET /api/docker/nodes/:nodeId/source-resources/admission\` — check internal-registry and Build Worker admission
+- \`POST /api/docker/nodes/:nodeId/source-resources\` — create a container/deployment source reservation and queue its first immutable build
+- \`GET /api/docker/builds\` — list visible Git-source builds
+- \`GET /api/docker/builds/:buildId\` — inspect one build and its artifact/policy result
+- \`GET /api/docker/builds/:buildId/logs\` — read persisted build logs
+- \`POST /api/docker/builds/:buildId/cancel\` — request build cancellation
+- \`POST /api/docker/builds/:buildId/retry\` — queue a new attempt
 - \`POST /api/docker/nodes/:nodeId/containers/:id/start\` — start container
 - \`POST /api/docker/nodes/:nodeId/containers/:id/stop\` — stop container
 - \`POST /api/docker/nodes/:nodeId/containers/:id/restart\` — restart container
@@ -1529,6 +1551,8 @@ If no enabled connector has a matching zone, DNS-01 cannot be automated. If seve
   'docker-registries': `# Docker Registries
 
 Gateway stores private Docker registry credentials encrypted at rest. A registry may be global or restricted to a specific Docker node; use only a registry available to the selected node when pulling, recreating, or deploying an image.
+
+The Gateway-managed internal Distribution registry is separate from user-saved registry credentials. It has no host-published port by default, keeps three successful artifacts plus live pins, and is configured under Settings > Features. Do not ask for a domain unless the user explicitly wants external Docker-client access; internal builder/runtime traffic uses scoped daemon-managed Relay bindings.
 
 Public Docker Hub images such as \`nginx:alpine\` do not require a saved registry. Pull them directly with \`registryId\` omitted. Never create a manual Docker Hub registry merely to pull a public image, and never pass an empty string as \`registryId\`.
 

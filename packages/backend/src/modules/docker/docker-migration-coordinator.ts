@@ -10,11 +10,13 @@ import {
   dockerMigrations,
   dockerRuntimeSettings,
   dockerSecrets,
+  dockerSourceBindings,
   dockerWebhooks,
   nodes,
   proxyHosts,
 } from '@/db/schema/index.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
+import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { migrationPlan } from './docker-migration-runtime.js';
 import type { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
@@ -27,7 +29,8 @@ export class DockerMigrationCoordinator {
     private db: DrizzleClient,
     private proxy: ProxyService,
     private snapshots: DockerSnapshotReconciler,
-    private accessResources: DockerAccessResourceService
+    private accessResources: DockerAccessResourceService,
+    private registry?: RelayRegistryService
   ) {}
 
   async enterMaintenance(row: MigrationRow): Promise<void> {
@@ -133,6 +136,18 @@ export class DockerMigrationCoordinator {
         })
         .where(eq(dockerMigrations.id, row.id));
     });
+    const contextKind = row.resourceType === 'deployment' ? 'deployment' : 'container';
+    const sourceContextId =
+      row.resourceType === 'deployment' ? row.deploymentId! : `${row.sourceNodeId}:${row.resourceName}`;
+    const targetContextId =
+      row.resourceType === 'deployment' ? row.deploymentId! : `${row.targetNodeId}:${row.resourceName}`;
+    await this.registry?.moveRuntimeContextBinding({
+      contextKind,
+      sourceContextId,
+      targetContextId,
+      sourceNodeId: row.sourceNodeId,
+      targetNodeId: row.targetNodeId,
+    });
     await this.refreshTargetSnapshots(row);
   }
 
@@ -197,6 +212,16 @@ export class DockerMigrationCoordinator {
         and(
           eq(dockerContainerFolderAssignments.nodeId, row.sourceNodeId),
           eq(dockerContainerFolderAssignments.containerName, row.resourceName)
+        )
+      );
+    await tx
+      .update(dockerSourceBindings)
+      .set({ nodeId: row.targetNodeId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(dockerSourceBindings.targetKind, 'container'),
+          eq(dockerSourceBindings.nodeId, row.sourceNodeId),
+          eq(dockerSourceBindings.containerName, row.resourceName)
         )
       );
     await tx

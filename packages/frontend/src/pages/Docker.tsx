@@ -2,6 +2,7 @@ import {
   ArchiveRestore,
   Box,
   FolderPlus,
+  Hammer,
   HardDrive,
   Layers,
   ListTodo,
@@ -22,6 +23,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { Node as GatewayNode } from "@/types";
+import { DockerBuilds } from "./DockerBuilds";
 import { DockerContainers } from "./DockerContainers";
 import { DockerImages } from "./DockerImages";
 import { DockerNetworks } from "./DockerNetworks";
@@ -35,6 +37,7 @@ const TABS = [
   { value: "volumes", label: "Volumes", icon: HardDrive, scope: "docker:volumes:view" },
   { value: "networks", label: "Networks", icon: Network, scope: "docker:networks:view" },
   { value: "tasks", label: "Tasks", icon: ListTodo, scope: "docker:tasks" },
+  { value: "builds", label: "Builds", icon: Hammer, scope: "docker:containers:view" },
 ] as const;
 
 const DOCKER_NODE_SCOPES_BY_TAB: Partial<
@@ -88,7 +91,7 @@ export function Docker() {
     tabParam && visibleTabs.some((t) => t.value === tabParam)
       ? tabParam
       : visibleTabs[0]?.value || "containers";
-  const usesFillLayout = activeTab === "tasks";
+  const usesFillLayout = activeTab === "tasks" || activeTab === "builds";
   const activeTabLoading =
     activeTab === "containers"
       ? loading.containers
@@ -470,6 +473,9 @@ export function Docker() {
           </TabsContent>
           <TabsContent value="tasks" className="flex flex-col flex-1 min-h-0">
             <DockerTasks embedded />
+          </TabsContent>
+          <TabsContent value="builds" className="flex flex-col flex-1 min-h-0">
+            <DockerBuilds embedded />
           </TabsContent>
         </Tabs>
         <GwcaImportDialog

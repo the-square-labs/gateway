@@ -13,7 +13,15 @@ import {
 } from 'drizzle-orm/pg-core';
 import { nodeFolders } from './node-folders.js';
 
-export const nodeTypeEnum = pgEnum('node_type', ['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']);
+export const nodeTypeEnum = pgEnum('node_type', [
+  'nginx',
+  'bastion',
+  'monitoring',
+  'docker',
+  'builder',
+  'databases',
+  'relay',
+]);
 export const nodeStatusEnum = pgEnum('node_status', ['pending', 'online', 'offline', 'error']);
 
 export interface NodeCapabilities {

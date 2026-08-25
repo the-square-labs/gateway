@@ -56,6 +56,8 @@ import { DOCKER_LOG_TAIL_MAX } from '@/modules/docker/docker.schemas.js';
 import { createComposeLogsWSHandlers } from '@/modules/docker/docker-compose-logs.ws.js';
 import { createDockerExecWSHandlers } from '@/modules/docker/docker-exec.ws.js';
 import { createDockerLogStreamWSHandlers } from '@/modules/docker/docker-logs.ws.js';
+import { dockerRegistryAuthRoutes } from '@/modules/docker/docker-registry-auth.routes.js';
+import { dockerSourceWebhookRoutes } from '@/modules/docker/docker-source.routes.js';
 import { dockerWebhookTriggerRoutes } from '@/modules/docker/docker-webhook.routes.js';
 import { domainRoutes } from '@/modules/domains/domain.routes.js';
 import { groupRoutes } from '@/modules/groups/group.routes.js';
@@ -591,6 +593,7 @@ export function createApp(): GatewayAppRuntime {
   app.use('/pki/*', pkiRateLimitMiddleware);
   app.use('/api/public/status-page', publicStatusRateLimitMiddleware);
   app.use('/api/webhooks/docker/*', publicWebhookRateLimitMiddleware);
+  app.use('/api/webhooks/docker-source/*', publicWebhookRateLimitMiddleware);
   app.use('/api/setup/*', setupRateLimitMiddleware);
   app.use('/api/ai/ws', aiWebSocketRateLimitMiddleware);
   app.use('/api/events', streamRateLimitMiddleware);
@@ -698,9 +701,11 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/tokens', tokensRoutes);
   app.route('/api/admin/groups', groupRoutes);
   app.route('/api/admin', adminRoutes);
+  app.route('/api/docker/registry', dockerRegistryAuthRoutes);
   app.route('/api/docker', dockerRoutes);
   app.route('/api/databases', databaseRoutes);
   app.route('/api/webhooks/docker', dockerWebhookTriggerRoutes);
+  app.route('/api/webhooks/docker-source', dockerSourceWebhookRoutes);
   app.route('/api/nodes', nodesRoutes);
   app.route('/api/proxy-hosts', proxyRoutes);
   app.route('/api/resources', resourceSearchRoutes);

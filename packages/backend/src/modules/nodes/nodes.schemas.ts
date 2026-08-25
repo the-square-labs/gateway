@@ -29,7 +29,7 @@ const NodeServiceAddressesSchema = z
 
 export const CreateNodeSchema = z
   .object({
-    type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']).default('nginx'),
+    type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'builder', 'databases', 'relay']).default('nginx'),
     hostname: z.string().min(1).max(255),
     displayName: z.string().max(255).optional(),
     serviceAddresses: NodeServiceAddressesSchema.optional(),
@@ -80,7 +80,7 @@ export const UpdateNodeServiceCreationLockSchema = z.object({
 
 export const NodeListQuerySchema = z.object({
   search: z.string().optional(),
-  type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'databases', 'relay']).optional(),
+  type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'builder', 'databases', 'relay']).optional(),
   status: z.enum(['pending', 'online', 'offline', 'error']).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),

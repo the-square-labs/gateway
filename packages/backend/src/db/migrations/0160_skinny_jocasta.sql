@@ -1,0 +1,1 @@
+ALTER TYPE "public"."node_type" ADD VALUE 'builder' BEFORE 'databases';

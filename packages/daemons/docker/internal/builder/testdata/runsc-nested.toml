@@ -1,0 +1,11 @@
+binary_name = "/opt/gateway-gvisor/runsc"
+
+[runsc_config]
+  network = "sandbox"
+  host-uds = "none"
+  allow-packet-socket-write = "false"
+  net-raw = "false"
+  ignore-cgroups = "true"
+  platform = "ptrace"
+  profile = "false"
+  strace = "false"

@@ -1,0 +1,223 @@
+export type DockerSourceTarget =
+  | { kind: "container"; nodeId: string; containerName: string }
+  | { kind: "deployment"; nodeId?: string; deploymentId: string };
+
+export type DockerBuildStatus =
+  | "queued"
+  | "claimed"
+  | "checking_out"
+  | "building"
+  | "scanning"
+  | "pushing"
+  | "deploying"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "superseded";
+
+export type DockerArtifactPolicyDecision = "pending" | "approved" | "rejected" | "error";
+
+export interface DockerBuildVulnerability {
+  id: string;
+  severity: string;
+  packageName: string;
+  installedVersion: string;
+  packageType: string;
+  fixedVersions: string[];
+  fixState: string;
+  namespace: string;
+  dataSource: string;
+}
+
+export interface DockerSourceBinding {
+  id: string;
+  target: DockerSourceTarget;
+  connectorId: string;
+  projectId: string;
+  provider: "gitlab" | "github" | "git";
+  repositoryRemoteId: string;
+  repositoryFullPath: string;
+  repositoryCloneUrl: string;
+  branch: string;
+  dockerfilePath: string;
+  contextPath: string;
+  autoBuild: boolean;
+  autoDeploy: boolean;
+  buildArgs: Record<string, string>;
+  buildSecretNames: string[];
+  policy: {
+    vulnerabilityThreshold?: "critical" | "high" | "medium" | "low" | "none";
+  };
+  desiredCommitSha: string | null;
+  deployedCommitSha: string | null;
+  lastResolvedAt: string | null;
+  lastPollAt: string | null;
+  lastPollError: string | null;
+  webhookConfiguredAt: string | null;
+  lastWebhookAt: string | null;
+  lastWebhookError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DockerSourceBindingConfig {
+  connectorId: string;
+  projectId: string;
+  branch: string;
+  dockerfilePath: string;
+  contextPath: string;
+  autoBuild: boolean;
+  autoDeploy: boolean;
+  buildArgs: Record<string, string>;
+  buildSecretNames: string[];
+  policy?: {
+    vulnerabilityThreshold?: "critical" | "high" | "medium" | "low" | "none";
+  };
+}
+
+export interface DockerBuildSecret {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DockerBuildArtifact {
+  id: string;
+  buildId: string;
+  registryRepository: string;
+  digest: string;
+  platform: string;
+  sizeBytes: number;
+  status: "pending" | "ready" | "rejected" | "deleting" | "deleted";
+  sbomDigest: string | null;
+  provenanceDigest: string | null;
+  scanSummary: {
+    scanner?: string;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    unknown: number;
+    vulnerabilities?: DockerBuildVulnerability[];
+    vulnerabilitiesTruncated?: number;
+  } | null;
+  policyDecision: DockerArtifactPolicyDecision;
+  policyReason: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
+}
+
+export interface DockerBuild {
+  id: string;
+  sourceBindingId: string;
+  provider: "gitlab" | "github" | "git";
+  trigger: "manual" | "gitlab_push" | "github_push" | "generic_webhook" | "poll" | "retry";
+  repositoryFullPath: string;
+  ref: string;
+  commitSha: string;
+  status: DockerBuildStatus;
+  builderNodeId: string | null;
+  builderName?: string | null;
+  platform: string | null;
+  attempt: number;
+  maxAttempts: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  progress: Record<string, unknown>;
+  artifact: DockerBuildArtifact | null;
+  target:
+    | { kind: "container"; nodeId: string; containerName: string; name: string }
+    | { kind: "deployment"; nodeId: string; deploymentId: string; name: string };
+  createdAt: string;
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface DockerBuildSourceRepository {
+  connectorId: string;
+  connectorName: string;
+  projectId: string;
+  provider: "gitlab" | "github" | "git";
+  remoteId: string;
+  fullPath: string;
+  name: string;
+  webUrl: string | null;
+  defaultBranch: string | null;
+  archived: boolean;
+}
+
+export interface DockerBuildLogChunk {
+  buildId: string;
+  sequence: number;
+  content: string;
+  byteLength: number;
+  createdAt: string;
+}
+
+export interface DockerInternalRegistryState {
+  status: "starting" | "ready" | "read_only" | "maintenance" | "degraded" | "unhealthy";
+  writable: boolean;
+  storageBackend: "filesystem";
+  storageUsedBytes: number;
+  storageCapacityBytes: number | null;
+  retentionSuccessfulArtifacts: 3;
+  objectStorageAvailable: false;
+  externalAccessEnabled: boolean;
+  externalHostname: string | null;
+  externalNginxNodeId: string | null;
+  externalCertificateId: string | null;
+  maintenancePhase: string;
+  lastGcAt: string | null;
+  nextGcAt: string | null;
+  lastError: string | null;
+}
+
+export interface DockerInternalRegistrySettings {
+  externalAccessEnabled: boolean;
+  externalHostname?: string;
+  externalNginxNodeId?: string;
+  externalCertificateId?: string;
+}
+
+export interface DockerBuildAdmissionStatus {
+  ready: boolean;
+  code: string | null;
+  message: string | null;
+}
+
+export type DockerSourceResourceCreateRequest = {
+  source: DockerSourceBindingConfig;
+  resource:
+    | {
+        kind: "container";
+        name: string;
+        restartPolicy: "no" | "always" | "unless-stopped" | "on-failure";
+        runtimeProfile: "default" | "secure";
+      }
+    | {
+        kind: "deployment";
+        name: string;
+        restartPolicy: "no" | "always" | "unless-stopped" | "on-failure";
+        runtimeProfile: "default" | "secure";
+        routes: Array<{ hostPort: number; containerPort: number; isPrimary: boolean }>;
+        health: {
+          path: string;
+          statusMin: number;
+          statusMax: number;
+          timeoutSeconds: number;
+          intervalSeconds: number;
+          successThreshold: number;
+          startupGraceSeconds: number;
+          deployTimeoutSeconds: number;
+        };
+        drainSeconds: number;
+      };
+};
+
+export interface DockerSourceResourceCreateResult {
+  source: DockerSourceBinding;
+  build: DockerBuild;
+  target: DockerSourceTarget;
+}

@@ -13,10 +13,15 @@ export function OverviewTab({
   nodeId,
   containerId,
   data,
+  sourceIdentity,
 }: {
   nodeId: string;
   containerId: string;
   data: InspectData;
+  sourceIdentity?: {
+    repositoryFullPath: string;
+    deployedCommitSha: string | null;
+  } | null;
 }) {
   const transition = data._transition as string | undefined;
   const state = transition ?? data.State?.Status ?? (data.State?.Running ? "running" : "stopped");
@@ -117,7 +122,37 @@ export function OverviewTab({
               </button>
             }
           />
-          <DetailRow label="Image" value={<span className="font-mono">{image}</span>} />
+          <DetailRow
+            label={sourceIdentity ? "Source" : "Image"}
+            value={
+              sourceIdentity ? (
+                <span className="flex min-w-0 max-w-full items-center justify-end gap-1.5">
+                  <span className="truncate">{sourceIdentity.repositoryFullPath}</span>
+                  {sourceIdentity.deployedCommitSha ? (
+                    <>
+                      <span aria-hidden="true" className="text-muted-foreground">
+                        &middot;
+                      </span>
+                      <span className="shrink-0 font-mono">
+                        {sourceIdentity.deployedCommitSha.slice(0, 10)}
+                      </span>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="shrink-0 text-muted-foreground hover:text-primary"
+                    aria-label="Copy immutable image reference"
+                    title="Copy immutable image reference"
+                    onClick={() => copyToClipboard(image)}
+                  >
+                    <ClipboardCopy className="h-3 w-3" />
+                  </button>
+                </span>
+              ) : (
+                <span className="font-mono">{image}</span>
+              )
+            }
+          />
           <DetailRow label="Created" value={created ? formatDate(created) : "-"} />
           <DetailRow label="Restart Policy" value={restartPolicy} />
           {platform && <DetailRow label="Platform" value={platform} />}

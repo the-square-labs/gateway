@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DockerRegistryService } from './docker-registry.service.js';
+import { INTERNAL_DOCKER_REGISTRY_ID } from './docker-registry-internal.service.js';
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -7,6 +8,38 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('DockerRegistryService internal registry', () => {
+  it('exposes the built-in registry as a stable read-only system registry', async () => {
+    const service = new DockerRegistryService({} as never, {} as never, {} as never, {} as never);
+    service.setInternalRegistryService({
+      getState: vi.fn().mockResolvedValue({
+        status: 'ready',
+        writable: true,
+        createdAt: new Date('2026-08-24T00:00:00.000Z'),
+        updatedAt: new Date('2026-08-24T01:00:00.000Z'),
+      }),
+    } as never);
+
+    await expect(service.get(INTERNAL_DOCKER_REGISTRY_ID)).resolves.toMatchObject({
+      id: INTERNAL_DOCKER_REGISTRY_ID,
+      source: 'system',
+      provider: 'gateway',
+      readOnly: true,
+      internal: { status: 'ready', writable: true },
+    });
+  });
+
+  it('rejects generic update and delete operations for the built-in registry', async () => {
+    const service = new DockerRegistryService({} as never, {} as never, {} as never, {} as never);
+    await expect(service.update(INTERNAL_DOCKER_REGISTRY_ID, {}, 'user-1')).rejects.toMatchObject({
+      code: 'REGISTRY_SYSTEM_MANAGED',
+    });
+    await expect(service.delete(INTERNAL_DOCKER_REGISTRY_ID, 'user-1')).rejects.toMatchObject({
+      code: 'REGISTRY_SYSTEM_MANAGED',
+    });
+  });
 });
 
 function createSavedRegistryConnectionService(rowOverride: Partial<Record<string, unknown>> = {}) {

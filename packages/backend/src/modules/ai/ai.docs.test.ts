@@ -168,6 +168,12 @@ describe('AI internal docs registry', () => {
       'target-node registry downloads'
     );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'require Business or Enterprise'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'private internal registry itself remains available'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
       'before stopping the existing container'
     );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(

@@ -60,44 +60,78 @@ const SelectContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & {
     overlayScrollControls?: boolean;
   }
->(({ className, children, position = "popper", overlayScrollControls = true, ...props }, ref) => (
-  <SelectPrimitive.Portal>
-    <SelectPrimitive.Content
-      ref={ref}
-      className={cn(
-        "dropdown-content relative z-50 max-h-96 min-w-[8rem] overflow-hidden border border-border bg-popover text-popover-foreground shadow-md",
-        position === "popper" &&
-          "min-w-[var(--radix-select-trigger-width)] data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
-        className
-      )}
-      position={position}
-      {...props}
-    >
-      <SelectScrollUpButton
-        className={
-          overlayScrollControls
-            ? "absolute inset-x-0 top-0 z-10 h-10 items-start bg-gradient-to-b from-popover via-popover to-transparent pt-1"
-            : undefined
-        }
-      />
-      <SelectPrimitive.Viewport
+>(({ className, children, position = "popper", overlayScrollControls = true, ...props }, ref) => {
+  const viewportRef = React.useRef<HTMLDivElement>(null);
+  const [canScrollUp, setCanScrollUp] = React.useState(false);
+  const [canScrollDown, setCanScrollDown] = React.useState(false);
+
+  const updateScrollControls = React.useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const edgeTolerance = 1.5;
+    setCanScrollUp(viewport.scrollTop > edgeTolerance);
+    setCanScrollDown(viewport.scrollTop < maxScrollTop - edgeTolerance);
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const frame = requestAnimationFrame(updateScrollControls);
+    viewport.addEventListener("scroll", updateScrollControls, { passive: true });
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateScrollControls);
+    observer?.observe(viewport);
+    return () => {
+      cancelAnimationFrame(frame);
+      viewport.removeEventListener("scroll", updateScrollControls);
+      observer?.disconnect();
+    };
+  }, [updateScrollControls]);
+
+  return (
+    <SelectPrimitive.Portal>
+      <SelectPrimitive.Content
+        ref={ref}
         className={cn(
-          "p-1",
-          position === "popper" && "h-[var(--radix-select-trigger-height)] w-full"
+          "dropdown-content relative z-50 max-h-96 min-w-[8rem] overflow-hidden border border-border bg-popover text-popover-foreground shadow-md",
+          position === "popper" &&
+            "min-w-[var(--radix-select-trigger-width)] data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+          className
         )}
+        position={position}
+        {...props}
       >
-        {children}
-      </SelectPrimitive.Viewport>
-      <SelectScrollDownButton
-        className={
-          overlayScrollControls
-            ? "absolute inset-x-0 bottom-0 z-10 h-10 items-end bg-gradient-to-t from-popover via-popover to-transparent pb-1"
-            : undefined
-        }
-      />
-    </SelectPrimitive.Content>
-  </SelectPrimitive.Portal>
-));
+        <SelectScrollUpButton
+          className={cn(
+            overlayScrollControls
+              ? "absolute inset-x-0 top-0 z-10 h-10 items-start bg-gradient-to-b from-popover via-popover to-transparent pt-1"
+              : undefined,
+            overlayScrollControls && !canScrollUp && "pointer-events-none opacity-0"
+          )}
+        />
+        <SelectPrimitive.Viewport
+          ref={viewportRef}
+          onScroll={updateScrollControls}
+          className={cn(
+            "p-1",
+            position === "popper" && "h-[var(--radix-select-trigger-height)] w-full"
+          )}
+        >
+          {children}
+        </SelectPrimitive.Viewport>
+        <SelectScrollDownButton
+          className={cn(
+            overlayScrollControls
+              ? "absolute inset-x-0 bottom-0 z-10 h-10 items-end bg-gradient-to-t from-popover via-popover to-transparent pb-1"
+              : undefined,
+            overlayScrollControls && !canScrollDown && "pointer-events-none opacity-0"
+          )}
+        />
+      </SelectPrimitive.Content>
+    </SelectPrimitive.Portal>
+  );
+});
 SelectContent.displayName = SelectPrimitive.Content.displayName;
 
 const SelectLabel = React.forwardRef<

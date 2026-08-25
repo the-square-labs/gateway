@@ -1,0 +1,1 @@
+ALTER TABLE "docker_registry_node_bindings" ALTER COLUMN "context_id" SET DATA TYPE text;

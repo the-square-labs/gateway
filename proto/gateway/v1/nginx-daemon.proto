@@ -95,6 +95,7 @@ message DaemonMessage {
     ExecOutput exec_output = 6;
     DockerRuntimeStatus docker_runtime_status = 7;
     RelayRuntimeStatus relay_runtime_status = 8;
+    DockerBuildEvent docker_build_event = 9;
   }
 }
 
@@ -293,6 +294,10 @@ message GatewayCommand {
     SetRelayDrainCommand set_relay_drain = 59;
     UpdateRelayWorkerCommand update_relay_worker = 60;
     CommitRelaySupervisorUpdateCommand commit_relay_supervisor_update = 61;
+    // Accepted only by docker-daemon running with docker.mode = "builder".
+    DockerBuildCommand docker_build = 62;
+    DockerBuildCancelCommand docker_build_cancel = 63;
+    SyncDockerRegistryBindingsCommand sync_docker_registry_bindings = 64;
   }
 }
 
@@ -774,6 +779,70 @@ message DockerRuntimeStatus {
   string local_install_command = 8;
   string step = 9; // preparing, downloading, verifying_download, installing_binaries, configuring_docker, restarting_docker, verifying_runtime
   uint32 progress_percent = 10; // meaningful while step is "downloading"
+}
+
+message DockerBuildCommand {
+  string build_id = 1;
+  string repository_url = 2;
+  string repository_remote_id = 3;
+  string repository_full_path = 4;
+  string ref = 5;
+  string commit_sha = 6;
+  string dockerfile_path = 7;
+  string context_path = 8;
+  string platform = 9;
+  string output_repository = 10;
+  string output_tag = 11;
+  map<string, string> build_args = 12;
+  map<string, bytes> build_secrets = 13;
+  bytes checkout_credential = 14;
+  repeated string allowed_dependencies = 15;
+  int64 cpu_limit_millis = 16;
+  int64 memory_limit_bytes = 17;
+  int64 disk_limit_bytes = 18;
+  int32 timeout_seconds = 19;
+}
+
+message DockerBuildCancelCommand {
+  string build_id = 1;
+  string reason = 2;
+}
+
+message DockerBuildEvent {
+  string build_id = 1;
+  string status = 2;
+  uint64 sequence = 3;
+  bytes log_chunk = 4;
+  string progress_json = 5;
+  string artifact_repository = 6;
+  string artifact_digest = 7;
+  int64 artifact_size_bytes = 8;
+  string platform = 9;
+  string sbom_digest = 10;
+  string provenance_digest = 11;
+  string scan_summary_json = 12;
+  string policy_decision = 13;
+  string error_code = 14;
+  string error_message = 15;
+  int64 occurred_at_unix_ms = 16;
+}
+
+message SyncDockerRegistryBindingsCommand {
+  repeated DockerRegistryBinding bindings = 1;
+}
+
+message DockerRegistryBinding {
+  string binding_id = 1;
+  string role = 2; // builder, runtime, or ingress
+  uint64 generation = 3;
+  string repository = 4;
+  repeated string actions = 5; // pull and/or push
+  string local_address = 6;
+  uint32 local_port = 7;
+  string relay_owner_kind = 8;
+  string relay_owner_id = 9;
+  string authorization = 10;
+  int64 authorization_expires_at_unix = 11;
 }
 
 message DockerExecCommand {

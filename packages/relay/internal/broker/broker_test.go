@@ -371,12 +371,25 @@ func TestSessionCapacityUsesRouteAndEndpointPolicyLimits(t *testing.T) {
 }
 
 func TestSessionCapacityCountersAreReleased(t *testing.T) {
-	b := &Broker{proxyByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}}
+	b := &Broker{proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}}
 	tunnel := &activeTunnel{routeID: "route-1", endpointID: "endpoint-1", trafficClass: admission.TrafficClassProxy}
 	b.trackSessionLocked(tunnel, 1)
 	b.trackSessionLocked(tunnel, -1)
 	if len(b.activeByRoute) != 0 || len(b.activeByTarget) != 0 || len(b.proxyByRoute) != 0 || b.activeProxy != 0 {
 		t.Fatalf("released session retained capacity: routes=%v endpoints=%v proxy=%v active=%d", b.activeByRoute, b.activeByTarget, b.proxyByRoute, b.activeProxy)
+	}
+}
+
+func TestRegistrySessionCapacityCountersAreIndependent(t *testing.T) {
+	b := &Broker{proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}}
+	tunnel := &activeTunnel{routeID: "registry-route", endpointID: "registry-endpoint", trafficClass: admission.TrafficClassRegistry}
+	b.trackSessionLocked(tunnel, 1)
+	if b.activeRegistry != 1 || b.registryByRoute["registry-route"] != 1 || b.activeProxy != 0 || b.activeDatabase != 0 {
+		t.Fatalf("registry session was not tracked independently: %+v", b.usageLocked())
+	}
+	b.trackSessionLocked(tunnel, -1)
+	if b.activeRegistry != 0 || len(b.registryByRoute) != 0 {
+		t.Fatalf("registry capacity was not released: %+v", b.usageLocked())
 	}
 }
 

@@ -66,6 +66,127 @@ export class DockerService {
     return { exitCode: ExitCode, output };
   }
 
+  async runManagedRegistryGarbageCollection(dryRun: boolean): Promise<void> {
+    const registryId = await this.managedRegistryContainerId();
+    const inspected = await this.request('GET', `${API_VERSION}/containers/${registryId}/json`);
+    if (inspected.statusCode !== 200) throw new Error(`Registry inspect failed (${inspected.statusCode})`);
+    const registry = JSON.parse(inspected.body) as {
+      Config?: { Image?: string; Env?: string[]; Entrypoint?: string[] | string | null };
+      HostConfig?: { Binds?: string[] };
+    };
+    const image = registry.Config?.Image;
+    if (!image) throw new Error('Managed registry image is unavailable');
+    const temporaryName = `gateway-registry-gc-${process.pid}-${Date.now()}`;
+    let temporaryId: string | null = null;
+    let registryStopped = false;
+    let operationError: unknown;
+    let restartError: Error | null = null;
+    try {
+      const stopped = await this.request('POST', `${API_VERSION}/containers/${registryId}/stop?t=30`);
+      if (stopped.statusCode !== 204 && stopped.statusCode !== 304) {
+        throw new Error(`Registry stop failed (${stopped.statusCode}): ${stopped.body}`);
+      }
+      registryStopped = true;
+      const args = [
+        'garbage-collect',
+        ...(dryRun ? ['--dry-run'] : []),
+        '--delete-untagged',
+        '/etc/distribution/config.yml',
+      ];
+      const created = await this.request(
+        'POST',
+        `${API_VERSION}/containers/create?name=${encodeURIComponent(temporaryName)}`,
+        {
+          Image: image,
+          Env: registry.Config?.Env ?? [],
+          Entrypoint: registry.Config?.Entrypoint ?? undefined,
+          Cmd: args,
+          HostConfig: { Binds: registry.HostConfig?.Binds ?? [], NetworkMode: 'none' },
+        }
+      );
+      if (created.statusCode !== 201) {
+        throw new Error(`Registry GC container create failed (${created.statusCode}): ${created.body}`);
+      }
+      temporaryId = (JSON.parse(created.body) as { Id: string }).Id;
+      const started = await this.request('POST', `${API_VERSION}/containers/${temporaryId}/start`);
+      if (started.statusCode !== 204) throw new Error(`Registry GC container start failed (${started.statusCode})`);
+      const waited = await this.request(
+        'POST',
+        `${API_VERSION}/containers/${temporaryId}/wait?condition=not-running`,
+        undefined,
+        30 * 60_000
+      );
+      if (waited.statusCode !== 200) throw new Error(`Registry GC wait failed (${waited.statusCode})`);
+      const statusCode = Number((JSON.parse(waited.body) as { StatusCode?: number }).StatusCode ?? 1);
+      if (statusCode !== 0) {
+        const logs = await this.request(
+          'GET',
+          `${API_VERSION}/containers/${temporaryId}/logs?stdout=1&stderr=1&tail=100`
+        );
+        throw new Error(
+          `Registry garbage collection failed (${statusCode}): ${this.stripDockerStreamHeaders(logs.bodyRaw)}`
+        );
+      }
+    } catch (error) {
+      operationError = error;
+    } finally {
+      if (temporaryId) {
+        await this.request('DELETE', `${API_VERSION}/containers/${temporaryId}?force=1`).catch(() => undefined);
+      }
+      if (registryStopped) {
+        const started = await this.request('POST', `${API_VERSION}/containers/${registryId}/start`).catch(() => null);
+        if (!started || (started.statusCode !== 204 && started.statusCode !== 304)) {
+          restartError = new Error('Managed registry could not be restarted after garbage collection');
+        }
+      }
+    }
+    if (restartError) throw restartError;
+    if (operationError) throw operationError;
+  }
+
+  async stopManagedRegistry(): Promise<void> {
+    const registryId = await this.managedRegistryContainerId();
+    const stopped = await this.request('POST', `${API_VERSION}/containers/${registryId}/stop?t=30`);
+    if (stopped.statusCode !== 204 && stopped.statusCode !== 304) {
+      throw new Error(`Registry stop failed (${stopped.statusCode}): ${stopped.body}`);
+    }
+  }
+
+  async startManagedRegistry(): Promise<void> {
+    const registryId = await this.managedRegistryContainerId();
+    const started = await this.request('POST', `${API_VERSION}/containers/${registryId}/start`);
+    if (started.statusCode !== 204 && started.statusCode !== 304) {
+      throw new Error(`Registry start failed (${started.statusCode}): ${started.body}`);
+    }
+  }
+
+  async restartManagedRegistry(): Promise<void> {
+    await this.stopManagedRegistry();
+    await this.startManagedRegistry();
+  }
+
+  async recoverManagedRegistryMaintenance(): Promise<void> {
+    const filters = encodeURIComponent(JSON.stringify({ name: ['gateway-registry-gc-'] }));
+    const listed = await this.request('GET', `${API_VERSION}/containers/json?all=1&filters=${filters}`);
+    if (listed.statusCode !== 200) throw new Error(`Docker GC container lookup failed (${listed.statusCode})`);
+    const containers = JSON.parse(listed.body) as Array<{ Id?: string }>;
+    for (const container of containers) {
+      if (!container.Id) continue;
+      await this.request('DELETE', `${API_VERSION}/containers/${container.Id}?force=1`).catch(() => undefined);
+    }
+    await this.startManagedRegistry();
+  }
+
+  private async managedRegistryContainerId(): Promise<string> {
+    const filters = encodeURIComponent(JSON.stringify({ label: ['com.wiolett.gateway.managed-service=registry'] }));
+    const listed = await this.request('GET', `${API_VERSION}/containers/json?all=1&filters=${filters}`);
+    if (listed.statusCode !== 200) throw new Error(`Docker container lookup failed (${listed.statusCode})`);
+    const containers = JSON.parse(listed.body) as Array<{ Id?: string }>;
+    const registryId = containers[0]?.Id;
+    if (!registryId) throw new Error('Managed registry container was not found');
+    return registryId;
+  }
+
   /**
    * Low-level helper that sends an HTTP request over the Docker unix socket.
    */

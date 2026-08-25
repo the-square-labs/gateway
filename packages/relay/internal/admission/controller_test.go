@@ -66,6 +66,19 @@ func TestDatabaseReserveRejectsProxyBeforeDatabase(t *testing.T) {
 	}
 }
 
+func TestRegistryUsesAnExplicitNonDatabaseTrafficClass(t *testing.T) {
+	controller, _ := newTestController(92)
+	for range 8 {
+		_ = controller.Admit(TrafficClassDatabase, "database", Usage{})
+	}
+	if err := controller.Admit(TrafficClassRegistry, "registry", Usage{}); err == nil {
+		t.Fatal("registry traffic bypassed the non-database pressure cutoff")
+	}
+	if err := controller.Admit("unknown", "route", Usage{}); err == nil {
+		t.Fatal("unknown traffic class was admitted")
+	}
+}
+
 func TestDisabledAdmissionNeverThrottles(t *testing.T) {
 	controller, _ := newTestController(100)
 	controller.UpdatePolicy(&relayv1.AdmissionPolicy{Enabled: false})

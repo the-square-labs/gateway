@@ -223,6 +223,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:registries:create` |  |
 | `docker:registries:edit` |  |
 | `docker:registries:delete` |  |
+| `docker:registries:internal:pull` | Repository-scopable access to pull artifacts from the internal registry. |
+| `docker:registries:internal:push` | Repository-scopable access to push artifacts to the internal registry. |
 | `docker:tasks` |  |
 | `docker:tasks:manage` | Yes |
 | `databases:view` | Yes |

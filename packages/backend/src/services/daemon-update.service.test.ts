@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { DaemonUpdateService } from './daemon-update.service.js';
+import { DaemonUpdateService, daemonTypeForNodeType } from './daemon-update.service.js';
 
 describe('DaemonUpdateService update artifact URLs', () => {
+  it('updates builder nodes with the existing docker-daemon artifact family', () => {
+    expect(daemonTypeForNodeType('builder')).toBe('docker');
+  });
+
   it('normalizes a trailing GitLab API slash before building signed artifact URLs', () => {
     const service = new DaemonUpdateService(
       {} as DrizzleClient,

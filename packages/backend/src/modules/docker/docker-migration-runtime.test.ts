@@ -59,6 +59,31 @@ describe('Docker migration runtime safety', () => {
     );
   });
 
+  it('accepts a target created from the separately verified image ID', () => {
+    const imageId = `sha256:${'a'.repeat(64)}`;
+    const imageReference = `registry.example.com/acme/api@sha256:${'b'.repeat(64)}`;
+    expect(() =>
+      assertMigrationManifest(
+        {
+          imageId,
+          imageReference,
+          config: { Image: imageReference },
+          hostConfig: {},
+          envKeys: [],
+          volumeNames: [],
+        },
+        {
+          imageId,
+          imageReference,
+          config: { Image: imageId },
+          hostConfig: {},
+          envKeys: [],
+          volumeNames: [],
+        }
+      )
+    ).not.toThrow();
+  });
+
   it('treats Docker OOM-killer null and false defaults as equivalent', () => {
     expect(() =>
       assertMigrationManifest(

@@ -1080,7 +1080,7 @@ export class DockerManagementService {
     nodeId: string,
     containerId: string,
     config: Record<string, unknown>,
-    userId: string,
+    userId: string | null,
     options?: {
       skipImagePull?: boolean;
       skipWebhookCleanup?: boolean;
@@ -1120,6 +1120,17 @@ export class DockerManagementService {
   async pullImage(nodeId: string, imageRef: string, registryAuth?: string, userId?: string, registryId?: string) {
     await this.validateDockerNode(nodeId);
     return pullDockerImage(this.imageOperationContext(), nodeId, imageRef, registryAuth, userId, registryId);
+  }
+
+  async pullImageImmediate(nodeId: string, imageRef: string, registryAuth?: string) {
+    await this.validateDockerNode(nodeId);
+    const result = await this.nodeDispatch.sendDockerImageCommand(
+      nodeId,
+      'pull',
+      { imageRef, registryAuthJson: registryAuth },
+      DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS
+    );
+    return this.parseResult(result);
   }
 
   async removeImage(nodeId: string, imageId: string, force: boolean, userId: string) {

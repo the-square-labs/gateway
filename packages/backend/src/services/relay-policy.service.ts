@@ -51,6 +51,23 @@ export interface ProxyRouteRuntime {
 }
 
 const logger = createChildLogger('RelayPolicyService');
+const INTERNAL_REGISTRY_ID = 'gateway-internal-registry';
+const INTERNAL_REGISTRY_CERTIFICATE_ID = 'local:gateway-internal-registry';
+const REGISTRY_ROUTE_OWNER_KINDS = ['registry_secure_link', 'registry_ingress'] as const;
+type RegistryRouteOwnerKind = (typeof REGISTRY_ROUTE_OWNER_KINDS)[number];
+
+function relayRoutePolicy(ownerKind: string): {
+  disableIdleTimeout: boolean;
+  trafficClass: 'proxy' | 'database' | 'registry';
+} {
+  if ((REGISTRY_ROUTE_OWNER_KINDS as readonly string[]).includes(ownerKind)) {
+    return { disableIdleTimeout: true, trafficClass: 'registry' };
+  }
+  if (ownerKind === 'proxy_host_secure_link') {
+    return { disableIdleTimeout: true, trafficClass: 'proxy' };
+  }
+  return { disableIdleTimeout: false, trafficClass: 'database' };
+}
 
 export class RelayPolicyService {
   private dispatch?: Pick<
@@ -137,6 +154,7 @@ export class RelayPolicyService {
     await backfillRelayNodeFingerprints(this.db);
     await this.grantKeys.ensureInitialized();
     await this.policyKeys.ensureInitialized();
+    await this.reconcileInternalRegistryEndpoint();
     await reconcileManagedDatabaseRelayPolicy(this.db);
     await this.syncSnapshot().catch((error) => {
       logger.warn('Initial relay policy sync deferred until relay is reachable', {
@@ -314,6 +332,45 @@ export class RelayPolicyService {
     return endpoint.id;
   }
 
+  async ensureInternalRegistryEndpoint(): Promise<string> {
+    const endpointId = await this.reconcileInternalRegistryEndpoint();
+    await this.syncSnapshot();
+    return endpointId;
+  }
+
+  async ensureInternalRegistryRoute(
+    bindingId: string,
+    sourceNodeId: string,
+    ownerKind: RegistryRouteOwnerKind = 'registry_secure_link'
+  ): Promise<string> {
+    if (!(REGISTRY_ROUTE_OWNER_KINDS as readonly string[]).includes(ownerKind)) {
+      throw new Error('Unsupported registry relay route owner kind');
+    }
+    const endpointId = await this.reconcileInternalRegistryEndpoint();
+    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
+    const routeId = await this.ensureRoute(
+      ownerKind,
+      bindingId,
+      'daemon',
+      sourceNodeId,
+      source.certificateFingerprint,
+      endpointId
+    );
+    await this.syncSnapshot();
+    await this.syncNodeGrants(sourceNodeId);
+    return routeId;
+  }
+
+  async getInternalRegistryRouteRuntime(bindingId: string, ownerKind: RegistryRouteOwnerKind = 'registry_secure_link') {
+    const [route] = await this.db
+      .select({ id: relayRoutes.id })
+      .from(relayRoutes)
+      .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, bindingId)))
+      .limit(1);
+    if (!route) return null;
+    return this.relay.getRouteRuntime(route.id);
+  }
+
   async ensureBindingRoute(
     bindingId: string,
     managedDatabaseId: string,
@@ -480,7 +537,13 @@ export class RelayPolicyService {
   }
 
   async revokeOwner(
-    ownerKind: 'managed_database_binding' | 'managed_database_gateway' | 'managed_database' | 'proxy_host_secure_link',
+    ownerKind:
+      | 'managed_database_binding'
+      | 'managed_database_gateway'
+      | 'managed_database'
+      | 'proxy_host_secure_link'
+      | RegistryRouteOwnerKind
+      | 'internal_registry',
     ownerId: string,
     options: { allowDeferredSnapshot?: boolean } = {}
   ): Promise<void> {
@@ -489,7 +552,7 @@ export class RelayPolicyService {
         .select({ nodeId: relayRoutes.sourceId, sourceKind: relayRoutes.sourceKind })
         .from(relayRoutes)
         .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId))),
-      ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link'
+      ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link' || ownerKind === 'internal_registry'
         ? this.db
             .select({ nodeId: relayEndpoints.subjectId })
             .from(relayEndpoints)
@@ -502,7 +565,7 @@ export class RelayPolicyService {
         .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
         .returning({ id: relayRoutes.id });
       const endpoints =
-        ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link'
+        ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link' || ownerKind === 'internal_registry'
           ? await tx
               .delete(relayEndpoints)
               .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
@@ -667,6 +730,49 @@ export class RelayPolicyService {
     });
   }
 
+  private async reconcileInternalRegistryEndpoint(): Promise<string> {
+    const endpoint = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-internal-registry-relay-endpoint'))`);
+      const [current] = await tx
+        .select()
+        .from(relayEndpoints)
+        .where(and(eq(relayEndpoints.ownerKind, 'internal_registry'), eq(relayEndpoints.ownerId, INTERNAL_REGISTRY_ID)))
+        .limit(1);
+      if (!current) {
+        const [created] = await tx
+          .insert(relayEndpoints)
+          .values({
+            ownerKind: 'internal_registry',
+            ownerId: INTERNAL_REGISTRY_ID,
+            subjectKind: 'local_service',
+            subjectId: INTERNAL_REGISTRY_ID,
+            certificateSha256: INTERNAL_REGISTRY_CERTIFICATE_ID,
+            maxConcurrentSessions: 128,
+          })
+          .returning({ id: relayEndpoints.id });
+        await bumpRelayPolicyRevision(tx);
+        return created.id;
+      }
+      if (
+        current.subjectKind !== 'local_service' ||
+        current.subjectId !== INTERNAL_REGISTRY_ID ||
+        current.certificateSha256 !== INTERNAL_REGISTRY_CERTIFICATE_ID
+      ) {
+        throw new Error('Internal registry Relay endpoint ownership or target identity was modified');
+      }
+      if (current.status !== 'active') {
+        await tx
+          .update(relayEndpoints)
+          .set({ status: 'active', generation: current.generation + 1, updatedAt: new Date() })
+          .where(eq(relayEndpoints.id, current.id));
+        await bumpRelayPolicyRevision(tx);
+      }
+      return current.id;
+    });
+    await this.ensureLegacyCompatibleAssignment(endpoint);
+    return endpoint;
+  }
+
   private async buildSnapshot(): Promise<RelayPolicySnapshot> {
     const relaySettings = (await this.settings.getConfig()).relay;
     return this.db.transaction(
@@ -715,8 +821,7 @@ export class RelayPolicyService {
               targetEndpointId: route.targetEndpointId,
               maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
               maxFrameBytes: route.maxFrameBytes,
-              disableIdleTimeout: route.ownerKind === 'proxy_host_secure_link',
-              trafficClass: route.ownerKind === 'proxy_host_secure_link' ? ('proxy' as const) : ('database' as const),
+              ...relayRoutePolicy(route.ownerKind),
             })),
         };
       },
@@ -857,8 +962,7 @@ export class RelayPolicyService {
             targetEndpointId: route.targetEndpointId,
             maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
             maxFrameBytes: route.maxFrameBytes,
-            disableIdleTimeout: route.ownerKind === 'proxy_host_secure_link',
-            trafficClass: route.ownerKind === 'proxy_host_secure_link' ? 'proxy' : 'database',
+            ...relayRoutePolicy(route.ownerKind),
             assignmentGeneration: String(assignment.assignmentGeneration),
           }))
       ),

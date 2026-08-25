@@ -1,0 +1,1 @@
+ALTER TABLE "docker_source_bindings" ADD COLUMN "initial_config" jsonb;

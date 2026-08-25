@@ -1,0 +1,2 @@
+DROP INDEX "docker_build_artifacts_repository_digest_platform_unique";--> statement-breakpoint
+CREATE INDEX "docker_build_artifacts_repository_digest_platform_idx" ON "docker_build_artifacts" USING btree ("registry_repository","digest","platform");

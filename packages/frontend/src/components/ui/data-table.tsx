@@ -196,15 +196,18 @@ export function DataTable<T>({
               }
 
               const canClick = isRowClickable?.(item.row) ?? !!onRowClick;
+              const hasFollowingContent = vi.index < items.length - 1 || Boolean(footer);
 
               return (
                 <Fragment key={item.key}>
                   <div
                     ref={virtualizer.measureElement}
                     data-index={vi.index}
-                    className={`absolute inset-x-0 grid items-center border-b border-border transition-colors ${
-                      canClick ? "cursor-pointer hover:bg-accent" : ""
-                    }`}
+                    className={cn(
+                      "absolute inset-x-0 grid items-center transition-colors",
+                      (embedded || hasFollowingContent) && "border-b border-border",
+                      canClick && "cursor-pointer hover:bg-accent"
+                    )}
                     style={{
                       transform: `translateY(${top}px)`,
                       gridTemplateColumns,

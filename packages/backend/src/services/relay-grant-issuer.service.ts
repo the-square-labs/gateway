@@ -109,7 +109,10 @@ export class RelayGrantIssuerService {
 
   async policyNodeIds(): Promise<string[]> {
     const [endpoints, routes] = await Promise.all([
-      this.db.select({ nodeId: relayEndpoints.subjectId }).from(relayEndpoints),
+      this.db
+        .select({ nodeId: relayEndpoints.subjectId })
+        .from(relayEndpoints)
+        .where(eq(relayEndpoints.subjectKind, 'daemon')),
       this.db.select({ nodeId: relayRoutes.sourceId, sourceKind: relayRoutes.sourceKind }).from(relayRoutes),
     ]);
     return [
@@ -319,7 +322,7 @@ export class RelayGrantIssuerService {
   private async endpointPathSupportsPool(endpointId: string): Promise<boolean> {
     const [[endpoint], routes] = await Promise.all([
       this.db
-        .select({ nodeId: relayEndpoints.subjectId })
+        .select({ nodeId: relayEndpoints.subjectId, subjectKind: relayEndpoints.subjectKind })
         .from(relayEndpoints)
         .where(eq(relayEndpoints.id, endpointId))
         .limit(1),
@@ -329,8 +332,9 @@ export class RelayGrantIssuerService {
         .where(eq(relayRoutes.targetEndpointId, endpointId)),
     ]);
     if (!endpoint) return false;
+    if (endpoint.subjectKind !== 'daemon' && endpoint.subjectKind !== 'local_service') return false;
     const nodeIds = [
-      endpoint.nodeId,
+      ...(endpoint.subjectKind === 'daemon' ? [endpoint.nodeId] : []),
       ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ sourceId }) => sourceId),
     ];
     const unique = [...new Set(nodeIds)];
