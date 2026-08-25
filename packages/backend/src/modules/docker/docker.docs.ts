@@ -895,7 +895,8 @@ export const getVolumeMetricsRoute = appRoute({
   method: 'get',
   path: '/nodes/{nodeId}/volumes/{name}/metrics',
   tags: ['Docker Volumes'],
-  summary: 'Get current volume metrics',
+  summary: 'Get cached volume metrics',
+  description: 'Returns the latest volume metrics collected by the background Docker snapshot reconciler.',
   request: { params: volumeParams },
   responses: okJson(UnknownDataResponseSchema),
 });

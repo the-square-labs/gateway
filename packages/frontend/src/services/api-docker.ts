@@ -1481,7 +1481,8 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         | "volumes"
         | "networks"
         | "container-detail"
-        | "volume-detail";
+        | "volume-detail"
+        | "volume-metrics";
       key?: string;
     }): Promise<void> {
       await this.request<void>("/docker/snapshots/refresh", {

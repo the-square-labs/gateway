@@ -1,0 +1,25 @@
+{
+  "file_name": "3mk44b9q_gateway_runtime_identity",
+  "edges": [
+    {
+      "from_id": "3mk44b9q",
+      "to_id": "asy6c7bj",
+      "relation": "same_area",
+      "weight": 0.82,
+      "reason": "Both define DockerContainerDetail mutation, recreate, snapshot, and runtime-transition handling.",
+      "source": "auto",
+      "created_at": 1787594310242,
+      "updated_at": 1787594310242
+    },
+    {
+      "from_id": "3mk44b9q",
+      "to_id": "kk05lizc",
+      "relation": "same_workflow",
+      "weight": 0.58,
+      "reason": "Both cover Docker container recreate lifecycles and replacement-container state handling.",
+      "source": "auto",
+      "created_at": 1787594310242,
+      "updated_at": 1787594310242
+    }
+  ]
+}

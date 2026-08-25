@@ -1,0 +1,25 @@
+{
+  "file_name": "iv7hhye3_gateway_volume_metrics",
+  "edges": [
+    {
+      "from_id": "iv7hhye3",
+      "to_id": "pzorr3qy",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both define Docker snapshot and reconciliation boundaries; metrics collection must remain in the persisted daemon snapshot flow without public-inventory filtering.",
+      "source": "auto",
+      "created_at": 1787590600951,
+      "updated_at": 1787590600951
+    },
+    {
+      "from_id": "iv7hhye3",
+      "to_id": "2tjfa2g5",
+      "relation": "same_area",
+      "weight": 0.56,
+      "reason": "The metrics endpoint follows the Gateway Docker volume routing conventions for node scoping and volume-name identity.",
+      "source": "auto",
+      "created_at": 1787590600951,
+      "updated_at": 1787590600951
+    }
+  ]
+}

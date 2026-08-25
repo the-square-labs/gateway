@@ -27,6 +27,7 @@ export interface LoginOptions {
   credentials: CredentialStore;
   fetch?: Fetch;
   openBrowser?: (url: string) => Promise<void>;
+  showAuthorizationUrl?: (url: string) => void;
   createReceiver?: () => Promise<LoopbackReceiver>;
   now?: () => Date;
   persistCredential?: boolean;
@@ -135,7 +136,7 @@ export async function openBrowser(url: string): Promise<void> {
       resolve();
     });
   }).catch(() => {
-    process.stderr.write(`Could not open a browser. Open this URL manually:\n${url}\n`);
+    process.stderr.write('Could not open a browser automatically. Use the authorization URL printed above.\n');
   });
 }
 
@@ -193,6 +194,9 @@ export async function loginWithBrowser(
       resource: options.discovery.oauth.resource,
     }).toString();
 
+    (options.showAuthorizationUrl ?? ((url) => process.stderr.write(`Open this URL to authorize manually:\n${url}\n`)))(
+      authorizeUrl.href
+    );
     await (options.openBrowser ?? openBrowser)(authorizeUrl.href);
     const code = await receiver.waitForCode(state);
     const response = await exchangeToken(

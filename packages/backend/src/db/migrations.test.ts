@@ -213,7 +213,6 @@ describe('drizzle migration metadata', () => {
     expect(composeMigration).toContain('CREATE TABLE "docker_compose_projects"');
     expect(proxyMigration).toContain('REFERENCES "public"."docker_compose_projects"');
   });
-
   it('preserves existing AI Workspace grants when splitting inference access', () => {
     const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0155_split_ai_workspace_access.sql'), 'utf8');
 

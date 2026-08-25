@@ -128,6 +128,7 @@ export function DockerVolumeDetail({
   const [resizing, setResizing] = useState(false);
   const metricsRequestRef = useRef<string | null>(null);
   const metricsIdentityRef = useRef("");
+  const lastMetricCollectedAtRef = useRef<string | null>(null);
   metricsIdentityRef.current = `${nodeId ?? ""}:${decodedVolumeName}`;
 
   const canCreateVolume =
@@ -302,6 +303,8 @@ export function DockerVolumeDetail({
       const next = await api.getVolumeMetrics(nodeId, decodedVolumeName);
       if (metricsIdentityRef.current !== identity) return;
       setMetrics(next);
+      if (lastMetricCollectedAtRef.current === next.collectedAt) return;
+      lastMetricCollectedAtRef.current = next.collectedAt;
       setMetricHistory((previous) => ({
         space: [...previous.space, next.usedBytes ?? 0].slice(-60),
         inodes: [...previous.inodes, next.usedInodes ?? 0].slice(-60),
@@ -316,6 +319,7 @@ export function DockerVolumeDetail({
 
   useEffect(() => {
     setMetrics(null);
+    lastMetricCollectedAtRef.current = null;
     setMetricHistory({ space: [], inodes: [], attachments: [] });
     void fetchMetrics();
   }, [fetchMetrics]);
@@ -346,10 +350,10 @@ export function DockerVolumeDetail({
 
   useRealtime("docker.snapshot.changed", (payload) => {
     const event = payload as { nodeId?: string; kind?: string; key?: string };
-    if (event.kind !== "volume-detail" || event.nodeId !== nodeId) return;
+    if (event.nodeId !== nodeId) return;
     if (event.key && event.key !== decodedVolumeName) return;
-    void fetchVolume(true);
-    void fetchMetrics();
+    if (event.kind === "volume-detail") void fetchVolume(true);
+    if (event.kind === "volume-metrics") void fetchMetrics();
   });
 
   useEffect(() => {

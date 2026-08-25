@@ -33,8 +33,8 @@ const MAX_ITEMS = 1000;
 const RefreshSchema = z
   .object({
     nodeId: z.string().uuid().optional(),
-    resource: z.enum([...DOCKER_SNAPSHOT_KINDS, 'container-detail', 'volume-detail']).optional(),
-    kind: z.enum([...DOCKER_SNAPSHOT_KINDS, 'container-detail', 'volume-detail']).optional(),
+    resource: z.enum([...DOCKER_SNAPSHOT_KINDS, 'container-detail', 'volume-detail', 'volume-metrics']).optional(),
+    kind: z.enum([...DOCKER_SNAPSHOT_KINDS, 'container-detail', 'volume-detail', 'volume-metrics']).optional(),
     key: z.string().trim().min(1).optional(),
   })
   .superRefine((value, ctx) => {
@@ -42,7 +42,10 @@ const RefreshSchema = z
     if (!resource) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['resource'], message: 'resource is required' });
     }
-    if ((resource === 'container-detail' || resource === 'volume-detail') && !value.key) {
+    if (
+      (resource === 'container-detail' || resource === 'volume-detail' || resource === 'volume-metrics') &&
+      !value.key
+    ) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['key'], message: 'key is required for detail refresh' });
     }
   });
@@ -54,6 +57,7 @@ const VIEW_SCOPE: Record<DockerRefreshKind, string> = {
   networks: 'docker:networks:view',
   'container-detail': 'docker:containers:view',
   'volume-detail': 'docker:volumes:view',
+  'volume-metrics': 'docker:volumes:view',
 };
 
 async function canRefreshContainerDetail(scopes: string[], nodeId: string, key: string): Promise<boolean> {
@@ -171,7 +175,11 @@ export function registerDockerSnapshotRoutes(router: OpenAPIHono<AppEnv>) {
       return c.json({ accepted: true, nodeCount: 1 }, 202);
     }
     const listKind: DockerSnapshotKind =
-      resource === 'container-detail' ? 'containers' : resource === 'volume-detail' ? 'volumes' : resource;
+      resource === 'container-detail'
+        ? 'containers'
+        : resource === 'volume-detail' || resource === 'volume-metrics'
+          ? 'volumes'
+          : resource;
     const visibleNodes = await snapshots.listVisibleNodes(listKind, scopes);
     for (const node of visibleNodes) {
       if (resource === 'container-detail' && !(await canRefreshContainerDetail(scopes, node.id, input.key!))) {

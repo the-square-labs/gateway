@@ -113,6 +113,14 @@ export async function inspectContainerAfterMutation(
   }
 }
 
+export function hasContainerRuntimeIdentityChanged(
+  containerId: string | undefined,
+  inspected: InspectData | null
+) {
+  const inspectedId = String(inspected?.Id ?? inspected?.id ?? "");
+  return !!containerId && !!inspectedId && inspectedId !== containerId;
+}
+
 // ── Main Page ────────────────────────────────────────────────────
 
 export function DockerContainerDetail({
@@ -427,14 +435,18 @@ export function DockerContainerDetail({
   }, [containerId, migrationHandoff?.targetResourceId]);
 
   useEffect(() => {
-    if (!resolvedContainer || migrationHandoff?.targetResourceId) {
+    const runtimeIdentityChanged = hasContainerRuntimeIdentityChanged(
+      containerId,
+      containerRef.current
+    );
+    if (!resolvedContainer || migrationHandoff?.targetResourceId || runtimeIdentityChanged) {
       void fetchContainer(true, Boolean(migrationHandoff?.targetResourceId));
     }
     // Safety-net poll — realtime channel handles fast updates, this just
     // catches anything that slipped through (e.g. between reconnects).
     const interval = setInterval(() => void fetchContainer(true, true), 30000);
     return () => clearInterval(interval);
-  }, [fetchContainer, migrationHandoff?.targetResourceId, resolvedContainer]);
+  }, [containerId, fetchContainer, migrationHandoff?.targetResourceId, resolvedContainer]);
 
   const refreshContainer = useCallback(() => fetchContainer(true, true), [fetchContainer]);
 
@@ -506,7 +518,7 @@ export function DockerContainerDetail({
     refreshContainer,
     transition: backendTransition,
     clearMutationTransition,
-    onContainerIdChange: setContainerId,
+    onContainerIdChange: adoptReplacementContainerId,
     onMigrationCutover: handleMigrationCutover,
     pageContextToken,
   });
@@ -1089,7 +1101,12 @@ export function DockerContainerDetail({
           )}
           {canViewContainer && !unavailable && (
             <TabsContent value="stats" className="pb-0">
-              <StatsTab nodeId={nodeId!} containerId={containerId!} data={container} />
+              <StatsTab
+                key={`${containerId}:${String(container?.State?.StartedAt ?? "")}`}
+                nodeId={nodeId!}
+                containerId={containerId!}
+                data={container}
+              />
             </TabsContent>
           )}
           {(canUseEnvironment || canUseSecrets) && !unavailable && !composeManaged && (
