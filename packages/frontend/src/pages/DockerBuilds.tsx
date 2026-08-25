@@ -316,7 +316,9 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                   ? build.target.name
                   : build.target.kind === "deployment"
                     ? `Deployment ${build.target.name}`
-                    : `Compose ${build.target.name}${build.serviceName ? ` · ${build.serviceName}` : ""}`}
+                    : build.target.kind === "compose_project"
+                      ? `Compose ${build.target.name}${build.serviceName ? ` · ${build.serviceName}` : ""}`
+                      : `Pages ${build.target.name}`}
               </span>
             </span>
           </span>
@@ -416,17 +418,19 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         width: "4rem",
         render: (build) => (
           <span className="flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Pin build"
-              onClick={() => {
-                setPinBuild(build);
-                setPinOpen(true);
-              }}
-            >
-              <Pin className="h-4 w-4" />
-            </Button>
+            {build.target.kind !== "pages_project" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Pin build"
+                onClick={() => {
+                  setPinBuild(build);
+                  setPinOpen(true);
+                }}
+              >
+                <Pin className="h-4 w-4" />
+              </Button>
+            )}
             {ACTIVE.has(build.status) && (
               <Button
                 size="icon"
@@ -628,6 +632,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
           </DialogHeader>
           {pinBuild &&
             (() => {
+              if (pinBuild.target.kind === "pages_project") return null;
               const scopeBase =
                 pinBuild.target.kind === "compose_project"
                   ? ("docker:compose:view" as const)
