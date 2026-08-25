@@ -101,7 +101,7 @@ export class DockerBuildQuery {
                 }
               : {
                   kind: 'pages_project' as const,
-                  nodeId: joined.pageNodeId!,
+                  nodeId: joined.pageNodeId ?? undefined,
                   pageProjectId: joined.source.pageProjectId!,
                   name: joined.pageName!,
                 },
@@ -215,7 +215,7 @@ export class DockerBuildQuery {
                   }
                 : {
                     kind: 'pages_project' as const,
-                    nodeId: pageNodeId!,
+                    nodeId: pageNodeId ?? undefined,
                     pageProjectId: source.pageProjectId!,
                     name: pageName!,
                   },

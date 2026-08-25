@@ -160,7 +160,7 @@ export interface DockerBuild {
         name: string;
         serviceName: string | null;
       }
-    | { kind: "pages_project"; nodeId: string; pageProjectId: string; name: string };
+    | { kind: "pages_project"; nodeId?: string; pageProjectId: string; name: string };
   createdAt: string;
   queuedAt: string;
   startedAt: string | null;
