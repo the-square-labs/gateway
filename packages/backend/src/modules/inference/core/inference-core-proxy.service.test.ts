@@ -8,6 +8,7 @@ const MODEL = {
   id: 'model-1',
   publicId: 'gpt-5.5',
   enabled: true,
+  sortOrder: 0,
   subscriptionMultiplier: '1',
   reasoningEfforts: ['low', 'high'],
   defaultReasoningEffort: null,
@@ -22,6 +23,7 @@ const SOURCE = {
   coreModelId: 'core-conn-1/gpt-5.5',
   upstreamModelId: 'gpt-5.5',
   reasoningEffortMap: { low: 'minimal', high: 'high' },
+  metadata: {},
   priority: 0,
 };
 const CONNECTION = {
@@ -77,10 +79,18 @@ function createContext(
 }
 
 function createService(
-  options: { coreResponse?: Response; coreError?: unknown; sources?: unknown[]; pricing?: unknown } = {}
+  options: {
+    coreResponse?: Response;
+    coreError?: unknown;
+    fetchError?: unknown;
+    sources?: unknown[];
+    pricing?: unknown;
+  } = {}
 ) {
   const db = {
-    select: vi.fn().mockReturnValue(selectChain(options.sources ?? [{ source: SOURCE, connection: CONNECTION }])),
+    select: vi
+      .fn()
+      .mockReturnValue(selectChain(options.sources ?? [{ model: MODEL, source: SOURCE, connection: CONNECTION }])),
     query: {
       inferencePricingSnapshots: {
         findFirst: vi.fn().mockResolvedValue(
@@ -97,7 +107,10 @@ function createService(
       },
     },
   };
-  const models = { resolveForUser: vi.fn().mockResolvedValue({ model: MODEL, sources: [SOURCE] }) };
+  const models = {
+    listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [{ id: MODEL.publicId }] }),
+    resolveForUser: vi.fn().mockResolvedValue({ model: MODEL, sources: [SOURCE] }),
+  };
   const routing = { select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }) };
   const bridge = options.coreError
     ? { dataPlaneTarget: vi.fn().mockRejectedValue(options.coreError) }
@@ -120,13 +133,15 @@ function createService(
     coreAccounting as never,
     legacyAccounting as never
   );
-  const fetchStub = vi.fn().mockResolvedValue(
-    options.coreResponse ??
-      new Response('data: {"type":"response.completed"}\n\n', {
-        status: 200,
-        headers: { 'content-type': 'text/event-stream' },
-      })
-  );
+  const fetchStub = options.fetchError
+    ? vi.fn().mockRejectedValue(options.fetchError)
+    : vi.fn().mockResolvedValue(
+        options.coreResponse ??
+          new Response('data: {"type":"response.completed"}\n\n', {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          })
+      );
   vi.stubGlobal('fetch', fetchStub);
   return { service, models, routing, bridge, coreAccounting, fetchStub };
 }
@@ -337,10 +352,10 @@ describe('inference core proxy', () => {
     });
   });
 
-  it('rewrites multipart image edits and applies the fixed image charge', async () => {
+  it('preserves the multipart image model and applies the fixed image charge', async () => {
     const { service, fetchStub, coreAccounting } = createService();
     const form = new FormData();
-    form.set('model', 'gpt-5.5');
+    form.set('model', 'gpt-image-2');
     form.set('n', '2');
     form.set('image', new Blob(['png'], { type: 'image/png' }), 'image.png');
     const c = createContext(form);
@@ -349,10 +364,111 @@ describe('inference core proxy', () => {
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
     expect(init.body).toBeInstanceOf(FormData);
-    expect((init.body as FormData).get('model')).toBe('core-conn-1/gpt-5.5');
+    expect((init.body as FormData).get('model')).toBe('gpt-image-2');
     expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(
       expect.objectContaining({ fixedApiMicrodollars: 80_000 })
     );
+  });
+
+  it('routes Codex image models through an eligible OpenAI carrier without rewriting the image model', async () => {
+    const { service, fetchStub, models, coreAccounting } = createService();
+    const c = createContext(JSON.stringify({ model: 'gpt-image-2', prompt: 'draw a cat', n: 2 }), {
+      'content-type': 'application/json',
+    });
+
+    await service.proxy(c, 'images/generations');
+
+    expect(models.resolveForUser).not.toHaveBeenCalled();
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      model: 'gpt-image-2',
+      prompt: 'draw a cat',
+      n: 2,
+    });
+    const sentHeaders = init.headers as Record<string, string>;
+    const claims = JSON.parse(Buffer.from(sentHeaders['x-wiolett-context'], 'base64url').toString('utf8'));
+    expect(claims).toMatchObject({
+      publicModelId: MODEL.publicId,
+      coreAccountId: SOURCE.coreAccountId,
+      coreModelId: SOURCE.coreModelId,
+      operation: 'images',
+    });
+    expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'image_generation',
+        model: MODEL,
+        source: SOURCE,
+        fixedApiMicrodollars: 80_000,
+      })
+    );
+  });
+
+  it('does not require API unit pricing for subscription image generation', async () => {
+    const subscriptionSource = {
+      ...SOURCE,
+      sourceType: 'subscription',
+      coreAccountId: 'pool-a',
+      coreModelId: 'gpt-5.6-sol',
+    };
+    const subscriptionConnection = {
+      ...CONNECTION,
+      providerId: 'openai',
+      authType: 'oauth',
+      metadata: { coreAccountId: 'pool-a' },
+    };
+    const { service, coreAccounting } = createService({
+      sources: [{ model: MODEL, source: subscriptionSource, connection: subscriptionConnection }],
+      pricing: null,
+    });
+
+    await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-image-2', prompt: 'draw a cat' }), {
+        'content-type': 'application/json',
+      }),
+      'images/generations'
+    );
+
+    expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(
+      expect.not.objectContaining({ fixedApiMicrodollars: expect.anything() })
+    );
+  });
+
+  it('never retries a paid image request after the core returns an error', async () => {
+    const { service, fetchStub, routing } = createService({
+      sources: [
+        { model: MODEL, source: SOURCE, connection: CONNECTION },
+        { model: MODEL, source: SOURCE_2, connection: CONNECTION_2 },
+      ],
+      coreResponse: Response.json({ error: { code: 'provider_unavailable' } }, { status: 503 }),
+    });
+
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-image-2', prompt: 'draw a cat' }), {
+        'content-type': 'application/json',
+      }),
+      'images/generations'
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'image_generation_result_unknown' } });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(routing.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes an ambiguous core transport failure non-retryable for image generation', async () => {
+    const { service, fetchStub, routing } = createService({ fetchError: new Error('socket reset after dispatch') });
+
+    await expect(
+      service.proxy(
+        createContext(JSON.stringify({ model: 'gpt-image-2', prompt: 'draw a cat' }), {
+          'content-type': 'application/json',
+        }),
+        'images/generations'
+      )
+    ).rejects.toMatchObject({ status: 409, code: 'image_generation_result_unknown' });
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(routing.select).toHaveBeenCalledTimes(1);
   });
 
   it('rejects models without a core-backed source', async () => {

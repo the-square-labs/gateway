@@ -7,6 +7,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import {
   inferenceDiscoveredModels,
   inferenceModelSources,
+  inferenceModels,
   inferencePricingSnapshots,
   inferenceProviderConnections,
 } from '@/db/schema/index.js';
@@ -25,6 +26,14 @@ import { CORE_ACCOUNT_METADATA_KEY } from './inference-core-provider-map.js';
 type SourceCandidate = {
   source: typeof inferenceModelSources.$inferSelect;
   connection: typeof inferenceProviderConnections.$inferSelect;
+};
+
+type ResolvedCoreTarget = {
+  model: typeof inferenceModels.$inferSelect;
+  selected: SourceCandidate;
+  upstreamModel: string;
+  coreAccountId: string;
+  candidateConnectionIds: string[];
 };
 
 /** Endpoint classes the proxy distinguishes (billing/rewrite behavior differ). */
@@ -80,6 +89,7 @@ type ProxyRequestBody = string | ArrayBuffer | FormData;
 
 const MAX_DECOMPRESSED_JSON_BODY_BYTES = 256 * 1024 * 1024;
 const MAX_CORE_ERROR_BODY_BYTES = 1024 * 1024;
+const MAX_CORE_IMAGE_BODY_BYTES = 100 * 1024 * 1024;
 
 function requireAuth(c: Context<AppEnv>): { user: User; tokenId: string } {
   const user = c.get('user');
@@ -114,13 +124,7 @@ export class InferenceCoreProxyService {
     user: User,
     publicModelId: string,
     options: { affinityKey?: string; existingThread?: boolean; excludeConnectionIds?: string[] } = {}
-  ): Promise<{
-    model: Awaited<ReturnType<InferenceModelService['resolveForUser']>>['model'];
-    selected: SourceCandidate;
-    upstreamModel: string;
-    coreAccountId: string;
-    candidateConnectionIds: string[];
-  }> {
+  ): Promise<ResolvedCoreTarget> {
     const resolved = await this.models.resolveForUser(user, publicModelId);
     const excluded = new Set(options.excludeConnectionIds ?? []);
     const candidates = (
@@ -149,6 +153,72 @@ export class InferenceCoreProxyService {
     };
   }
 
+  /**
+   * Codex's built-in image tool sends an endpoint model such as `gpt-image-2`,
+   * which intentionally is not a selectable Gateway text model. Select an
+   * accessible OpenAI connection through an existing published source for
+   * routing/accounting, but leave the endpoint model untouched in the body.
+   */
+  private async resolveImagesTarget(
+    user: User,
+    options: { excludeConnectionIds?: string[] } = {}
+  ): Promise<ResolvedCoreTarget> {
+    const visible = await this.models.listForUser(user);
+    const publicModelIds = visible.data.map((model) => model.id);
+    if (!publicModelIds.length) throw imageProviderUnavailable();
+
+    const rows = await this.db
+      .select({ model: inferenceModels, source: inferenceModelSources, connection: inferenceProviderConnections })
+      .from(inferenceModelSources)
+      .innerJoin(inferenceModels, eq(inferenceModelSources.modelId, inferenceModels.id))
+      .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
+      .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
+      .where(
+        and(
+          inArray(inferenceModels.publicId, publicModelIds),
+          eq(inferenceModels.enabled, true),
+          eq(inferenceModelSources.enabled, true),
+          eq(inferenceProviderConnections.enabled, true),
+          isNull(inferenceProviderConnections.deletedAt),
+          inArray(inferenceProviderConnections.providerId, ['openai', 'openai-apikey']),
+          isNotNull(inferenceModelSources.coreAccountId),
+          isNotNull(inferenceModelSources.coreModelId),
+          or(isNull(inferenceModelSources.discoveredModelId), eq(inferenceDiscoveredModels.available, true))
+        )
+      )
+      .orderBy(
+        asc(inferenceModels.sortOrder),
+        asc(inferenceModelSources.priority),
+        asc(inferenceProviderConnections.routingOrder)
+      );
+
+    const excluded = new Set(options.excludeConnectionIds ?? []);
+    const primary = rows.filter((row) => !excluded.has(row.connection.id) && isPrimarySource(row.source));
+    const providerId = primary.some((row) => row.connection.providerId === 'openai') ? 'openai' : 'openai-apikey';
+    const byConnection = new Map<string, (typeof primary)[number]>();
+    for (const row of primary) {
+      if (row.connection.providerId === providerId && !byConnection.has(row.connection.id)) {
+        byConnection.set(row.connection.id, row);
+      }
+    }
+    const candidates = [...byConnection.values()];
+    if (!candidates.length) throw imageProviderUnavailable();
+    const selection = await this.routing.select({
+      providerId,
+      allowedConnectionIds: candidates.map((row) => row.connection.id),
+      existingThread: false,
+    });
+    const selected = candidates.find((row) => row.connection.id === selection.connectionId);
+    if (!selected?.source.coreAccountId || !selected.source.coreModelId) throw imageProviderUnavailable();
+    return {
+      model: selected.model,
+      selected,
+      upstreamModel: selected.source.coreModelId,
+      coreAccountId: exactCoreAccountId(selected),
+      candidateConnectionIds: candidates.map((candidate) => candidate.connection.id),
+    };
+  }
+
   /** Core base URL + data credential as a stable Gateway error when unavailable. */
   async dataPlaneTarget(): Promise<{ baseUrl: string; credential: string }> {
     return this.coreTarget();
@@ -157,10 +227,16 @@ export class InferenceCoreProxyService {
   async proxy(c: Context<AppEnv>, operation: CoreProxyOperation): Promise<Response> {
     const { user, tokenId } = requireAuth(c);
     const prepared = await this.prepareBody(c, operation);
-    let resolved = await this.resolveTarget(user, prepared.publicModelId, {
-      ...(prepared.affinityKey ? { affinityKey: prepared.affinityKey } : {}),
-      existingThread: prepared.existingThread,
-    });
+    const imagesOperation = OPERATION_PROTOCOL[operation] === 'images';
+    const resolveOperationTarget = (excludeConnectionIds: string[] = []) =>
+      imagesOperation
+        ? this.resolveImagesTarget(user, { excludeConnectionIds })
+        : this.resolveTarget(user, prepared.publicModelId, {
+            ...(prepared.affinityKey ? { affinityKey: prepared.affinityKey } : {}),
+            existingThread: prepared.existingThread,
+            excludeConnectionIds,
+          });
+    let resolved = await resolveOperationTarget();
     // Realtime is not admitted by the core; it keeps the legacy fixed-charge
     // accounting at the Gateway edge. Everything else correlates through the
     // request row the core's admission callback references.
@@ -185,7 +261,7 @@ export class InferenceCoreProxyService {
     let rootRequestId: string = randomUUID();
     let fixedApiMicrodollars = 0;
     if (coreAdmitted) {
-      fixedApiMicrodollars = await this.fixedCharge(operation, resolved.selected.source.id, prepared.units);
+      fixedApiMicrodollars = await this.fixedCharge(operation, resolved.selected.source, prepared.units);
       rootRequestId = (
         await this.coreAccounting.createCoreRequest({
           userId: user.id,
@@ -208,13 +284,9 @@ export class InferenceCoreProxyService {
     try {
       for (;;) {
         if (excludedConnectionIds.length > 0) {
-          resolved = await this.resolveTarget(user, prepared.publicModelId, {
-            ...(prepared.affinityKey ? { affinityKey: prepared.affinityKey } : {}),
-            existingThread: prepared.existingThread,
-            excludeConnectionIds: excludedConnectionIds,
-          });
+          resolved = await resolveOperationTarget(excludedConnectionIds);
           if (coreAdmitted) {
-            fixedApiMicrodollars = await this.fixedCharge(operation, resolved.selected.source.id, prepared.units);
+            fixedApiMicrodollars = await this.fixedCharge(operation, resolved.selected.source, prepared.units);
             await this.coreAccounting.retargetCoreRequest(
               rootRequestId,
               resolved.selected.source,
@@ -223,7 +295,11 @@ export class InferenceCoreProxyService {
             );
           }
         }
-        const body = prepared.rewrite(resolved.upstreamModel, resolved.model, resolved.selected.source);
+        const body = prepared.rewrite(
+          imagesOperation ? prepared.publicModelId : resolved.upstreamModel,
+          resolved.model,
+          resolved.selected.source
+        );
         const { claims } = newCoreRequestContext({
           tenantUserId: user.id,
           rootRequestId,
@@ -232,7 +308,9 @@ export class InferenceCoreProxyService {
           coreModelId: resolved.upstreamModel,
           operation: contextOperation(operation),
         });
-        const allowFailover = coreAdmitted && resolved.candidateConnectionIds.length > 1;
+        // Images create paid, non-idempotent work inside the core. A lost core
+        // response is not proof that the upstream generation was never dispatched.
+        const allowFailover = coreAdmitted && !imagesOperation && resolved.candidateConnectionIds.length > 1;
         const forwarded = await this.forward(
           c,
           target,
@@ -241,7 +319,8 @@ export class InferenceCoreProxyService {
           coreAdmitted,
           `/v1/${operation}`,
           { method: 'POST', headers: prepared.headers, body },
-          allowFailover
+          allowFailover,
+          imagesOperation
         );
         if (forwarded.kind === 'response') return forwarded.response;
         excludedConnectionIds.push(resolved.selected.connection.id);
@@ -274,7 +353,8 @@ export class InferenceCoreProxyService {
     accounted: boolean,
     path: string,
     init: { method: string; headers: Record<string, string>; body: ProxyRequestBody },
-    allowFailover = false
+    allowFailover = false,
+    nonRetryableDispatch = false
   ): Promise<{ kind: 'response'; response: Response } | { kind: 'retry' }> {
     const controller = new AbortController();
     let clientGone = false;
@@ -307,12 +387,41 @@ export class InferenceCoreProxyService {
       if (allowFailover && !clientGone) return { kind: 'retry' };
       finalize(clientGone ? 'cancelled' : 'failed', error);
       if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+      if (nonRetryableDispatch) {
+        throw new InferenceProtocolError(
+          409,
+          'image_generation_result_unknown',
+          'Image generation result is unknown; automatic retry is disabled to avoid duplicate paid work'
+        );
+      }
       throw new InferenceProtocolError(503, 'inference_core_unavailable', 'The inference core is unavailable');
     }
     const status = upstream.status;
     if (allowFailover && (await shouldFailOverCoreResponse(upstream))) {
       await upstream.body?.cancel().catch(() => undefined);
       return { kind: 'retry' };
+    }
+    if (nonRetryableDispatch) {
+      const headers = publicResponseHeaders(upstream.headers);
+      if (!upstream.body) {
+        finalize(status < 400 ? 'completed' : 'failed');
+        if (status >= 500) return { kind: 'response', response: ambiguousImageResponse() };
+        return { kind: 'response', response: new Response(null, { status, headers }) };
+      }
+      try {
+        const body = await readBoundedCoreBody(
+          upstream.body,
+          MAX_CORE_IMAGE_BODY_BYTES,
+          'Inference core image response exceeded the safe body limit'
+        );
+        finalize(status < 400 ? 'completed' : 'failed');
+        if (status >= 500) return { kind: 'response', response: ambiguousImageResponse() };
+        return { kind: 'response', response: new Response(body, { status, headers }) };
+      } catch (error) {
+        finalize(clientGone ? 'cancelled' : 'failed', error);
+        if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+        return { kind: 'response', response: ambiguousImageResponse() };
+      }
     }
     if (status >= 400 && upstream.body) {
       const headers = publicResponseHeaders(upstream.headers);
@@ -546,11 +655,16 @@ export class InferenceCoreProxyService {
   }
 
   /** Fixed per-call charge for operations the core settles without token usage. */
-  private async fixedCharge(operation: CoreProxyOperation, sourceId: string, units: number): Promise<number> {
+  private async fixedCharge(
+    operation: CoreProxyOperation,
+    source: typeof inferenceModelSources.$inferSelect,
+    units: number
+  ): Promise<number> {
     const priceKey = FIXED_PRICE_KEYS[operation];
     if (!priceKey) return 0;
+    if (source.sourceType === 'subscription') return 0;
     const pricing = await this.db.query.inferencePricingSnapshots.findFirst({
-      where: eq(inferencePricingSnapshots.sourceId, sourceId),
+      where: eq(inferencePricingSnapshots.sourceId, source.id),
       orderBy: (table, { desc }) => [desc(table.createdAt)],
     });
     const amount = unitCharge(pricing ?? null, priceKey, units);
@@ -702,6 +816,24 @@ function assertRoutable(candidates: SourceCandidate[]): void {
   }
 }
 
+function imageProviderUnavailable(): InferenceProtocolError {
+  return new InferenceProtocolError(
+    503,
+    'image_provider_unavailable',
+    'No accessible OpenAI image provider is available'
+  );
+}
+
+function isPrimarySource(source: typeof inferenceModelSources.$inferSelect): boolean {
+  const composition = source.metadata.composition;
+  return !(
+    composition &&
+    typeof composition === 'object' &&
+    !Array.isArray(composition) &&
+    (composition as { role?: unknown }).role === 'vision_sidecar'
+  );
+}
+
 function requiredModel(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new InferenceProtocolError(400, 'invalid_request_error', 'model is required');
@@ -730,6 +862,18 @@ function hasCompactionTrigger(input: unknown): boolean {
 type CoreStreamOutcome = 'completed' | 'failed' | 'cancelled';
 
 async function readBoundedCoreErrorBody(body: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  return readBoundedCoreBody(
+    body,
+    MAX_CORE_ERROR_BODY_BYTES,
+    'Inference core error response exceeded the safe body limit'
+  );
+}
+
+async function readBoundedCoreBody(
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  limitMessage: string
+): Promise<Uint8Array> {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -738,9 +882,9 @@ async function readBoundedCoreErrorBody(body: ReadableStream<Uint8Array>): Promi
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_CORE_ERROR_BODY_BYTES) {
-        await reader.cancel('core error body exceeded safe limit').catch(() => undefined);
-        throw new Error('Inference core error response exceeded the safe body limit');
+      if (total > maxBytes) {
+        await reader.cancel('core response body exceeded safe limit').catch(() => undefined);
+        throw new Error(limitMessage);
       }
       chunks.push(value);
     }
@@ -755,6 +899,19 @@ async function readBoundedCoreErrorBody(body: ReadableStream<Uint8Array>): Promi
     offset += chunk.byteLength;
   }
   return output;
+}
+
+function ambiguousImageResponse(): Response {
+  return Response.json(
+    {
+      error: {
+        type: 'server_error',
+        code: 'image_generation_result_unknown',
+        message: 'Image generation result is unknown; automatic retry is disabled to avoid duplicate paid work',
+      },
+    },
+    { status: 409 }
+  );
 }
 
 function relayCoreResponseBody(
