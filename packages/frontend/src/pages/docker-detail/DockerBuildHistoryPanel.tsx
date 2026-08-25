@@ -171,40 +171,54 @@ export function DockerBuildHistoryPanel({
     ) : (
       <span className="text-muted-foreground">—</span>
     );
+  const hasServiceBuilds = builds.some((build) => Boolean(build.serviceName));
+  const renderService = (build: DockerBuild) => (
+    <span className="block truncate font-medium">{build.serviceName ?? "—"}</span>
+  );
 
   const recentColumns: SimpleTableColumn<DockerBuild>[] = [
     {
       id: "commit",
       header: "Commit",
-      className: "w-[20%]",
+      className: hasServiceBuilds ? "w-[16%]" : "w-[20%]",
       render: (build) => <span className="font-mono">{build.commitSha.slice(0, 10)}</span>,
     },
+    ...(hasServiceBuilds
+      ? [
+          {
+            id: "service",
+            header: "Service",
+            className: "w-[16%]",
+            render: renderService,
+          } satisfies SimpleTableColumn<DockerBuild>,
+        ]
+      : []),
     {
       id: "status",
       header: "Status",
       align: "right",
-      className: "w-[15%]",
+      className: hasServiceBuilds ? "w-[13%]" : "w-[15%]",
       render: renderStatus,
     },
     {
       id: "worker",
       header: "Build Worker",
       align: "right",
-      className: "w-[20%]",
+      className: hasServiceBuilds ? "w-[17%]" : "w-[20%]",
       render: renderWorker,
     },
     {
       id: "artifact",
       header: "Result",
       align: "right",
-      className: "w-[25%]",
+      className: hasServiceBuilds ? "w-[22%]" : "w-[25%]",
       render: renderResult,
     },
     {
       id: "artifactSha",
       header: "SHA",
       align: "right",
-      className: "w-[20%]",
+      className: hasServiceBuilds ? "w-[16%]" : "w-[20%]",
       render: renderArtifactSha,
     },
   ];
@@ -217,6 +231,16 @@ export function DockerBuildHistoryPanel({
         <span className="block truncate font-mono">{build.commitSha.slice(0, 10)}</span>
       ),
     },
+    ...(hasServiceBuilds
+      ? [
+          {
+            key: "service",
+            header: "Service",
+            width: "0.9fr",
+            render: renderService,
+          } satisfies DataTableColumn<DockerBuild>,
+        ]
+      : []),
     { key: "status", header: "Status", align: "right", width: "0.8fr", render: renderStatus },
     {
       key: "worker",

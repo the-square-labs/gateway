@@ -28,6 +28,31 @@ const PROJECT = {
 } as const;
 
 describe('DockerComposeService', () => {
+  it('creates a managed pending project for a repository-backed first revision', async () => {
+    const returning = vi.fn().mockResolvedValue([{ ...PROJECT, managementState: 'managed', status: 'validating' }]);
+    const values = vi.fn(() => ({ returning }));
+    const db = { insert: vi.fn(() => ({ values })) };
+    const audit = { log: vi.fn().mockResolvedValue(undefined) };
+    const compose = new DockerComposeService(db as never, audit as never, {} as never, {} as never);
+
+    await expect(compose.createPendingGitProject(PROJECT.nodeId, 'demo', 'user-1')).resolves.toMatchObject({
+      managementState: 'managed',
+      status: 'validating',
+    });
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: PROJECT.nodeId,
+        name: 'demo',
+        managementState: 'managed',
+        desiredState: 'running',
+        status: 'validating',
+      })
+    );
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'docker.compose.source.create', resourceId: PROJECT.id })
+    );
+  });
+
   it('keeps an adopted project external while only preparing its first revision', async () => {
     const compose = service();
     vi.spyOn(compose as any, 'getProject').mockResolvedValue(PROJECT);

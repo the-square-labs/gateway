@@ -572,11 +572,11 @@ Gateway provides Portainer-like Docker container management through a daemon run
 
 ## Git Source Builds And Push-To-Deploy
 - Git push-to-deploy, source mutation and automation, new build admission, and optional external Docker-client access to the internal registry require Business or Enterprise. The private internal registry itself remains available and operational on every plan. Let operators configure Repository mode fully, but explain that **Create and build** is the enforcement point when the current plan is below Business. After downgrade, existing source and build history remains readable and source bindings or Build Secrets may be removed, but edits, polling, webhooks, and new builds remain blocked.
-- A Git source is attached directly to an existing container or blue/green deployment; there is no separate application entity. Repository mode in the Deploy dialog can also reserve the Docker resource and queue its first build.
+- A Git source is attached directly to an existing container, blue/green deployment, or Compose Project; there is no separate application entity. Repository mode in the Docker or Compose create dialog can reserve the resource and queue its first build.
 - Use \`list_docker_builds\` to inspect visible build status, exact commit, Build Worker, immutable artifact digest, and policy result.
 - Use \`manage_docker_source\` with \`get\`, \`upsert\`, \`remove\`, \`resolve\`, or \`build\` for an existing Docker resource. Use \`admission\` before promising a new build; it reports whether the internal registry and an isolated Build Worker are ready.
 - Repository and integration IDs must come from an enabled allowlisted GitLab, GitHub, or generic Git connector. Gateway resolves the configured branch to an exact commit SHA and deduplicates ordinary builds by source binding plus commit.
-- Automatic deployment never runs a mutable Git-derived tag. An approved artifact is stored in the internal registry and addressed by digest; standalone containers recreate from that digest, while deployments use the existing health-checked blue/green path.
+- Automatic deployment never runs a mutable Git-derived tag. An approved artifact is stored in the internal registry and addressed by digest; standalone containers recreate from that digest, deployments use the existing health-checked blue/green path, and Compose waits for every service build in the parent batch before creating one digest-pinned immutable revision. Manual Compose revisions remain image-only; repository Compose files support the bounded single-node build subset of context, dockerfile, and args.
 - Build admission fails closed when the registry is read-only or in maintenance, or when no online worker advertises BuildKit execution, runsc isolation, and enforced resource limits. Image-based deployment remains available separately.
 - The current Build Worker profile accepts one isolated runsc job at a time, enforces the installed CPU/RAM/disk profile, and clears BuildKit/containerd state between jobs. Internet egress is the default installer profile while metadata, private/control-plane destinations, and the Gateway gRPC endpoint are blocked; an offline profile is also available.
 - Build Secrets are encrypted, source-scoped, write-only values exposed only through explicit BuildKit secret mounts. Never suggest passing secrets as build arguments or copying them into the build context.
@@ -1075,6 +1075,7 @@ Programmatic clients can use validated \`advancedConfig\`, but cannot set or rea
 - \`GET /api/docker/nodes/:nodeId/containers\` — list containers
 - \`GET /api/docker/nodes/:nodeId/source-resources/admission\` — check internal-registry and Build Worker admission
 - \`POST /api/docker/nodes/:nodeId/source-resources\` — create a container/deployment source reservation and queue its first immutable build
+- \`POST /api/docker/nodes/:nodeId/compose-projects/from-source\` — create a Compose Project source reservation and queue one immutable child build per build-enabled service
 - \`GET /api/docker/builds\` — list visible Git-source builds
 - \`GET /api/docker/builds/:buildId\` — inspect one build and its artifact/policy result
 - \`GET /api/docker/builds/:buildId/logs\` — read persisted build logs

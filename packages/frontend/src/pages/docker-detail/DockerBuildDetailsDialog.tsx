@@ -121,6 +121,7 @@ export function DockerBuildDetailsDialog({
             <MetaRow label="Commit">
               <span className="break-all font-mono text-xs">{build.commitSha}</span>
             </MetaRow>
+            {build.serviceName && <MetaRow label="Compose service">{build.serviceName}</MetaRow>}
             <MetaRow label="Platform">{build.platform ?? "Not assigned"}</MetaRow>
             <MetaRow label="Build Worker">
               <Badge variant="secondary">

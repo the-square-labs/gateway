@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	DefaultGitAskpassPath  = "/usr/local/lib/gateway-builder/git-askpass"
-	maxBuildLogChunk       = 64 * 1024
-	maxScanVulnerabilities = 100
+	DefaultGitAskpassPath    = "/usr/local/lib/gateway-builder/git-askpass"
+	maxBuildLogChunk         = 64 * 1024
+	maxScanVulnerabilities   = 100
+	commandCancellationGrace = 10 * time.Second
 )
 
 var (
@@ -413,6 +414,13 @@ func registryScanEnvironment(base []string, caPath string) []string {
 
 func (m *Manager) runCommand(ctx context.Context, buildID, dir string, env []string, name string, args ...string) error {
 	command := exec.CommandContext(ctx, name, args...)
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		return command.Process.Signal(os.Interrupt)
+	}
+	command.WaitDelay = commandCancellationGrace
 	command.Dir = dir
 	command.Env = env
 	stdout, err := command.StdoutPipe()

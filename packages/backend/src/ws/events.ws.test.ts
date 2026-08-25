@@ -942,6 +942,48 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('delivers Compose build events through Compose project scopes', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['docker:compose:view:node-1/project-visible'] },
+      effectiveScopes: ['docker:compose:view:node-1/project-visible'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.build.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['docker.build.changed'], rejected: [] })
+    );
+    eventBus.publish('docker.build.changed', {
+      buildId: 'build-hidden',
+      nodeId: 'node-1',
+      scopeResourceId: 'project-hidden',
+      targetKind: 'compose_project',
+      status: 'building',
+    });
+    eventBus.publish('docker.build.changed', {
+      buildId: 'build-visible',
+      nodeId: 'node-1',
+      scopeResourceId: 'project-visible',
+      targetKind: 'compose_project',
+      status: 'building',
+    });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('build-hidden'));
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('build-visible'));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('filters node changes for Docker-scoped users to their Docker node', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

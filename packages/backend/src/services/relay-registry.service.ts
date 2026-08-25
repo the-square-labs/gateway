@@ -12,7 +12,7 @@ const TOKEN_REFRESH_MS = 15_000;
 const REPOSITORY_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 
 type RegistryBindingRole = 'builder' | 'runtime';
-type RegistryBindingContext = 'build' | 'container' | 'deployment';
+type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_project';
 
 export class RelayRegistryService {
   private refreshTimer: ReturnType<typeof setInterval> | null = null;

@@ -906,9 +906,21 @@ function RealtimeBridge() {
       [auth.hasScopedAccess("docker:networks:view"), "docker.network.changed"],
       [auth.hasScopedAccess("docker:tasks"), "docker.task.changed"],
       [auth.hasScopedAccess("docker:registries:view"), "docker.registry.changed"],
-      [auth.hasScopedAccess("docker:containers:view"), "docker.build.changed"],
-      [auth.hasScopedAccess("docker:containers:view"), "docker.build.artifact.changed"],
-      [auth.hasScopedAccess("docker:containers:view"), "docker.build.log"],
+      [
+        auth.hasScopedAccess("docker:containers:view") ||
+          auth.hasScopedAccess("docker:compose:view"),
+        "docker.build.changed",
+      ],
+      [
+        auth.hasScopedAccess("docker:containers:view") ||
+          auth.hasScopedAccess("docker:compose:view"),
+        "docker.build.artifact.changed",
+      ],
+      [
+        auth.hasScopedAccess("docker:containers:view") ||
+          auth.hasScopedAccess("docker:compose:view"),
+        "docker.build.log",
+      ],
       [auth.hasScope("housekeeping:view"), "logging.health.changed"],
       [auth.hasScope("housekeeping:view"), "system.relay.health.changed"],
       [auth.hasScope("status-page:view"), "status-page.changed"],

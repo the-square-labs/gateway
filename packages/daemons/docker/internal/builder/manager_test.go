@@ -1,10 +1,12 @@
 package builder
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
@@ -137,6 +139,46 @@ func TestPrepareJobDirectoryRemovesStaleCheckoutFromExpiredLease(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o700 {
 		t.Fatalf("job directory mode = %o, want 700", info.Mode().Perm())
+	}
+}
+
+func TestRunCommandInterruptsGracefullyOnCancellation(t *testing.T) {
+	workspace := t.TempDir()
+	readyPath := filepath.Join(workspace, "ready")
+	interruptedPath := filepath.Join(workspace, "interrupted")
+	manager := NewManager(DefaultRuntimeConfig(0), workspace, DefaultGitAskpassPath, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.runCommand(
+			ctx,
+			"build-1",
+			workspace,
+			os.Environ(),
+			"sh",
+			"-c",
+			"trap 'printf interrupted > "+interruptedPath+"; exit 0' INT; printf ready > "+readyPath+"; while :; do :; done",
+		)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("helper command did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled command did not exit during the graceful interruption window")
+	}
+	if content, err := os.ReadFile(interruptedPath); err != nil || string(content) != "interrupted" {
+		t.Fatalf("command did not handle interrupt gracefully: content=%q err=%v", content, err)
 	}
 }
 

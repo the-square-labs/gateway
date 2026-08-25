@@ -7,6 +7,8 @@ import {
   ExternalLink,
   FilePenLine,
   FolderOpen,
+  GitBranch,
+  Hammer,
   HardDrive,
   History,
   KeyRound,
@@ -78,6 +80,7 @@ import type {
 } from "@/types";
 import { ComposeProjectEditor } from "./compose/ComposeProjectEditor";
 import { ComposeVariablesTab } from "./compose/ComposeVariablesTab";
+import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 import { StatsTab } from "./docker-detail/StatsTab";
 
@@ -311,7 +314,16 @@ export function DockerComposeProjectDetail() {
   const activitySentinelRef = useRef<HTMLDivElement>(null);
   const [serviceProcesses, setServiceProcesses] = useState<ServiceProcesses>({});
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "services", "monitoring", "configuration", "variables", "logs"],
+    [
+      "overview",
+      "services",
+      "source",
+      "builds",
+      "monitoring",
+      "configuration",
+      "variables",
+      "logs",
+    ],
     "overview",
     (tab) => dockerComposeProjectRoute(projectId, tab)
   );
@@ -547,7 +559,7 @@ export function DockerComposeProjectDetail() {
     }
   };
 
-  if (loading) return <DetailPageSkeleton label="Loading Compose project" tabs={6} />;
+  if (loading) return <DetailPageSkeleton label="Loading Compose project" tabs={8} />;
   if (!project) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -1061,6 +1073,12 @@ export function DockerComposeProjectDetail() {
             <TabsTrigger value="services" className="gap-1.5">
               <Boxes className="h-3.5 w-3.5" /> Services
             </TabsTrigger>
+            <TabsTrigger value="source" className="gap-1.5">
+              <GitBranch className="h-3.5 w-3.5" /> Source
+            </TabsTrigger>
+            <TabsTrigger value="builds" className="gap-1.5">
+              <Hammer className="h-3.5 w-3.5" /> Builds
+            </TabsTrigger>
             <TabsTrigger
               value="monitoring"
               className="gap-1.5"
@@ -1201,6 +1219,30 @@ export function DockerComposeProjectDetail() {
                 className="h-fit w-full max-h-full [&_[data-route-scroll-container]]:flex-1"
               />
             </PanelShell>
+          </TabsContent>
+
+          <TabsContent value="source" className="pb-6">
+            <DockerResourceGitTabs
+              target={{
+                kind: "compose_project",
+                nodeId: project.nodeId,
+                composeProjectId: project.id,
+              }}
+              view="source"
+              composeVariables={project.activeRevision?.variables ?? {}}
+              composeSecretKeys={project.activeRevision?.secretKeys ?? []}
+            />
+          </TabsContent>
+
+          <TabsContent value="builds" className="pb-0">
+            <DockerResourceGitTabs
+              target={{
+                kind: "compose_project",
+                nodeId: project.nodeId,
+                composeProjectId: project.id,
+              }}
+              view="builds"
+            />
           </TabsContent>
 
           <TabsContent value="monitoring" className="pb-0">

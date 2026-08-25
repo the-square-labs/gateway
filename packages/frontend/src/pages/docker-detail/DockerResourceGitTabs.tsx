@@ -10,6 +10,8 @@ interface DockerResourceGitTabsProps {
   target: DockerSourceTarget;
   view: "source" | "builds";
   includeBuilds?: boolean;
+  composeVariables?: Record<string, string>;
+  composeSecretKeys?: string[];
 }
 
 const ACTIVE_BUILD_STATUSES = new Set<DockerBuild["status"]>([
@@ -26,6 +28,8 @@ export function DockerResourceGitTabs({
   target,
   view,
   includeBuilds = false,
+  composeVariables,
+  composeSecretKeys,
 }: DockerResourceGitTabsProps) {
   const [source, setSource] = useState<DockerSourceBinding | null>(null);
   const [builds, setBuilds] = useState<DockerBuild[]>([]);
@@ -35,12 +39,19 @@ export function DockerResourceGitTabs({
   const buildRequestId = useRef(0);
   const targetKind = target.kind;
   const targetNodeId = target.nodeId;
-  const targetResourceId = target.kind === "container" ? target.containerName : target.deploymentId;
+  const targetResourceId =
+    target.kind === "container"
+      ? target.containerName
+      : target.kind === "deployment"
+        ? target.deploymentId
+        : target.composeProjectId;
   const stableTarget = useMemo<DockerSourceTarget>(
     () =>
       targetKind === "container"
         ? { kind: "container", nodeId: targetNodeId!, containerName: targetResourceId }
-        : { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId },
+        : targetKind === "deployment"
+          ? { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId }
+          : { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId },
     [targetKind, targetNodeId, targetResourceId]
   );
 
@@ -120,6 +131,8 @@ export function DockerResourceGitTabs({
         error={error}
         onRetry={() => void load()}
         onBuildQueued={includeBuilds ? () => void refreshBuilds() : undefined}
+        composeVariables={composeVariables}
+        composeSecretKeys={composeSecretKeys}
       />
       {includeBuilds && source ? (
         <DockerBuildHistoryPanel builds={builds} sourceBindingId={source.id} loading={loading} />

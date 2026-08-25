@@ -1,7 +1,57 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DockerBuildRolloutService } from './docker-build-rollout.service.js';
+import {
+  COMPOSE_GIT_ROLLOUT_ACTION,
+  composeGitRolloutIdempotencyKey,
+  isComposeBuildBatchReady,
+  isComposeRolloutCurrent,
+} from './docker-compose-build-rollout.service.js';
 
 describe('DockerBuildRolloutService', () => {
+  it('pulls immutable Compose artifacts before applying a Git revision', () => {
+    expect(COMPOSE_GIT_ROLLOUT_ACTION).toBe('pull_apply');
+  });
+
+  it('keeps duplicate events idempotent within a batch while allowing a same-commit retry batch', () => {
+    expect(composeGitRolloutIdempotencyKey('source-1', 'batch-1')).toBe('git:source-1:batch-1');
+    expect(composeGitRolloutIdempotencyKey('source-1', 'batch-1')).not.toBe(
+      composeGitRolloutIdempotencyKey('source-1', 'batch-2')
+    );
+  });
+
+  it('does not finalize an applying batch after a newer commit supersedes it', () => {
+    expect(
+      isComposeRolloutCurrent({ batchStatus: 'applying', desiredCommitSha: 'b'.repeat(40), commitSha: 'a'.repeat(40) })
+    ).toBe(false);
+    expect(
+      isComposeRolloutCurrent({
+        batchStatus: 'superseded',
+        desiredCommitSha: 'a'.repeat(40),
+        commitSha: 'a'.repeat(40),
+      })
+    ).toBe(false);
+    expect(
+      isComposeRolloutCurrent({ batchStatus: 'applying', desiredCommitSha: 'a'.repeat(40), commitSha: 'a'.repeat(40) })
+    ).toBe(true);
+  });
+
+  it('waits for every Compose service artifact to pass policy before applying the project', () => {
+    const expected = ['api', 'web'];
+    expect(
+      isComposeBuildBatchReady(expected, [
+        { serviceName: 'api', status: 'ready', policyDecision: 'approved' },
+        { serviceName: 'web', status: 'ready', policyDecision: 'pending' },
+      ])
+    ).toBe(false);
+    expect(
+      isComposeBuildBatchReady(expected, [
+        { serviceName: 'api', status: 'ready', policyDecision: 'approved' },
+        { serviceName: 'web', status: 'ready', policyDecision: 'approved' },
+      ])
+    ).toBe(true);
+    expect(isComposeBuildBatchReady([], [])).toBe(false);
+  });
+
   it('recreates an existing container from the immutable internal registry digest', async () => {
     const image = `127.0.0.1:5443/gateway/builds/source@sha256:${'a'.repeat(64)}`;
     const docker = {
@@ -245,7 +295,16 @@ describe('DockerBuildRolloutService', () => {
           })),
         }),
     };
-    const db = { transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)) };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: vi.fn(async () => [{ targetKind: 'container' }]) })),
+          })),
+        })),
+      })),
+      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
     const service = new DockerBuildRolloutService(db as never, {} as never, {} as never, {} as never);
     const deployTarget = vi.spyOn(service as any, 'deployTarget');
 
@@ -274,6 +333,13 @@ describe('DockerBuildRolloutService', () => {
     };
     let transactionTail = Promise.resolve();
     const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: vi.fn(async () => [{ targetKind: 'container' }]) })),
+          })),
+        })),
+      })),
       transaction: vi.fn((callback: (tx: any) => Promise<unknown>) => {
         const current = transactionTail.then(async () => {
           const tx = {

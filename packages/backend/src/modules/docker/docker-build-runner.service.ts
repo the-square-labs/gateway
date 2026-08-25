@@ -114,7 +114,7 @@ export class DockerBuildRunnerService {
         repositoryUrl: source.repositoryCloneUrl,
         repositoryRemoteId: source.repositoryRemoteId,
       });
-      const outputRepository = `gateway/builds/${source.id}`;
+      const outputRepository = `gateway/builds/${source.id}${build.serviceName ? `/${build.serviceName}` : ''}`;
       await this.registry.ensureBinding({
         nodeId: builderNodeId,
         role: 'builder',
@@ -131,12 +131,12 @@ export class DockerBuildRunnerService {
         repositoryFullPath: build.repositoryFullPath,
         ref: build.ref,
         commitSha: build.commitSha,
-        dockerfilePath: source.dockerfilePath,
-        contextPath: source.contextPath,
+        dockerfilePath: build.dockerfilePath,
+        contextPath: build.contextPath,
         platform,
         outputRepository,
         outputTag: build.id,
-        buildArgs: source.buildArgs,
+        buildArgs: build.buildArgs,
         buildSecrets,
         checkoutCredential: Buffer.from(JSON.stringify(credential)),
         allowedDependencies: [],

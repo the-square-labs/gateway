@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClientUuid } from "@/lib/client-id";
 import {
   canAdoptComposeProject,
@@ -24,7 +25,9 @@ import { dockerComposeProjectRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
-import type { DockerComposeProject, Node } from "@/types";
+import type { DockerBuildAdmissionStatus, DockerComposeProject, Node } from "@/types";
+import { RepositorySourceFields } from "../docker-deploy/RepositorySourceFields";
+import { useDockerSourceRepositories } from "../docker-deploy/useDockerSourceRepositories";
 
 const DEFAULT_YAML = `services:
   web:
@@ -65,6 +68,15 @@ export function ComposeProjectEditor({
   const [name, setName] = useState("");
   const [yaml, setYaml] = useState(DEFAULT_YAML);
   const [variablesText, setVariablesText] = useState("{}");
+  const [sourceMode, setSourceMode] = useState<"yaml" | "repository">("yaml");
+  const [sourceConnectorId, setSourceConnectorId] = useState("");
+  const [sourceProjectId, setSourceProjectId] = useState("");
+  const [sourceBranch, setSourceBranch] = useState("main");
+  const [sourceComposeFilePath, setSourceComposeFilePath] = useState("compose.yaml");
+  const [sourceAutoBuild, setSourceAutoBuild] = useState(true);
+  const [sourceAutoDeploy, setSourceAutoDeploy] = useState(true);
+  const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
+  const [checkingSourceAdmission, setCheckingSourceAdmission] = useState(false);
   const [loading, setLoading] = useState(!!projectId);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -78,6 +90,9 @@ export function ComposeProjectEditor({
       ? canAdoptComposeProject(user?.scopes ?? [], nodeId, projectId)
       : hasComposeProjectScope(user?.scopes ?? [], "docker:compose:manage", nodeId, projectId)
     : !!nodeId && hasComposeNodeScope(user?.scopes ?? [], "docker:compose:create", nodeId);
+  const repositoryCreation = !projectId && sourceMode === "repository";
+  const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
+    useDockerSourceRepositories(repositoryCreation, sourceConnectorId);
 
   useEffect(() => {
     loadVisibleDockerNodes(
@@ -91,6 +106,37 @@ export function ComposeProjectEditor({
       })
       .catch(() => toast.error("Failed to load Docker nodes"));
   }, [hasScopedAccess, nodeId, user?.scopes]);
+
+  useEffect(() => {
+    if (!repositoryCreation || !nodeId) {
+      setSourceAdmission(null);
+      setCheckingSourceAdmission(false);
+      return;
+    }
+    let cancelled = false;
+    setCheckingSourceAdmission(true);
+    void api
+      .getDockerBuildAdmission(nodeId)
+      .then((status) => {
+        if (!cancelled) setSourceAdmission(status);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSourceAdmission({
+            ready: false,
+            code: "BUILD_ADMISSION_CHECK_FAILED",
+            message:
+              error instanceof Error ? error.message : "Build capacity could not be verified",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingSourceAdmission(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, repositoryCreation]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -174,6 +220,9 @@ export function ComposeProjectEditor({
 
   const save = async () => {
     if (!requireLicenseFeature("compose-applications", "Compose projects")) return;
+    if (repositoryCreation && !requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")) {
+      return;
+    }
     if (!canSubmit) {
       toast.error(
         adoption
@@ -184,6 +233,36 @@ export function ComposeProjectEditor({
     }
     setSaving(true);
     try {
+      if (repositoryCreation) {
+        if (!name.trim() || !sourceConnectorId || !sourceProjectId || !sourceBranch.trim()) {
+          throw new Error("Project name, repository, and branch are required");
+        }
+        if (!sourceComposeFilePath.trim()) throw new Error("Compose file path is required");
+        if (sourceAdmission?.ready === false) {
+          throw new Error(sourceAdmission.message || "Build capacity is unavailable");
+        }
+        const created = await api.createDockerComposeSourceProject(nodeId, {
+          projectName: name.trim(),
+          source: {
+            connectorId: sourceConnectorId,
+            projectId: sourceProjectId,
+            branch: sourceBranch.trim(),
+            dockerfilePath: "Dockerfile",
+            contextPath: ".",
+            composeFilePath: sourceComposeFilePath.trim(),
+            composeVariables: {},
+            composeSecretKeys: [],
+            autoBuild: sourceAutoBuild,
+            autoDeploy: sourceAutoDeploy,
+            buildArgs: {},
+            buildSecretNames: [],
+            policy: { vulnerabilityThreshold: "critical" },
+          },
+        });
+        toast.success("Compose build queued");
+        navigate(dockerComposeProjectRoute(created.project.id), { replace: true });
+        return;
+      }
       const values = input();
       const result = await validate(false);
       if (!result.valid) throw new Error("Fix validation errors before applying");
@@ -215,7 +294,12 @@ export function ComposeProjectEditor({
       if (compactRevision && onClose) onClose();
       else navigate(dockerComposeProjectRoute(targetProjectId), { replace: true });
     } catch (error) {
-      if (!handleLicenseApiError(error, "Compose projects"))
+      if (
+        !handleLicenseApiError(
+          error,
+          repositoryCreation ? "Git push-to-deploy" : "Compose projects"
+        )
+      )
         toast.error(error instanceof Error ? error.message : "Failed to apply Compose project");
     } finally {
       setSaving(false);
@@ -314,24 +398,96 @@ export function ComposeProjectEditor({
           </div>
         </div>
 
-        <div className="space-y-1.5">
+        {!projectId ? (
+          <Tabs
+            value={sourceMode}
+            onValueChange={(value) => setSourceMode(value as "yaml" | "repository")}
+          >
+            <TabsList>
+              <TabsTrigger value="yaml">Compose YAML</TabsTrigger>
+              <TabsTrigger value="repository">Repository</TabsTrigger>
+            </TabsList>
+            <TabsContent value="yaml" className="space-y-1.5">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Compose YAML</label>
+                <p className="text-xs text-muted-foreground">
+                  Images are required; build, host paths, privileged and swarm-only fields are
+                  rejected.
+                </p>
+              </div>
+              <div className="h-[min(48dvh,440px)] min-h-72 overflow-hidden border border-border">
+                <CodeEditor
+                  value={yaml}
+                  onChange={setYaml}
+                  language="yaml"
+                  minHeight="0"
+                  height="100%"
+                  bordered={false}
+                />
+              </div>
+            </TabsContent>
+            <TabsContent value="repository">
+              <RepositorySourceFields
+                connectorId={sourceConnectorId}
+                connectorOptions={sourceConnectorOptions}
+                repositories={sourceRepositories}
+                repositoryOptions={sourceRepositories.map((repository) => ({
+                  value: repository.projectId,
+                  label: repository.fullPath,
+                  keywords: `${repository.name} ${repository.fullPath}`,
+                }))}
+                projectId={sourceProjectId}
+                branch={sourceBranch}
+                dockerfilePath="Dockerfile"
+                contextPath="."
+                composeFilePath={sourceComposeFilePath}
+                autoBuild={sourceAutoBuild}
+                autoDeploy={sourceAutoDeploy}
+                onConnectorChange={(value) => {
+                  setSourceConnectorId(value);
+                  setSourceProjectId("");
+                }}
+                onProjectChange={setSourceProjectId}
+                onBranchChange={setSourceBranch}
+                onDockerfilePathChange={() => {}}
+                onContextPathChange={() => {}}
+                onComposeFilePathChange={setSourceComposeFilePath}
+                onAutoBuildChange={setSourceAutoBuild}
+                onAutoDeployChange={setSourceAutoDeploy}
+              />
+              {checkingSourceAdmission && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Checking Build Worker capacity…
+                </p>
+              )}
+              {sourceAdmission?.ready === false && (
+                <p className="mt-3 text-xs text-destructive" role="alert">
+                  {sourceAdmission.message || "Build capacity is unavailable."}
+                </p>
+              )}
+            </TabsContent>
+          </Tabs>
+        ) : (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Compose YAML</label>
-            <p className="text-xs text-muted-foreground">
-              Images are required; build, host paths, privileged and swarm-only fields are rejected.
-            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Compose YAML</label>
+              <p className="text-xs text-muted-foreground">
+                Images are required; build, host paths, privileged and swarm-only fields are
+                rejected.
+              </p>
+            </div>
+            <div className="h-[min(48dvh,440px)] min-h-72 overflow-hidden border border-border">
+              <CodeEditor
+                value={yaml}
+                onChange={setYaml}
+                language="yaml"
+                minHeight="0"
+                height="100%"
+                bordered={false}
+              />
+            </div>
           </div>
-          <div className="h-[min(48dvh,440px)] min-h-72 overflow-hidden border border-border">
-            <CodeEditor
-              value={yaml}
-              onChange={setYaml}
-              language="yaml"
-              minHeight="0"
-              height="100%"
-              bordered={false}
-            />
-          </div>
-        </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={validating || saving}>
@@ -340,7 +496,7 @@ export function ComposeProjectEditor({
           <Button
             variant="outline"
             onClick={() => void validate().catch((error) => toast.error(error.message))}
-            disabled={validating || saving}
+            disabled={validating || saving || repositoryCreation}
           >
             {validating ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -351,14 +507,32 @@ export function ComposeProjectEditor({
           </Button>
           <Button
             onClick={() => void save()}
-            disabled={validating || saving || !supportsCompose || !canSubmit}
+            disabled={
+              validating ||
+              saving ||
+              !supportsCompose ||
+              !canSubmit ||
+              checkingSourceAdmission ||
+              (repositoryCreation &&
+                (!sourceConnectorId ||
+                  !sourceProjectId ||
+                  !sourceBranch.trim() ||
+                  !sourceComposeFilePath.trim() ||
+                  sourceAdmission?.ready === false))
+            }
           >
             {saving ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
             ) : (
               <Save className="mr-1 h-4 w-4" />
             )}
-            {adoption ? "Adopt & Apply" : editing ? "Apply" : "Deploy"}
+            {repositoryCreation
+              ? "Create and build"
+              : adoption
+                ? "Adopt & Apply"
+                : editing
+                  ? "Apply"
+                  : "Deploy"}
           </Button>
         </DialogFooter>
       </div>

@@ -27,6 +27,10 @@ export const DockerSourceTargetSchema = z.discriminatedUnion('kind', [
     kind: z.literal('deployment'),
     deploymentId: z.string().uuid(),
   }),
+  z.object({
+    kind: z.literal('compose_project'),
+    composeProjectId: z.string().uuid(),
+  }),
 ]);
 
 export const DockerSourceBindingConfigSchema = z.object({
@@ -35,6 +39,12 @@ export const DockerSourceBindingConfigSchema = z.object({
   branch: z.string().trim().min(1).max(500),
   dockerfilePath: RelativeBuildPathSchema.default('Dockerfile'),
   contextPath: RelativeBuildPathSchema.default('.'),
+  composeFilePath: RelativeBuildPathSchema.optional(),
+  composeVariables: z.record(z.string().max(65_536)).default({}),
+  composeSecretKeys: z
+    .array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/))
+    .max(256)
+    .default([]),
   autoBuild: z.boolean().default(true),
   autoDeploy: z.boolean().default(true),
   buildArgs: z.record(z.string().max(16_384)).default({}),
@@ -60,6 +70,21 @@ export const DockerBuildSecretValueSchema = z.object({
 
 export const DockerSourceBindingUpsertSchema = DockerSourceBindingConfigSchema.extend({
   target: DockerSourceTargetSchema,
+}).superRefine((value, ctx) => {
+  if (value.target.kind === 'compose_project' && !value.composeFilePath) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['composeFilePath'],
+      message: 'Compose file path is required for a Compose project source',
+    });
+  }
+  if (value.target.kind !== 'compose_project' && value.composeFilePath) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['composeFilePath'],
+      message: 'Compose file path is only valid for a Compose project source',
+    });
+  }
 });
 
 export const DockerSourceResourceCreateSchema = z.object({

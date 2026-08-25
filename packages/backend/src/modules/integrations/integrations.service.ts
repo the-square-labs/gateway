@@ -581,6 +581,54 @@ export class IntegrationsService {
     };
   }
 
+  async readDockerBuildSourceFile(
+    user: User,
+    input: { connectorId: string; projectId: string; repositoryUrl: string; path: string; commitSha: string }
+  ): Promise<{ path: string; content: string }> {
+    const [joined] = await this.db
+      .select({ connector: integrationConnectors, project: integrationConnectorProjects })
+      .from(integrationConnectorProjects)
+      .innerJoin(integrationConnectors, eq(integrationConnectors.id, integrationConnectorProjects.connectorId))
+      .where(
+        and(
+          eq(integrationConnectorProjects.id, input.projectId),
+          eq(integrationConnectorProjects.connectorId, input.connectorId)
+        )
+      )
+      .limit(1);
+    if (!joined || !['gitlab', 'github', 'git'].includes(joined.connector.provider)) {
+      throw new AppError(404, 'SOURCE_PROJECT_NOT_FOUND', 'Repository is not available through this connector');
+    }
+    if (joined.connector.provider === 'gitlab') {
+      const result = await (this.getProvider('gitlab') as VcsConnectorProvider).readFile(
+        this.systemAuthFor(joined.connector),
+        {
+          project: this.toProviderProject(joined.project),
+          path: input.path,
+          ref: input.commitSha,
+          length: 256_000,
+        }
+      );
+      if (result.truncated) throw new AppError(413, 'COMPOSE_FILE_TOO_LARGE', 'Compose file exceeds 256 KiB');
+      return { path: result.path, content: result.content };
+    }
+    const repositoryUrl = joined.project.webUrl || input.repositoryUrl;
+    if (joined.connector.provider === 'github') {
+      return this.githubReadRepositoryFile(user, {
+        connectorId: input.connectorId,
+        repositoryUrl,
+        path: input.path,
+        ref: input.commitSha,
+      });
+    }
+    return this.gitReadRepositoryFile(user, {
+      connectorId: input.connectorId,
+      repositoryUrl,
+      path: input.path,
+      ref: input.commitSha,
+    });
+  }
+
   async reconcileDockerSourceWebhook(input: {
     connectorId: string;
     projectId: string;

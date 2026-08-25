@@ -31,6 +31,25 @@ describe('Docker source binding schemas', () => {
     );
   });
 
+  it('requires one repository Compose file for a Compose project target', () => {
+    const target = {
+      kind: 'compose_project' as const,
+      composeProjectId: '44444444-4444-4444-8444-444444444444',
+    };
+    expect(DockerSourceBindingUpsertSchema.safeParse({ ...containerBinding, target }).success).toBe(false);
+    const parsed = DockerSourceBindingUpsertSchema.parse({
+      ...containerBinding,
+      target,
+      composeFilePath: 'deploy/compose.yaml',
+    });
+    expect(parsed.composeFilePath).toBe('deploy/compose.yaml');
+    expect(parsed.composeVariables).toEqual({});
+    expect(parsed.composeSecretKeys).toEqual([]);
+    expect(
+      DockerSourceBindingUpsertSchema.safeParse({ ...containerBinding, composeFilePath: 'compose.yaml' }).success
+    ).toBe(false);
+  });
+
   it('requires the complete external registry ingress tuple', () => {
     expect(DockerInternalRegistrySettingsSchema.safeParse({ externalAccessEnabled: false }).success).toBe(true);
     expect(DockerInternalRegistrySettingsSchema.safeParse({ externalAccessEnabled: true }).success).toBe(false);

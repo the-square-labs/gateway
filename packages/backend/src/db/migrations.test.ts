@@ -237,6 +237,22 @@ describe('drizzle migration metadata', () => {
     expect(migration).not.toContain('"docker_build_artifacts_repository_digest_platform_unique"');
   });
 
+  it('adds project-level Compose build batches after the base build platform', () => {
+    const entries = readMigrationJournal();
+    const buildPlatform = entries.findIndex((entry) => entry.tag === '0159_rich_warbird');
+    const composeBuilds = entries.findIndex((entry) => entry.tag === '0160_lame_prodigy');
+
+    expect(composeBuilds).toBe(buildPlatform + 1);
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0160_lame_prodigy.sql'), 'utf8');
+    expect(migration).toContain('CREATE TABLE "docker_build_batches"');
+    expect(migration).toContain('ADD COLUMN "compose_project_id" uuid');
+    expect(migration).toContain('ADD COLUMN "batch_id" uuid');
+    expect(migration).toContain('ADD COLUMN "compose_revision_id" uuid');
+    expect(migration).toContain('docker_builds_batch_service_unique');
+    expect(migration).toContain('docker_source_bindings_compose_project_unique');
+    expect(migration).toContain("NOT LIKE '%/../%'");
+  });
+
   it('preserves existing AI Workspace grants when splitting inference access', () => {
     const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0155_split_ai_workspace_access.sql'), 'utf8');
 

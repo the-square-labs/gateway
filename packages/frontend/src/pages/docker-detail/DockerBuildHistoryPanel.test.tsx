@@ -40,6 +40,8 @@ function build(index: number): DockerBuild {
   return {
     id: `build-${index}`,
     sourceBindingId: "11111111-1111-4111-8111-111111111111",
+    batchId: null,
+    serviceName: null,
     provider: "gitlab",
     trigger: "gitlab_push",
     repositoryFullPath: "platform/api",

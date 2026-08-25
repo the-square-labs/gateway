@@ -112,7 +112,10 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   );
 
   const setExternalAccess = (enabled: boolean) => {
-    if (enabled && !requireLicenseFeature("git-push-to-deploy", "External internal registry access")) {
+    if (
+      enabled &&
+      !requireLicenseFeature("git-push-to-deploy", "External internal registry access")
+    ) {
       return;
     }
     setExternalEnabled(enabled);

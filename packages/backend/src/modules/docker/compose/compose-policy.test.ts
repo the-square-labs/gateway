@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateComposeYaml } from './compose-policy.js';
+import { prepareComposeGitBuild, validateComposeYaml } from './compose-policy.js';
 
 describe('validateComposeYaml', () => {
   it('accepts the image-only safe subset and reports normalized resources', () => {
@@ -83,6 +83,94 @@ networks:
 
     expect(result.valid).toBe(false);
     expect(result.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'BUILD_FORBIDDEN' })]));
+  });
+
+  it('prepares repository Compose builds as image-only runtime YAML', () => {
+    const result = prepareComposeGitBuild(
+      {
+        projectName: 'demo',
+        variables: {},
+        secretKeys: [],
+        yaml: `services:
+  api:
+    build:
+      context: services/api
+      dockerfile: Dockerfile.prod
+      args:
+        NODE_ENV: production
+    ports: ["8080:80"]
+  worker:
+    build: services/worker
+  redis:
+    image: redis:7-alpine
+`,
+      },
+      {
+        api: `127.0.0.1:5443/gateway/builds/source/api@sha256:${'a'.repeat(64)}`,
+        worker: `127.0.0.1:5443/gateway/builds/source/worker@sha256:${'b'.repeat(64)}`,
+      }
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.services).toEqual([
+      {
+        serviceName: 'api',
+        contextPath: 'services/api',
+        dockerfilePath: 'services/api/Dockerfile.prod',
+        buildArgs: { NODE_ENV: 'production' },
+      },
+      {
+        serviceName: 'worker',
+        contextPath: 'services/worker',
+        dockerfilePath: 'services/worker/Dockerfile',
+        buildArgs: {},
+      },
+    ]);
+    expect(result.runtimeYaml).not.toContain('build:');
+    expect(result.validation.normalizedModel?.services.api.image).toContain('@sha256:');
+    expect(result.validation.normalizedModel?.services.redis.image).toBe('redis:7-alpine');
+  });
+
+  it('normalizes dot-prefixed Compose contexts and resolves Dockerfiles from the context directory', () => {
+    const result = prepareComposeGitBuild({
+      projectName: 'demo',
+      variables: {},
+      secretKeys: [],
+      yaml: `services:
+  web:
+    build:
+      context: ./web
+`,
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.services).toEqual([
+      {
+        serviceName: 'web',
+        contextPath: 'web',
+        dockerfilePath: 'web/Dockerfile',
+        buildArgs: {},
+      },
+    ]);
+  });
+
+  it('rejects repository build paths that escape the checkout', () => {
+    const result = prepareComposeGitBuild({
+      projectName: 'demo',
+      variables: {},
+      secretKeys: [],
+      yaml: `services:
+  api:
+    build:
+      context: ../api
+      dockerfile: /Dockerfile
+`,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toEqual(
+      expect.arrayContaining(['INVALID_BUILD_CONTEXT', 'INVALID_DOCKERFILE_PATH'])
+    );
   });
 
   it.each([

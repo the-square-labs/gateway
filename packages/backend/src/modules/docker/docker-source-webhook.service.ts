@@ -47,7 +47,11 @@ export class DockerSourceWebhookService {
     private readonly db: DrizzleClient,
     private readonly integrations: IntegrationsService,
     private readonly cryptoService: CryptoService,
-    private readonly getBuildService: () => DockerBuildService | undefined
+    private readonly getBuildService: () => DockerBuildService | undefined,
+    private readonly prepareCommit?: (
+      binding: SourceBindingRow,
+      commitSha: string
+    ) => Promise<{ composeBuildPlan: SourceBindingRow['composeBuildPlan'] }>
   ) {}
 
   webhookSecret(sourceBindingId: string): string {
@@ -141,6 +145,7 @@ export class DockerSourceWebhookService {
       throw new AppError(400, 'SOURCE_WEBHOOK_JSON_INVALID', 'Webhook body must be valid JSON');
     }
     const normalized = this.normalizeWebhook(provider, headers, payload, joined.binding);
+    const prepared = await this.prepareCommit?.(joined.binding, normalized.commitSha);
     const payloadSha256 = createHash('sha256').update(rawBody).digest('hex');
     const [delivery] = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${sourceBindingId}`}))`);
@@ -163,6 +168,7 @@ export class DockerSourceWebhookService {
           .update(dockerSourceBindings)
           .set({
             desiredCommitSha: normalized.commitSha,
+            ...(prepared ? { composeBuildPlan: prepared.composeBuildPlan } : {}),
             lastWebhookAt: new Date(),
             lastWebhookError: null,
             updatedAt: new Date(),
@@ -182,7 +188,12 @@ export class DockerSourceWebhookService {
       }
       return this.webhookResult(joined.binding, provider, normalized, true);
     }
-    await this.enqueueWebhookBuild(joined.binding, provider, normalized.deliveryId, normalized.commitSha);
+    await this.enqueueWebhookBuild(
+      prepared ? { ...joined.binding, composeBuildPlan: prepared.composeBuildPlan } : joined.binding,
+      provider,
+      normalized.deliveryId,
+      normalized.commitSha
+    );
     return this.webhookResult(joined.binding, provider, normalized, false);
   }
 

@@ -206,7 +206,9 @@ export const dockerRegistryNodeBindings = pgTable(
     role: varchar('role', { length: 16 }).$type<'builder' | 'runtime'>().notNull(),
     repository: text('repository').notNull(),
     actions: text('actions').array().notNull(),
-    contextKind: varchar('context_kind', { length: 32 }).$type<'build' | 'container' | 'deployment'>().notNull(),
+    contextKind: varchar('context_kind', { length: 32 })
+      .$type<'build' | 'container' | 'deployment' | 'compose_project'>()
+      .notNull(),
     contextId: text('context_id').notNull(),
     generation: bigint('generation', { mode: 'number' }).notNull().default(1),
     status: varchar('status', { length: 32 }).notNull().default('active'),

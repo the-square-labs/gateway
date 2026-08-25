@@ -58,7 +58,19 @@ describe("Compose UI contract", () => {
     expect(list).toContain('requireLicenseFeature("compose-applications", "Compose lifecycle")');
     expect(detail).toContain('requireLicenseFeature("compose-applications", "Compose lifecycle")');
     expect(editor).toContain('requireLicenseFeature("compose-applications", "Compose projects")');
+    expect(editor).toContain('requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")');
     expect(list).toContain("void fetchProjects(fixedNodeId)");
+  });
+
+  it("creates Compose projects from repositories with the shared repository controls", () => {
+    const editor = source("pages/compose/ComposeProjectEditor.tsx");
+    const api = source("services/api-docker.ts");
+    expect(editor).toContain('from "../docker-deploy/RepositorySourceFields"');
+    expect(editor).toContain('<TabsTrigger value="repository">Repository</TabsTrigger>');
+    expect(editor).toContain("createDockerComposeSourceProject");
+    expect(editor).toContain("composeFilePath={sourceComposeFilePath}");
+    expect(editor).toContain('"Create and build"');
+    expect(api).toContain("/compose-projects/from-source");
   });
 
   it("refreshes Compose lists and details through the resource-scoped Compose event channel", () => {

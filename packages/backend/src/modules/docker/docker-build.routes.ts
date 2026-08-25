@@ -2,7 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { requireAnyScopeBase } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { DockerBuildListQuerySchema, DockerBuildLogQuerySchema } from './docker-build.schemas.js';
@@ -40,19 +40,31 @@ function decodeBuildCursor(value?: string): DockerBuildCursor | null {
 
 function canAccessBuild(
   scopes: readonly string[],
-  action: 'docker:containers:view' | 'docker:containers:manage',
+  action: 'view' | 'manage',
   build: {
     target:
       | { kind: 'container'; nodeId: string; containerName: string }
-      | { kind: 'deployment'; nodeId: string; deploymentId: string };
+      | { kind: 'deployment'; nodeId: string; deploymentId: string }
+      | { kind: 'compose_project'; nodeId: string; composeProjectId: string };
   }
 ) {
-  const resourceId = build.target.kind === 'container' ? build.target.containerName : build.target.deploymentId;
-  return hasDockerResourceScope([...scopes], action, build.target.nodeId, resourceId);
+  const compose = build.target.kind === 'compose_project';
+  const resourceId =
+    build.target.kind === 'container'
+      ? build.target.containerName
+      : build.target.kind === 'deployment'
+        ? build.target.deploymentId
+        : build.target.composeProjectId;
+  return hasDockerResourceScope(
+    [...scopes],
+    compose ? `docker:compose:${action}` : `docker:containers:${action}`,
+    build.target.nodeId,
+    resourceId
+  );
 }
 
 export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
-  router.get('/builds', requireScopeBase('docker:containers:view'), async (c) => {
+  router.get('/builds', requireAnyScopeBase('docker:containers:view', 'docker:compose:view'), async (c) => {
     const query = DockerBuildListQuerySchema.parse(c.req.query());
     const scopes = c.get('effectiveScopes') ?? [];
     const requestedCursor = decodeBuildCursor(query.cursor);
@@ -83,7 +95,7 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
       }
       for (const build of rows) {
         lastScanned = build;
-        if (canAccessBuild(scopes, 'docker:containers:view', build)) visible.push(build);
+        if (canAccessBuild(scopes, 'view', build)) visible.push(build);
         if (visible.length > query.limit) break;
       }
       if (visible.length > query.limit) break;
@@ -108,44 +120,56 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
     return c.json({ data, nextCursor });
   });
 
-  router.get('/builds/:buildId', requireScopeBase('docker:containers:view'), async (c) => {
+  router.get('/builds/:buildId', requireAnyScopeBase('docker:containers:view', 'docker:compose:view'), async (c) => {
     const build = await container.resolve(DockerBuildService).get(BuildIdSchema.parse(c.req.param('buildId')));
-    if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'docker:containers:view', build)) {
+    if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'view', build)) {
       throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
     }
     return c.json({ data: build });
   });
 
-  router.get('/builds/:buildId/logs', requireScopeBase('docker:containers:view'), async (c) => {
-    const buildId = BuildIdSchema.parse(c.req.param('buildId'));
-    const build = await container.resolve(DockerBuildService).get(buildId);
-    if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'docker:containers:view', build)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
+  router.get(
+    '/builds/:buildId/logs',
+    requireAnyScopeBase('docker:containers:view', 'docker:compose:view'),
+    async (c) => {
+      const buildId = BuildIdSchema.parse(c.req.param('buildId'));
+      const build = await container.resolve(DockerBuildService).get(buildId);
+      if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'view', build)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
+      }
+      const query = DockerBuildLogQuerySchema.parse(c.req.query());
+      const data = await container.resolve(DockerBuildService).listLogs(buildId, query.afterSequence, query.limit);
+      return c.json({ data });
     }
-    const query = DockerBuildLogQuerySchema.parse(c.req.query());
-    const data = await container.resolve(DockerBuildService).listLogs(buildId, query.afterSequence, query.limit);
-    return c.json({ data });
-  });
+  );
 
-  router.post('/builds/:buildId/cancel', requireScopeBase('docker:containers:manage'), async (c) => {
-    const service = container.resolve(DockerBuildService);
-    const buildId = BuildIdSchema.parse(c.req.param('buildId'));
-    const build = await service.get(buildId);
-    if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'docker:containers:manage', build)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource manage scope for this build');
+  router.post(
+    '/builds/:buildId/cancel',
+    requireAnyScopeBase('docker:containers:manage', 'docker:compose:manage'),
+    async (c) => {
+      const service = container.resolve(DockerBuildService);
+      const buildId = BuildIdSchema.parse(c.req.param('buildId'));
+      const build = await service.get(buildId);
+      if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'manage', build)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource manage scope for this build');
+      }
+      const data = await service.requestCancellation(buildId, c.get('user')!.id);
+      return c.json({ data });
     }
-    const data = await service.requestCancellation(buildId, c.get('user')!.id);
-    return c.json({ data });
-  });
+  );
 
-  router.post('/builds/:buildId/retry', requireScopeBase('docker:containers:manage'), async (c) => {
-    const service = container.resolve(DockerBuildService);
-    const buildId = BuildIdSchema.parse(c.req.param('buildId'));
-    const build = await service.get(buildId);
-    if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'docker:containers:manage', build)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource manage scope for this build');
+  router.post(
+    '/builds/:buildId/retry',
+    requireAnyScopeBase('docker:containers:manage', 'docker:compose:manage'),
+    async (c) => {
+      const service = container.resolve(DockerBuildService);
+      const buildId = BuildIdSchema.parse(c.req.param('buildId'));
+      const build = await service.get(buildId);
+      if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'manage', build)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource manage scope for this build');
+      }
+      const data = await service.retry(buildId, c.get('user')!.id);
+      return c.json({ data }, 201);
     }
-    const data = await service.retry(buildId, c.get('user')!.id);
-    return c.json({ data }, 201);
-  });
+  );
 }

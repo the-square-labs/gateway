@@ -12,10 +12,15 @@ export function dockerSourceTargetWhere(target: DockerSourceTarget): SQL {
         eq(dockerSourceBindings.nodeId, target.nodeId),
         eq(dockerSourceBindings.containerName, target.containerName)
       )!
-    : and(
-        eq(dockerSourceBindings.targetKind, 'deployment'),
-        eq(dockerSourceBindings.deploymentId, target.deploymentId)
-      )!;
+    : target.kind === 'deployment'
+      ? and(
+          eq(dockerSourceBindings.targetKind, 'deployment'),
+          eq(dockerSourceBindings.deploymentId, target.deploymentId)
+        )!
+      : and(
+          eq(dockerSourceBindings.targetKind, 'compose_project'),
+          eq(dockerSourceBindings.composeProjectId, target.composeProjectId)
+        )!;
 }
 
 export function dockerSourceTargetColumns(target: DockerSourceTarget) {
@@ -25,8 +30,23 @@ export function dockerSourceTargetColumns(target: DockerSourceTarget) {
         nodeId: target.nodeId,
         containerName: target.containerName,
         deploymentId: null,
+        composeProjectId: null,
       }
-    : { targetKind: 'deployment' as const, nodeId: null, containerName: null, deploymentId: target.deploymentId };
+    : target.kind === 'deployment'
+      ? {
+          targetKind: 'deployment' as const,
+          nodeId: null,
+          containerName: null,
+          deploymentId: target.deploymentId,
+          composeProjectId: null,
+        }
+      : {
+          targetKind: 'compose_project' as const,
+          nodeId: null,
+          containerName: null,
+          deploymentId: null,
+          composeProjectId: target.composeProjectId,
+        };
 }
 
 export function toPublicDockerSource(row: SourceBindingRow, provider: SupportedSourceProvider) {
@@ -35,7 +55,9 @@ export function toPublicDockerSource(row: SourceBindingRow, provider: SupportedS
     target:
       row.targetKind === 'container'
         ? { kind: 'container' as const, nodeId: row.nodeId!, containerName: row.containerName! }
-        : { kind: 'deployment' as const, deploymentId: row.deploymentId! },
+        : row.targetKind === 'deployment'
+          ? { kind: 'deployment' as const, deploymentId: row.deploymentId! }
+          : { kind: 'compose_project' as const, composeProjectId: row.composeProjectId! },
     connectorId: row.connectorId,
     projectId: row.projectId,
     provider,
@@ -45,6 +67,9 @@ export function toPublicDockerSource(row: SourceBindingRow, provider: SupportedS
     branch: row.branch,
     dockerfilePath: row.dockerfilePath,
     contextPath: row.contextPath,
+    composeFilePath: row.composeFilePath,
+    composeVariables: row.composeVariables,
+    composeSecretKeys: row.composeSecretKeys,
     autoBuild: row.autoBuild,
     autoDeploy: row.autoDeploy,
     buildArgs: row.buildArgs,

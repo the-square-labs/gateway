@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { parseAllDocuments } from 'yaml';
+import { posix } from 'node:path';
+import { parseAllDocuments, stringify } from 'yaml';
 import type {
   DockerComposeNormalizedModel,
   DockerComposeNormalizedResource,
@@ -21,6 +22,21 @@ export interface ComposeValidationResult {
   normalizedModel: DockerComposeNormalizedModel | null;
   configDigest: string | null;
   requiredVariables: string[];
+  diagnostics: ComposeValidationDiagnostic[];
+}
+
+export interface ComposeGitBuildSpec {
+  serviceName: string;
+  dockerfilePath: string;
+  contextPath: string;
+  buildArgs: Record<string, string>;
+}
+
+export interface ComposeGitBuildPreparation {
+  valid: boolean;
+  runtimeYaml: string | null;
+  services: ComposeGitBuildSpec[];
+  validation: ComposeValidationResult;
   diagnostics: ComposeValidationDiagnostic[];
 }
 
@@ -70,6 +86,125 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return (
     !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
+}
+
+function relativeBuildPath(value: unknown, fallback: string): string | null {
+  const raw = value === undefined ? fallback : typeof value === 'string' ? value.trim() : '';
+  if (!raw || raw.startsWith('/') || raw.split('/').includes('..') || raw.includes('\0')) return null;
+  const normalized = posix.normalize(raw);
+  if (normalized === '..' || normalized.startsWith('../')) return null;
+  return normalized;
+}
+
+export function prepareComposeGitBuild(
+  input: ComposeYamlInput,
+  images: Record<string, string> = {}
+): ComposeGitBuildPreparation {
+  const diagnostics: ComposeValidationDiagnostic[] = [];
+  const documents = parseAllDocuments(input.yaml, {
+    schema: 'core',
+    merge: false,
+    uniqueKeys: true,
+    strict: true,
+    customTags: [],
+    logLevel: 'silent',
+  });
+  const document = documents.length === 1 ? documents[0] : null;
+  for (const error of document?.errors ?? []) diagnostic(diagnostics, 'YAML_PARSE_ERROR', error.message);
+  let parsed: unknown = null;
+  try {
+    parsed = document?.toJS({ maxAliasCount: 0, mapAsMap: false }) ?? null;
+  } catch (error) {
+    diagnostic(diagnostics, 'YAML_CONVERSION_ERROR', error instanceof Error ? error.message : String(error));
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.services)) {
+    diagnostic(diagnostics, 'SERVICES_REQUIRED', 'At least one service is required', 'services');
+  }
+
+  const services: ComposeGitBuildSpec[] = [];
+  if (isRecord(parsed) && isRecord(parsed.services)) {
+    for (const [serviceName, value] of Object.entries(parsed.services)) {
+      if (!isRecord(value)) continue;
+      if (!('build' in value)) continue;
+      const build = value.build;
+      let contextPath: string | null;
+      let dockerfilePath: string | null;
+      let buildArgs: Record<string, string> = {};
+      if (typeof build === 'string') {
+        contextPath = relativeBuildPath(build, '.');
+        dockerfilePath = contextPath ? posix.join(contextPath, 'Dockerfile') : null;
+      } else if (isRecord(build)) {
+        for (const key of Object.keys(build)) {
+          if (!['context', 'dockerfile', 'args'].includes(key)) {
+            diagnostic(
+              diagnostics,
+              'UNSUPPORTED_BUILD_FIELD',
+              `Unsupported Compose build field: ${key}`,
+              `services.${serviceName}.build.${key}`
+            );
+          }
+        }
+        contextPath = relativeBuildPath(build.context, '.');
+        const dockerfileRelativePath = relativeBuildPath(build.dockerfile, 'Dockerfile');
+        dockerfilePath = contextPath && dockerfileRelativePath ? posix.join(contextPath, dockerfileRelativePath) : null;
+        if (build.args !== undefined) {
+          if (!isRecord(build.args)) {
+            diagnostic(
+              diagnostics,
+              'INVALID_BUILD_ARGS',
+              'Compose build args must be a mapping',
+              `services.${serviceName}.build.args`
+            );
+          } else {
+            buildArgs = Object.fromEntries(
+              Object.entries(build.args).map(([key, argument]) => [key, argument == null ? '' : String(argument)])
+            );
+          }
+        }
+      } else {
+        contextPath = null;
+        dockerfilePath = null;
+      }
+      if (!contextPath)
+        diagnostic(
+          diagnostics,
+          'INVALID_BUILD_CONTEXT',
+          'Compose build context must stay inside the repository',
+          `services.${serviceName}.build.context`
+        );
+      if (!dockerfilePath)
+        diagnostic(
+          diagnostics,
+          'INVALID_DOCKERFILE_PATH',
+          'Compose Dockerfile path must stay inside the repository',
+          `services.${serviceName}.build.dockerfile`
+        );
+      if (!contextPath || !dockerfilePath) continue;
+      services.push({ serviceName, contextPath, dockerfilePath, buildArgs });
+      value.image = images[serviceName] ?? `gateway.invalid/compose-build/${serviceName}:pending`;
+      delete value.build;
+    }
+  }
+  if (services.length === 0) diagnostic(diagnostics, 'COMPOSE_BUILD_REQUIRED', 'No Compose services define build');
+  const runtimeYaml = isRecord(parsed) ? stringify(parsed, { lineWidth: 0 }) : null;
+  const validation = runtimeYaml
+    ? validateComposeYaml({ ...input, yaml: runtimeYaml })
+    : {
+        valid: false,
+        projectName: input.projectName,
+        normalizedModel: null,
+        configDigest: null,
+        requiredVariables: [],
+        diagnostics: [],
+      };
+  diagnostics.push(...validation.diagnostics);
+  return {
+    valid: diagnostics.every((item) => item.severity !== 'error'),
+    runtimeYaml,
+    services,
+    validation,
+    diagnostics,
+  };
 }
 
 function stableValue(value: unknown): unknown {

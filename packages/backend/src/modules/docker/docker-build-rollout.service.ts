@@ -9,18 +9,37 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
+import type { DockerComposeService } from './compose/compose.service.js';
 import type { DockerManagementService } from './docker.service.js';
+import { DockerComposeBuildRolloutService } from './docker-compose-build-rollout.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 
 export class DockerBuildRolloutService {
+  private readonly composeRollout?: DockerComposeBuildRolloutService;
+
   constructor(
     private readonly db: DrizzleClient,
     private readonly docker: DockerManagementService,
     private readonly deployments: DockerDeploymentService,
-    private readonly registry: RelayRegistryService
-  ) {}
+    private readonly registry: RelayRegistryService,
+    compose?: DockerComposeService
+  ) {
+    if (compose) this.composeRollout = new DockerComposeBuildRolloutService(db, registry, compose);
+  }
 
-  async rollout(buildId: string): Promise<'deployed' | 'superseded'> {
+  async rollout(buildId: string): Promise<'deployed' | 'superseded' | 'pending'> {
+    const [target] = await this.db
+      .select({ targetKind: dockerSourceBindings.targetKind })
+      .from(dockerBuilds)
+      .innerJoin(dockerSourceBindings, eq(dockerSourceBindings.id, dockerBuilds.sourceBindingId))
+      .where(eq(dockerBuilds.id, buildId))
+      .limit(1);
+    if (target?.targetKind === 'compose_project') {
+      if (!this.composeRollout) {
+        throw new AppError(503, 'COMPOSE_ROLLOUT_UNAVAILABLE', 'Compose rollout is unavailable');
+      }
+      return this.composeRollout.rollout(buildId);
+    }
     return this.db.transaction(async (tx) => {
       const [identity] = await tx
         .select({ sourceBindingId: dockerBuilds.sourceBindingId })
@@ -62,6 +81,10 @@ export class DockerBuildRolloutService {
         .where(eq(dockerSourceBindings.id, joined.source.id));
       return 'deployed';
     });
+  }
+
+  async recoverInterruptedComposeRollouts(now = new Date()) {
+    return this.composeRollout?.recoverInterrupted(now) ?? { succeeded: 0, failed: 0 };
   }
 
   private async deployTarget(

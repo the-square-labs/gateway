@@ -596,8 +596,14 @@ async function listDockerBuilds(user: User, args: Record<string, unknown>) {
   const builds = await container.resolve(DockerBuildService).list(query);
   return builds.filter((build) => {
     if (a.nodeId && build.target.nodeId !== a.nodeId) return false;
-    const resourceId = build.target.kind === 'container' ? build.target.containerName : build.target.deploymentId;
-    return hasDockerResourceScope(user.scopes, 'docker:containers:view', build.target.nodeId, resourceId);
+    const resourceId =
+      build.target.kind === 'container'
+        ? build.target.containerName
+        : build.target.kind === 'deployment'
+          ? build.target.deploymentId
+          : build.target.composeProjectId;
+    const scope = build.target.kind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view';
+    return hasDockerResourceScope(user.scopes, scope, build.target.nodeId, resourceId);
   });
 }
 

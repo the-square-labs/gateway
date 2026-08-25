@@ -784,7 +784,13 @@ export async function initializeContainer(): Promise<void> {
     await dockerBuildRunnerService.assertBuildAdmission();
   });
   const dockerBuildRolloutService = relayRegistryService
-    ? new DockerBuildRolloutService(db, dockerManagementService, dockerDeploymentService, relayRegistryService)
+    ? new DockerBuildRolloutService(
+        db,
+        dockerManagementService,
+        dockerDeploymentService,
+        relayRegistryService,
+        dockerComposeService
+      )
     : null;
   if (dockerBuildRolloutService) {
     container.registerInstance(DockerBuildRolloutService, dockerBuildRolloutService);
@@ -808,9 +814,12 @@ export async function initializeContainer(): Promise<void> {
   void dockerTaskService.markActiveTasksLostOnStartup().catch((error) => {
     logger.warn('Failed to mark interrupted Docker tasks during bootstrap', { error });
   });
-  void dockerComposeService.recoverInterruptedOperations().catch((error) => {
-    logger.warn('Failed to recover interrupted Compose operations during bootstrap', { error });
-  });
+  void dockerComposeService
+    .recoverInterruptedOperations()
+    .then(() => dockerBuildRolloutService?.recoverInterruptedComposeRollouts())
+    .catch((error) => {
+      logger.warn('Failed to recover interrupted Compose operations during bootstrap', { error });
+    });
   dockerDeploymentService.setEventBus(eventBus);
   dockerHealthCheckService.setEventBus(eventBus);
   dockerImageCleanupService.setEventBus(eventBus);

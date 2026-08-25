@@ -1,6 +1,7 @@
 export type DockerSourceTarget =
   | { kind: "container"; nodeId: string; containerName: string }
-  | { kind: "deployment"; nodeId?: string; deploymentId: string };
+  | { kind: "deployment"; nodeId?: string; deploymentId: string }
+  | { kind: "compose_project"; nodeId: string; composeProjectId: string };
 
 export type DockerBuildStatus =
   | "queued"
@@ -41,6 +42,9 @@ export interface DockerSourceBinding {
   branch: string;
   dockerfilePath: string;
   contextPath: string;
+  composeFilePath: string | null;
+  composeVariables: Record<string, string>;
+  composeSecretKeys: string[];
   autoBuild: boolean;
   autoDeploy: boolean;
   buildArgs: Record<string, string>;
@@ -66,6 +70,9 @@ export interface DockerSourceBindingConfig {
   branch: string;
   dockerfilePath: string;
   contextPath: string;
+  composeFilePath?: string;
+  composeVariables?: Record<string, string>;
+  composeSecretKeys?: string[];
   autoBuild: boolean;
   autoDeploy: boolean;
   buildArgs: Record<string, string>;
@@ -111,6 +118,8 @@ export interface DockerBuildArtifact {
 export interface DockerBuild {
   id: string;
   sourceBindingId: string;
+  batchId: string | null;
+  serviceName: string | null;
   provider: "gitlab" | "github" | "git";
   trigger: "manual" | "gitlab_push" | "github_push" | "generic_webhook" | "poll" | "retry";
   repositoryFullPath: string;
@@ -128,7 +137,14 @@ export interface DockerBuild {
   artifact: DockerBuildArtifact | null;
   target:
     | { kind: "container"; nodeId: string; containerName: string; name: string }
-    | { kind: "deployment"; nodeId: string; deploymentId: string; name: string };
+    | { kind: "deployment"; nodeId: string; deploymentId: string; name: string }
+    | {
+        kind: "compose_project";
+        nodeId: string;
+        composeProjectId: string;
+        name: string;
+        serviceName: string | null;
+      };
   createdAt: string;
   queuedAt: string;
   startedAt: string | null;
@@ -220,4 +236,12 @@ export interface DockerSourceResourceCreateResult {
   source: DockerSourceBinding;
   build: DockerBuild;
   target: DockerSourceTarget;
+}
+
+export interface DockerComposeSourceProjectCreateResult {
+  project: { id: string; nodeId: string; name: string };
+  source: DockerSourceBinding;
+  build: DockerBuild;
+  builds: DockerBuild[];
+  created: boolean;
 }

@@ -5,6 +5,7 @@ import {
   type DockerBuildScanSummary,
   type DockerBuildStatus,
   type DockerBuildTrigger,
+  dockerBuildBatches,
   dockerBuilds,
   dockerSourceBindings,
 } from '@/db/schema/index.js';
@@ -46,7 +47,7 @@ export class DockerBuildService {
   private eventBus?: EventBusService;
   private admissionGuard?: () => Promise<void>;
   private licenseGuard?: () => Promise<void>;
-  private artifactRollout?: (buildId: string) => Promise<'deployed' | 'superseded'>;
+  private artifactRollout?: (buildId: string) => Promise<'deployed' | 'superseded' | 'pending'>;
   private buildReleaseHandler?: (buildId: string) => Promise<void>;
 
   private readonly artifacts: DockerBuildArtifactStore;
@@ -69,7 +70,7 @@ export class DockerBuildService {
     this.licenseGuard = guard;
   }
 
-  setArtifactRollout(handler: (buildId: string) => Promise<'deployed' | 'superseded'>): void {
+  setArtifactRollout(handler: (buildId: string) => Promise<'deployed' | 'superseded' | 'pending'>): void {
     this.artifactRollout = handler;
   }
 
@@ -91,9 +92,6 @@ export class DockerBuildService {
     await this.licenseGuard?.();
     await this.admissionGuard?.();
     const now = new Date();
-    const dedupeKey = input.force
-      ? `${input.sourceBindingId}:${input.commitSha.toLowerCase()}:${randomUUID()}`
-      : `${input.sourceBindingId}:${input.commitSha.toLowerCase()}`;
     const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${input.sourceBindingId}`}))`);
       const [source] = await tx
@@ -107,79 +105,182 @@ export class DockerBuildService {
         throw new AppError(409, 'SOURCE_COMMIT_STALE', 'Build commit is no longer the desired source commit');
       }
 
-      if (!input.force) {
-        const [existing] = await tx.select().from(dockerBuilds).where(eq(dockerBuilds.dedupeKey, dedupeKey)).limit(1);
-        if (existing) return { build: existing, created: false };
+      const specs =
+        source.targetKind === 'compose_project'
+          ? (source.composeBuildPlan?.services ?? [])
+          : [
+              {
+                serviceName: null,
+                dockerfilePath: source.dockerfilePath,
+                contextPath: source.contextPath,
+                buildArgs: source.buildArgs,
+              },
+            ];
+      if (specs.length === 0) {
+        throw new AppError(409, 'COMPOSE_BUILD_PLAN_MISSING', 'Compose source has no resolved build services');
       }
+      const commitSha = input.commitSha.toLowerCase();
+      let batchId: string | null = null;
+      if (source.targetKind === 'compose_project') {
+        const batchDedupeKey = input.force ? `${source.id}:${commitSha}:${randomUUID()}` : `${source.id}:${commitSha}`;
+        if (!input.force) {
+          const [existingBatch] = await tx
+            .select()
+            .from(dockerBuildBatches)
+            .where(eq(dockerBuildBatches.dedupeKey, batchDedupeKey))
+            .limit(1);
+          if (existingBatch) {
+            const builds = await tx.select().from(dockerBuilds).where(eq(dockerBuilds.batchId, existingBatch.id));
+            const build = builds[0];
+            if (!build) throw new AppError(409, 'BUILD_BATCH_INCOMPLETE', 'Compose build batch has no child builds');
+            return { build, builds, batch: existingBatch, created: false };
+          }
+        }
+        const [batch] = await tx
+          .insert(dockerBuildBatches)
+          .values({
+            sourceBindingId: source.id,
+            dedupeKey: batchDedupeKey,
+            commitSha,
+            status: 'building',
+            expectedServices: specs.map((spec) => spec.serviceName!).sort(),
+            composeBuildPlan: source.composeBuildPlan!,
+            composeVariables: source.composeVariables,
+            composeSecretKeys: source.composeSecretKeys,
+            createdById: input.createdById ?? null,
+          })
+          .returning();
+        batchId = batch.id;
+        await tx
+          .update(dockerBuildBatches)
+          .set({
+            status: 'superseded',
+            supersededByBatchId: batch.id,
+            completedAt: now,
+            updatedAt: now,
+            errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
+            errorMessage: 'A newer source commit was queued',
+          })
+          .where(
+            and(
+              eq(dockerBuildBatches.sourceBindingId, source.id),
+              inArray(dockerBuildBatches.status, ['building', 'awaiting_approval', 'applying']),
+              ne(dockerBuildBatches.id, batch.id)
+            )
+          );
+      }
+      const existing =
+        source.targetKind === 'compose_project' || input.force
+          ? []
+          : await tx
+              .select()
+              .from(dockerBuilds)
+              .where(and(eq(dockerBuilds.sourceBindingId, source.id), eq(dockerBuilds.commitSha, commitSha)));
+      const existingByService = new Map(existing.map((build) => [build.serviceName ?? '', build]));
+      const missing = specs.filter((spec) => !existingByService.has(spec.serviceName ?? ''));
+      const inserted =
+        missing.length === 0
+          ? []
+          : await tx
+              .insert(dockerBuilds)
+              .values(
+                missing.map((spec) => ({
+                  sourceBindingId: source.id,
+                  batchId,
+                  dedupeKey: batchId
+                    ? `${batchId}:${spec.serviceName}`
+                    : input.force
+                      ? `${source.id}:${commitSha}:${spec.serviceName ?? 'default'}:${randomUUID()}`
+                      : `${source.id}:${commitSha}:${spec.serviceName ?? 'default'}`,
+                  trigger: input.trigger,
+                  triggerDeliveryId: input.triggerDeliveryId ?? null,
+                  repositoryRemoteId: source.repositoryRemoteId,
+                  repositoryFullPath: source.repositoryFullPath,
+                  ref: `refs/heads/${source.branch}`,
+                  commitSha,
+                  serviceName: spec.serviceName,
+                  dockerfilePath: spec.dockerfilePath,
+                  contextPath: spec.contextPath,
+                  buildArgs: spec.buildArgs,
+                  status: 'queued' as const,
+                  createdById: input.createdById ?? null,
+                  queuedAt: now,
+                  createdAt: now,
+                  updatedAt: now,
+                }))
+              )
+              .returning();
+      const builds = specs
+        .map(
+          (spec) =>
+            existingByService.get(spec.serviceName ?? '') ??
+            inserted.find((row) => row.serviceName === spec.serviceName)
+        )
+        .filter((row): row is typeof dockerBuilds.$inferSelect => Boolean(row));
+      const build = builds[0];
+      if (!build) throw new AppError(500, 'BUILD_CREATE_FAILED', 'Docker build was not created');
 
-      const [build] = await tx
-        .insert(dockerBuilds)
-        .values({
-          sourceBindingId: source.id,
-          dedupeKey,
-          trigger: input.trigger,
-          triggerDeliveryId: input.triggerDeliveryId ?? null,
-          repositoryRemoteId: source.repositoryRemoteId,
-          repositoryFullPath: source.repositoryFullPath,
-          ref: `refs/heads/${source.branch}`,
-          commitSha: input.commitSha.toLowerCase(),
-          status: 'queued',
-          createdById: input.createdById ?? null,
-          queuedAt: now,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning();
-
-      await tx
-        .update(dockerBuilds)
-        .set({
-          status: 'superseded',
-          supersededByBuildId: build.id,
-          completedAt: now,
-          updatedAt: now,
-          errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
-          errorMessage: 'A newer source commit was queued',
-        })
-        .where(
-          and(
-            eq(dockerBuilds.sourceBindingId, source.id),
-            eq(dockerBuilds.status, 'queued'),
-            ne(dockerBuilds.id, build.id),
-            ne(dockerBuilds.commitSha, build.commitSha)
-          )
-        );
-      await tx
-        .update(dockerBuilds)
-        .set({
-          cancellationRequestedAt: now,
-          supersededByBuildId: build.id,
-          updatedAt: now,
-          errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
-          errorMessage: 'Cancellation requested because a newer source commit was queued',
-        })
-        .where(
-          and(
-            eq(dockerBuilds.sourceBindingId, source.id),
-            inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES),
-            ne(dockerBuilds.commitSha, build.commitSha)
-          )
-        );
-      return { build, created: true };
+      if (inserted.length > 0)
+        await tx
+          .update(dockerBuilds)
+          .set({
+            status: 'superseded',
+            supersededByBuildId: build.id,
+            completedAt: now,
+            updatedAt: now,
+            errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
+            errorMessage: 'A newer source commit was queued',
+          })
+          .where(
+            and(
+              eq(dockerBuilds.sourceBindingId, source.id),
+              eq(dockerBuilds.status, 'queued'),
+              ne(dockerBuilds.commitSha, commitSha)
+            )
+          );
+      if (inserted.length > 0)
+        await tx
+          .update(dockerBuilds)
+          .set({
+            cancellationRequestedAt: now,
+            supersededByBuildId: build.id,
+            updatedAt: now,
+            errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
+            errorMessage: 'Cancellation requested because a newer source commit was queued',
+          })
+          .where(
+            and(
+              eq(dockerBuilds.sourceBindingId, source.id),
+              inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES),
+              ne(dockerBuilds.commitSha, commitSha)
+            )
+          );
+      const batch = batchId
+        ? (await tx.select().from(dockerBuildBatches).where(eq(dockerBuildBatches.id, batchId)).limit(1))[0]
+        : null;
+      return { build, builds, batch, created: inserted.length > 0 };
     });
-    this.emit(result.build);
+    for (const build of result.builds) this.emit(build);
     return result;
   }
 
   async hasBuildForCommit(sourceBindingId: string, commitSha: string): Promise<boolean> {
-    const [build] = await this.db
-      .select({ id: dockerBuilds.id })
-      .from(dockerBuilds)
-      .where(
-        and(eq(dockerBuilds.sourceBindingId, sourceBindingId), eq(dockerBuilds.commitSha, commitSha.toLowerCase()))
-      )
-      .limit(1);
-    return Boolean(build);
+    const [source, builds] = await Promise.all([
+      this.db.select().from(dockerSourceBindings).where(eq(dockerSourceBindings.id, sourceBindingId)).limit(1),
+      this.db
+        .select({ serviceName: dockerBuilds.serviceName })
+        .from(dockerBuilds)
+        .where(
+          and(eq(dockerBuilds.sourceBindingId, sourceBindingId), eq(dockerBuilds.commitSha, commitSha.toLowerCase()))
+        ),
+    ]);
+    const expected =
+      source[0]?.targetKind === 'compose_project' ? (source[0].composeBuildPlan?.services ?? []) : [null];
+    const present = new Set(builds.map((build) => build.serviceName));
+    return (
+      expected.length > 0 &&
+      expected.every((spec) => present.has(spec && typeof spec === 'object' ? spec.serviceName : null))
+    );
   }
 
   async claimNext(input: {
@@ -289,6 +390,25 @@ export class DockerBuildService {
       )
       .returning();
     if (!row) throw new AppError(409, 'BUILD_STATE_CONFLICT', 'Build state changed concurrently');
+    if (row.batchId && ['failed', 'cancelled', 'superseded'].includes(nextStatus)) {
+      const batchStatus =
+        nextStatus === 'superseded' ? 'superseded' : nextStatus === 'cancelled' ? 'cancelled' : 'failed';
+      await this.db
+        .update(dockerBuildBatches)
+        .set({
+          status: batchStatus,
+          errorCode: row.errorCode,
+          errorMessage: row.errorMessage,
+          completedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(dockerBuildBatches.id, row.batchId),
+            inArray(dockerBuildBatches.status, ['building', 'awaiting_approval', 'applying'])
+          )
+        );
+    }
     this.emit(row);
     if (terminal) await this.buildReleaseHandler?.(row.id);
     return row;
@@ -406,7 +526,7 @@ export class DockerBuildService {
         errorMessage: artifact.artifact.policyReason || 'Built artifact did not satisfy source policy',
       });
     }
-    if (current.sourceAutoDeploy === false) {
+    if (current.sourceAutoDeploy === false && current.target.kind !== 'compose_project') {
       return this.transition(event.buildId, leaseOwner, 'succeeded');
     }
     if (!this.artifactRollout) {
@@ -520,11 +640,16 @@ export class DockerBuildService {
       .get(buildId)
       .then((build) => {
         const scopeResourceId =
-          build.target.kind === 'container' ? build.target.containerName : build.target.deploymentId;
+          build.target.kind === 'container'
+            ? build.target.containerName
+            : build.target.kind === 'deployment'
+              ? build.target.deploymentId
+              : build.target.composeProjectId;
         this.eventBus?.publish(topic, {
           ...payload,
           nodeId: build.target.nodeId,
           scopeResourceId,
+          targetKind: build.target.kind,
         });
       })
       .catch(() => undefined);

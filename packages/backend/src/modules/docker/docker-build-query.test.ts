@@ -32,8 +32,12 @@ describe('DockerBuildQuery', () => {
               innerJoin: vi.fn(() => ({
                 innerJoin: vi.fn(() => ({
                   leftJoin: vi.fn(() => ({
-                    where: vi.fn(() => ({
-                      orderBy: vi.fn(() => ({ limit: vi.fn(async () => [{ build, source, provider: 'github' }]) })),
+                    leftJoin: vi.fn(() => ({
+                      where: vi.fn(() => ({
+                        orderBy: vi.fn(() => ({
+                          limit: vi.fn(async () => [{ build, source, provider: 'github' }]),
+                        })),
+                      })),
                     })),
                   })),
                 })),

@@ -25,8 +25,10 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
-import { handleLicenseApiError } from "@/stores/license-paywall";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { DockerBuildSecret, DockerSourceBinding, DockerSourceTarget } from "@/types";
+import { RepositorySourceFields } from "../docker-deploy/RepositorySourceFields";
+import { useDockerSourceRepositories } from "../docker-deploy/useDockerSourceRepositories";
 
 interface DockerGitSourcePanelProps {
   target?: DockerSourceTarget;
@@ -35,6 +37,8 @@ interface DockerGitSourcePanelProps {
   error?: string | null;
   onRetry?: () => void;
   onBuildQueued?: () => void;
+  composeVariables?: Record<string, string>;
+  composeSecretKeys?: string[];
 }
 
 type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none";
@@ -56,16 +60,22 @@ export function DockerGitSourcePanel({
   error,
   onRetry,
   onBuildQueued,
+  composeVariables = {},
+  composeSecretKeys = [],
 }: DockerGitSourcePanelProps) {
   const [source, setSource] = useState<DockerSourceBinding | null>(suppliedSource ?? null);
   const [loading, setLoading] = useState(suppliedSource === undefined);
   const [saving, setSaving] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [branch, setBranch] = useState(suppliedSource?.branch ?? "main");
   const [dockerfilePath, setDockerfilePath] = useState(
     suppliedSource?.dockerfilePath ?? "Dockerfile"
   );
   const [contextPath, setContextPath] = useState(suppliedSource?.contextPath ?? ".");
+  const [composeFilePath, setComposeFilePath] = useState(
+    suppliedSource?.composeFilePath ?? "compose.yaml"
+  );
   const [autoBuild, setAutoBuild] = useState(suppliedSource?.autoBuild ?? true);
   const [autoDeploy, setAutoDeploy] = useState(suppliedSource?.autoDeploy ?? true);
   const [vulnerabilityThreshold, setVulnerabilityThreshold] = useState<VulnerabilityThreshold>(
@@ -83,10 +93,26 @@ export function DockerGitSourcePanel({
   const [secretName, setSecretName] = useState("");
   const [secretValue, setSecretValue] = useState("");
   const [secretSaving, setSecretSaving] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectorId, setConnectorId] = useState("");
+  const [projectId, setProjectId] = useState("");
+  const [connectBranch, setConnectBranch] = useState("main");
+  const [connectDockerfilePath, setConnectDockerfilePath] = useState("Dockerfile");
+  const [connectContextPath, setConnectContextPath] = useState(".");
+  const [connectComposeFilePath, setConnectComposeFilePath] = useState("compose.yaml");
+  const [connectAutoBuild, setConnectAutoBuild] = useState(true);
+  const [connectAutoDeploy, setConnectAutoDeploy] = useState(true);
   const targetKind = target?.kind;
   const targetNodeId = target?.nodeId;
   const targetResourceId =
-    target?.kind === "container" ? target.containerName : target?.deploymentId;
+    target?.kind === "container"
+      ? target.containerName
+      : target?.kind === "deployment"
+        ? target.deploymentId
+        : target?.composeProjectId;
+  const composeTarget = target?.kind === "compose_project";
+  const { connectorOptions, repositories } = useDockerSourceRepositories(connectOpen, connectorId);
   const sourceId = source?.id;
 
   useEffect(() => {
@@ -100,13 +126,15 @@ export function DockerGitSourcePanel({
       suppliedSource !== undefined ||
       !targetKind ||
       !targetResourceId ||
-      (targetKind === "container" && !targetNodeId)
+      ((targetKind === "container" || targetKind === "compose_project") && !targetNodeId)
     )
       return;
     const sourceTarget: DockerSourceTarget =
       targetKind === "container"
         ? { kind: "container", nodeId: targetNodeId!, containerName: targetResourceId }
-        : { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId };
+        : targetKind === "deployment"
+          ? { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId }
+          : { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId };
     setLoading(true);
     void api
       .getDockerSource(sourceTarget)
@@ -122,13 +150,15 @@ export function DockerGitSourcePanel({
       !sourceId ||
       !targetKind ||
       !targetResourceId ||
-      (targetKind === "container" && !targetNodeId)
+      ((targetKind === "container" || targetKind === "compose_project") && !targetNodeId)
     )
       return;
     const sourceTarget: DockerSourceTarget =
       targetKind === "container"
         ? { kind: "container", nodeId: targetNodeId!, containerName: targetResourceId }
-        : { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId };
+        : targetKind === "deployment"
+          ? { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId }
+          : { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId };
     void api
       .listDockerBuildSecrets(sourceTarget)
       .then(setBuildSecrets)
@@ -142,6 +172,7 @@ export function DockerGitSourcePanel({
     setBranch(source.branch);
     setDockerfilePath(source.dockerfilePath);
     setContextPath(source.contextPath);
+    setComposeFilePath(source.composeFilePath ?? "compose.yaml");
     setAutoBuild(source.autoBuild);
     setAutoDeploy(source.autoDeploy);
     setVulnerabilityThreshold(source.policy?.vulnerabilityThreshold ?? "critical");
@@ -150,15 +181,21 @@ export function DockerGitSourcePanel({
   const dirty = Boolean(
     source &&
       (branch !== source.branch ||
-        dockerfilePath !== source.dockerfilePath ||
-        contextPath !== source.contextPath ||
+        (composeTarget
+          ? composeFilePath !== (source.composeFilePath ?? "compose.yaml")
+          : dockerfilePath !== source.dockerfilePath || contextPath !== source.contextPath) ||
         autoBuild !== source.autoBuild ||
         autoDeploy !== source.autoDeploy ||
         vulnerabilityThreshold !== (source.policy?.vulnerabilityThreshold ?? "critical"))
   );
 
   const save = async () => {
-    if (!source || !branch.trim() || !dockerfilePath.trim() || !contextPath.trim()) return;
+    if (
+      !source ||
+      !branch.trim() ||
+      (composeTarget ? !composeFilePath.trim() : !dockerfilePath.trim() || !contextPath.trim())
+    )
+      return;
     setSaving(true);
     try {
       if (!target) return;
@@ -169,6 +206,9 @@ export function DockerGitSourcePanel({
           branch: branch.trim(),
           dockerfilePath: dockerfilePath.trim(),
           contextPath: contextPath.trim(),
+          composeFilePath: composeTarget ? composeFilePath.trim() : undefined,
+          composeVariables: source.composeVariables,
+          composeSecretKeys: source.composeSecretKeys,
           autoBuild,
           autoDeploy,
           buildArgs: source.buildArgs,
@@ -188,6 +228,43 @@ export function DockerGitSourcePanel({
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openConnect = () => {
+    if (!requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")) return;
+    setConnectOpen(true);
+  };
+
+  const connectSource = async () => {
+    if (!target || !connectorId || !projectId || !connectBranch.trim()) return;
+    if (composeTarget && !connectComposeFilePath.trim()) return;
+    setConnecting(true);
+    try {
+      const connected = await api.upsertDockerSource(target, {
+        connectorId,
+        projectId,
+        branch: connectBranch.trim(),
+        dockerfilePath: connectDockerfilePath.trim() || "Dockerfile",
+        contextPath: connectContextPath.trim() || ".",
+        composeFilePath: composeTarget ? connectComposeFilePath.trim() : undefined,
+        composeVariables: composeTarget ? composeVariables : undefined,
+        composeSecretKeys: composeTarget ? composeSecretKeys : undefined,
+        autoBuild: connectAutoBuild,
+        autoDeploy: connectAutoDeploy,
+        buildArgs: {},
+        buildSecretNames: [],
+        policy: { vulnerabilityThreshold: "critical" },
+      });
+      setSource(connected);
+      setConnectOpen(false);
+      toast.success("Repository connected");
+    } catch (error) {
+      if (!handleLicenseApiError(error, "Git push-to-deploy")) {
+        toast.error(error instanceof Error ? error.message : "Failed to connect repository");
+      }
+    } finally {
+      setConnecting(false);
     }
   };
 
@@ -275,6 +352,31 @@ export function DockerGitSourcePanel({
     }
   };
 
+  const disconnectSource = async () => {
+    if (!target || !source) return;
+    const accepted = await confirm({
+      title: "Disconnect repository",
+      description:
+        "Stop repository polling, webhooks, builds, and automatic deployment for this resource? Existing runtime state and build history are preserved.",
+      confirmLabel: "Disconnect",
+      variant: "destructive",
+    });
+    if (!accepted) return;
+    setDisconnecting(true);
+    try {
+      await api.removeDockerSource(target);
+      setSource(null);
+      setBuildSecrets([]);
+      toast.success("Repository disconnected");
+    } catch (error) {
+      if (!handleLicenseApiError(error, "Git push-to-deploy")) {
+        toast.error(error instanceof Error ? error.message : "Failed to disconnect repository");
+      }
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
   if (suppliedLoading ?? loading) {
     return (
       <PanelShell title="Repository" description="Loading repository delivery settings…">
@@ -296,15 +398,76 @@ export function DockerGitSourcePanel({
 
   if (!source) {
     return (
-      <PanelShell
-        title="Repository"
-        description="Build and deploy this resource directly from a Git repository."
-      >
-        <EmptyState
-          message="No repository connected. This resource continues to use its configured image."
-          embedded
-        />
-      </PanelShell>
+      <>
+        <PanelShell
+          title="Repository"
+          description="Build and deploy this resource directly from a Git repository."
+        >
+          <EmptyState
+            message="No repository connected. This resource continues to use its configured image."
+            actionLabel="Connect repository"
+            onAction={openConnect}
+            embedded
+          />
+        </PanelShell>
+        <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Connect repository</DialogTitle>
+              <DialogDescription>
+                {composeTarget
+                  ? "Build every Compose service that declares build and apply the project only after all artifacts pass policy."
+                  : "Build and deploy this Docker resource from an allowlisted repository."}
+              </DialogDescription>
+            </DialogHeader>
+            <RepositorySourceFields
+              connectorId={connectorId}
+              connectorOptions={connectorOptions}
+              repositories={repositories}
+              repositoryOptions={repositories.map((repository) => ({
+                value: repository.projectId,
+                label: repository.fullPath,
+                keywords: `${repository.name} ${repository.fullPath}`,
+              }))}
+              projectId={projectId}
+              branch={connectBranch}
+              dockerfilePath={connectDockerfilePath}
+              contextPath={connectContextPath}
+              composeFilePath={composeTarget ? connectComposeFilePath : undefined}
+              autoBuild={connectAutoBuild}
+              autoDeploy={connectAutoDeploy}
+              onConnectorChange={(value) => {
+                setConnectorId(value);
+                setProjectId("");
+              }}
+              onProjectChange={setProjectId}
+              onBranchChange={setConnectBranch}
+              onDockerfilePathChange={setConnectDockerfilePath}
+              onContextPathChange={setConnectContextPath}
+              onComposeFilePathChange={composeTarget ? setConnectComposeFilePath : undefined}
+              onAutoBuildChange={setConnectAutoBuild}
+              onAutoDeployChange={setConnectAutoDeploy}
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConnectOpen(false)} disabled={connecting}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void connectSource()}
+                disabled={
+                  connecting ||
+                  !connectorId ||
+                  !projectId ||
+                  !connectBranch.trim() ||
+                  (composeTarget && !connectComposeFilePath.trim())
+                }
+              >
+                {connecting ? "Connecting…" : "Connect"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </>
     );
   }
 
@@ -321,7 +484,12 @@ export function DockerGitSourcePanel({
             <Button
               onClick={() => void save()}
               disabled={
-                saving || !dirty || !branch.trim() || !dockerfilePath.trim() || !contextPath.trim()
+                saving ||
+                !dirty ||
+                !branch.trim() ||
+                (composeTarget
+                  ? !composeFilePath.trim()
+                  : !dockerfilePath.trim() || !contextPath.trim())
               }
             >
               <Save className="h-4 w-4" />
@@ -330,6 +498,16 @@ export function DockerGitSourcePanel({
             <Button onClick={() => void triggerBuild()} disabled={building || dirty}>
               <Play className="h-4 w-4" />
               {building ? "Queuing…" : "Build now"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Disconnect repository"
+              title="Disconnect repository"
+              disabled={disconnecting}
+              onClick={() => void disconnectSource()}
+            >
+              <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         }
@@ -360,28 +538,44 @@ export function DockerGitSourcePanel({
             placeholder="main"
           />
         </SettingsControlRow>
-        <SettingsControlRow
-          title="Dockerfile"
-          description="Path to the Dockerfile relative to the repository root."
-        >
-          <Input
-            value={dockerfilePath}
-            onChange={(event) => setDockerfilePath(event.target.value)}
-            className="sm:w-72"
-            placeholder="Dockerfile"
-          />
-        </SettingsControlRow>
-        <SettingsControlRow
-          title="Build context"
-          description="Directory sent to BuildKit, relative to the repository root."
-        >
-          <Input
-            value={contextPath}
-            onChange={(event) => setContextPath(event.target.value)}
-            className="sm:w-72"
-            placeholder="."
-          />
-        </SettingsControlRow>
+        {composeTarget ? (
+          <SettingsControlRow
+            title="Compose file"
+            description="Repository-relative Compose file used to resolve all service builds."
+          >
+            <Input
+              value={composeFilePath}
+              onChange={(event) => setComposeFilePath(event.target.value)}
+              className="sm:w-72"
+              placeholder="compose.yaml"
+            />
+          </SettingsControlRow>
+        ) : (
+          <>
+            <SettingsControlRow
+              title="Dockerfile"
+              description="Path to the Dockerfile relative to the repository root."
+            >
+              <Input
+                value={dockerfilePath}
+                onChange={(event) => setDockerfilePath(event.target.value)}
+                className="sm:w-72"
+                placeholder="Dockerfile"
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Build context"
+              description="Directory sent to BuildKit, relative to the repository root."
+            >
+              <Input
+                value={contextPath}
+                onChange={(event) => setContextPath(event.target.value)}
+                className="sm:w-72"
+                placeholder="."
+              />
+            </SettingsControlRow>
+          </>
+        )}
         <SettingsControlRow
           title="Automatic builds"
           description="Queue a build when a new commit is detected by webhook or polling."

@@ -11,6 +11,7 @@ import type {
   DockerComposeProject,
   DockerComposeProjectSummary,
   DockerComposeRevision,
+  DockerComposeSourceProjectCreateResult,
   DockerComposeValidationResult,
   DockerContainer,
   DockerContainerFolder,
@@ -63,6 +64,16 @@ interface DockerBuildListParams {
   search?: string;
   cursor?: string;
   limit?: number;
+}
+
+function dockerSourcePath(target: DockerSourceTarget): string {
+  if (target.kind === "container") {
+    return `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`;
+  }
+  if (target.kind === "deployment") {
+    return `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
+  }
+  return `/docker/nodes/${target.nodeId}/compose-projects/${target.composeProjectId}/source`;
 }
 
 type DockerListQuery = {
@@ -1859,23 +1870,17 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
     }
 
     async getDockerSource(target: DockerSourceTarget): Promise<DockerSourceBinding | null> {
-      const path =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
-      return this.unwrapData(this.request<{ data: DockerSourceBinding | null }>(path));
+      return this.unwrapData(
+        this.request<{ data: DockerSourceBinding | null }>(dockerSourcePath(target))
+      );
     }
 
     async upsertDockerSource(
       target: DockerSourceTarget,
       config: DockerSourceBindingConfig
     ): Promise<DockerSourceBinding> {
-      const path =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
       return this.unwrapData(
-        this.request<{ data: DockerSourceBinding }>(path, {
+        this.request<{ data: DockerSourceBinding }>(dockerSourcePath(target), {
           method: "PUT",
           body: JSON.stringify(config),
         })
@@ -1883,18 +1888,13 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
     }
 
     async removeDockerSource(target: DockerSourceTarget): Promise<void> {
-      const path =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
-      await this.request<{ success: true; removed: boolean }>(path, { method: "DELETE" });
+      await this.request<{ success: true; removed: boolean }>(dockerSourcePath(target), {
+        method: "DELETE",
+      });
     }
 
     async listDockerBuildSecrets(target: DockerSourceTarget): Promise<DockerBuildSecret[]> {
-      const path =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/build-secrets`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/build-secrets`;
+      const path = `${dockerSourcePath(target)}/build-secrets`;
       return this.unwrapData(this.request<{ data: DockerBuildSecret[] }>(path));
     }
 
@@ -1903,10 +1903,7 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       name: string,
       value: string
     ): Promise<DockerBuildSecret> {
-      const base =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/build-secrets`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/build-secrets`;
+      const base = `${dockerSourcePath(target)}/build-secrets`;
       return this.unwrapData(
         this.request<{ data: DockerBuildSecret }>(`${base}/${encodeURIComponent(name)}`, {
           method: "PUT",
@@ -1916,10 +1913,7 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
     }
 
     async deleteDockerBuildSecret(target: DockerSourceTarget, name: string): Promise<void> {
-      const base =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/build-secrets`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/build-secrets`;
+      const base = `${dockerSourcePath(target)}/build-secrets`;
       await this.request(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
     }
 
@@ -1927,10 +1921,7 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       target: DockerSourceTarget,
       input: { commitSha?: string; force?: boolean } = {}
     ): Promise<DockerBuild> {
-      const path =
-        target.kind === "container"
-          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/builds`
-          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/builds`;
+      const path = `${dockerSourcePath(target)}/builds`;
       const result = await this.unwrapData(
         this.request<{ data: { build: DockerBuild; created: boolean } }>(path, {
           method: "POST",
@@ -1947,6 +1938,21 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return this.unwrapData(
         this.request<{ data: DockerSourceResourceCreateResult }>(
           `/docker/nodes/${nodeId}/source-resources`,
+          {
+            method: "POST",
+            body: JSON.stringify(input),
+          }
+        )
+      );
+    }
+
+    async createDockerComposeSourceProject(
+      nodeId: string,
+      input: { projectName: string; source: DockerSourceBindingConfig }
+    ): Promise<DockerComposeSourceProjectCreateResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeSourceProjectCreateResult }>(
+          `/docker/nodes/${nodeId}/compose-projects/from-source`,
           {
             method: "POST",
             body: JSON.stringify(input),

@@ -2,6 +2,7 @@ import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   dockerBuildSecrets,
+  dockerComposeProjects,
   dockerDeployments,
   dockerSourceBindings,
   integrationConnectors,
@@ -12,6 +13,7 @@ import type { IntegrationsService } from '@/modules/integrations/integrations.se
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { User } from '@/types.js';
+import { prepareComposeGitBuild } from './compose/compose-policy.js';
 import type {
   DockerBuildCreateInput,
   DockerSourceBindingUpsertInput,
@@ -60,7 +62,13 @@ export class DockerSourceService {
     private readonly integrations: IntegrationsService,
     private readonly cryptoService: CryptoService
   ) {
-    this.webhooks = new DockerSourceWebhookService(db, integrations, cryptoService, () => this.buildService);
+    this.webhooks = new DockerSourceWebhookService(
+      db,
+      integrations,
+      cryptoService,
+      () => this.buildService,
+      (binding, commitSha) => this.prepareComposeCommit(binding, commitSha, AUTOMATION_ACTOR)
+    );
   }
 
   setBuildService(buildService: DockerBuildService): void {
@@ -88,8 +96,22 @@ export class DockerSourceService {
       projectId: input.projectId,
       branch: input.branch,
     });
-    const now = new Date();
     const existing = await this.findByTarget(input.target);
+    const compose = await this.prepareComposeCommit(
+      {
+        ...(existing ?? {}),
+        ...dockerSourceTargetColumns(input.target),
+        connectorId: resolved.connectorId,
+        projectId: resolved.projectId,
+        repositoryCloneUrl: resolved.cloneUrl,
+        composeFilePath: input.composeFilePath ?? existing?.composeFilePath ?? null,
+        composeVariables: input.composeVariables,
+        composeSecretKeys: input.composeSecretKeys,
+      } as SourceBindingRow,
+      resolved.commitSha,
+      user
+    );
+    const now = new Date();
     const sourceChanged =
       !!existing && (existing.connectorId !== resolved.connectorId || existing.projectId !== resolved.projectId);
     if (sourceChanged && existing.webhookProviderId) {
@@ -116,6 +138,10 @@ export class DockerSourceService {
       branch: resolved.branch,
       dockerfilePath: input.dockerfilePath,
       contextPath: input.contextPath,
+      composeFilePath: input.target.kind === 'compose_project' ? input.composeFilePath : null,
+      composeVariables: input.composeVariables,
+      composeSecretKeys: input.composeSecretKeys,
+      composeBuildPlan: compose.composeBuildPlan,
       autoBuild: input.autoBuild,
       autoDeploy: input.autoDeploy,
       initialConfig: options.initialConfig === undefined ? (existing?.initialConfig ?? null) : options.initialConfig,
@@ -146,8 +172,18 @@ export class DockerSourceService {
     await this.auditService.log({
       action: existing ? 'docker.source.updated' : 'docker.source.created',
       userId: user.id,
-      resourceType: input.target.kind === 'container' ? 'docker-container' : 'docker-deployment',
-      resourceId: input.target.kind === 'container' ? input.target.containerName : input.target.deploymentId,
+      resourceType:
+        input.target.kind === 'container'
+          ? 'docker-container'
+          : input.target.kind === 'deployment'
+            ? 'docker-deployment'
+            : 'docker-compose-project',
+      resourceId:
+        input.target.kind === 'container'
+          ? input.target.containerName
+          : input.target.kind === 'deployment'
+            ? input.target.deploymentId
+            : input.target.composeProjectId,
       details: {
         target: input.target,
         connectorId: resolved.connectorId,
@@ -192,8 +228,18 @@ export class DockerSourceService {
     await this.auditService.log({
       action: 'docker.source.deleted',
       userId,
-      resourceType: target.kind === 'container' ? 'docker-container' : 'docker-deployment',
-      resourceId: target.kind === 'container' ? target.containerName : target.deploymentId,
+      resourceType:
+        target.kind === 'container'
+          ? 'docker-container'
+          : target.kind === 'deployment'
+            ? 'docker-deployment'
+            : 'docker-compose-project',
+      resourceId:
+        target.kind === 'container'
+          ? target.containerName
+          : target.kind === 'deployment'
+            ? target.deploymentId
+            : target.composeProjectId,
       details: {
         target,
         connectorId: existing.connectorId,
@@ -215,6 +261,7 @@ export class DockerSourceService {
       projectId: existing.projectId,
       branch: existing.branch,
     });
+    const compose = await this.prepareComposeCommit(existing, resolved.commitSha, user);
     const [updated] = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${existing.id}`}))`);
       return tx
@@ -224,6 +271,7 @@ export class DockerSourceService {
           repositoryFullPath: resolved.fullPath,
           repositoryCloneUrl: resolved.cloneUrl,
           desiredCommitSha: resolved.commitSha,
+          composeBuildPlan: compose.composeBuildPlan,
           lastResolvedAt: new Date(),
           lastWebhookError: null,
           updatedAt: new Date(),
@@ -257,6 +305,7 @@ export class DockerSourceService {
           projectId: binding.projectId,
           branch: binding.branch,
         });
+        const compose = await this.prepareComposeCommit(binding, resolved.commitSha, AUTOMATION_ACTOR);
         const commitChanged = await this.db.transaction(async (tx) => {
           await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${binding.id}`}))`);
           const [current] = await tx
@@ -273,6 +322,7 @@ export class DockerSourceService {
               repositoryFullPath: resolved.fullPath,
               repositoryCloneUrl: resolved.cloneUrl,
               desiredCommitSha: resolved.commitSha,
+              composeBuildPlan: compose.composeBuildPlan,
               lastResolvedAt: now,
               lastPollAt: now,
               lastPollError: null,
@@ -335,12 +385,53 @@ export class DockerSourceService {
 
   private async assertTargetExists(target: DockerSourceTarget): Promise<void> {
     if (target.kind === 'container') return;
-    const [deployment] = await this.db
-      .select({ id: dockerDeployments.id })
-      .from(dockerDeployments)
-      .where(eq(dockerDeployments.id, target.deploymentId))
+    if (target.kind === 'deployment') {
+      const [deployment] = await this.db
+        .select({ id: dockerDeployments.id })
+        .from(dockerDeployments)
+        .where(eq(dockerDeployments.id, target.deploymentId))
+        .limit(1);
+      if (!deployment) throw new AppError(404, 'DEPLOYMENT_NOT_FOUND', 'Docker deployment not found');
+      return;
+    }
+    const [project] = await this.db
+      .select({ id: dockerComposeProjects.id })
+      .from(dockerComposeProjects)
+      .where(eq(dockerComposeProjects.id, target.composeProjectId))
       .limit(1);
-    if (!deployment) throw new AppError(404, 'DEPLOYMENT_NOT_FOUND', 'Docker deployment not found');
+    if (!project) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+  }
+
+  private async prepareComposeCommit(binding: SourceBindingRow, commitSha: string, user: User) {
+    if (binding.targetKind !== 'compose_project') return { composeBuildPlan: binding.composeBuildPlan ?? null };
+    if (!binding.composeProjectId || !binding.composeFilePath) {
+      throw new AppError(400, 'COMPOSE_SOURCE_PATH_REQUIRED', 'Compose source requires a repository Compose file path');
+    }
+    const [project] = await this.db
+      .select({ name: dockerComposeProjects.name })
+      .from(dockerComposeProjects)
+      .where(eq(dockerComposeProjects.id, binding.composeProjectId))
+      .limit(1);
+    if (!project) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+    const file = await this.integrations.readDockerBuildSourceFile(user, {
+      connectorId: binding.connectorId,
+      projectId: binding.projectId,
+      repositoryUrl: binding.repositoryCloneUrl,
+      path: binding.composeFilePath,
+      commitSha,
+    });
+    const prepared = prepareComposeGitBuild({
+      projectName: project.name,
+      yaml: file.content,
+      variables: binding.composeVariables ?? {},
+      secretKeys: binding.composeSecretKeys ?? [],
+    });
+    if (!prepared.valid) {
+      throw new AppError(400, 'COMPOSE_SOURCE_INVALID', 'Repository Compose configuration is invalid', {
+        diagnostics: prepared.diagnostics,
+      });
+    }
+    return { composeBuildPlan: { sourceYaml: file.content, services: prepared.services } };
   }
 
   async listBuildSecrets(target: DockerSourceTarget) {

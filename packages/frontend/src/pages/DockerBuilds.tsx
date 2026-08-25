@@ -270,7 +270,9 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
               <span className="block truncate text-xs text-muted-foreground">
                 {build.target.kind === "container"
                   ? build.target.name
-                  : `Deployment ${build.target.name}`}
+                  : build.target.kind === "deployment"
+                    ? `Deployment ${build.target.name}`
+                    : `Compose ${build.target.name}${build.serviceName ? ` · ${build.serviceName}` : ""}`}
               </span>
             </span>
           </span>

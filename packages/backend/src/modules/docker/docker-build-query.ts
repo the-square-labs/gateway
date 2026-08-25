@@ -4,6 +4,7 @@ import {
   type DockerBuildStatus,
   dockerBuildArtifacts,
   dockerBuilds,
+  dockerComposeProjects,
   dockerDeployments,
   dockerSourceBindings,
   integrationConnectors,
@@ -42,11 +43,14 @@ export class DockerBuildQuery {
         provider: integrationConnectors.provider,
         deploymentNodeId: dockerDeployments.nodeId,
         deploymentName: dockerDeployments.name,
+        composeNodeId: dockerComposeProjects.nodeId,
+        composeName: dockerComposeProjects.name,
       })
       .from(dockerBuilds)
       .innerJoin(dockerSourceBindings, eq(dockerSourceBindings.id, dockerBuilds.sourceBindingId))
       .innerJoin(integrationConnectors, eq(integrationConnectors.id, dockerSourceBindings.connectorId))
       .leftJoin(dockerDeployments, eq(dockerDeployments.id, dockerSourceBindings.deploymentId))
+      .leftJoin(dockerComposeProjects, eq(dockerComposeProjects.id, dockerSourceBindings.composeProjectId))
       .where(eq(dockerBuilds.id, id))
       .limit(1);
     if (!joined) throw new AppError(404, 'BUILD_NOT_FOUND', 'Docker build not found');
@@ -76,12 +80,20 @@ export class DockerBuildQuery {
               containerName: joined.source.containerName!,
               name: joined.source.containerName!,
             }
-          : {
-              kind: 'deployment' as const,
-              nodeId: joined.deploymentNodeId!,
-              deploymentId: joined.source.deploymentId!,
-              name: joined.deploymentName!,
-            },
+          : joined.source.targetKind === 'deployment'
+            ? {
+                kind: 'deployment' as const,
+                nodeId: joined.deploymentNodeId!,
+                deploymentId: joined.source.deploymentId!,
+                name: joined.deploymentName!,
+              }
+            : {
+                kind: 'compose_project' as const,
+                nodeId: joined.composeNodeId!,
+                composeProjectId: joined.source.composeProjectId!,
+                name: joined.composeName!,
+                serviceName: joined.build.serviceName,
+              },
     };
   }
 
@@ -100,7 +112,8 @@ export class DockerBuildQuery {
           ilike(dockerBuilds.commitSha, pattern),
           ilike(dockerBuilds.ref, pattern),
           ilike(dockerSourceBindings.containerName, pattern),
-          ilike(dockerDeployments.name, pattern)
+          ilike(dockerDeployments.name, pattern),
+          ilike(dockerComposeProjects.name, pattern)
         )!
       );
     }
@@ -119,11 +132,14 @@ export class DockerBuildQuery {
         provider: integrationConnectors.provider,
         deploymentNodeId: dockerDeployments.nodeId,
         deploymentName: dockerDeployments.name,
+        composeNodeId: dockerComposeProjects.nodeId,
+        composeName: dockerComposeProjects.name,
       })
       .from(dockerBuilds)
       .innerJoin(dockerSourceBindings, eq(dockerSourceBindings.id, dockerBuilds.sourceBindingId))
       .innerJoin(integrationConnectors, eq(integrationConnectors.id, dockerSourceBindings.connectorId))
       .leftJoin(dockerDeployments, eq(dockerDeployments.id, dockerSourceBindings.deploymentId))
+      .leftJoin(dockerComposeProjects, eq(dockerComposeProjects.id, dockerSourceBindings.composeProjectId))
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(dockerBuilds.createdAt), desc(dockerBuilds.id))
       .limit(Math.min(Math.max(input.limit ?? 50, 1), 200));
@@ -142,7 +158,7 @@ export class DockerBuildQuery {
       ? await this.db.select().from(dockerBuildArtifacts).where(inArray(dockerBuildArtifacts.buildId, buildIds))
       : [];
     const artifactsByBuildId = new Map(artifacts.map((artifact) => [artifact.buildId, artifact] as const));
-    return rows.map(({ build, source, provider, deploymentNodeId, deploymentName }) => ({
+    return rows.map(({ build, source, provider, deploymentNodeId, deploymentName, composeNodeId, composeName }) => ({
       ...build,
       provider,
       builderName: build.builderNodeId ? (builderNames.get(build.builderNodeId) ?? null) : null,
@@ -156,12 +172,20 @@ export class DockerBuildQuery {
               containerName: source.containerName!,
               name: source.containerName!,
             }
-          : {
-              kind: 'deployment' as const,
-              nodeId: deploymentNodeId!,
-              deploymentId: source.deploymentId!,
-              name: deploymentName!,
-            },
+          : source.targetKind === 'deployment'
+            ? {
+                kind: 'deployment' as const,
+                nodeId: deploymentNodeId!,
+                deploymentId: source.deploymentId!,
+                name: deploymentName!,
+              }
+            : {
+                kind: 'compose_project' as const,
+                nodeId: composeNodeId!,
+                composeProjectId: source.composeProjectId!,
+                name: composeName!,
+                serviceName: build.serviceName,
+              },
     }));
   }
 }

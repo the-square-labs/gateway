@@ -31,7 +31,7 @@ import {
   encodeComposeServiceTarget,
   removeManagedDatabaseBindingFromYaml,
 } from './compose-managed-bindings.js';
-import { validateComposeYaml } from './compose-policy.js';
+import { prepareComposeGitBuild, validateComposeYaml } from './compose-policy.js';
 
 const ACTIVE_OPERATION_STATUSES = ['pending', 'running', 'cancelling'] as const;
 const INTERRUPTED_OPERATION_ERROR = 'Compose operation tracking interrupted by backend restart';
@@ -227,6 +227,39 @@ export class DockerComposeService {
     return result;
   }
 
+  async createPendingGitProject(nodeId: string, projectName: string, userId: string) {
+    const [project] = await this.db
+      .insert(dockerComposeProjects)
+      .values({
+        nodeId,
+        name: projectName,
+        managementState: 'managed',
+        desiredState: 'running',
+        status: 'validating',
+        availability: 'available',
+        createdById: userId,
+        updatedById: userId,
+      })
+      .returning();
+    await this.audit.log({
+      userId,
+      action: 'docker.compose.source.create',
+      resourceType: 'docker-compose-project',
+      resourceId: project.id,
+      details: { nodeId, name: project.name },
+    });
+    this.emit('created', project, { source: 'repository' });
+    return project;
+  }
+
+  async discardPendingGitProject(projectId: string): Promise<boolean> {
+    const deleted = await this.db
+      .delete(dockerComposeProjects)
+      .where(and(eq(dockerComposeProjects.id, projectId), sql`${dockerComposeProjects.activeRevisionId} IS NULL`))
+      .returning({ id: dockerComposeProjects.id });
+    return deleted.length > 0;
+  }
+
   async adopt(nodeId: string, projectId: string, input: ComposeRevisionCreateInput, userId: string) {
     const project = await this.getProject(nodeId, projectId);
     if (project.managementState !== 'external') {
@@ -278,6 +311,39 @@ export class DockerComposeService {
       details: { nodeId, revisionId: revision.id, revisionNumber: revision.revisionNumber },
     });
     this.emit('revision_created', project, { revisionId: revision.id });
+    return revision;
+  }
+
+  async createGitRevision(
+    nodeId: string,
+    projectId: string,
+    input: ComposeRevisionCreateInput,
+    source: { yaml: string; bindingId: string; batchId: string; commitSha: string },
+    userId: string
+  ) {
+    const project = await this.getProject(nodeId, projectId);
+    if (project.managementState !== 'managed') {
+      throw new AppError(409, 'COMPOSE_EXTERNAL_READ_ONLY', 'External Compose projects must be adopted first');
+    }
+    const authored = prepareComposeGitBuild({ ...input, yaml: source.yaml, projectName: project.name });
+    if (!authored.valid) {
+      throw new AppError(400, 'COMPOSE_SOURCE_INVALID', 'Repository Compose configuration is invalid', {
+        diagnostics: authored.diagnostics,
+      });
+    }
+    const effectiveInput = await this.addCurrentManagedDatabaseBindings(project, input);
+    const effectiveValidation = validateComposeYaml({ ...effectiveInput, projectName: project.name });
+    this.assertValid(effectiveValidation);
+    const revision = await this.insertRevision(
+      project,
+      effectiveInput,
+      effectiveValidation.normalizedModel!,
+      effectiveValidation.configDigest!,
+      userId,
+      source.yaml,
+      { sourceBindingId: source.bindingId, buildBatchId: source.batchId, sourceCommitSha: source.commitSha }
+    );
+    this.emit('revision_created', project, { revisionId: revision.id, sourceCommitSha: source.commitSha });
     return revision;
   }
 
@@ -971,7 +1037,8 @@ export class DockerComposeService {
     normalizedModel: RevisionRow['normalizedModel'],
     configDigest: string,
     userId: string,
-    sourceYaml = input.yaml
+    sourceYaml = input.yaml,
+    source: { sourceBindingId: string; buildBatchId: string; sourceCommitSha: string } | null = null
   ) {
     try {
       return await this.db.transaction(async (tx) => {
@@ -993,6 +1060,9 @@ export class DockerComposeService {
             configDigest,
             variables: input.variables,
             secretKeys: [...new Set(input.secretKeys)].sort(),
+            sourceBindingId: source?.sourceBindingId ?? null,
+            buildBatchId: source?.buildBatchId ?? null,
+            sourceCommitSha: source?.sourceCommitSha ?? null,
             createdById: userId,
           })
           .returning();

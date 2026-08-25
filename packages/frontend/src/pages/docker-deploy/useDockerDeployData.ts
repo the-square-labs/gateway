@@ -1,13 +1,8 @@
 import { useEffect, useState } from "react";
-import type { ComboboxOption } from "@/components/common/Combobox";
 import { api } from "@/services/api";
-import type {
-  DockerBuildAdmissionStatus,
-  DockerBuildSourceRepository,
-  DockerRegistry,
-  Node,
-} from "@/types";
+import type { DockerBuildAdmissionStatus, DockerRegistry, Node } from "@/types";
 import type { DockerDeploySourceMode } from "./types";
+import { useDockerSourceRepositories } from "./useDockerSourceRepositories";
 
 interface UseDockerDeployDataOptions {
   allNodes: Node[];
@@ -39,10 +34,10 @@ export function useDockerDeployData({
   const [registries, setRegistries] = useState<DockerRegistry[]>([]);
   const [deployLocalImages, setDeployLocalImages] = useState<string[]>([]);
   const [deployPullableImages, setDeployPullableImages] = useState<string[]>([]);
-  const [sourceConnectorOptions, setSourceConnectorOptions] = useState<ComboboxOption[]>([]);
-  const [sourceRepositories, setSourceRepositories] = useState<DockerBuildSourceRepository[]>([]);
   const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
   const [checkingSourceAdmission, setCheckingSourceAdmission] = useState(false);
+  const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
+    useDockerSourceRepositories(open && sourceMode === "repository", sourceConnectorId);
 
   useEffect(() => {
     if (!open || !hasScope("docker:registries:view")) {
@@ -54,63 +49,6 @@ export function useDockerDeployData({
       .then(setRegistries)
       .catch(() => setRegistries([]));
   }, [hasScope, open]);
-
-  useEffect(() => {
-    if (!open || sourceMode !== "repository") return;
-    let cancelled = false;
-    void Promise.all([
-      api.listGitLabConnectors({ enabled: true }),
-      api.listGitConnectors("github"),
-      api.listGitConnectors("git"),
-    ])
-      .then(([gitlab, github, git]) => {
-        if (cancelled) return;
-        setSourceConnectorOptions([
-          ...gitlab.map((connector) => ({
-            value: connector.id,
-            label: connector.name,
-            keywords: `gitlab ${connector.baseUrl}`,
-          })),
-          ...github
-            .filter((connector) => connector.enabled)
-            .map((connector) => ({
-              value: connector.id,
-              label: connector.name,
-              keywords: `github ${connector.baseUrl}`,
-            })),
-          ...git
-            .filter((connector) => connector.enabled)
-            .map((connector) => ({
-              value: connector.id,
-              label: connector.name,
-              keywords: `git ${connector.baseUrl}`,
-            })),
-        ]);
-      })
-      .catch(() => setSourceConnectorOptions([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [open, sourceMode]);
-
-  useEffect(() => {
-    if (!open || sourceMode !== "repository" || !sourceConnectorId) {
-      setSourceRepositories([]);
-      return;
-    }
-    let cancelled = false;
-    void api
-      .listDockerBuildRepositories(sourceConnectorId)
-      .then(
-        (repositories) =>
-          !cancelled &&
-          setSourceRepositories(repositories.filter((repository) => !repository.archived))
-      )
-      .catch(() => !cancelled && setSourceRepositories([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [open, sourceConnectorId, sourceMode]);
 
   useEffect(() => {
     if (!open || sourceMode !== "repository" || !deployNodeId) {

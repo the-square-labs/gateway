@@ -335,9 +335,7 @@ describe('DockerSourceService webhooks', () => {
     const db = { select: vi.fn(), insert: vi.fn(), update: vi.fn(), transaction: vi.fn() };
     const service = new DockerSourceService(db as never, { log: vi.fn() } as never, integrations as never, {} as never);
     service.setLicensePolicyService({
-      requireFeature: vi
-        .fn()
-        .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required')),
+      requireFeature: vi.fn().mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required')),
     } as never);
 
     await expect(
@@ -349,6 +347,8 @@ describe('DockerSourceService webhooks', () => {
           branch: binding.branch,
           dockerfilePath: binding.dockerfilePath,
           contextPath: binding.contextPath,
+          composeVariables: {},
+          composeSecretKeys: [],
           autoBuild: true,
           autoDeploy: true,
           buildArgs: {},

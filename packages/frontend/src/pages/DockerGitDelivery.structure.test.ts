@@ -79,6 +79,22 @@ describe("Docker Git delivery UI structure", () => {
     expect(deploymentTabs).toContain('"builds"');
   });
 
+  it("reuses the shared repository and build surfaces for Compose projects", () => {
+    const composeDetail = source("./DockerComposeProjectDetail.tsx");
+    const resourceTabs = source("./docker-detail/DockerResourceGitTabs.tsx");
+    const sourcePanel = source("./docker-detail/DockerGitSourcePanel.tsx");
+
+    expect(composeDetail).toContain('from "./docker-detail/DockerResourceGitTabs"');
+    expect(composeDetail).toContain('<TabsTrigger value="source"');
+    expect(composeDetail).toContain('<TabsTrigger value="builds"');
+    expect(composeDetail).toContain('kind: "compose_project"');
+    expect(resourceTabs).toContain('kind: "compose_project"');
+    expect(sourcePanel).toContain('from "../docker-deploy/RepositorySourceFields"');
+    expect(sourcePanel).toContain('from "../docker-deploy/useDockerSourceRepositories"');
+    expect(sourcePanel).toContain('title="Compose file"');
+    expect(sourcePanel).toContain('requireLicenseFeature("git-push-to-deploy"');
+  });
+
   it("shares the container log viewport with build dialogs", () => {
     const logs = source("./docker-detail/LogsTab.tsx");
     const details = source("./docker-detail/DockerBuildDetailsDialog.tsx");

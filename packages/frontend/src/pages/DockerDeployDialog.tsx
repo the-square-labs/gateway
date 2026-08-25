@@ -14,10 +14,7 @@ import {
 import { nodeRoute } from "@/lib/resource-routes";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import {
-  handleLicenseApiError,
-  requireLicenseFeature,
-} from "@/stores/license-paywall";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type DockerRuntimeProfile,
   type DockerRuntimeStatus,
@@ -236,7 +233,10 @@ export function DockerDeployDialog({
       return;
     }
     if (deployMode === "deployment" && !deployName.trim()) return;
-    if (sourceMode === "repository" && !requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy"))
+    if (
+      sourceMode === "repository" &&
+      !requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")
+    )
       return;
     if (
       deployMode === "deployment" &&

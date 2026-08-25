@@ -15,6 +15,7 @@ function queuedBuild(id: string) {
   return {
     id,
     sourceBindingId: '11111111-1111-4111-8111-111111111111',
+    batchId: null,
     dedupeKey: `source:${id}`,
     trigger: 'manual' as const,
     triggerDeliveryId: null,
@@ -22,6 +23,10 @@ function queuedBuild(id: string) {
     repositoryFullPath: 'acme/api',
     ref: 'refs/heads/main',
     commitSha: id.padEnd(40, 'a').slice(0, 40),
+    serviceName: null,
+    dockerfilePath: 'Dockerfile',
+    contextPath: '.',
+    buildArgs: {},
     status: 'queued' as DockerBuildStatus,
     builderNodeId: null,
     platform: null,
@@ -206,7 +211,10 @@ describe('DockerBuildService', () => {
   it('retries a terminal build as a new forced queue entry', async () => {
     const service = new DockerBuildService({} as never);
     vi.spyOn(service, 'get').mockResolvedValue({ ...queuedBuild('build-retry'), status: 'failed' } as never);
-    const enqueue = vi.spyOn(service, 'enqueue').mockResolvedValue({ build: queuedBuild('build-new'), created: true });
+    const next = queuedBuild('build-new');
+    const enqueue = vi
+      .spyOn(service, 'enqueue')
+      .mockResolvedValue({ build: next, builds: [next], batch: null, created: true });
     await service.retry('build-retry', 'user-1');
     expect(enqueue).toHaveBeenCalledWith({
       sourceBindingId: '11111111-1111-4111-8111-111111111111',
@@ -338,6 +346,55 @@ describe('DockerBuildService', () => {
         }),
       })
     );
+  });
+
+  it('prepares a Compose revision even when automatic deployment is disabled', async () => {
+    const service = new DockerBuildService({} as never);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      ...queuedBuild('compose-build'),
+      status: 'scanning',
+      builderNodeId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      leaseOwner: 'worker-a',
+      sourceAutoDeploy: false,
+      target: {
+        kind: 'compose_project',
+        nodeId: 'node-1',
+        composeProjectId: 'project-1',
+        name: 'demo',
+        serviceName: 'api',
+      },
+    } as never);
+    const transition = vi
+      .spyOn(service, 'transition')
+      .mockImplementation(async (_id, _lease, status) => ({ ...queuedBuild('compose-build'), status }) as never);
+    vi.spyOn(service, 'recordArtifact').mockResolvedValue({
+      artifact: { policyDecision: 'approved' },
+      created: true,
+    } as never);
+    const rollout = vi.fn().mockResolvedValue('pending' as const);
+    service.setArtifactRollout(rollout);
+
+    await service.handleDaemonEvent('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
+      buildId: 'compose-build',
+      status: 'succeeded',
+      sequence: '0',
+      logChunk: Buffer.alloc(0),
+      progressJson: '',
+      artifactRepository: 'gateway/builds/source/api',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+      artifactSizeBytes: '1234',
+      platform: 'linux/amd64',
+      sbomDigest: '',
+      provenanceDigest: '',
+      scanSummaryJson: '{"critical":0,"high":0,"medium":0,"low":0,"unknown":0}',
+      policyDecision: 'pending',
+      errorCode: '',
+      errorMessage: '',
+      occurredAtUnixMs: '0',
+    });
+
+    expect(rollout).toHaveBeenCalledWith('compose-build');
+    expect(transition).toHaveBeenLastCalledWith('compose-build', 'worker-a', 'succeeded');
   });
 
   it('rejects builder events from a node that does not own the lease', async () => {

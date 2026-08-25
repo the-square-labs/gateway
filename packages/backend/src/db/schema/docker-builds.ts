@@ -15,13 +15,14 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { dockerComposeProjects, dockerComposeRevisions } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
 import { integrationConnectorProjects, integrationConnectors } from './integration-connectors.js';
 import { nodes } from './nodes.js';
 import { sslCertificates } from './ssl-certificates.js';
 import { users } from './users.js';
 
-export type DockerSourceTargetKind = 'container' | 'deployment';
+export type DockerSourceTargetKind = 'container' | 'deployment' | 'compose_project';
 export type DockerBuildTrigger = 'manual' | 'gitlab_push' | 'github_push' | 'generic_webhook' | 'poll' | 'retry';
 export type DockerBuildStatus =
   | 'queued'
@@ -31,6 +32,14 @@ export type DockerBuildStatus =
   | 'scanning'
   | 'pushing'
   | 'deploying'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'superseded';
+export type DockerBuildBatchStatus =
+  | 'building'
+  | 'awaiting_approval'
+  | 'applying'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
@@ -61,6 +70,18 @@ export type DockerRegistryMaintenancePhase =
 export interface DockerBuildPolicySnapshot {
   vulnerabilityThreshold?: string;
   [key: string]: unknown;
+}
+
+export interface DockerComposeBuildSpec {
+  serviceName: string;
+  dockerfilePath: string;
+  contextPath: string;
+  buildArgs: Record<string, string>;
+}
+
+export interface DockerComposeBuildPlan {
+  sourceYaml: string;
+  services: DockerComposeBuildSpec[];
 }
 
 export interface DockerBuildScanSummary {
@@ -95,6 +116,7 @@ export const dockerSourceBindings = pgTable(
     nodeId: uuid('node_id').references(() => nodes.id, { onDelete: 'cascade' }),
     containerName: text('container_name'),
     deploymentId: uuid('deployment_id').references(() => dockerDeployments.id, { onDelete: 'cascade' }),
+    composeProjectId: uuid('compose_project_id').references(() => dockerComposeProjects.id, { onDelete: 'cascade' }),
     connectorId: uuid('connector_id')
       .notNull()
       .references(() => integrationConnectors.id, { onDelete: 'restrict' }),
@@ -107,6 +129,10 @@ export const dockerSourceBindings = pgTable(
     branch: text('branch').notNull(),
     dockerfilePath: text('dockerfile_path').notNull().default('Dockerfile'),
     contextPath: text('context_path').notNull().default('.'),
+    composeFilePath: text('compose_file_path'),
+    composeVariables: jsonb('compose_variables').$type<Record<string, string>>().notNull().default({}),
+    composeSecretKeys: text('compose_secret_keys').array().notNull().default([]),
+    composeBuildPlan: jsonb('compose_build_plan').$type<DockerComposeBuildPlan>(),
     autoBuild: boolean('auto_build').notNull().default(true),
     autoDeploy: boolean('auto_deploy').notNull().default(true),
     initialConfig: jsonb('initial_config').$type<Record<string, unknown>>(),
@@ -115,6 +141,7 @@ export const dockerSourceBindings = pgTable(
     policy: jsonb('policy').$type<DockerBuildPolicySnapshot>().notNull().default({}),
     desiredCommitSha: varchar('desired_commit_sha', { length: 64 }),
     deployedCommitSha: varchar('deployed_commit_sha', { length: 64 }),
+    deployingCommitSha: varchar('deploying_commit_sha', { length: 64 }),
     lastResolvedAt: timestamp('last_resolved_at', { withTimezone: true }),
     lastPollAt: timestamp('last_poll_at', { withTimezone: true }),
     lastPollError: text('last_poll_error'),
@@ -130,17 +157,24 @@ export const dockerSourceBindings = pgTable(
   (table) => [
     check(
       'docker_source_bindings_target_shape_check',
-      sql`(${table.targetKind} = 'container' AND ${table.nodeId} IS NOT NULL AND ${table.containerName} IS NOT NULL AND ${table.deploymentId} IS NULL) OR (${table.targetKind} = 'deployment' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NOT NULL)`
+      sql`(${table.targetKind} = 'container' AND ${table.nodeId} IS NOT NULL AND ${table.containerName} IS NOT NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NULL AND ${table.composeFilePath} IS NULL) OR (${table.targetKind} = 'deployment' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NOT NULL AND ${table.composeProjectId} IS NULL AND ${table.composeFilePath} IS NULL) OR (${table.targetKind} = 'compose_project' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NOT NULL AND ${table.composeFilePath} IS NOT NULL)`
     ),
     check('docker_source_bindings_branch_not_blank_check', sql`length(trim(${table.branch})) > 0`),
     check('docker_source_bindings_dockerfile_not_absolute_check', sql`${table.dockerfilePath} !~ '^/'`),
     check('docker_source_bindings_context_not_absolute_check', sql`${table.contextPath} !~ '^/'`),
+    check(
+      'docker_source_bindings_compose_file_not_absolute_check',
+      sql`${table.composeFilePath} IS NULL OR (${table.composeFilePath} !~ '^/' AND ('/' || ${table.composeFilePath} || '/') NOT LIKE '%/../%')`
+    ),
     uniqueIndex('docker_source_bindings_container_unique')
       .on(table.nodeId, table.containerName)
       .where(sql`${table.targetKind} = 'container'`),
     uniqueIndex('docker_source_bindings_deployment_unique')
       .on(table.deploymentId)
       .where(sql`${table.targetKind} = 'deployment'`),
+    uniqueIndex('docker_source_bindings_compose_project_unique')
+      .on(table.composeProjectId)
+      .where(sql`${table.targetKind} = 'compose_project'`),
     index('docker_source_bindings_connector_project_idx').on(table.connectorId, table.projectId),
     index('docker_source_bindings_desired_commit_idx').on(table.desiredCommitSha),
   ]
@@ -163,6 +197,40 @@ export const dockerBuildSecrets = pgTable(
   (table) => [
     uniqueIndex('docker_build_secrets_binding_name_unique').on(table.sourceBindingId, table.name),
     index('docker_build_secrets_binding_idx').on(table.sourceBindingId),
+  ]
+);
+
+export const dockerBuildBatches = pgTable(
+  'docker_build_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceBindingId: uuid('source_binding_id')
+      .notNull()
+      .references(() => dockerSourceBindings.id, { onDelete: 'cascade' }),
+    dedupeKey: text('dedupe_key').notNull(),
+    commitSha: varchar('commit_sha', { length: 64 }).notNull(),
+    status: varchar('status', { length: 32 }).$type<DockerBuildBatchStatus>().notNull().default('building'),
+    expectedServices: jsonb('expected_services').$type<string[]>().notNull(),
+    composeBuildPlan: jsonb('compose_build_plan').$type<DockerComposeBuildPlan>().notNull(),
+    composeVariables: jsonb('compose_variables').$type<Record<string, string>>().notNull().default({}),
+    composeSecretKeys: text('compose_secret_keys').array().notNull().default([]),
+    candidateRevisionId: uuid('candidate_revision_id').references(() => dockerComposeRevisions.id, {
+      onDelete: 'set null',
+    }),
+    supersededByBatchId: uuid('superseded_by_batch_id').references((): AnyPgColumn => dockerBuildBatches.id, {
+      onDelete: 'set null',
+    }),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('docker_build_batches_dedupe_unique').on(table.dedupeKey),
+    index('docker_build_batches_source_created_idx').on(table.sourceBindingId, table.createdAt),
+    index('docker_build_batches_status_idx').on(table.status, table.updatedAt),
   ]
 );
 
@@ -194,6 +262,7 @@ export const dockerBuilds = pgTable(
     sourceBindingId: uuid('source_binding_id')
       .notNull()
       .references(() => dockerSourceBindings.id, { onDelete: 'cascade' }),
+    batchId: uuid('batch_id').references(() => dockerBuildBatches.id, { onDelete: 'cascade' }),
     dedupeKey: text('dedupe_key').notNull(),
     trigger: varchar('trigger', { length: 32 }).$type<DockerBuildTrigger>().notNull(),
     triggerDeliveryId: text('trigger_delivery_id'),
@@ -201,6 +270,10 @@ export const dockerBuilds = pgTable(
     repositoryFullPath: text('repository_full_path').notNull(),
     ref: text('ref').notNull(),
     commitSha: varchar('commit_sha', { length: 64 }).notNull(),
+    serviceName: text('service_name'),
+    dockerfilePath: text('dockerfile_path').notNull().default('Dockerfile'),
+    contextPath: text('context_path').notNull().default('.'),
+    buildArgs: jsonb('build_args').$type<Record<string, string>>().notNull().default({}),
     status: varchar('status', { length: 32 }).$type<DockerBuildStatus>().notNull().default('queued'),
     builderNodeId: uuid('builder_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     platform: varchar('platform', { length: 64 }),
@@ -232,6 +305,8 @@ export const dockerBuilds = pgTable(
     index('docker_builds_status_lease_idx').on(table.status, table.leaseExpiresAt),
     index('docker_builds_builder_status_idx').on(table.builderNodeId, table.status),
     index('docker_builds_commit_idx').on(table.sourceBindingId, table.commitSha),
+    uniqueIndex('docker_builds_batch_service_unique').on(table.batchId, table.serviceName),
+    index('docker_builds_batch_status_idx').on(table.batchId, table.status),
     check('docker_builds_attempt_range_check', sql`${table.attempt} >= 0 AND ${table.maxAttempts} BETWEEN 1 AND 20`),
   ]
 );
@@ -301,6 +376,9 @@ export const dockerArtifactPins = pgTable(
     artifactId: uuid('artifact_id')
       .notNull()
       .references(() => dockerBuildArtifacts.id, { onDelete: 'cascade' }),
+    composeRevisionId: uuid('compose_revision_id').references(() => dockerComposeRevisions.id, {
+      onDelete: 'cascade',
+    }),
     kind: varchar('kind', { length: 32 }).$type<DockerArtifactPinKind>().notNull(),
     ownerKey: text('owner_key').notNull(),
     reason: text('reason'),

@@ -91,6 +91,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'docker.folder.changed') return 'docker:containers:view';
   if (channel === 'docker.image-cleanup.changed') return 'docker:containers:edit';
   if (channel === 'docker.registry.changed') return 'docker:registries:view';
+  if (channel.startsWith('docker.build')) return 'docker:containers:view';
   if (channel === 'docker.file.changed') return 'docker:containers:files:read';
   if (channel === 'docker.volume.file.changed') return 'docker:volumes:files:read';
   if (channel === 'docker.snapshot.changed') return 'docker:containers:view';
@@ -155,6 +156,9 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScope(scopes, 'integrations:ssh:view') ||
       hasScope(scopes, 'integrations:ssh:manage')
     );
+  }
+  if (channel.startsWith('docker.build')) {
+    return hasScopeBase(scopes, 'docker:containers:view') || hasScopeBase(scopes, 'docker:compose:view');
   }
   const required = requiredScopeFor(channel);
   if (!required) return false;
@@ -401,7 +405,12 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasDockerEventAccess(scopes, 'docker:containers:webhooks', payload);
   }
   if (channel.startsWith('docker.build')) {
-    return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
+    const targetKind = (payload as { targetKind?: string } | undefined)?.targetKind;
+    return hasDockerEventAccess(
+      scopes,
+      targetKind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view',
+      payload
+    );
   }
   if (channel.startsWith('docker.deployment') || channel.startsWith('docker.health')) {
     return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
