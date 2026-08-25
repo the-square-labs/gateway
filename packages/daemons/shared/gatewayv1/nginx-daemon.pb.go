@@ -7024,28 +7024,35 @@ func (x *DockerRuntimeStatus) GetProgressPercent() uint32 {
 }
 
 type DockerBuildCommand struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	BuildId             string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
-	RepositoryUrl       string                 `protobuf:"bytes,2,opt,name=repository_url,json=repositoryUrl,proto3" json:"repository_url,omitempty"`
-	RepositoryRemoteId  string                 `protobuf:"bytes,3,opt,name=repository_remote_id,json=repositoryRemoteId,proto3" json:"repository_remote_id,omitempty"`
-	RepositoryFullPath  string                 `protobuf:"bytes,4,opt,name=repository_full_path,json=repositoryFullPath,proto3" json:"repository_full_path,omitempty"`
-	Ref                 string                 `protobuf:"bytes,5,opt,name=ref,proto3" json:"ref,omitempty"`
-	CommitSha           string                 `protobuf:"bytes,6,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"`
-	DockerfilePath      string                 `protobuf:"bytes,7,opt,name=dockerfile_path,json=dockerfilePath,proto3" json:"dockerfile_path,omitempty"`
-	ContextPath         string                 `protobuf:"bytes,8,opt,name=context_path,json=contextPath,proto3" json:"context_path,omitempty"`
-	Platform            string                 `protobuf:"bytes,9,opt,name=platform,proto3" json:"platform,omitempty"`
-	OutputRepository    string                 `protobuf:"bytes,10,opt,name=output_repository,json=outputRepository,proto3" json:"output_repository,omitempty"`
-	OutputTag           string                 `protobuf:"bytes,11,opt,name=output_tag,json=outputTag,proto3" json:"output_tag,omitempty"`
-	BuildArgs           map[string]string      `protobuf:"bytes,12,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	BuildSecrets        map[string][]byte      `protobuf:"bytes,13,rep,name=build_secrets,json=buildSecrets,proto3" json:"build_secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	CheckoutCredential  []byte                 `protobuf:"bytes,14,opt,name=checkout_credential,json=checkoutCredential,proto3" json:"checkout_credential,omitempty"`
-	AllowedDependencies []string               `protobuf:"bytes,15,rep,name=allowed_dependencies,json=allowedDependencies,proto3" json:"allowed_dependencies,omitempty"`
-	CpuLimitMillis      int64                  `protobuf:"varint,16,opt,name=cpu_limit_millis,json=cpuLimitMillis,proto3" json:"cpu_limit_millis,omitempty"`
-	MemoryLimitBytes    int64                  `protobuf:"varint,17,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
-	DiskLimitBytes      int64                  `protobuf:"varint,18,opt,name=disk_limit_bytes,json=diskLimitBytes,proto3" json:"disk_limit_bytes,omitempty"`
-	TimeoutSeconds      int32                  `protobuf:"varint,19,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	BuildId               string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	RepositoryUrl         string                 `protobuf:"bytes,2,opt,name=repository_url,json=repositoryUrl,proto3" json:"repository_url,omitempty"`
+	RepositoryRemoteId    string                 `protobuf:"bytes,3,opt,name=repository_remote_id,json=repositoryRemoteId,proto3" json:"repository_remote_id,omitempty"`
+	RepositoryFullPath    string                 `protobuf:"bytes,4,opt,name=repository_full_path,json=repositoryFullPath,proto3" json:"repository_full_path,omitempty"`
+	Ref                   string                 `protobuf:"bytes,5,opt,name=ref,proto3" json:"ref,omitempty"`
+	CommitSha             string                 `protobuf:"bytes,6,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"`
+	DockerfilePath        string                 `protobuf:"bytes,7,opt,name=dockerfile_path,json=dockerfilePath,proto3" json:"dockerfile_path,omitempty"`
+	ContextPath           string                 `protobuf:"bytes,8,opt,name=context_path,json=contextPath,proto3" json:"context_path,omitempty"`
+	Platform              string                 `protobuf:"bytes,9,opt,name=platform,proto3" json:"platform,omitempty"`
+	OutputRepository      string                 `protobuf:"bytes,10,opt,name=output_repository,json=outputRepository,proto3" json:"output_repository,omitempty"`
+	OutputTag             string                 `protobuf:"bytes,11,opt,name=output_tag,json=outputTag,proto3" json:"output_tag,omitempty"`
+	BuildArgs             map[string]string      `protobuf:"bytes,12,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	BuildSecrets          map[string][]byte      `protobuf:"bytes,13,rep,name=build_secrets,json=buildSecrets,proto3" json:"build_secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	CheckoutCredential    []byte                 `protobuf:"bytes,14,opt,name=checkout_credential,json=checkoutCredential,proto3" json:"checkout_credential,omitempty"`
+	AllowedDependencies   []string               `protobuf:"bytes,15,rep,name=allowed_dependencies,json=allowedDependencies,proto3" json:"allowed_dependencies,omitempty"`
+	CpuLimitMillis        int64                  `protobuf:"varint,16,opt,name=cpu_limit_millis,json=cpuLimitMillis,proto3" json:"cpu_limit_millis,omitempty"`
+	MemoryLimitBytes      int64                  `protobuf:"varint,17,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
+	DiskLimitBytes        int64                  `protobuf:"varint,18,opt,name=disk_limit_bytes,json=diskLimitBytes,proto3" json:"disk_limit_bytes,omitempty"`
+	TimeoutSeconds        int32                  `protobuf:"varint,19,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	OutputKind            string                 `protobuf:"bytes,20,opt,name=output_kind,json=outputKind,proto3" json:"output_kind,omitempty"` // oci_image or pages_archive
+	ApplicationRoot       string                 `protobuf:"bytes,21,opt,name=application_root,json=applicationRoot,proto3" json:"application_root,omitempty"`
+	PackageManager        string                 `protobuf:"bytes,22,opt,name=package_manager,json=packageManager,proto3" json:"package_manager,omitempty"`
+	PackageManagerVersion string                 `protobuf:"bytes,23,opt,name=package_manager_version,json=packageManagerVersion,proto3" json:"package_manager_version,omitempty"`
+	NodeVersion           string                 `protobuf:"bytes,24,opt,name=node_version,json=nodeVersion,proto3" json:"node_version,omitempty"`
+	BuildScript           string                 `protobuf:"bytes,25,opt,name=build_script,json=buildScript,proto3" json:"build_script,omitempty"`
+	ArtifactDirectory     string                 `protobuf:"bytes,26,opt,name=artifact_directory,json=artifactDirectory,proto3" json:"artifact_directory,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *DockerBuildCommand) Reset() {
@@ -7209,6 +7216,55 @@ func (x *DockerBuildCommand) GetTimeoutSeconds() int32 {
 		return x.TimeoutSeconds
 	}
 	return 0
+}
+
+func (x *DockerBuildCommand) GetOutputKind() string {
+	if x != nil {
+		return x.OutputKind
+	}
+	return ""
+}
+
+func (x *DockerBuildCommand) GetApplicationRoot() string {
+	if x != nil {
+		return x.ApplicationRoot
+	}
+	return ""
+}
+
+func (x *DockerBuildCommand) GetPackageManager() string {
+	if x != nil {
+		return x.PackageManager
+	}
+	return ""
+}
+
+func (x *DockerBuildCommand) GetPackageManagerVersion() string {
+	if x != nil {
+		return x.PackageManagerVersion
+	}
+	return ""
+}
+
+func (x *DockerBuildCommand) GetNodeVersion() string {
+	if x != nil {
+		return x.NodeVersion
+	}
+	return ""
+}
+
+func (x *DockerBuildCommand) GetBuildScript() string {
+	if x != nil {
+		return x.BuildScript
+	}
+	return ""
+}
+
+func (x *DockerBuildCommand) GetArtifactDirectory() string {
+	if x != nil {
+		return x.ArtifactDirectory
+	}
+	return ""
 }
 
 type DockerBuildCancelCommand struct {
@@ -10383,7 +10439,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x15local_install_command\x18\b \x01(\tR\x13localInstallCommand\x12\x12\n" +
 	"\x04step\x18\t \x01(\tR\x04step\x12)\n" +
 	"\x10progress_percent\x18\n" +
-	" \x01(\rR\x0fprogressPercent\"\xd2\a\n" +
+	" \x01(\rR\x0fprogressPercent\"\xf4\t\n" +
 	"\x12DockerBuildCommand\x12\x19\n" +
 	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12%\n" +
 	"\x0erepository_url\x18\x02 \x01(\tR\rrepositoryUrl\x120\n" +
@@ -10407,7 +10463,15 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x10cpu_limit_millis\x18\x10 \x01(\x03R\x0ecpuLimitMillis\x12,\n" +
 	"\x12memory_limit_bytes\x18\x11 \x01(\x03R\x10memoryLimitBytes\x12(\n" +
 	"\x10disk_limit_bytes\x18\x12 \x01(\x03R\x0ediskLimitBytes\x12'\n" +
-	"\x0ftimeout_seconds\x18\x13 \x01(\x05R\x0etimeoutSeconds\x1a<\n" +
+	"\x0ftimeout_seconds\x18\x13 \x01(\x05R\x0etimeoutSeconds\x12\x1f\n" +
+	"\voutput_kind\x18\x14 \x01(\tR\n" +
+	"outputKind\x12)\n" +
+	"\x10application_root\x18\x15 \x01(\tR\x0fapplicationRoot\x12'\n" +
+	"\x0fpackage_manager\x18\x16 \x01(\tR\x0epackageManager\x126\n" +
+	"\x17package_manager_version\x18\x17 \x01(\tR\x15packageManagerVersion\x12!\n" +
+	"\fnode_version\x18\x18 \x01(\tR\vnodeVersion\x12!\n" +
+	"\fbuild_script\x18\x19 \x01(\tR\vbuildScript\x12-\n" +
+	"\x12artifact_directory\x18\x1a \x01(\tR\x11artifactDirectory\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +

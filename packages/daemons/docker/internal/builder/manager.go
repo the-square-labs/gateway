@@ -35,6 +35,8 @@ var (
 	commitSHAPattern   = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	repositoryPattern  = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
+	pagesPathPattern   = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+	environmentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	errDiskLimit       = errors.New("builder disk limit exceeded")
 )
 
@@ -199,12 +201,46 @@ func (m *Manager) validate(command *pb.DockerBuildCommand) error {
 			return errors.New("Dockerfile and context paths must remain inside the checkout")
 		}
 	}
+	outputKind := command.GetOutputKind()
+	if outputKind == "" {
+		outputKind = "oci_image"
+	}
+	if outputKind != "oci_image" && outputKind != "pages_archive" {
+		return errors.New("unsupported build output kind")
+	}
+	if outputKind == "pages_archive" {
+		for _, path := range []string{command.GetApplicationRoot(), command.GetArtifactDirectory()} {
+			if path == "" || !pagesPathPattern.MatchString(path) || filepath.IsAbs(path) || filepath.Clean(path) != path || path == ".." || strings.HasPrefix(path, "../") {
+				return errors.New("Pages build paths must remain inside the checkout")
+			}
+		}
+		if command.GetPackageManager() != "npm" && command.GetPackageManager() != "pnpm" && command.GetPackageManager() != "yarn" {
+			return errors.New("unsupported Pages package manager")
+		}
+		if command.GetNodeVersion() != "20" && command.GetNodeVersion() != "22" && command.GetNodeVersion() != "24" {
+			return errors.New("unsupported Pages Node.js version")
+		}
+		if command.GetBuildScript() == "" || len(command.GetBuildScript()) > 128 || strings.ContainsAny(command.GetBuildScript(), "\x00\r\n") {
+			return errors.New("invalid Pages build script")
+		}
+		if version := command.GetPackageManagerVersion(); version != "" && !regexp.MustCompile(`^[A-Za-z0-9._+:-]+$`).MatchString(version) {
+			return errors.New("invalid package manager version")
+		}
+		for name := range command.GetBuildArgs() {
+			if !environmentPattern.MatchString(name) {
+				return errors.New("invalid Pages build variable name")
+			}
+		}
+	}
 	for name, value := range command.GetBuildSecrets() {
 		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`).MatchString(name) {
 			return errors.New("invalid build secret name")
 		}
 		if len(value) == 0 || len(value) > 65_536 {
 			return errors.New("build secret value must be between 1 byte and 64 KiB")
+		}
+		if outputKind == "pages_archive" && (!environmentPattern.MatchString(name) || strings.HasPrefix(name, "VITE_")) {
+			return errors.New("Pages Build Secret names must be private environment variable names")
 		}
 	}
 	if command.GetCpuLimitMillis() <= 0 || command.GetMemoryLimitBytes() <= 0 || command.GetDiskLimitBytes() <= 0 {
@@ -259,7 +295,11 @@ func (m *Manager) run(ctx context.Context, command *pb.DockerBuildCommand) {
 	m.status(command, "building")
 	metadataPath := filepath.Join(jobDir, "build-metadata.json")
 	imageRef := "127.0.0.1:5443/" + command.GetOutputRepository() + ":" + command.GetOutputTag()
-	if err := m.build(jobCtx, command, jobDir, metadataPath, imageRef); err != nil {
+	build := m.build
+	if command.GetOutputKind() == "pages_archive" {
+		build = m.buildPages
+	}
+	if err := build(jobCtx, command, jobDir, metadataPath, imageRef); err != nil {
 		m.failForContext(command, jobCtx, "BUILD_FAILED", err)
 		return
 	}
@@ -274,6 +314,14 @@ func (m *Manager) run(ctx context.Context, command *pb.DockerBuildCommand) {
 		m.log(command.GetBuildId(), []byte("artifact size measurement failed: "+measureErr.Error()))
 	}
 	m.status(command, "scanning")
+	if command.GetOutputKind() == "pages_archive" {
+		m.emitEvent(&pb.DockerBuildEvent{
+			BuildId: command.GetBuildId(), Status: "succeeded", ArtifactRepository: command.GetOutputRepository(),
+			ArtifactDigest: metadata.Digest, ArtifactSizeBytes: metadata.Size, Platform: command.GetPlatform(),
+			PolicyDecision: "pending", OccurredAtUnixMs: time.Now().UnixMilli(),
+		})
+		return
+	}
 	scanSummary, err := m.scan(jobCtx, command, jobDir, imageRef, metadata.Digest)
 	if err != nil {
 		m.failForContext(command, jobCtx, "ARTIFACT_POLICY_FAILED", err)
@@ -378,6 +426,132 @@ func (m *Manager) build(ctx context.Context, command *pb.DockerBuildCommand, job
 		}
 	}
 	return m.runCommand(ctx, command.GetBuildId(), jobDir, os.Environ(), "buildctl", args...)
+}
+
+func (m *Manager) buildPages(ctx context.Context, command *pb.DockerBuildCommand, jobDir, metadataPath, imageRef string) error {
+	dockerfilePath := filepath.Join(jobDir, ".gateway-pages.Dockerfile")
+	dockerignorePath := filepath.Join(jobDir, ".dockerignore")
+	if err := os.WriteFile(dockerignorePath, []byte(".git\n.gateway-pages.Dockerfile\n"), 0o600); err != nil {
+		return fmt.Errorf("write Pages .dockerignore: %w", err)
+	}
+	dockerfile, err := renderPagesDockerfile(command)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(dockerfilePath, []byte(dockerfile), 0o600); err != nil {
+		return fmt.Errorf("write managed Pages Dockerfile: %w", err)
+	}
+	args := []string{"--addr", "unix://" + m.config.BuildkitSocket, "build", "--frontend", "dockerfile.v0",
+		"--local", "context=" + jobDir, "--local", "dockerfile=" + jobDir,
+		"--opt", "filename=" + filepath.Base(dockerfilePath), "--opt", "platform=" + command.GetPlatform(),
+		"--metadata-file", metadataPath,
+		"--output", "type=image,name=" + imageRef + ",push=true,compression=gzip,force-compression=true,oci-mediatypes=true",
+	}
+	keys := make([]string, 0, len(command.GetBuildArgs()))
+	for key := range command.GetBuildArgs() {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "--opt", "build-arg:"+key+"="+command.GetBuildArgs()[key])
+	}
+	secretDir := ""
+	if len(command.GetBuildSecrets()) > 0 {
+		secretDir, err = os.MkdirTemp(m.workspace, ".gateway-build-secrets-")
+		if err != nil {
+			return fmt.Errorf("create Build Secret directory: %w", err)
+		}
+		if err := os.Chmod(secretDir, 0o700); err != nil {
+			_ = os.RemoveAll(secretDir)
+			return fmt.Errorf("protect Build Secret directory: %w", err)
+		}
+		defer secureRemoveAll(secretDir)
+		secretNames := make([]string, 0, len(command.GetBuildSecrets()))
+		for name := range command.GetBuildSecrets() {
+			secretNames = append(secretNames, name)
+		}
+		sort.Strings(secretNames)
+		for _, name := range secretNames {
+			path := filepath.Join(secretDir, name)
+			if err := os.WriteFile(path, command.GetBuildSecrets()[name], 0o600); err != nil {
+				return fmt.Errorf("write Build Secret %s: %w", name, err)
+			}
+			args = append(args, "--secret", "id="+name+",src="+path)
+		}
+	}
+	return m.runCommand(ctx, command.GetBuildId(), jobDir, os.Environ(), "buildctl", args...)
+}
+
+func renderPagesDockerfile(command *pb.DockerBuildCommand) (string, error) {
+	manager := command.GetPackageManager()
+	version := command.GetPackageManagerVersion()
+	setup := ""
+	install := ""
+	run := ""
+	switch manager {
+	case "npm":
+		install = "if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi"
+		run = "npm run " + shellQuote(command.GetBuildScript())
+	case "pnpm":
+		if version == "" {
+			version = "10"
+		}
+		setup = "corepack enable && corepack prepare " + shellQuote("pnpm@"+version) + " --activate && "
+		install = "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi"
+		run = "pnpm run " + shellQuote(command.GetBuildScript())
+	case "yarn":
+		if version == "" {
+			version = "4"
+		}
+		setup = "corepack enable && corepack prepare " + shellQuote("yarn@"+version) + " --activate && "
+		install = "if [ -f yarn.lock ]; then yarn install --immutable; else yarn install; fi"
+		run = "yarn run " + shellQuote(command.GetBuildScript())
+	default:
+		return "", errors.New("unsupported Pages package manager")
+	}
+	variableNames := make([]string, 0, len(command.GetBuildArgs()))
+	for name := range command.GetBuildArgs() {
+		variableNames = append(variableNames, name)
+	}
+	sort.Strings(variableNames)
+	secretNames := make([]string, 0, len(command.GetBuildSecrets()))
+	for name := range command.GetBuildSecrets() {
+		secretNames = append(secretNames, name)
+	}
+	sort.Strings(secretNames)
+	lines := []string{
+		"# syntax=docker/dockerfile:1.7",
+		"FROM docker.io/library/node:" + command.GetNodeVersion() + "-bookworm-slim AS build",
+		"WORKDIR /workspace",
+		"COPY . .",
+		"WORKDIR /workspace/" + command.GetApplicationRoot(),
+	}
+	for _, name := range variableNames {
+		lines = append(lines, "ARG "+name, "ENV "+name+"=${"+name+"}")
+	}
+	mounts := make([]string, 0, len(secretNames))
+	exports := make([]string, 0, len(secretNames))
+	for _, name := range secretNames {
+		mounts = append(mounts, "--mount=type=secret,id="+name+",required=true")
+		exports = append(exports, "export "+name+"=\"$(cat /run/secrets/"+name+")\"")
+	}
+	runPrefix := "RUN"
+	if len(mounts) > 0 {
+		runPrefix += " " + strings.Join(mounts, " ")
+	}
+	commands := []string{"set -eu"}
+	commands = append(commands, exports...)
+	commands = append(commands, setup+install, run)
+	lines = append(lines, runPrefix+" "+strings.Join(commands, "; "))
+	lines = append(lines,
+		"FROM scratch AS pages",
+		"COPY --from=build /workspace/"+command.GetApplicationRoot()+"/"+command.GetArtifactDirectory()+"/ /",
+	)
+	return strings.Join(lines, "\n") + "\n", nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (m *Manager) scan(ctx context.Context, command *pb.DockerBuildCommand, jobDir, imageRef, imageDigest string) (string, error) {

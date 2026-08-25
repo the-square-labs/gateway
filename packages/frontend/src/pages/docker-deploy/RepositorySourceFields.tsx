@@ -13,6 +13,7 @@ interface RepositorySourceFieldsProps {
   dockerfilePath: string;
   contextPath: string;
   composeFilePath?: string;
+  pages?: boolean;
   autoBuild: boolean;
   autoDeploy: boolean;
   onConnectorChange: (value: string) => void;
@@ -35,6 +36,7 @@ export function RepositorySourceFields({
   dockerfilePath,
   contextPath,
   composeFilePath,
+  pages = false,
   autoBuild,
   autoDeploy,
   onConnectorChange,
@@ -91,45 +93,47 @@ export function RepositorySourceFields({
           />
         </div>
       </div>
-      <div
-        className={
-          onComposeFilePathChange ? "space-y-1.5" : "grid grid-cols-1 gap-3 sm:grid-cols-2"
-        }
-      >
-        {onComposeFilePathChange ? (
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Compose file</label>
-            <Input
-              value={composeFilePath ?? ""}
-              onChange={(event) => onComposeFilePathChange(event.target.value)}
-              placeholder="compose.yaml"
-            />
-            <p className="text-xs text-muted-foreground">
-              Repository-relative Compose file. Each service with a build section is built
-              independently.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Dockerfile</label>
-            <Input
-              value={dockerfilePath}
-              onChange={(event) => onDockerfilePathChange(event.target.value)}
-              placeholder="Dockerfile"
-            />
-          </div>
-        )}
-        {!onComposeFilePathChange && (
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Build context</label>
-            <Input
-              value={contextPath}
-              onChange={(event) => onContextPathChange(event.target.value)}
-              placeholder="."
-            />
-          </div>
-        )}
-      </div>
+      {!pages && (
+        <div
+          className={
+            onComposeFilePathChange ? "space-y-1.5" : "grid grid-cols-1 gap-3 sm:grid-cols-2"
+          }
+        >
+          {onComposeFilePathChange ? (
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Compose file</label>
+              <Input
+                value={composeFilePath ?? ""}
+                onChange={(event) => onComposeFilePathChange(event.target.value)}
+                placeholder="compose.yaml"
+              />
+              <p className="text-xs text-muted-foreground">
+                Repository-relative Compose file. Each service with a build section is built
+                independently.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Dockerfile</label>
+              <Input
+                value={dockerfilePath}
+                onChange={(event) => onDockerfilePathChange(event.target.value)}
+                placeholder="Dockerfile"
+              />
+            </div>
+          )}
+          {!onComposeFilePathChange && (
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Build context</label>
+              <Input
+                value={contextPath}
+                onChange={(event) => onContextPathChange(event.target.value)}
+                placeholder="."
+              />
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium">Automatic builds</p>

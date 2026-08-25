@@ -1,6 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
+import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireAnyScopeBase } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -45,9 +46,17 @@ function canAccessBuild(
     target:
       | { kind: 'container'; nodeId: string; containerName: string }
       | { kind: 'deployment'; nodeId: string; deploymentId: string }
-      | { kind: 'compose_project'; nodeId: string; composeProjectId: string };
+      | { kind: 'compose_project'; nodeId: string; composeProjectId: string }
+      | { kind: 'pages_project'; nodeId: string; pageProjectId: string };
   }
 ) {
+  if (build.target.kind === 'pages_project') {
+    return hasScopeForResource(
+      [...scopes],
+      action === 'view' ? 'pages:view' : 'pages:deploy',
+      build.target.pageProjectId
+    );
+  }
   const compose = build.target.kind === 'compose_project';
   const resourceId =
     build.target.kind === 'container'
@@ -64,73 +73,81 @@ function canAccessBuild(
 }
 
 export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
-  router.get('/builds', requireAnyScopeBase('docker:containers:view', 'docker:compose:view'), async (c) => {
-    const query = DockerBuildListQuerySchema.parse(c.req.query());
-    const scopes = c.get('effectiveScopes') ?? [];
-    const requestedCursor = decodeBuildCursor(query.cursor);
-    if (query.cursor && !requestedCursor) {
-      throw new AppError(400, 'INVALID_BUILD_CURSOR', 'Build cursor is invalid');
-    }
-    const service = container.resolve(DockerBuildService);
-    const visible: Awaited<ReturnType<DockerBuildService['list']>> = [];
-    let cursor = requestedCursor;
-    let exhausted = false;
-    let lastScanned: { createdAt: Date | string; id: string } | null = null;
-
-    for (let pass = 0; pass < BUILD_PAGE_SCAN_PASSES && visible.length <= query.limit; pass += 1) {
-      const rows = await service.list({
-        sourceBindingId: query.sourceBindingId,
-        builderNodeId: query.builderNodeId,
-        status: query.status,
-        provider: query.provider,
-        branch: query.branch,
-        search: query.search,
-        beforeCreatedAt: cursor ? new Date(cursor.createdAt) : undefined,
-        beforeId: cursor?.id,
-        limit: BUILD_PAGE_SCAN_LIMIT,
-      });
-      if (rows.length === 0) {
-        exhausted = true;
-        break;
+  router.get(
+    '/builds',
+    requireAnyScopeBase('docker:containers:view', 'docker:compose:view', 'pages:view'),
+    async (c) => {
+      const query = DockerBuildListQuerySchema.parse(c.req.query());
+      const scopes = c.get('effectiveScopes') ?? [];
+      const requestedCursor = decodeBuildCursor(query.cursor);
+      if (query.cursor && !requestedCursor) {
+        throw new AppError(400, 'INVALID_BUILD_CURSOR', 'Build cursor is invalid');
       }
-      for (const build of rows) {
-        lastScanned = build;
-        if (canAccessBuild(scopes, 'view', build)) visible.push(build);
+      const service = container.resolve(DockerBuildService);
+      const visible: Awaited<ReturnType<DockerBuildService['list']>> = [];
+      let cursor = requestedCursor;
+      let exhausted = false;
+      let lastScanned: { createdAt: Date | string; id: string } | null = null;
+
+      for (let pass = 0; pass < BUILD_PAGE_SCAN_PASSES && visible.length <= query.limit; pass += 1) {
+        const rows = await service.list({
+          sourceBindingId: query.sourceBindingId,
+          builderNodeId: query.builderNodeId,
+          status: query.status,
+          provider: query.provider,
+          branch: query.branch,
+          search: query.search,
+          beforeCreatedAt: cursor ? new Date(cursor.createdAt) : undefined,
+          beforeId: cursor?.id,
+          limit: BUILD_PAGE_SCAN_LIMIT,
+        });
+        if (rows.length === 0) {
+          exhausted = true;
+          break;
+        }
+        for (const build of rows) {
+          lastScanned = build;
+          if (canAccessBuild(scopes, 'view', build)) visible.push(build);
+          if (visible.length > query.limit) break;
+        }
         if (visible.length > query.limit) break;
+        if (rows.length < BUILD_PAGE_SCAN_LIMIT) {
+          exhausted = true;
+          break;
+        }
+        const tail = rows.at(-1)!;
+        cursor = {
+          createdAt: tail.createdAt instanceof Date ? tail.createdAt.toISOString() : tail.createdAt,
+          id: tail.id,
+        };
       }
-      if (visible.length > query.limit) break;
-      if (rows.length < BUILD_PAGE_SCAN_LIMIT) {
-        exhausted = true;
-        break;
+
+      const data = visible.slice(0, query.limit);
+      const nextCursor =
+        visible.length > query.limit
+          ? encodeBuildCursor(data.at(-1)!)
+          : !exhausted && lastScanned
+            ? encodeBuildCursor(lastScanned)
+            : null;
+      return c.json({ data, nextCursor });
+    }
+  );
+
+  router.get(
+    '/builds/:buildId',
+    requireAnyScopeBase('docker:containers:view', 'docker:compose:view', 'pages:view'),
+    async (c) => {
+      const build = await container.resolve(DockerBuildService).get(BuildIdSchema.parse(c.req.param('buildId')));
+      if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'view', build)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
       }
-      const tail = rows.at(-1)!;
-      cursor = {
-        createdAt: tail.createdAt instanceof Date ? tail.createdAt.toISOString() : tail.createdAt,
-        id: tail.id,
-      };
+      return c.json({ data: build });
     }
-
-    const data = visible.slice(0, query.limit);
-    const nextCursor =
-      visible.length > query.limit
-        ? encodeBuildCursor(data.at(-1)!)
-        : !exhausted && lastScanned
-          ? encodeBuildCursor(lastScanned)
-          : null;
-    return c.json({ data, nextCursor });
-  });
-
-  router.get('/builds/:buildId', requireAnyScopeBase('docker:containers:view', 'docker:compose:view'), async (c) => {
-    const build = await container.resolve(DockerBuildService).get(BuildIdSchema.parse(c.req.param('buildId')));
-    if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'view', build)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
-    }
-    return c.json({ data: build });
-  });
+  );
 
   router.get(
     '/builds/:buildId/logs',
-    requireAnyScopeBase('docker:containers:view', 'docker:compose:view'),
+    requireAnyScopeBase('docker:containers:view', 'docker:compose:view', 'pages:view'),
     async (c) => {
       const buildId = BuildIdSchema.parse(c.req.param('buildId'));
       const build = await container.resolve(DockerBuildService).get(buildId);
@@ -145,7 +162,7 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
 
   router.post(
     '/builds/:buildId/cancel',
-    requireAnyScopeBase('docker:containers:manage', 'docker:compose:manage'),
+    requireAnyScopeBase('docker:containers:manage', 'docker:compose:manage', 'pages:deploy'),
     async (c) => {
       const service = container.resolve(DockerBuildService);
       const buildId = BuildIdSchema.parse(c.req.param('buildId'));
@@ -160,7 +177,7 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
 
   router.post(
     '/builds/:buildId/retry',
-    requireAnyScopeBase('docker:containers:manage', 'docker:compose:manage'),
+    requireAnyScopeBase('docker:containers:manage', 'docker:compose:manage', 'pages:deploy'),
     async (c) => {
       const service = container.resolve(DockerBuildService);
       const buildId = BuildIdSchema.parse(c.req.param('buildId'));

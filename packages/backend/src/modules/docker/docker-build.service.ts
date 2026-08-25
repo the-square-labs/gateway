@@ -202,6 +202,13 @@ export class DockerBuildService {
                   dockerfilePath: spec.dockerfilePath,
                   contextPath: spec.contextPath,
                   buildArgs: spec.buildArgs,
+                  applicationRoot: source.applicationRoot,
+                  packageManager: source.packageManager,
+                  packageManagerVersion: source.packageManagerVersion,
+                  nodeVersion: source.nodeVersion,
+                  buildScript: source.buildScript,
+                  artifactDirectory: source.artifactDirectory,
+                  publishTag: source.publishTag,
                   status: 'queued' as const,
                   createdById: input.createdById ?? null,
                   queuedAt: now,
@@ -644,7 +651,9 @@ export class DockerBuildService {
             ? build.target.containerName
             : build.target.kind === 'deployment'
               ? build.target.deploymentId
-              : build.target.composeProjectId;
+              : build.target.kind === 'compose_project'
+                ? build.target.composeProjectId
+                : build.target.pageProjectId;
         this.eventBus?.publish(topic, {
           ...payload,
           nodeId: build.target.nodeId,

@@ -38,6 +38,63 @@ func TestBuildValidationAcceptsBuildSecretsAndRejectsInvalidSecretPayloads(t *te
 	}
 }
 
+func validPagesBuildCommand() *pb.DockerBuildCommand {
+	command := validBuildCommand()
+	command.OutputKind = "pages_archive"
+	command.ApplicationRoot = "apps/web"
+	command.PackageManager = "pnpm"
+	command.PackageManagerVersion = "10.15.0"
+	command.NodeVersion = "24"
+	command.BuildScript = "build"
+	command.ArtifactDirectory = "dist"
+	command.BuildArgs = map[string]string{"VITE_API_URL": "https://api.example.com"}
+	command.BuildSecrets = map[string][]byte{"NPM_TOKEN": []byte("super-secret")}
+	return command
+}
+
+func TestPagesBuildValidationRejectsPublicSecretsAndPathEscape(t *testing.T) {
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, nil)
+	command := validPagesBuildCommand()
+	if err := manager.validate(command); err != nil {
+		t.Fatalf("valid Pages build was rejected: %v", err)
+	}
+	command.BuildSecrets = map[string][]byte{"VITE_TOKEN": []byte("not-private")}
+	if err := manager.validate(command); err == nil || !strings.Contains(err.Error(), "private environment") {
+		t.Fatalf("public Pages Build Secret was accepted: %v", err)
+	}
+	command = validPagesBuildCommand()
+	command.ArtifactDirectory = "../dist"
+	if err := manager.validate(command); err == nil || !strings.Contains(err.Error(), "inside the checkout") {
+		t.Fatalf("escaping Pages artifact directory was accepted: %v", err)
+	}
+}
+
+func TestRenderPagesDockerfileUsesGeneratedBuildRecipe(t *testing.T) {
+	command := validPagesBuildCommand()
+	dockerfile, err := renderPagesDockerfile(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"FROM docker.io/library/node:24-bookworm-slim AS build",
+		"WORKDIR /workspace/apps/web",
+		"ARG VITE_API_URL",
+		"ENV VITE_API_URL=${VITE_API_URL}",
+		"--mount=type=secret,id=NPM_TOKEN,required=true",
+		"corepack prepare 'pnpm@10.15.0' --activate",
+		"pnpm install --frozen-lockfile",
+		"pnpm run 'build'",
+		"COPY --from=build /workspace/apps/web/dist/ /",
+	} {
+		if !strings.Contains(dockerfile, expected) {
+			t.Fatalf("generated Pages Dockerfile is missing %q:\n%s", expected, dockerfile)
+		}
+	}
+	if strings.Contains(dockerfile, "super-secret") {
+		t.Fatal("generated Pages Dockerfile contains a Build Secret value")
+	}
+}
+
 func TestBuildLogRedactsBuildSecretValues(t *testing.T) {
 	var emitted *pb.DockerBuildEvent
 	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) {

@@ -39,6 +39,8 @@ interface DockerGitSourcePanelProps {
   onBuildQueued?: () => void;
   composeVariables?: Record<string, string>;
   composeSecretKeys?: string[];
+  canEdit?: boolean;
+  canBuild?: boolean;
 }
 
 type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none";
@@ -62,6 +64,8 @@ export function DockerGitSourcePanel({
   onBuildQueued,
   composeVariables = {},
   composeSecretKeys = [],
+  canEdit = true,
+  canBuild = true,
 }: DockerGitSourcePanelProps) {
   const [source, setSource] = useState<DockerSourceBinding | null>(suppliedSource ?? null);
   const [loading, setLoading] = useState(suppliedSource === undefined);
@@ -81,6 +85,27 @@ export function DockerGitSourcePanel({
   const [vulnerabilityThreshold, setVulnerabilityThreshold] = useState<VulnerabilityThreshold>(
     suppliedSource?.policy?.vulnerabilityThreshold ?? "critical"
   );
+  const [applicationRoot, setApplicationRoot] = useState(suppliedSource?.applicationRoot ?? ".");
+  const [packageManager, setPackageManager] = useState<"npm" | "pnpm" | "yarn">(
+    suppliedSource?.packageManager ?? "npm"
+  );
+  const [packageManagerVersion, setPackageManagerVersion] = useState(
+    suppliedSource?.packageManagerVersion ?? ""
+  );
+  const [nodeVersion, setNodeVersion] = useState<"20" | "22" | "24">(
+    suppliedSource?.nodeVersion ?? "24"
+  );
+  const [buildScript, setBuildScript] = useState(suppliedSource?.buildScript ?? "build");
+  const [artifactDirectory, setArtifactDirectory] = useState(
+    suppliedSource?.artifactDirectory ?? "dist"
+  );
+  const [publishTag, setPublishTag] = useState(suppliedSource?.publishTag ?? "production");
+  const [buildVariables, setBuildVariables] = useState<Record<string, string>>(
+    suppliedSource?.buildArgs ?? {}
+  );
+  const [variableDialogOpen, setVariableDialogOpen] = useState(false);
+  const [variableName, setVariableName] = useState("");
+  const [variableValue, setVariableValue] = useState("");
   const [buildSecrets, setBuildSecrets] = useState<DockerBuildSecret[]>(() =>
     (suppliedSource?.buildSecretNames ?? []).map((name, index) => ({
       id: `source-secret-${index}`,
@@ -103,6 +128,18 @@ export function DockerGitSourcePanel({
   const [connectComposeFilePath, setConnectComposeFilePath] = useState("compose.yaml");
   const [connectAutoBuild, setConnectAutoBuild] = useState(true);
   const [connectAutoDeploy, setConnectAutoDeploy] = useState(true);
+  const [connectApplicationRoot, setConnectApplicationRoot] = useState(".");
+  const [connectPackageManager, setConnectPackageManager] = useState<"npm" | "pnpm" | "yarn">(
+    "npm"
+  );
+  const [connectPackageManagerVersion, setConnectPackageManagerVersion] = useState("");
+  const [connectNodeVersion, setConnectNodeVersion] = useState<"20" | "22" | "24">("24");
+  const [connectBuildScript, setConnectBuildScript] = useState("");
+  const [connectArtifactDirectory, setConnectArtifactDirectory] = useState("dist");
+  const [connectPublishTag, setConnectPublishTag] = useState("production");
+  const [discoveryScripts, setDiscoveryScripts] = useState<Record<string, string>>({});
+  const [discoveryManagers, setDiscoveryManagers] = useState<Array<"npm" | "pnpm" | "yarn">>([]);
+  const [discovering, setDiscovering] = useState(false);
   const targetKind = target?.kind;
   const targetNodeId = target?.nodeId;
   const targetResourceId =
@@ -110,9 +147,16 @@ export function DockerGitSourcePanel({
       ? target.containerName
       : target?.kind === "deployment"
         ? target.deploymentId
-        : target?.composeProjectId;
+        : target?.kind === "compose_project"
+          ? target.composeProjectId
+          : target?.pageProjectId;
   const composeTarget = target?.kind === "compose_project";
-  const { connectorOptions, repositories } = useDockerSourceRepositories(connectOpen, connectorId);
+  const pagesTarget = target?.kind === "pages_project";
+  const { connectorOptions, repositories } = useDockerSourceRepositories(
+    connectOpen,
+    connectorId,
+    target
+  );
   const sourceId = source?.id;
 
   useEffect(() => {
@@ -134,7 +178,9 @@ export function DockerGitSourcePanel({
         ? { kind: "container", nodeId: targetNodeId!, containerName: targetResourceId }
         : targetKind === "deployment"
           ? { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId }
-          : { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId };
+          : targetKind === "compose_project"
+            ? { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId }
+            : { kind: "pages_project", nodeId: targetNodeId, pageProjectId: targetResourceId };
     setLoading(true);
     void api
       .getDockerSource(sourceTarget)
@@ -158,7 +204,9 @@ export function DockerGitSourcePanel({
         ? { kind: "container", nodeId: targetNodeId!, containerName: targetResourceId }
         : targetKind === "deployment"
           ? { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId }
-          : { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId };
+          : targetKind === "compose_project"
+            ? { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId }
+            : { kind: "pages_project", nodeId: targetNodeId, pageProjectId: targetResourceId };
     void api
       .listDockerBuildSecrets(sourceTarget)
       .then(setBuildSecrets)
@@ -176,6 +224,14 @@ export function DockerGitSourcePanel({
     setAutoBuild(source.autoBuild);
     setAutoDeploy(source.autoDeploy);
     setVulnerabilityThreshold(source.policy?.vulnerabilityThreshold ?? "critical");
+    setApplicationRoot(source.applicationRoot || ".");
+    setPackageManager(source.packageManager ?? "npm");
+    setPackageManagerVersion(source.packageManagerVersion ?? "");
+    setNodeVersion(source.nodeVersion ?? "24");
+    setBuildScript(source.buildScript ?? "build");
+    setArtifactDirectory(source.artifactDirectory ?? "dist");
+    setPublishTag(source.publishTag ?? "production");
+    setBuildVariables(source.buildArgs);
   }, [source]);
 
   const dirty = Boolean(
@@ -186,14 +242,31 @@ export function DockerGitSourcePanel({
           : dockerfilePath !== source.dockerfilePath || contextPath !== source.contextPath) ||
         autoBuild !== source.autoBuild ||
         autoDeploy !== source.autoDeploy ||
-        vulnerabilityThreshold !== (source.policy?.vulnerabilityThreshold ?? "critical"))
+        vulnerabilityThreshold !== (source.policy?.vulnerabilityThreshold ?? "critical") ||
+        (pagesTarget &&
+          (applicationRoot !== source.applicationRoot ||
+            packageManager !== source.packageManager ||
+            packageManagerVersion !== (source.packageManagerVersion ?? "") ||
+            nodeVersion !== source.nodeVersion ||
+            buildScript !== source.buildScript ||
+            artifactDirectory !== source.artifactDirectory ||
+            publishTag !== source.publishTag ||
+            JSON.stringify(buildVariables) !== JSON.stringify(source.buildArgs))))
   );
 
   const save = async () => {
+    if (!canEdit) return;
     if (
       !source ||
       !branch.trim() ||
-      (composeTarget ? !composeFilePath.trim() : !dockerfilePath.trim() || !contextPath.trim())
+      (composeTarget
+        ? !composeFilePath.trim()
+        : pagesTarget
+          ? !applicationRoot.trim() ||
+            !buildScript.trim() ||
+            !artifactDirectory.trim() ||
+            !publishTag.trim()
+          : !dockerfilePath.trim() || !contextPath.trim())
     )
       return;
     setSaving(true);
@@ -211,11 +284,19 @@ export function DockerGitSourcePanel({
           composeSecretKeys: source.composeSecretKeys,
           autoBuild,
           autoDeploy,
-          buildArgs: source.buildArgs,
+          buildArgs: pagesTarget ? buildVariables : source.buildArgs,
           buildSecretNames: source.buildSecretNames,
+          applicationRoot: pagesTarget ? applicationRoot.trim() : undefined,
+          packageManager: pagesTarget ? packageManager : undefined,
+          packageManagerVersion:
+            pagesTarget && packageManagerVersion.trim() ? packageManagerVersion.trim() : undefined,
+          nodeVersion: pagesTarget ? nodeVersion : undefined,
+          buildScript: pagesTarget ? buildScript.trim() : undefined,
+          artifactDirectory: pagesTarget ? artifactDirectory.trim() : undefined,
+          publishTag: pagesTarget ? publishTag.trim() : undefined,
           policy: {
             ...source.policy,
-            vulnerabilityThreshold,
+            vulnerabilityThreshold: pagesTarget ? "none" : vulnerabilityThreshold,
           },
         })
       );
@@ -232,13 +313,23 @@ export function DockerGitSourcePanel({
   };
 
   const openConnect = () => {
+    if (!canEdit) return;
     if (!requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")) return;
     setConnectOpen(true);
   };
 
   const connectSource = async () => {
+    if (!canEdit) return;
     if (!target || !connectorId || !projectId || !connectBranch.trim()) return;
     if (composeTarget && !connectComposeFilePath.trim()) return;
+    if (
+      pagesTarget &&
+      (!connectApplicationRoot.trim() ||
+        !connectBuildScript.trim() ||
+        !connectArtifactDirectory.trim() ||
+        !connectPublishTag.trim())
+    )
+      return;
     setConnecting(true);
     try {
       const connected = await api.upsertDockerSource(target, {
@@ -254,7 +345,17 @@ export function DockerGitSourcePanel({
         autoDeploy: connectAutoDeploy,
         buildArgs: {},
         buildSecretNames: [],
-        policy: { vulnerabilityThreshold: "critical" },
+        applicationRoot: pagesTarget ? connectApplicationRoot.trim() : undefined,
+        packageManager: pagesTarget ? connectPackageManager : undefined,
+        packageManagerVersion:
+          pagesTarget && connectPackageManagerVersion.trim()
+            ? connectPackageManagerVersion.trim()
+            : undefined,
+        nodeVersion: pagesTarget ? connectNodeVersion : undefined,
+        buildScript: pagesTarget ? connectBuildScript.trim() : undefined,
+        artifactDirectory: pagesTarget ? connectArtifactDirectory.trim() : undefined,
+        publishTag: pagesTarget ? connectPublishTag.trim() : undefined,
+        policy: { vulnerabilityThreshold: pagesTarget ? "none" : "critical" },
       });
       setSource(connected);
       setConnectOpen(false);
@@ -268,9 +369,63 @@ export function DockerGitSourcePanel({
     }
   };
 
+  const discoverPagesBuild = async () => {
+    if (!pagesTarget || !target || !connectorId || !projectId || !connectBranch.trim()) return;
+    setDiscovering(true);
+    try {
+      const discovery = await api.discoverPagesBuild(target.pageProjectId, {
+        connectorId,
+        projectId,
+        branch: connectBranch.trim(),
+        applicationRoot: connectApplicationRoot.trim() || ".",
+      });
+      setDiscoveryScripts(discovery.scripts);
+      setDiscoveryManagers(discovery.packageManagers);
+      if (discovery.preferredPackageManager) {
+        setConnectPackageManager(discovery.preferredPackageManager);
+      }
+      setConnectPackageManagerVersion(discovery.packageManagerVersion ?? "");
+      if (discovery.scripts.build) setConnectBuildScript("build");
+      else if (Object.keys(discovery.scripts).length === 1) {
+        setConnectBuildScript(Object.keys(discovery.scripts)[0]!);
+      }
+      toast.success("package.json loaded");
+    } catch (error) {
+      setDiscoveryScripts({});
+      toast.error(error instanceof Error ? error.message : "Failed to inspect package.json");
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const saveBuildVariable = () => {
+    const name = variableName.trim();
+    if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      toast.error("Variable name must be a valid environment variable name");
+      return;
+    }
+    setBuildVariables((current) => ({ ...current, [name]: variableValue }));
+    setVariableDialogOpen(false);
+    setVariableName("");
+    setVariableValue("");
+  };
+
+  const removeBuildVariable = (name: string) => {
+    setBuildVariables((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+  };
+
   const saveBuildSecret = async () => {
+    if (!canEdit) return;
     const name = secretName.trim();
     if (!name || !secretValue || !source) return;
+    if (pagesTarget && name.startsWith("VITE_")) {
+      toast.error("VITE_* values are public build variables, not Build Secrets");
+      return;
+    }
     setSecretSaving(true);
     try {
       const saved = target ? await api.upsertDockerBuildSecret(target, name, secretValue) : null;
@@ -305,6 +460,7 @@ export function DockerGitSourcePanel({
   };
 
   const removeBuildSecret = async (name: string) => {
+    if (!canEdit) return;
     const accepted = await confirm({
       title: "Delete Build Secret",
       description: `Delete ${name}? Builds that mount this secret will fail until it is added again.`,
@@ -336,6 +492,7 @@ export function DockerGitSourcePanel({
   };
 
   const triggerBuild = async () => {
+    if (!canBuild) return;
     if (!source) return;
     if (!target) return;
     setBuilding(true);
@@ -353,6 +510,7 @@ export function DockerGitSourcePanel({
   };
 
   const disconnectSource = async () => {
+    if (!canEdit) return;
     if (!target || !source) return;
     const accepted = await confirm({
       title: "Disconnect repository",
@@ -404,9 +562,13 @@ export function DockerGitSourcePanel({
           description="Build and deploy this resource directly from a Git repository."
         >
           <EmptyState
-            message="No repository connected. This resource continues to use its configured image."
-            actionLabel="Connect repository"
-            onAction={openConnect}
+            message={
+              pagesTarget
+                ? "No repository connected. This Project continues to accept manual Deployments."
+                : "No repository connected. This resource continues to use its configured image."
+            }
+            actionLabel={canEdit ? "Connect repository" : undefined}
+            onAction={canEdit ? openConnect : undefined}
             embedded
           />
         </PanelShell>
@@ -415,9 +577,11 @@ export function DockerGitSourcePanel({
             <DialogHeader>
               <DialogTitle>Connect repository</DialogTitle>
               <DialogDescription>
-                {composeTarget
-                  ? "Build every Compose service that declares build and apply the project only after all artifacts pass policy."
-                  : "Build and deploy this Docker resource from an allowlisted repository."}
+                {pagesTarget
+                  ? "Build a static artifact from a package.json script and publish it as an immutable Pages Deployment."
+                  : composeTarget
+                    ? "Build every Compose service that declares build and apply the project only after all artifacts pass policy."
+                    : "Build and deploy this Docker resource from an allowlisted repository."}
               </DialogDescription>
             </DialogHeader>
             <RepositorySourceFields
@@ -434,6 +598,7 @@ export function DockerGitSourcePanel({
               dockerfilePath={connectDockerfilePath}
               contextPath={connectContextPath}
               composeFilePath={composeTarget ? connectComposeFilePath : undefined}
+              pages={pagesTarget}
               autoBuild={connectAutoBuild}
               autoDeploy={connectAutoDeploy}
               onConnectorChange={(value) => {
@@ -448,6 +613,111 @@ export function DockerGitSourcePanel({
               onAutoBuildChange={setConnectAutoBuild}
               onAutoDeployChange={setConnectAutoDeploy}
             />
+            {pagesTarget && (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="pages-application-root">
+                    Application root
+                  </label>
+                  <Input
+                    id="pages-application-root"
+                    value={connectApplicationRoot}
+                    onChange={(event) => {
+                      setConnectApplicationRoot(event.target.value);
+                      setDiscoveryScripts({});
+                    }}
+                    placeholder="."
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => void discoverPagesBuild()}
+                  disabled={discovering || !connectorId || !projectId || !connectBranch.trim()}
+                >
+                  {discovering ? "Loading…" : "Load package.json"}
+                </Button>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Package manager</label>
+                    <Select
+                      value={connectPackageManager}
+                      onValueChange={(value) =>
+                        setConnectPackageManager(value as "npm" | "pnpm" | "yarn")
+                      }
+                    >
+                      <SelectTrigger aria-label="Package manager">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(discoveryManagers.length > 0
+                          ? discoveryManagers
+                          : (["npm", "pnpm", "yarn"] as const)
+                        ).map((manager) => (
+                          <SelectItem key={manager} value={manager}>
+                            {manager}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Node.js</label>
+                    <Select
+                      value={connectNodeVersion}
+                      onValueChange={(value) => setConnectNodeVersion(value as "20" | "22" | "24")}
+                    >
+                      <SelectTrigger aria-label="Node.js version">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="20">Node.js 20</SelectItem>
+                        <SelectItem value="22">Node.js 22</SelectItem>
+                        <SelectItem value="24">Node.js 24</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Build script</label>
+                  <Select value={connectBuildScript} onValueChange={setConnectBuildScript}>
+                    <SelectTrigger aria-label="Build script">
+                      <SelectValue placeholder="Load package.json first" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(discoveryScripts).map(([name, command]) => (
+                        <SelectItem key={name} value={name} description={command}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="pages-artifact-directory">
+                      Artifact directory
+                    </label>
+                    <Input
+                      id="pages-artifact-directory"
+                      value={connectArtifactDirectory}
+                      onChange={(event) => setConnectArtifactDirectory(event.target.value)}
+                      placeholder="dist"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="pages-publish-tag">
+                      Publish Tag
+                    </label>
+                    <Input
+                      id="pages-publish-tag"
+                      value={connectPublishTag}
+                      onChange={(event) => setConnectPublishTag(event.target.value)}
+                      placeholder="production"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setConnectOpen(false)} disabled={connecting}>
                 Cancel
@@ -459,7 +729,12 @@ export function DockerGitSourcePanel({
                   !connectorId ||
                   !projectId ||
                   !connectBranch.trim() ||
-                  (composeTarget && !connectComposeFilePath.trim())
+                  (composeTarget && !connectComposeFilePath.trim()) ||
+                  (pagesTarget &&
+                    (!connectBuildScript ||
+                      !connectApplicationRoot.trim() ||
+                      !connectArtifactDirectory.trim() ||
+                      !connectPublishTag.trim()))
                 }
               >
                 {connecting ? "Connecting…" : "Connect"}
@@ -477,38 +752,53 @@ export function DockerGitSourcePanel({
     <div className="flex flex-col gap-4">
       <PanelShell
         title="Repository"
-        description="Source and build settings used by this Docker resource."
+        description={
+          pagesTarget
+            ? "Source and build settings used by this Pages Project."
+            : "Source and build settings used by this Docker resource."
+        }
         dirty={dirty}
         actions={
           <div className="flex items-center gap-2">
-            <Button
-              onClick={() => void save()}
-              disabled={
-                saving ||
-                !dirty ||
-                !branch.trim() ||
-                (composeTarget
-                  ? !composeFilePath.trim()
-                  : !dockerfilePath.trim() || !contextPath.trim())
-              }
-            >
-              <Save className="h-4 w-4" />
-              {saving ? "Saving…" : "Save"}
-            </Button>
-            <Button onClick={() => void triggerBuild()} disabled={building || dirty}>
-              <Play className="h-4 w-4" />
-              {building ? "Queuing…" : "Build now"}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Disconnect repository"
-              title="Disconnect repository"
-              disabled={disconnecting}
-              onClick={() => void disconnectSource()}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {canEdit && (
+              <Button
+                onClick={() => void save()}
+                disabled={
+                  saving ||
+                  !dirty ||
+                  !branch.trim() ||
+                  (composeTarget
+                    ? !composeFilePath.trim()
+                    : pagesTarget
+                      ? !applicationRoot.trim() ||
+                        !buildScript.trim() ||
+                        !artifactDirectory.trim() ||
+                        !publishTag.trim()
+                      : !dockerfilePath.trim() || !contextPath.trim())
+                }
+              >
+                <Save className="h-4 w-4" />
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            )}
+            {canBuild && (
+              <Button onClick={() => void triggerBuild()} disabled={building || dirty}>
+                <Play className="h-4 w-4" />
+                {building ? "Queuing…" : "Build now"}
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Disconnect repository"
+                title="Disconnect repository"
+                disabled={disconnecting}
+                onClick={() => void disconnectSource()}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         }
       >
@@ -536,6 +826,7 @@ export function DockerGitSourcePanel({
             onChange={(event) => setBranch(event.target.value)}
             className="sm:w-72"
             placeholder="main"
+            disabled={!canEdit}
           />
         </SettingsControlRow>
         {composeTarget ? (
@@ -548,8 +839,98 @@ export function DockerGitSourcePanel({
               onChange={(event) => setComposeFilePath(event.target.value)}
               className="sm:w-72"
               placeholder="compose.yaml"
+              disabled={!canEdit}
             />
           </SettingsControlRow>
+        ) : pagesTarget ? (
+          <>
+            <SettingsControlRow
+              title="Application root"
+              description="Repository-relative directory containing package.json."
+            >
+              <Input
+                value={applicationRoot}
+                onChange={(event) => setApplicationRoot(event.target.value)}
+                className="sm:w-72"
+                placeholder="."
+                disabled={!canEdit}
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Package manager"
+              description="Dependency installer and package.json script executor."
+            >
+              <Select
+                value={packageManager}
+                onValueChange={(value) => setPackageManager(value as "npm" | "pnpm" | "yarn")}
+                disabled={!canEdit}
+              >
+                <SelectTrigger className="sm:w-72" aria-label="Package manager">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="npm">npm</SelectItem>
+                  <SelectItem value="pnpm">pnpm</SelectItem>
+                  <SelectItem value="yarn">yarn</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Node.js"
+              description="Managed Node.js runtime used by the isolated builder."
+            >
+              <Select
+                value={nodeVersion}
+                onValueChange={(value) => setNodeVersion(value as "20" | "22" | "24")}
+                disabled={!canEdit}
+              >
+                <SelectTrigger className="sm:w-72" aria-label="Node.js version">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="20">Node.js 20</SelectItem>
+                  <SelectItem value="22">Node.js 22</SelectItem>
+                  <SelectItem value="24">Node.js 24</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Build script"
+              description="package.json script executed after dependency installation."
+            >
+              <Input
+                value={buildScript}
+                onChange={(event) => setBuildScript(event.target.value)}
+                className="sm:w-72"
+                placeholder="build"
+                disabled={!canEdit}
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Artifact directory"
+              description="Directory published relative to the Application root."
+            >
+              <Input
+                value={artifactDirectory}
+                onChange={(event) => setArtifactDirectory(event.target.value)}
+                className="sm:w-72"
+                placeholder="dist"
+                disabled={!canEdit}
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Publish Tag"
+              description="Successful builds move this existing Pages Tag."
+            >
+              <Input
+                value={publishTag}
+                onChange={(event) => setPublishTag(event.target.value)}
+                className="sm:w-72"
+                placeholder="production"
+                disabled={!canEdit}
+              />
+            </SettingsControlRow>
+          </>
         ) : (
           <>
             <SettingsControlRow
@@ -561,6 +942,7 @@ export function DockerGitSourcePanel({
                 onChange={(event) => setDockerfilePath(event.target.value)}
                 className="sm:w-72"
                 placeholder="Dockerfile"
+                disabled={!canEdit}
               />
             </SettingsControlRow>
             <SettingsControlRow
@@ -572,6 +954,7 @@ export function DockerGitSourcePanel({
                 onChange={(event) => setContextPath(event.target.value)}
                 className="sm:w-72"
                 placeholder="."
+                disabled={!canEdit}
               />
             </SettingsControlRow>
           </>
@@ -580,54 +963,151 @@ export function DockerGitSourcePanel({
           title="Automatic builds"
           description="Queue a build when a new commit is detected by webhook or polling."
         >
-          <Switch checked={autoBuild} onChange={setAutoBuild} ariaLabel="Automatic builds" />
+          <Switch
+            checked={autoBuild}
+            onChange={setAutoBuild}
+            ariaLabel="Automatic builds"
+            disabled={!canEdit}
+          />
         </SettingsControlRow>
         <SettingsControlRow
           title="Automatic deployment"
           description="Roll out an approved artifact after its build succeeds."
         >
-          <Switch checked={autoDeploy} onChange={setAutoDeploy} ariaLabel="Automatic deployment" />
+          <Switch
+            checked={autoDeploy}
+            onChange={setAutoDeploy}
+            ariaLabel="Automatic deployment"
+            disabled={!canEdit}
+          />
         </SettingsControlRow>
-        <SettingsControlRow
-          title="Vulnerability policy"
-          description="Minimum vulnerability severity that blocks an artifact from deployment."
-        >
-          <Select
-            value={vulnerabilityThreshold}
-            onValueChange={(value) => setVulnerabilityThreshold(value as VulnerabilityThreshold)}
+        {!pagesTarget && (
+          <SettingsControlRow
+            title="Vulnerability policy"
+            description="Minimum vulnerability severity that blocks an artifact from deployment."
           >
-            <SelectTrigger className="sm:w-72" aria-label="Vulnerability policy">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="critical" description="Block critical findings.">
-                Critical
-              </SelectItem>
-              <SelectItem value="high" description="Block high and critical findings.">
-                High
-              </SelectItem>
-              <SelectItem value="medium" description="Block medium, high, and critical findings.">
-                Medium
-              </SelectItem>
-              <SelectItem value="low" description="Block every known vulnerability severity.">
-                Low
-              </SelectItem>
-              <SelectItem value="none" description="Report findings without blocking deployment.">
-                Report only
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </SettingsControlRow>
+            <Select
+              value={vulnerabilityThreshold}
+              onValueChange={(value) => setVulnerabilityThreshold(value as VulnerabilityThreshold)}
+              disabled={!canEdit}
+            >
+              <SelectTrigger className="sm:w-72" aria-label="Vulnerability policy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="critical" description="Block critical findings.">
+                  Critical
+                </SelectItem>
+                <SelectItem value="high" description="Block high and critical findings.">
+                  High
+                </SelectItem>
+                <SelectItem value="medium" description="Block medium, high, and critical findings.">
+                  Medium
+                </SelectItem>
+                <SelectItem value="low" description="Block every known vulnerability severity.">
+                  Low
+                </SelectItem>
+                <SelectItem value="none" description="Report findings without blocking deployment.">
+                  Report only
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsControlRow>
+        )}
       </PanelShell>
+
+      {pagesTarget && (
+        <PanelShell
+          title="Build Variables"
+          description="Build-time environment values. VITE_* values are embedded in the published client bundle."
+          dirty={JSON.stringify(buildVariables) !== JSON.stringify(source.buildArgs)}
+          actions={
+            canEdit ? (
+              <Button
+                onClick={() => {
+                  setVariableName("");
+                  setVariableValue("");
+                  setVariableDialogOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Add variable
+              </Button>
+            ) : undefined
+          }
+        >
+          {Object.keys(buildVariables).length === 0 ? (
+            <EmptyState message="No Build Variables configured." embedded />
+          ) : (
+            Object.entries(buildVariables)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([name, value]) => (
+                <SettingsControlRow
+                  key={name}
+                  title={name}
+                  description={
+                    name.startsWith("VITE_")
+                      ? "Public in the built client bundle."
+                      : "Build-time environment variable."
+                  }
+                  onClick={
+                    canEdit
+                      ? () => {
+                          setVariableName(name);
+                          setVariableValue(value);
+                          setVariableDialogOpen(true);
+                        }
+                      : undefined
+                  }
+                >
+                  {canEdit && (
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Edit ${name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setVariableName(name);
+                          setVariableValue(value);
+                          setVariableDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Delete ${name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeBuildVariable(name);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
+                </SettingsControlRow>
+              ))
+          )}
+        </PanelShell>
+      )}
 
       <PanelShell
         title="Build Secrets"
-        description="Encrypted values exposed only through explicit BuildKit secret mounts."
+        description={
+          pagesTarget
+            ? "Encrypted write-only values exposed to dependency installation and the selected build script."
+            : "Encrypted values exposed only through explicit BuildKit secret mounts."
+        }
         actions={
-          <Button onClick={() => openBuildSecretDialog()}>
-            <Plus className="h-4 w-4" />
-            Add secret
-          </Button>
+          canEdit ? (
+            <Button onClick={() => openBuildSecretDialog()}>
+              <Plus className="h-4 w-4" />
+              Add secret
+            </Button>
+          ) : undefined
         }
       >
         {buildSecrets.length === 0 ? (
@@ -638,33 +1118,35 @@ export function DockerGitSourcePanel({
               key={secret.id}
               title={secret.name}
               description="Value is write-only and never returned by the API."
-              onClick={() => openBuildSecretDialog(secret.name)}
+              onClick={canEdit ? () => openBuildSecretDialog(secret.name) : undefined}
             >
-              <div className="flex items-center justify-end gap-2">
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label={`Replace ${secret.name}`}
-                  title={`Replace ${secret.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    openBuildSecretDialog(secret.name);
-                  }}
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label={`Delete ${secret.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void removeBuildSecret(secret.name);
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
+              {canEdit && (
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`Replace ${secret.name}`}
+                    title={`Replace ${secret.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openBuildSecretDialog(secret.name);
+                    }}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`Delete ${secret.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void removeBuildSecret(secret.name);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </SettingsControlRow>
           ))
         )}
@@ -727,8 +1209,9 @@ export function DockerGitSourcePanel({
               Secret
             </DialogTitle>
             <DialogDescription>
-              Use the same ID in the Dockerfile with RUN --mount=type=secret. Existing values cannot
-              be revealed.
+              {pagesTarget
+                ? "The value is exposed only to the isolated build process. VITE_* names are public and must use Build Variables."
+                : "Use the same ID in the Dockerfile with RUN --mount=type=secret. Existing values cannot be revealed."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -766,6 +1249,50 @@ export function DockerGitSourcePanel({
               disabled={secretSaving || !secretName.trim() || !secretValue}
             >
               {secretSaving ? "Saving…" : "Save secret"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={variableDialogOpen} onOpenChange={setVariableDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {Object.hasOwn(buildVariables, variableName) ? "Edit" : "Add"} Build Variable
+            </DialogTitle>
+            <DialogDescription>
+              Build Variables are readable configuration. VITE_* values are embedded in the static
+              client bundle.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="build-variable-name">
+                Name
+              </label>
+              <Input
+                id="build-variable-name"
+                value={variableName}
+                onChange={(event) => setVariableName(event.target.value)}
+                placeholder="VITE_API_URL"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="build-variable-value">
+                Value
+              </label>
+              <Input
+                id="build-variable-value"
+                value={variableValue}
+                onChange={(event) => setVariableValue(event.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVariableDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={saveBuildVariable} disabled={!variableName.trim()}>
+              Save variable
             </Button>
           </DialogFooter>
         </DialogContent>

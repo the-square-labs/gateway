@@ -22,7 +22,8 @@ import { nodes } from './nodes.js';
 import { sslCertificates } from './ssl-certificates.js';
 import { users } from './users.js';
 
-export type DockerSourceTargetKind = 'container' | 'deployment' | 'compose_project';
+export type DockerSourceTargetKind = 'container' | 'deployment' | 'compose_project' | 'pages_project';
+export type PagesBuildPackageManager = 'npm' | 'pnpm' | 'yarn';
 export type DockerBuildTrigger = 'manual' | 'gitlab_push' | 'github_push' | 'generic_webhook' | 'poll' | 'retry';
 export type DockerBuildStatus =
   | 'queued'
@@ -117,6 +118,7 @@ export const dockerSourceBindings = pgTable(
     containerName: text('container_name'),
     deploymentId: uuid('deployment_id').references(() => dockerDeployments.id, { onDelete: 'cascade' }),
     composeProjectId: uuid('compose_project_id').references(() => dockerComposeProjects.id, { onDelete: 'cascade' }),
+    pageProjectId: uuid('page_project_id'),
     connectorId: uuid('connector_id')
       .notNull()
       .references(() => integrationConnectors.id, { onDelete: 'restrict' }),
@@ -138,6 +140,13 @@ export const dockerSourceBindings = pgTable(
     initialConfig: jsonb('initial_config').$type<Record<string, unknown>>(),
     buildArgs: jsonb('build_args').$type<Record<string, string>>().notNull().default({}),
     buildSecretNames: text('build_secret_names').array().notNull().default([]),
+    applicationRoot: text('application_root').notNull().default('.'),
+    packageManager: varchar('package_manager', { length: 16 }).$type<PagesBuildPackageManager>(),
+    packageManagerVersion: varchar('package_manager_version', { length: 64 }),
+    nodeVersion: varchar('node_version', { length: 16 }),
+    buildScript: varchar('build_script', { length: 128 }),
+    artifactDirectory: text('artifact_directory'),
+    publishTag: varchar('publish_tag', { length: 63 }),
     policy: jsonb('policy').$type<DockerBuildPolicySnapshot>().notNull().default({}),
     desiredCommitSha: varchar('desired_commit_sha', { length: 64 }),
     deployedCommitSha: varchar('deployed_commit_sha', { length: 64 }),
@@ -157,9 +166,13 @@ export const dockerSourceBindings = pgTable(
   (table) => [
     check(
       'docker_source_bindings_target_shape_check',
-      sql`(${table.targetKind} = 'container' AND ${table.nodeId} IS NOT NULL AND ${table.containerName} IS NOT NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NULL AND ${table.composeFilePath} IS NULL) OR (${table.targetKind} = 'deployment' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NOT NULL AND ${table.composeProjectId} IS NULL AND ${table.composeFilePath} IS NULL) OR (${table.targetKind} = 'compose_project' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NOT NULL AND ${table.composeFilePath} IS NOT NULL)`
+      sql`(${table.targetKind} = 'container' AND ${table.nodeId} IS NOT NULL AND ${table.containerName} IS NOT NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NULL AND ${table.pageProjectId} IS NULL AND ${table.composeFilePath} IS NULL) OR (${table.targetKind} = 'deployment' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NOT NULL AND ${table.composeProjectId} IS NULL AND ${table.pageProjectId} IS NULL AND ${table.composeFilePath} IS NULL) OR (${table.targetKind} = 'compose_project' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NOT NULL AND ${table.pageProjectId} IS NULL AND ${table.composeFilePath} IS NOT NULL) OR (${table.targetKind} = 'pages_project' AND ${table.nodeId} IS NULL AND ${table.containerName} IS NULL AND ${table.deploymentId} IS NULL AND ${table.composeProjectId} IS NULL AND ${table.pageProjectId} IS NOT NULL AND ${table.composeFilePath} IS NULL)`
     ),
     check('docker_source_bindings_branch_not_blank_check', sql`length(trim(${table.branch})) > 0`),
+    check(
+      'docker_source_bindings_pages_build_config_check',
+      sql`(${table.targetKind} = 'pages_project' AND ${table.packageManager} IN ('npm', 'pnpm', 'yarn') AND ${table.nodeVersion} IN ('20', '22', '24') AND ${table.buildScript} IS NOT NULL AND length(trim(${table.buildScript})) > 0 AND ${table.artifactDirectory} IS NOT NULL AND length(trim(${table.artifactDirectory})) > 0 AND ${table.publishTag} IS NOT NULL) OR (${table.targetKind} <> 'pages_project' AND ${table.packageManager} IS NULL AND ${table.packageManagerVersion} IS NULL AND ${table.nodeVersion} IS NULL AND ${table.buildScript} IS NULL AND ${table.artifactDirectory} IS NULL AND ${table.publishTag} IS NULL)`
+    ),
     check('docker_source_bindings_dockerfile_not_absolute_check', sql`${table.dockerfilePath} !~ '^/'`),
     check('docker_source_bindings_context_not_absolute_check', sql`${table.contextPath} !~ '^/'`),
     check(
@@ -175,6 +188,9 @@ export const dockerSourceBindings = pgTable(
     uniqueIndex('docker_source_bindings_compose_project_unique')
       .on(table.composeProjectId)
       .where(sql`${table.targetKind} = 'compose_project'`),
+    uniqueIndex('docker_source_bindings_page_project_unique')
+      .on(table.pageProjectId)
+      .where(sql`${table.targetKind} = 'pages_project'`),
     index('docker_source_bindings_connector_project_idx').on(table.connectorId, table.projectId),
     index('docker_source_bindings_desired_commit_idx').on(table.desiredCommitSha),
   ]
@@ -274,6 +290,13 @@ export const dockerBuilds = pgTable(
     dockerfilePath: text('dockerfile_path').notNull().default('Dockerfile'),
     contextPath: text('context_path').notNull().default('.'),
     buildArgs: jsonb('build_args').$type<Record<string, string>>().notNull().default({}),
+    applicationRoot: text('application_root').notNull().default('.'),
+    packageManager: varchar('package_manager', { length: 16 }).$type<PagesBuildPackageManager>(),
+    packageManagerVersion: varchar('package_manager_version', { length: 64 }),
+    nodeVersion: varchar('node_version', { length: 16 }),
+    buildScript: varchar('build_script', { length: 128 }),
+    artifactDirectory: text('artifact_directory'),
+    publishTag: varchar('publish_tag', { length: 63 }),
     status: varchar('status', { length: 32 }).$type<DockerBuildStatus>().notNull().default('queued'),
     builderNodeId: uuid('builder_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     platform: varchar('platform', { length: 64 }),

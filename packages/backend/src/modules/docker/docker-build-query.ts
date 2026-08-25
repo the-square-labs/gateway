@@ -9,6 +9,7 @@ import {
   dockerSourceBindings,
   integrationConnectors,
   nodes,
+  pageProjects,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 
@@ -45,12 +46,15 @@ export class DockerBuildQuery {
         deploymentName: dockerDeployments.name,
         composeNodeId: dockerComposeProjects.nodeId,
         composeName: dockerComposeProjects.name,
+        pageNodeId: pageProjects.nodeId,
+        pageName: pageProjects.name,
       })
       .from(dockerBuilds)
       .innerJoin(dockerSourceBindings, eq(dockerSourceBindings.id, dockerBuilds.sourceBindingId))
       .innerJoin(integrationConnectors, eq(integrationConnectors.id, dockerSourceBindings.connectorId))
       .leftJoin(dockerDeployments, eq(dockerDeployments.id, dockerSourceBindings.deploymentId))
       .leftJoin(dockerComposeProjects, eq(dockerComposeProjects.id, dockerSourceBindings.composeProjectId))
+      .leftJoin(pageProjects, eq(pageProjects.id, dockerSourceBindings.pageProjectId))
       .where(eq(dockerBuilds.id, id))
       .limit(1);
     if (!joined) throw new AppError(404, 'BUILD_NOT_FOUND', 'Docker build not found');
@@ -87,13 +91,20 @@ export class DockerBuildQuery {
                 deploymentId: joined.source.deploymentId!,
                 name: joined.deploymentName!,
               }
-            : {
-                kind: 'compose_project' as const,
-                nodeId: joined.composeNodeId!,
-                composeProjectId: joined.source.composeProjectId!,
-                name: joined.composeName!,
-                serviceName: joined.build.serviceName,
-              },
+            : joined.source.targetKind === 'compose_project'
+              ? {
+                  kind: 'compose_project' as const,
+                  nodeId: joined.composeNodeId!,
+                  composeProjectId: joined.source.composeProjectId!,
+                  name: joined.composeName!,
+                  serviceName: joined.build.serviceName,
+                }
+              : {
+                  kind: 'pages_project' as const,
+                  nodeId: joined.pageNodeId!,
+                  pageProjectId: joined.source.pageProjectId!,
+                  name: joined.pageName!,
+                },
     };
   }
 
@@ -113,7 +124,8 @@ export class DockerBuildQuery {
           ilike(dockerBuilds.ref, pattern),
           ilike(dockerSourceBindings.containerName, pattern),
           ilike(dockerDeployments.name, pattern),
-          ilike(dockerComposeProjects.name, pattern)
+          ilike(dockerComposeProjects.name, pattern),
+          ilike(pageProjects.name, pattern)
         )!
       );
     }
@@ -134,12 +146,15 @@ export class DockerBuildQuery {
         deploymentName: dockerDeployments.name,
         composeNodeId: dockerComposeProjects.nodeId,
         composeName: dockerComposeProjects.name,
+        pageNodeId: pageProjects.nodeId,
+        pageName: pageProjects.name,
       })
       .from(dockerBuilds)
       .innerJoin(dockerSourceBindings, eq(dockerSourceBindings.id, dockerBuilds.sourceBindingId))
       .innerJoin(integrationConnectors, eq(integrationConnectors.id, dockerSourceBindings.connectorId))
       .leftJoin(dockerDeployments, eq(dockerDeployments.id, dockerSourceBindings.deploymentId))
       .leftJoin(dockerComposeProjects, eq(dockerComposeProjects.id, dockerSourceBindings.composeProjectId))
+      .leftJoin(pageProjects, eq(pageProjects.id, dockerSourceBindings.pageProjectId))
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(dockerBuilds.createdAt), desc(dockerBuilds.id))
       .limit(Math.min(Math.max(input.limit ?? 50, 1), 200));
@@ -158,34 +173,53 @@ export class DockerBuildQuery {
       ? await this.db.select().from(dockerBuildArtifacts).where(inArray(dockerBuildArtifacts.buildId, buildIds))
       : [];
     const artifactsByBuildId = new Map(artifacts.map((artifact) => [artifact.buildId, artifact] as const));
-    return rows.map(({ build, source, provider, deploymentNodeId, deploymentName, composeNodeId, composeName }) => ({
-      ...build,
-      provider,
-      builderName: build.builderNodeId ? (builderNames.get(build.builderNodeId) ?? null) : null,
-      sourceAutoDeploy: source.autoDeploy,
-      artifact: artifactsByBuildId.get(build.id) ?? null,
-      target:
-        source.targetKind === 'container'
-          ? {
-              kind: 'container' as const,
-              nodeId: source.nodeId!,
-              containerName: source.containerName!,
-              name: source.containerName!,
-            }
-          : source.targetKind === 'deployment'
+    return rows.map(
+      ({
+        build,
+        source,
+        provider,
+        deploymentNodeId,
+        deploymentName,
+        composeNodeId,
+        composeName,
+        pageNodeId,
+        pageName,
+      }) => ({
+        ...build,
+        provider,
+        builderName: build.builderNodeId ? (builderNames.get(build.builderNodeId) ?? null) : null,
+        sourceAutoDeploy: source.autoDeploy,
+        artifact: artifactsByBuildId.get(build.id) ?? null,
+        target:
+          source.targetKind === 'container'
             ? {
-                kind: 'deployment' as const,
-                nodeId: deploymentNodeId!,
-                deploymentId: source.deploymentId!,
-                name: deploymentName!,
+                kind: 'container' as const,
+                nodeId: source.nodeId!,
+                containerName: source.containerName!,
+                name: source.containerName!,
               }
-            : {
-                kind: 'compose_project' as const,
-                nodeId: composeNodeId!,
-                composeProjectId: source.composeProjectId!,
-                name: composeName!,
-                serviceName: build.serviceName,
-              },
-    }));
+            : source.targetKind === 'deployment'
+              ? {
+                  kind: 'deployment' as const,
+                  nodeId: deploymentNodeId!,
+                  deploymentId: source.deploymentId!,
+                  name: deploymentName!,
+                }
+              : source.targetKind === 'compose_project'
+                ? {
+                    kind: 'compose_project' as const,
+                    nodeId: composeNodeId!,
+                    composeProjectId: source.composeProjectId!,
+                    name: composeName!,
+                    serviceName: build.serviceName,
+                  }
+                : {
+                    kind: 'pages_project' as const,
+                    nodeId: pageNodeId!,
+                    pageProjectId: source.pageProjectId!,
+                    name: pageName!,
+                  },
+      })
+    );
   }
 }

@@ -12,6 +12,8 @@ interface DockerResourceGitTabsProps {
   includeBuilds?: boolean;
   composeVariables?: Record<string, string>;
   composeSecretKeys?: string[];
+  canEdit?: boolean;
+  canBuild?: boolean;
 }
 
 const ACTIVE_BUILD_STATUSES = new Set<DockerBuild["status"]>([
@@ -30,6 +32,8 @@ export function DockerResourceGitTabs({
   includeBuilds = false,
   composeVariables,
   composeSecretKeys,
+  canEdit = true,
+  canBuild = true,
 }: DockerResourceGitTabsProps) {
   const [source, setSource] = useState<DockerSourceBinding | null>(null);
   const [builds, setBuilds] = useState<DockerBuild[]>([]);
@@ -44,14 +48,18 @@ export function DockerResourceGitTabs({
       ? target.containerName
       : target.kind === "deployment"
         ? target.deploymentId
-        : target.composeProjectId;
+        : target.kind === "compose_project"
+          ? target.composeProjectId
+          : target.pageProjectId;
   const stableTarget = useMemo<DockerSourceTarget>(
     () =>
       targetKind === "container"
         ? { kind: "container", nodeId: targetNodeId!, containerName: targetResourceId }
         : targetKind === "deployment"
           ? { kind: "deployment", nodeId: targetNodeId, deploymentId: targetResourceId }
-          : { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId },
+          : targetKind === "compose_project"
+            ? { kind: "compose_project", nodeId: targetNodeId!, composeProjectId: targetResourceId }
+            : { kind: "pages_project", nodeId: targetNodeId, pageProjectId: targetResourceId },
     [targetKind, targetNodeId, targetResourceId]
   );
 
@@ -133,6 +141,8 @@ export function DockerResourceGitTabs({
         onBuildQueued={includeBuilds ? () => void refreshBuilds() : undefined}
         composeVariables={composeVariables}
         composeSecretKeys={composeSecretKeys}
+        canEdit={canEdit}
+        canBuild={canBuild}
       />
       {includeBuilds && source ? (
         <DockerBuildHistoryPanel builds={builds} sourceBindingId={source.id} loading={loading} />

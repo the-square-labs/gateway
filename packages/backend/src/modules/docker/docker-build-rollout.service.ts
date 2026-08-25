@@ -8,6 +8,7 @@ import {
   dockerSourceBindings,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerComposeService } from './compose/compose.service.js';
 import type { DockerManagementService } from './docker.service.js';
@@ -16,6 +17,7 @@ import type { DockerDeploymentService } from './docker-deployment.service.js';
 
 export class DockerBuildRolloutService {
   private readonly composeRollout?: DockerComposeBuildRolloutService;
+  private pagesRollout?: PageBuildRolloutService;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -25,6 +27,10 @@ export class DockerBuildRolloutService {
     compose?: DockerComposeService
   ) {
     if (compose) this.composeRollout = new DockerComposeBuildRolloutService(db, registry, compose);
+  }
+
+  setPagesRollout(service: PageBuildRolloutService): void {
+    this.pagesRollout = service;
   }
 
   async rollout(buildId: string): Promise<'deployed' | 'superseded' | 'pending'> {
@@ -39,6 +45,12 @@ export class DockerBuildRolloutService {
         throw new AppError(503, 'COMPOSE_ROLLOUT_UNAVAILABLE', 'Compose rollout is unavailable');
       }
       return this.composeRollout.rollout(buildId);
+    }
+    if (target?.targetKind === 'pages_project') {
+      if (!this.pagesRollout) {
+        throw new AppError(503, 'PAGES_BUILD_ROLLOUT_UNAVAILABLE', 'Pages build rollout is unavailable');
+      }
+      return this.pagesRollout.rollout(buildId);
     }
     return this.db.transaction(async (tx) => {
       const [identity] = await tx

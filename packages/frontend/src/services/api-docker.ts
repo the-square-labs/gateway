@@ -35,6 +35,7 @@ import type {
   DockerVolume,
   FileEntry,
   Node,
+  PagesBuildDiscovery,
 } from "@/types";
 import { API_BASE } from "./api-base";
 import { withDockerMigrationApi } from "./api-docker-migrations";
@@ -72,6 +73,9 @@ function dockerSourcePath(target: DockerSourceTarget): string {
   }
   if (target.kind === "deployment") {
     return `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
+  }
+  if (target.kind === "pages_project") {
+    return `/pages/projects/${target.pageProjectId}/source`;
   }
   return `/docker/nodes/${target.nodeId}/compose-projects/${target.composeProjectId}/source`;
 }
@@ -1867,10 +1871,25 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
-    async listDockerBuildRepositories(connectorId: string): Promise<DockerBuildSourceRepository[]> {
+    async listDockerBuildRepositories(
+      connectorId: string,
+      target?: DockerSourceTarget
+    ): Promise<DockerBuildSourceRepository[]> {
+      const path =
+        target?.kind === "pages_project"
+          ? `/pages/projects/${target.pageProjectId}/source/connectors/${connectorId}/repositories`
+          : `/docker/sources/connectors/${connectorId}/repositories`;
+      return this.unwrapData(this.request<{ data: DockerBuildSourceRepository[] }>(path));
+    }
+
+    async discoverPagesBuild(
+      pageProjectId: string,
+      input: { connectorId: string; projectId: string; branch: string; applicationRoot: string }
+    ): Promise<PagesBuildDiscovery> {
       return this.unwrapData(
-        this.request<{ data: DockerBuildSourceRepository[] }>(
-          `/docker/sources/connectors/${connectorId}/repositories`
+        this.request<{ data: PagesBuildDiscovery }>(
+          `/pages/projects/${pageProjectId}/source/discovery`,
+          { method: "POST", body: JSON.stringify(input) }
         )
       );
     }

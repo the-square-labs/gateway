@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PageTagNameSchema } from '@/modules/pages/tokens/page-deploy-token.schemas.js';
 import {
   DOCKER_DEPLOYMENT_ROUTES_MAX,
   DockerDeploymentHealthSchema,
@@ -13,6 +14,23 @@ const RelativeBuildPathSchema = z
   .refine((value) => !value.startsWith('/') && !value.split('/').includes('..'), {
     message: 'Build paths must stay inside the repository',
   });
+
+const PagesBuildPathSchema = RelativeBuildPathSchema.refine((value) => /^[A-Za-z0-9._/-]+$/.test(value), {
+  message: 'Pages build paths may contain only letters, numbers, dots, underscores, dashes, and slashes',
+});
+
+const BuildEnvironmentNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+export const PagesBuildPackageManagerSchema = z.enum(['npm', 'pnpm', 'yarn']);
+export const PagesBuildNodeVersionSchema = z.enum(['20', '22', '24']);
+export const PagesBuildScriptSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .refine(
+    (value) => [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127),
+    'Build script name contains control characters'
+  );
 
 export const DockerBuildCommitShaSchema = z.string().regex(/^[0-9a-f]{40,64}$/i, 'Invalid commit SHA');
 export const DockerBuildPlatformSchema = z.string().regex(/^linux\/(amd64|arm64)(\/v[1-4])?$/);
@@ -30,6 +48,10 @@ export const DockerSourceTargetSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('compose_project'),
     composeProjectId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal('pages_project'),
+    pageProjectId: z.string().uuid(),
   }),
 ]);
 
@@ -49,6 +71,13 @@ export const DockerSourceBindingConfigSchema = z.object({
   autoDeploy: z.boolean().default(true),
   buildArgs: z.record(z.string().max(16_384)).default({}),
   buildSecretNames: z.array(z.string().min(1).max(255)).max(128).default([]),
+  applicationRoot: PagesBuildPathSchema.optional(),
+  packageManager: PagesBuildPackageManagerSchema.optional(),
+  packageManagerVersion: z.string().trim().min(1).max(64).optional(),
+  nodeVersion: PagesBuildNodeVersionSchema.optional(),
+  buildScript: PagesBuildScriptSchema.optional(),
+  artifactDirectory: PagesBuildPathSchema.optional(),
+  publishTag: PageTagNameSchema.optional(),
   policy: z
     .object({
       vulnerabilityThreshold: z.enum(['critical', 'high', 'medium', 'low', 'none']).optional(),
@@ -85,6 +114,54 @@ export const DockerSourceBindingUpsertSchema = DockerSourceBindingConfigSchema.e
       message: 'Compose file path is only valid for a Compose project source',
     });
   }
+  if (value.target.kind === 'pages_project') {
+    for (const [field, present] of [
+      ['packageManager', Boolean(value.packageManager)],
+      ['nodeVersion', Boolean(value.nodeVersion)],
+      ['buildScript', Boolean(value.buildScript)],
+      ['artifactDirectory', Boolean(value.artifactDirectory)],
+      ['publishTag', Boolean(value.publishTag)],
+    ] as const) {
+      if (!present) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} is required for a Pages project source`,
+        });
+      }
+    }
+    for (const name of Object.keys(value.buildArgs)) {
+      if (!BuildEnvironmentNameSchema.safeParse(name).success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['buildArgs', name],
+          message: 'Pages build variable names must be valid environment variable names',
+        });
+      }
+    }
+    for (const name of value.buildSecretNames) {
+      if (!BuildEnvironmentNameSchema.safeParse(name).success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['buildSecretNames'],
+          message: 'Pages Build Secret names must be valid environment variable names',
+        });
+      } else if (name.startsWith('VITE_')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['buildSecretNames'],
+          message: 'VITE_* values are public build variables and cannot be stored as secrets',
+        });
+      }
+    }
+  }
+});
+
+export const PagesBuildDiscoverySchema = z.object({
+  connectorId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  branch: z.string().trim().min(1).max(500),
+  applicationRoot: PagesBuildPathSchema.default('.'),
 });
 
 export const DockerSourceResourceCreateSchema = z.object({
@@ -172,3 +249,4 @@ export type DockerSourceTarget = z.infer<typeof DockerSourceTargetSchema>;
 export type DockerBuildCreateInput = z.infer<typeof DockerBuildCreateSchema>;
 export type DockerBuildListQuery = z.infer<typeof DockerBuildListQuerySchema>;
 export type DockerInternalRegistrySettingsInput = z.infer<typeof DockerInternalRegistrySettingsSchema>;
+export type PagesBuildDiscoveryInput = z.infer<typeof PagesBuildDiscoverySchema>;

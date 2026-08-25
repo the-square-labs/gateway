@@ -41,6 +41,21 @@ const source: DockerSourceBinding = {
   updatedAt: "2026-08-24T00:00:00.000Z",
 };
 
+const pagesSource: DockerSourceBinding = {
+  ...source,
+  target: { kind: "pages_project", pageProjectId: "page-project-1" },
+  repositoryFullPath: "platform/site",
+  applicationRoot: "apps/site",
+  packageManager: "pnpm",
+  packageManagerVersion: "10.15.0",
+  nodeVersion: "24",
+  buildScript: "build",
+  artifactDirectory: "dist",
+  publishTag: "production",
+  buildArgs: { VITE_API_URL: "https://api.example.com" },
+  policy: { vulnerabilityThreshold: "none" },
+};
+
 describe("DockerGitSourcePanel Build Secrets", () => {
   beforeEach(() => vi.restoreAllMocks());
 
@@ -90,5 +105,22 @@ describe("DockerGitSourcePanel Build Secrets", () => {
       variant: "destructive",
     });
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("renders Pages build settings on the existing source panel", async () => {
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    renderWithRouter(
+      <DockerGitSourcePanel
+        target={{ kind: "pages_project", pageProjectId: "page-project-1" }}
+        source={pagesSource}
+      />
+    );
+
+    expect(screen.getByText("Application root")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("apps/site")).toBeInTheDocument();
+    expect(screen.getByText("Build Variables")).toBeInTheDocument();
+    expect(screen.getByText("VITE_API_URL")).toBeInTheDocument();
+    expect(screen.getByText(/VITE_\* values are embedded/)).toBeInTheDocument();
+    expect(screen.queryByText("Dockerfile")).not.toBeInTheDocument();
   });
 });

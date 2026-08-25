@@ -95,6 +95,23 @@ describe("Docker Git delivery UI structure", () => {
     expect(sourcePanel).toContain('requireLicenseFeature("git-push-to-deploy"');
   });
 
+  it("reuses the same repository and build surfaces for Pages projects", () => {
+    const pageDetail = source("./pages/PageProjectDetail.tsx");
+    const resourceTabs = source("./docker-detail/DockerResourceGitTabs.tsx");
+    const sourcePanel = source("./docker-detail/DockerGitSourcePanel.tsx");
+
+    expect(pageDetail).toContain('from "../docker-detail/DockerResourceGitTabs"');
+    expect(pageDetail).toContain('<TabsTrigger value="source"');
+    expect(pageDetail).toContain('<TabsTrigger value="builds"');
+    expect(pageDetail).toContain('kind: "pages_project"');
+    expect(resourceTabs).toContain('kind: "pages_project"');
+    expect(sourcePanel).toContain('title="Application root"');
+    expect(sourcePanel).toContain('title="Build Variables"');
+    expect(sourcePanel).toContain('title="Build Secrets"');
+    expect(sourcePanel).toContain("VITE_* values are public build variables");
+    expect(pageDetail).not.toMatch(/from ["'].+Page(?:Git|Build)Source/);
+  });
+
   it("shares the container log viewport with build dialogs", () => {
     const logs = source("./docker-detail/LogsTab.tsx");
     const details = source("./docker-detail/DockerBuildDetailsDialog.tsx");

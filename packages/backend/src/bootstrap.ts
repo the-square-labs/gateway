@@ -149,6 +149,7 @@ import { NotificationWebhookService } from '@/modules/notifications/notification
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import { PageArtifactStore } from '@/modules/pages/artifacts/page-artifact-store.js';
+import { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
 import { PageDeploymentService } from '@/modules/pages/deployments/page-deployment.service.js';
 import { PageProjectService } from '@/modules/pages/page-project.service.js';
 import { PageProjectFolderService } from '@/modules/pages/page-project-folder.service.js';
@@ -1161,6 +1162,14 @@ export async function initializeContainer(): Promise<void> {
   const pagePublicationService = new PagePublicationService(db, auditService, pageTagService);
   pagePublicationService.setEventBus(eventBus);
   container.registerInstance(PagePublicationService, pagePublicationService);
+  const pageBuildRolloutService = new PageBuildRolloutService(
+    db,
+    dockerRegistryTokenService,
+    pageDeploymentService,
+    pagePublicationService
+  );
+  container.registerInstance(PageBuildRolloutService, pageBuildRolloutService);
+  dockerBuildRolloutService?.setPagesRollout(pageBuildRolloutService);
   const pageRetentionService = new PageRetentionService(db, auditService, pageArtifactStore);
   pageRetentionService.setEventBus(eventBus);
   container.registerInstance(PageRetentionService, pageRetentionService);

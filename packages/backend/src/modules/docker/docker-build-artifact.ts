@@ -103,7 +103,10 @@ export class DockerBuildArtifactStore {
         }
         return { artifact: existing, created: false };
       }
-      const policy = evaluateDockerArtifactPolicy(joined.source.policy, input);
+      const policy =
+        joined.source.targetKind === 'pages_project'
+          ? { decision: 'approved' as const, reason: null }
+          : evaluateDockerArtifactPolicy(joined.source.policy, input);
       const now = new Date();
       const [artifact] = await tx
         .insert(dockerBuildArtifacts)

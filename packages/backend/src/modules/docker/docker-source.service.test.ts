@@ -100,6 +100,63 @@ function signedHeaders(provider: 'gitlab' | 'github' | 'git', body: Buffer, deli
   return headers;
 }
 
+describe('DockerSourceService Pages discovery', () => {
+  it('reads only the selected Application root and treats a large lockfile as present', async () => {
+    const readDockerBuildSourceFile = vi.fn(async (_user: unknown, input: { path: string }) => {
+      if (input.path === 'apps/site/package.json') {
+        return {
+          content: JSON.stringify({ scripts: { preview: 'vite preview', build: 'vite build' } }),
+        };
+      }
+      if (input.path === 'apps/site/pnpm-lock.yaml') {
+        throw new AppError(413, 'COMPOSE_FILE_TOO_LARGE', 'File exceeds inspection limit');
+      }
+      throw new AppError(404, 'SOURCE_FILE_NOT_FOUND', 'File not found');
+    });
+    const integrations = {
+      resolveDockerBuildSource: vi.fn(async () => ({
+        connectorId: binding.connectorId,
+        projectId: binding.projectId,
+        provider: 'gitlab',
+        remoteId: binding.repositoryRemoteId,
+        fullPath: 'acme/site',
+        cloneUrl: 'https://git.example.test/acme/site.git',
+        commitSha: 'a'.repeat(40),
+      })),
+      readDockerBuildSourceFile,
+    };
+    const service = allowBusiness(
+      new DockerSourceService({} as never, { log: vi.fn() } as never, integrations as never, {} as never)
+    );
+
+    await expect(
+      service.discoverPagesBuild(
+        {
+          connectorId: binding.connectorId,
+          projectId: binding.projectId,
+          branch: 'main',
+          applicationRoot: 'apps/site',
+        },
+        { id: 'user-1' } as never
+      )
+    ).resolves.toEqual({
+      commitSha: 'a'.repeat(40),
+      packagePath: 'apps/site/package.json',
+      scripts: { build: 'vite build', preview: 'vite preview' },
+      packageManagers: ['pnpm'],
+      preferredPackageManager: 'pnpm',
+      packageManagerVersion: null,
+    });
+    expect(readDockerBuildSourceFile.mock.calls.map(([, input]) => input.path)).toEqual([
+      'apps/site/package.json',
+      'apps/site/package-lock.json',
+      'apps/site/npm-shrinkwrap.json',
+      'apps/site/pnpm-lock.yaml',
+      'apps/site/yarn.lock',
+    ]);
+  });
+});
+
 describe('DockerSourceService webhooks', () => {
   beforeEach(() => vi.restoreAllMocks());
 

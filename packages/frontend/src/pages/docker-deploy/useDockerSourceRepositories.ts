@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import type { ComboboxOption } from "@/components/common/Combobox";
 import { api } from "@/services/api";
-import type { DockerBuildSourceRepository } from "@/types";
+import type { DockerBuildSourceRepository, DockerSourceTarget } from "@/types";
 
-export function useDockerSourceRepositories(open: boolean, connectorId: string) {
+export function useDockerSourceRepositories(
+  open: boolean,
+  connectorId: string,
+  target?: DockerSourceTarget
+) {
   const [connectorOptions, setConnectorOptions] = useState<ComboboxOption[]>([]);
   const [repositories, setRepositories] = useState<DockerBuildSourceRepository[]>([]);
 
@@ -52,7 +56,7 @@ export function useDockerSourceRepositories(open: boolean, connectorId: string) 
     }
     let cancelled = false;
     void api
-      .listDockerBuildRepositories(connectorId)
+      .listDockerBuildRepositories(connectorId, target)
       .then((items) => {
         if (!cancelled) setRepositories(items.filter((repository) => !repository.archived));
       })
@@ -60,7 +64,7 @@ export function useDockerSourceRepositories(open: boolean, connectorId: string) 
     return () => {
       cancelled = true;
     };
-  }, [connectorId, open]);
+  }, [connectorId, open, target]);
 
   return { connectorOptions, repositories };
 }

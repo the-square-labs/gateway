@@ -50,6 +50,62 @@ describe('Docker source binding schemas', () => {
     ).toBe(false);
   });
 
+  it('accepts the user-supplied Pages Node build contract without a Dockerfile', () => {
+    const parsed = DockerSourceBindingUpsertSchema.parse({
+      ...containerBinding,
+      target: {
+        kind: 'pages_project',
+        pageProjectId: '44444444-4444-4444-8444-444444444444',
+      },
+      applicationRoot: 'apps/web',
+      packageManager: 'pnpm',
+      packageManagerVersion: '10.15.0',
+      nodeVersion: '24',
+      buildScript: 'build',
+      artifactDirectory: 'dist',
+      publishTag: 'production',
+      buildArgs: { VITE_API_URL: 'https://api.example.com' },
+      buildSecretNames: ['NPM_TOKEN'],
+    });
+    expect(parsed.applicationRoot).toBe('apps/web');
+    expect(parsed.packageManager).toBe('pnpm');
+    expect(parsed.buildScript).toBe('build');
+    expect(parsed.artifactDirectory).toBe('dist');
+  });
+
+  it('rejects incomplete or public Pages secrets', () => {
+    const target = {
+      kind: 'pages_project' as const,
+      pageProjectId: '44444444-4444-4444-8444-444444444444',
+    };
+    expect(DockerSourceBindingUpsertSchema.safeParse({ ...containerBinding, target }).success).toBe(false);
+    expect(
+      DockerSourceBindingUpsertSchema.safeParse({
+        ...containerBinding,
+        target,
+        applicationRoot: '.',
+        packageManager: 'npm',
+        nodeVersion: '24',
+        buildScript: 'build',
+        artifactDirectory: 'dist',
+        publishTag: 'production',
+        buildSecretNames: ['VITE_PRIVATE_KEY'],
+      }).success
+    ).toBe(false);
+    expect(
+      DockerSourceBindingUpsertSchema.safeParse({
+        ...containerBinding,
+        target,
+        applicationRoot: '../web',
+        packageManager: 'npm',
+        nodeVersion: '24',
+        buildScript: 'build',
+        artifactDirectory: 'dist',
+        publishTag: 'production',
+      }).success
+    ).toBe(false);
+  });
+
   it('requires the complete external registry ingress tuple', () => {
     expect(DockerInternalRegistrySettingsSchema.safeParse({ externalAccessEnabled: false }).success).toBe(true);
     expect(DockerInternalRegistrySettingsSchema.safeParse({ externalAccessEnabled: true }).success).toBe(false);

@@ -1,7 +1,8 @@
 export type DockerSourceTarget =
   | { kind: "container"; nodeId: string; containerName: string }
   | { kind: "deployment"; nodeId?: string; deploymentId: string }
-  | { kind: "compose_project"; nodeId: string; composeProjectId: string };
+  | { kind: "compose_project"; nodeId: string; composeProjectId: string }
+  | { kind: "pages_project"; nodeId?: string; pageProjectId: string };
 
 export type DockerBuildStatus =
   | "queued"
@@ -49,6 +50,13 @@ export interface DockerSourceBinding {
   autoDeploy: boolean;
   buildArgs: Record<string, string>;
   buildSecretNames: string[];
+  applicationRoot?: string;
+  packageManager?: "npm" | "pnpm" | "yarn" | null;
+  packageManagerVersion?: string | null;
+  nodeVersion?: "20" | "22" | "24" | null;
+  buildScript?: string | null;
+  artifactDirectory?: string | null;
+  publishTag?: string | null;
   policy: {
     vulnerabilityThreshold?: "critical" | "high" | "medium" | "low" | "none";
   };
@@ -77,6 +85,13 @@ export interface DockerSourceBindingConfig {
   autoDeploy: boolean;
   buildArgs: Record<string, string>;
   buildSecretNames: string[];
+  applicationRoot?: string;
+  packageManager?: "npm" | "pnpm" | "yarn";
+  packageManagerVersion?: string;
+  nodeVersion?: "20" | "22" | "24";
+  buildScript?: string;
+  artifactDirectory?: string;
+  publishTag?: string;
   policy?: {
     vulnerabilityThreshold?: "critical" | "high" | "medium" | "low" | "none";
   };
@@ -144,7 +159,8 @@ export interface DockerBuild {
         composeProjectId: string;
         name: string;
         serviceName: string | null;
-      };
+      }
+    | { kind: "pages_project"; nodeId: string; pageProjectId: string; name: string };
   createdAt: string;
   queuedAt: string;
   startedAt: string | null;
@@ -162,6 +178,15 @@ export interface DockerBuildSourceRepository {
   webUrl: string | null;
   defaultBranch: string | null;
   archived: boolean;
+}
+
+export interface PagesBuildDiscovery {
+  commitSha: string;
+  packagePath: string;
+  scripts: Record<string, string>;
+  packageManagers: Array<"npm" | "pnpm" | "yarn">;
+  preferredPackageManager: "npm" | "pnpm" | "yarn" | null;
+  packageManagerVersion: string | null;
 }
 
 export interface DockerBuildLogChunk {

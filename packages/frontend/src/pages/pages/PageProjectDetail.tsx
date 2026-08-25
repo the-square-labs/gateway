@@ -43,6 +43,7 @@ import { useUrlTab } from "@/hooks/use-url-tab";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageProject, PageProjectPlacementOption } from "@/types";
+import { DockerResourceGitTabs } from "../docker-detail/DockerResourceGitTabs";
 import { PageDeploymentsTab } from "./PageDeploymentsTab";
 import { PageManualDeployDialog } from "./PageManualDeployDialog";
 import { PageProjectSettingsDialog } from "./PageProjectSettingsTab";
@@ -50,7 +51,14 @@ import { PageRuntimeConfigTab } from "./PageRuntimeConfigTab";
 import { PageTagsTab } from "./PageTagsTab";
 import { PageTokensTab } from "./PageTokensTab";
 
-const PROJECT_TABS = ["deployments", "tags", "tokens", "configuration"] as const;
+const PROJECT_TABS = [
+  "deployments",
+  "source",
+  "builds",
+  "tags",
+  "tokens",
+  "configuration",
+] as const;
 
 function MigrateProjectDialog({
   open,
@@ -335,7 +343,7 @@ export function PageProjectDetail({
   };
 
   if (!canView) return null;
-  if (loading && !project) return <DetailPageSkeleton label="Loading Page Project" tabs={4} />;
+  if (loading && !project) return <DetailPageSkeleton label="Loading Page Project" tabs={6} />;
   if (!project) return null;
 
   return (
@@ -503,6 +511,8 @@ export function PageProjectDetail({
         >
           <TabsList className="shrink-0">
             <TabsTrigger value="deployments">Deployments</TabsTrigger>
+            <TabsTrigger value="source">Source</TabsTrigger>
+            <TabsTrigger value="builds">Builds</TabsTrigger>
             <TabsTrigger value="tags">Tags</TabsTrigger>
             <TabsTrigger value="tokens">Deploy tokens</TabsTrigger>
             <TabsTrigger value="configuration">Configuration</TabsTrigger>
@@ -511,6 +521,29 @@ export function PageProjectDetail({
             <PageDeploymentsTab
               projectId={project.id}
               onLatestPreviewChange={setLatestPreviewHostname}
+            />
+          </TabsContent>
+          <TabsContent value="source" className="pb-6">
+            <DockerResourceGitTabs
+              target={{
+                kind: "pages_project",
+                nodeId: project.nodeId ?? undefined,
+                pageProjectId: project.id,
+              }}
+              view="source"
+              includeBuilds
+              canEdit={canEdit}
+              canBuild={canDeploy}
+            />
+          </TabsContent>
+          <TabsContent value="builds" className="pb-0">
+            <DockerResourceGitTabs
+              target={{
+                kind: "pages_project",
+                nodeId: project.nodeId ?? undefined,
+                pageProjectId: project.id,
+              }}
+              view="builds"
             />
           </TabsContent>
           <TabsContent value="tags" className="pb-0">

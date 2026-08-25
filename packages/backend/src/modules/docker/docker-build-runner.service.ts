@@ -144,6 +144,13 @@ export class DockerBuildRunnerService {
         memoryLimitBytes: String(policyLimit(policy, 'memoryLimitBytes', 4 * 1024 ** 3)),
         diskLimitBytes: String(policyLimit(policy, 'diskLimitBytes', 20 * 1024 ** 3)),
         timeoutSeconds: policyLimit(policy, 'timeoutSeconds', 1800),
+        outputKind: source.targetKind === 'pages_project' ? 'pages_archive' : 'oci_image',
+        applicationRoot: build.applicationRoot,
+        packageManager: build.packageManager ?? '',
+        packageManagerVersion: build.packageManagerVersion ?? '',
+        nodeVersion: build.nodeVersion ?? '',
+        buildScript: build.buildScript ?? '',
+        artifactDirectory: build.artifactDirectory ?? '',
       });
       if (!result.success) throw new Error(result.error || 'Builder daemon rejected the build');
     } catch (error) {

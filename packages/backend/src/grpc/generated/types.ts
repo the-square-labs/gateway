@@ -332,6 +332,13 @@ export interface DockerBuildCommand {
   memoryLimitBytes: string;
   diskLimitBytes: string;
   timeoutSeconds: number;
+  outputKind: string;
+  applicationRoot: string;
+  packageManager: string;
+  packageManagerVersion: string;
+  nodeVersion: string;
+  buildScript: string;
+  artifactDirectory: string;
 }
 
 export interface DockerBuildCancelCommand {

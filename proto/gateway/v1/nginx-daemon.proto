@@ -819,6 +819,13 @@ message DockerBuildCommand {
   int64 memory_limit_bytes = 17;
   int64 disk_limit_bytes = 18;
   int32 timeout_seconds = 19;
+  string output_kind = 20; // oci_image or pages_archive
+  string application_root = 21;
+  string package_manager = 22;
+  string package_manager_version = 23;
+  string node_version = 24;
+  string build_script = 25;
+  string artifact_directory = 26;
 }
 
 message DockerBuildCancelCommand {

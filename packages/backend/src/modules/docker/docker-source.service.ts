@@ -6,6 +6,7 @@ import {
   dockerDeployments,
   dockerSourceBindings,
   integrationConnectors,
+  pageProjects,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -18,6 +19,7 @@ import type {
   DockerBuildCreateInput,
   DockerSourceBindingUpsertInput,
   DockerSourceTarget,
+  PagesBuildDiscoveryInput,
 } from './docker-build.schemas.js';
 import type { DockerBuildService } from './docker-build.service.js';
 import {
@@ -67,7 +69,7 @@ export class DockerSourceService {
       integrations,
       cryptoService,
       () => this.buildService,
-      (binding, commitSha) => this.prepareComposeCommit(binding, commitSha, AUTOMATION_ACTOR)
+      (binding, commitSha) => this.prepareSourceCommit(binding, commitSha, AUTOMATION_ACTOR)
     );
   }
 
@@ -89,7 +91,7 @@ export class DockerSourceService {
     user: User,
     options: { allowMissingTarget?: boolean; initialConfig?: Record<string, unknown> | null } = {}
   ) {
-    await this.requireGitPushToDeploy();
+    await this.requireTargetFeatures(input.target);
     if (!options.allowMissingTarget) await this.assertTargetExists(input.target);
     const resolved = await this.integrations.resolveDockerBuildSource(user, {
       connectorId: input.connectorId,
@@ -97,7 +99,7 @@ export class DockerSourceService {
       branch: input.branch,
     });
     const existing = await this.findByTarget(input.target);
-    const compose = await this.prepareComposeCommit(
+    const prepared = await this.prepareSourceCommit(
       {
         ...(existing ?? {}),
         ...dockerSourceTargetColumns(input.target),
@@ -107,6 +109,13 @@ export class DockerSourceService {
         composeFilePath: input.composeFilePath ?? existing?.composeFilePath ?? null,
         composeVariables: input.composeVariables,
         composeSecretKeys: input.composeSecretKeys,
+        applicationRoot: input.applicationRoot ?? '.',
+        packageManager: input.packageManager ?? null,
+        packageManagerVersion: input.packageManagerVersion ?? null,
+        nodeVersion: input.nodeVersion ?? null,
+        buildScript: input.buildScript ?? null,
+        artifactDirectory: input.artifactDirectory ?? null,
+        publishTag: input.publishTag ?? null,
       } as SourceBindingRow,
       resolved.commitSha,
       user
@@ -141,12 +150,19 @@ export class DockerSourceService {
       composeFilePath: input.target.kind === 'compose_project' ? input.composeFilePath : null,
       composeVariables: input.composeVariables,
       composeSecretKeys: input.composeSecretKeys,
-      composeBuildPlan: compose.composeBuildPlan,
+      composeBuildPlan: prepared.composeBuildPlan,
       autoBuild: input.autoBuild,
       autoDeploy: input.autoDeploy,
       initialConfig: options.initialConfig === undefined ? (existing?.initialConfig ?? null) : options.initialConfig,
       buildArgs: input.buildArgs,
       buildSecretNames: input.buildSecretNames,
+      applicationRoot: input.target.kind === 'pages_project' ? (input.applicationRoot ?? '.') : '.',
+      packageManager: input.target.kind === 'pages_project' ? input.packageManager : null,
+      packageManagerVersion: input.target.kind === 'pages_project' ? (input.packageManagerVersion ?? null) : null,
+      nodeVersion: input.target.kind === 'pages_project' ? input.nodeVersion : null,
+      buildScript: input.target.kind === 'pages_project' ? input.buildScript : null,
+      artifactDirectory: input.target.kind === 'pages_project' ? input.artifactDirectory : null,
+      publishTag: input.target.kind === 'pages_project' ? input.publishTag : null,
       policy: input.policy,
       desiredCommitSha: resolved.commitSha,
       lastResolvedAt: now,
@@ -172,18 +188,8 @@ export class DockerSourceService {
     await this.auditService.log({
       action: existing ? 'docker.source.updated' : 'docker.source.created',
       userId: user.id,
-      resourceType:
-        input.target.kind === 'container'
-          ? 'docker-container'
-          : input.target.kind === 'deployment'
-            ? 'docker-deployment'
-            : 'docker-compose-project',
-      resourceId:
-        input.target.kind === 'container'
-          ? input.target.containerName
-          : input.target.kind === 'deployment'
-            ? input.target.deploymentId
-            : input.target.composeProjectId,
+      resourceType: this.targetResourceType(input.target),
+      resourceId: this.targetResourceId(input.target),
       details: {
         target: input.target,
         connectorId: resolved.connectorId,
@@ -228,18 +234,8 @@ export class DockerSourceService {
     await this.auditService.log({
       action: 'docker.source.deleted',
       userId,
-      resourceType:
-        target.kind === 'container'
-          ? 'docker-container'
-          : target.kind === 'deployment'
-            ? 'docker-deployment'
-            : 'docker-compose-project',
-      resourceId:
-        target.kind === 'container'
-          ? target.containerName
-          : target.kind === 'deployment'
-            ? target.deploymentId
-            : target.composeProjectId,
+      resourceType: this.targetResourceType(target),
+      resourceId: this.targetResourceId(target),
       details: {
         target,
         connectorId: existing.connectorId,
@@ -253,7 +249,7 @@ export class DockerSourceService {
   }
 
   async resolveCurrent(target: DockerSourceTarget, user: User) {
-    await this.requireGitPushToDeploy();
+    await this.requireTargetFeatures(target);
     const existing = await this.findByTarget(target);
     if (!existing) throw new AppError(404, 'SOURCE_BINDING_NOT_FOUND', 'Git source is not configured');
     const resolved = await this.integrations.resolveDockerBuildSource(user, {
@@ -261,7 +257,7 @@ export class DockerSourceService {
       projectId: existing.projectId,
       branch: existing.branch,
     });
-    const compose = await this.prepareComposeCommit(existing, resolved.commitSha, user);
+    const prepared = await this.prepareSourceCommit(existing, resolved.commitSha, user);
     const [updated] = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${existing.id}`}))`);
       return tx
@@ -271,7 +267,7 @@ export class DockerSourceService {
           repositoryFullPath: resolved.fullPath,
           repositoryCloneUrl: resolved.cloneUrl,
           desiredCommitSha: resolved.commitSha,
-          composeBuildPlan: compose.composeBuildPlan,
+          composeBuildPlan: prepared.composeBuildPlan,
           lastResolvedAt: new Date(),
           lastWebhookError: null,
           updatedAt: new Date(),
@@ -305,7 +301,7 @@ export class DockerSourceService {
           projectId: binding.projectId,
           branch: binding.branch,
         });
-        const compose = await this.prepareComposeCommit(binding, resolved.commitSha, AUTOMATION_ACTOR);
+        const prepared = await this.prepareSourceCommit(binding, resolved.commitSha, AUTOMATION_ACTOR);
         const commitChanged = await this.db.transaction(async (tx) => {
           await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${binding.id}`}))`);
           const [current] = await tx
@@ -322,7 +318,7 @@ export class DockerSourceService {
               repositoryFullPath: resolved.fullPath,
               repositoryCloneUrl: resolved.cloneUrl,
               desiredCommitSha: resolved.commitSha,
-              composeBuildPlan: compose.composeBuildPlan,
+              composeBuildPlan: prepared.composeBuildPlan,
               lastResolvedAt: now,
               lastPollAt: now,
               lastPollError: null,
@@ -354,7 +350,7 @@ export class DockerSourceService {
   }
 
   async createBuild(target: DockerSourceTarget, input: DockerBuildCreateInput, user: User) {
-    await this.requireGitPushToDeploy();
+    await this.requireTargetFeatures(target);
     if (!this.buildService) throw new AppError(503, 'BUILD_SCHEDULER_UNAVAILABLE', 'Build scheduler is unavailable');
     const source = await this.resolveCurrent(target, user);
     if (input.commitSha && input.commitSha.toLowerCase() !== source.desiredCommitSha?.toLowerCase()) {
@@ -394,15 +390,130 @@ export class DockerSourceService {
       if (!deployment) throw new AppError(404, 'DEPLOYMENT_NOT_FOUND', 'Docker deployment not found');
       return;
     }
+    if (target.kind === 'compose_project') {
+      const [project] = await this.db
+        .select({ id: dockerComposeProjects.id })
+        .from(dockerComposeProjects)
+        .where(eq(dockerComposeProjects.id, target.composeProjectId))
+        .limit(1);
+      if (!project) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+      return;
+    }
     const [project] = await this.db
-      .select({ id: dockerComposeProjects.id })
-      .from(dockerComposeProjects)
-      .where(eq(dockerComposeProjects.id, target.composeProjectId))
+      .select({ id: pageProjects.id })
+      .from(pageProjects)
+      .where(eq(pageProjects.id, target.pageProjectId))
       .limit(1);
-    if (!project) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+    if (!project) throw new AppError(404, 'PAGE_PROJECT_NOT_FOUND', 'Page Project not found');
   }
 
-  private async prepareComposeCommit(binding: SourceBindingRow, commitSha: string, user: User) {
+  async discoverPagesBuild(input: PagesBuildDiscoveryInput, user: User) {
+    await this.requireGitPushToDeploy();
+    await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('pages');
+    const resolved = await this.integrations.resolveDockerBuildSource(user, {
+      connectorId: input.connectorId,
+      projectId: input.projectId,
+      branch: input.branch,
+    });
+    const packagePath = input.applicationRoot === '.' ? 'package.json' : `${input.applicationRoot}/package.json`;
+    const file = await this.integrations.readDockerBuildSourceFile(user, {
+      connectorId: resolved.connectorId,
+      projectId: resolved.projectId,
+      repositoryUrl: resolved.cloneUrl,
+      path: packagePath,
+      commitSha: resolved.commitSha,
+    });
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(file.content) as Record<string, unknown>;
+    } catch {
+      throw new AppError(400, 'PAGES_PACKAGE_JSON_INVALID', `${packagePath} is not valid JSON`);
+    }
+    const rawScripts = manifest.scripts;
+    const scripts =
+      rawScripts && typeof rawScripts === 'object' && !Array.isArray(rawScripts)
+        ? Object.fromEntries(
+            Object.entries(rawScripts)
+              .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+              .sort(([left], [right]) => left.localeCompare(right))
+          )
+        : {};
+    const managers = new Set<'npm' | 'pnpm' | 'yarn'>();
+    let packageManagerVersion: string | null = null;
+    const declaredManager = typeof manifest.packageManager === 'string' ? manifest.packageManager.trim() : '';
+    const declared = /^(npm|pnpm|yarn)@([^\s]+)$/.exec(declaredManager);
+    if (declared) {
+      managers.add(declared[1] as 'npm' | 'pnpm' | 'yarn');
+      packageManagerVersion = declared[2];
+    }
+    for (const [name, manager] of [
+      ['package-lock.json', 'npm'],
+      ['npm-shrinkwrap.json', 'npm'],
+      ['pnpm-lock.yaml', 'pnpm'],
+      ['yarn.lock', 'yarn'],
+    ] as const) {
+      const path = input.applicationRoot === '.' ? name : `${input.applicationRoot}/${name}`;
+      try {
+        await this.integrations.readDockerBuildSourceFile(user, {
+          connectorId: resolved.connectorId,
+          projectId: resolved.projectId,
+          repositoryUrl: resolved.cloneUrl,
+          path,
+          commitSha: resolved.commitSha,
+        });
+        managers.add(manager);
+      } catch (error) {
+        if (error instanceof AppError && error.code === 'COMPOSE_FILE_TOO_LARGE') {
+          managers.add(manager);
+          continue;
+        }
+        if (!(error instanceof AppError) || error.statusCode !== 404) throw error;
+      }
+    }
+    return {
+      commitSha: resolved.commitSha,
+      packagePath,
+      scripts,
+      packageManagers: [...managers],
+      preferredPackageManager: declared?.[1] ?? (managers.size === 1 ? [...managers][0] : null),
+      packageManagerVersion,
+    };
+  }
+
+  private async prepareSourceCommit(binding: SourceBindingRow, commitSha: string, user: User) {
+    if (binding.targetKind === 'pages_project') {
+      if (!binding.buildScript) {
+        throw new AppError(400, 'PAGES_BUILD_SCRIPT_REQUIRED', 'Pages source requires a package.json build script');
+      }
+      const packagePath = binding.applicationRoot === '.' ? 'package.json' : `${binding.applicationRoot}/package.json`;
+      const file = await this.integrations.readDockerBuildSourceFile(user, {
+        connectorId: binding.connectorId,
+        projectId: binding.projectId,
+        repositoryUrl: binding.repositoryCloneUrl,
+        path: packagePath,
+        commitSha,
+      });
+      let manifest: Record<string, unknown>;
+      try {
+        manifest = JSON.parse(file.content) as Record<string, unknown>;
+      } catch {
+        throw new AppError(400, 'PAGES_PACKAGE_JSON_INVALID', `${packagePath} is not valid JSON`);
+      }
+      const scripts = manifest.scripts;
+      if (
+        !scripts ||
+        typeof scripts !== 'object' ||
+        Array.isArray(scripts) ||
+        typeof (scripts as Record<string, unknown>)[binding.buildScript] !== 'string'
+      ) {
+        throw new AppError(
+          400,
+          'PAGES_BUILD_SCRIPT_NOT_FOUND',
+          `Script ${binding.buildScript} is not present in ${packagePath}`
+        );
+      }
+      return { composeBuildPlan: null };
+    }
     if (binding.targetKind !== 'compose_project') return { composeBuildPlan: binding.composeBuildPlan ?? null };
     if (!binding.composeProjectId || !binding.composeFilePath) {
       throw new AppError(400, 'COMPOSE_SOURCE_PATH_REQUIRED', 'Compose source requires a repository Compose file path');
@@ -454,6 +565,13 @@ export class DockerSourceService {
     await this.requireGitPushToDeploy();
     const source = await this.findByTarget(target);
     if (!source) throw new AppError(404, 'SOURCE_BINDING_NOT_FOUND', 'Git source is not configured');
+    if (source.targetKind === 'pages_project' && name.startsWith('VITE_')) {
+      throw new AppError(
+        400,
+        'PAGES_PUBLIC_VARIABLE_CANNOT_BE_SECRET',
+        'VITE_* values are public build variables and cannot be stored as secrets'
+      );
+    }
     const encryptedValue = JSON.stringify(this.cryptoService.encryptString(value));
     const now = new Date();
     const row = await this.db.transaction(async (tx) => {
@@ -555,5 +673,32 @@ export class DockerSourceService {
 
   private requireGitPushToDeploy(): Promise<void> {
     return requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('git-push-to-deploy');
+  }
+
+  private async requireTargetFeatures(target: DockerSourceTarget): Promise<void> {
+    await this.requireGitPushToDeploy();
+    if (target.kind === 'pages_project') {
+      await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('pages');
+    }
+  }
+
+  private targetResourceType(target: DockerSourceTarget): string {
+    return target.kind === 'container'
+      ? 'docker-container'
+      : target.kind === 'deployment'
+        ? 'docker-deployment'
+        : target.kind === 'compose_project'
+          ? 'docker-compose-project'
+          : 'page-project';
+  }
+
+  private targetResourceId(target: DockerSourceTarget): string {
+    return target.kind === 'container'
+      ? target.containerName
+      : target.kind === 'deployment'
+        ? target.deploymentId
+        : target.kind === 'compose_project'
+          ? target.composeProjectId
+          : target.pageProjectId;
   }
 }

@@ -17,10 +17,15 @@ export function dockerSourceTargetWhere(target: DockerSourceTarget): SQL {
           eq(dockerSourceBindings.targetKind, 'deployment'),
           eq(dockerSourceBindings.deploymentId, target.deploymentId)
         )!
-      : and(
-          eq(dockerSourceBindings.targetKind, 'compose_project'),
-          eq(dockerSourceBindings.composeProjectId, target.composeProjectId)
-        )!;
+      : target.kind === 'compose_project'
+        ? and(
+            eq(dockerSourceBindings.targetKind, 'compose_project'),
+            eq(dockerSourceBindings.composeProjectId, target.composeProjectId)
+          )!
+        : and(
+            eq(dockerSourceBindings.targetKind, 'pages_project'),
+            eq(dockerSourceBindings.pageProjectId, target.pageProjectId)
+          )!;
 }
 
 export function dockerSourceTargetColumns(target: DockerSourceTarget) {
@@ -31,6 +36,7 @@ export function dockerSourceTargetColumns(target: DockerSourceTarget) {
         containerName: target.containerName,
         deploymentId: null,
         composeProjectId: null,
+        pageProjectId: null,
       }
     : target.kind === 'deployment'
       ? {
@@ -39,14 +45,25 @@ export function dockerSourceTargetColumns(target: DockerSourceTarget) {
           containerName: null,
           deploymentId: target.deploymentId,
           composeProjectId: null,
+          pageProjectId: null,
         }
-      : {
-          targetKind: 'compose_project' as const,
-          nodeId: null,
-          containerName: null,
-          deploymentId: null,
-          composeProjectId: target.composeProjectId,
-        };
+      : target.kind === 'compose_project'
+        ? {
+            targetKind: 'compose_project' as const,
+            nodeId: null,
+            containerName: null,
+            deploymentId: null,
+            composeProjectId: target.composeProjectId,
+            pageProjectId: null,
+          }
+        : {
+            targetKind: 'pages_project' as const,
+            nodeId: null,
+            containerName: null,
+            deploymentId: null,
+            composeProjectId: null,
+            pageProjectId: target.pageProjectId,
+          };
 }
 
 export function toPublicDockerSource(row: SourceBindingRow, provider: SupportedSourceProvider) {
@@ -57,7 +74,9 @@ export function toPublicDockerSource(row: SourceBindingRow, provider: SupportedS
         ? { kind: 'container' as const, nodeId: row.nodeId!, containerName: row.containerName! }
         : row.targetKind === 'deployment'
           ? { kind: 'deployment' as const, deploymentId: row.deploymentId! }
-          : { kind: 'compose_project' as const, composeProjectId: row.composeProjectId! },
+          : row.targetKind === 'compose_project'
+            ? { kind: 'compose_project' as const, composeProjectId: row.composeProjectId! }
+            : { kind: 'pages_project' as const, pageProjectId: row.pageProjectId! },
     connectorId: row.connectorId,
     projectId: row.projectId,
     provider,
@@ -74,6 +93,13 @@ export function toPublicDockerSource(row: SourceBindingRow, provider: SupportedS
     autoDeploy: row.autoDeploy,
     buildArgs: row.buildArgs,
     buildSecretNames: row.buildSecretNames,
+    applicationRoot: row.applicationRoot,
+    packageManager: row.packageManager,
+    packageManagerVersion: row.packageManagerVersion,
+    nodeVersion: row.nodeVersion,
+    buildScript: row.buildScript,
+    artifactDirectory: row.artifactDirectory,
+    publishTag: row.publishTag,
     policy: row.policy,
     desiredCommitSha: row.desiredCommitSha,
     deployedCommitSha: row.deployedCommitSha,
