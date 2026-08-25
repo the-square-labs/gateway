@@ -12,6 +12,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import type { AISandboxArtifactService } from '@/modules/ai/ai.sandbox-artifact.service.js';
 import type { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
+import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import type { DockerService } from './docker.service.js';
@@ -146,6 +147,7 @@ export class HousekeepingService {
   private pagesMaintenanceService?: {
     run(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }>;
   };
+  private internalRegistryMaintenanceService?: DockerInternalRegistryService;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -156,6 +158,10 @@ export class HousekeepingService {
 
   setPagesMaintenanceService(service: { run(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> }): void {
     this.pagesMaintenanceService = service;
+  }
+
+  setInternalRegistryMaintenanceService(service: DockerInternalRegistryService): void {
+    this.internalRegistryMaintenanceService = service;
   }
 
   // ── Config ──────────────────────────────────────────────────────
@@ -347,6 +353,19 @@ export class HousekeepingService {
 
       if (this.pagesMaintenanceService) {
         categories.push(await this.runCategory('Pages', () => this.pagesMaintenanceService!.run()));
+      }
+      if (this.internalRegistryMaintenanceService) {
+        categories.push(
+          await this.runCategory('Internal Registry', async () => {
+            const run = await this.internalRegistryMaintenanceService!.runGarbageCollection({
+              requestedById: userId ?? null,
+            });
+            const candidateIds = Array.isArray(run.progress?.candidateArtifactIds)
+              ? run.progress.candidateArtifactIds
+              : [];
+            return { itemsCleaned: candidateIds.length };
+          })
+        );
       }
 
       if (config.nginxLogs.enabled) {

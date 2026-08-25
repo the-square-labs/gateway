@@ -389,6 +389,46 @@ describe('mapGpuHealthDevices', () => {
 });
 
 describe('CommandStream daemon certificate identity', () => {
+  it('accepts only the isolated docker builder profile for builder nodes', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'builder-1',
+        daemonVersion: 'dev',
+        daemonType: 'docker',
+        capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+      },
+    });
+
+    await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+    expect(stream.end).not.toHaveBeenCalled();
+  });
+
+  it('rejects a general Docker daemon registering as a builder node', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'builder-1',
+        daemonVersion: 'dev',
+        daemonType: 'docker',
+        capabilities: ['docker_deployments_v1', 'docker_registry_proxy_v1'],
+      },
+    });
+
+    await vi.waitFor(() => expect(stream.end).toHaveBeenCalled());
+    expect(deps.registry.register).not.toHaveBeenCalled();
+  });
+
   it('publishes the online reconciliation event only after daemon capabilities are durable', async () => {
     let releaseMetadata!: () => void;
     const metadataCommitted = new Promise<void>((resolve) => {

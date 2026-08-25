@@ -845,7 +845,7 @@ export async function recreateWithConfig(
   nodeId: string,
   containerId: string,
   config: Record<string, unknown>,
-  userId: string,
+  userId: string | null,
   options?: {
     skipImagePull?: boolean;
     skipWebhookCleanup?: boolean;

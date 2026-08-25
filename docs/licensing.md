@@ -18,7 +18,7 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 |---|---|---|---|
 | **Community** | Noncommercial personal, hobby, educational, research, and qualifying noncommercial use | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
 | **Personal** | Commercially operated installations that need unlimited node/user/group quotas, Compose deployment and lifecycle management, and current workload lifecycle features, without the in-development application-cluster capabilities | Unlimited nodes, users, and custom permission groups | Standard |
-| **Business** | Teams that need Secure Runtime isolation, structured logging, audit export, guided onboarding, and planned application scaling/security scanning | Unlimited | Priority |
+| **Business** | Teams that need Docker and Compose Git push-to-deploy, isolated Build Workers, external access to the internal registry, Secure Runtime isolation, structured logging, audit export, guided onboarding, and planned application scaling/security scanning | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
 ## Feature Availability
@@ -29,6 +29,7 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 | Multi-Node Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker Container Management — Default Runtime (`runc`) | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker ↔ Nginx Secure Links | Ready | ✅ | ✅ | ✅ | ✅ |
+| Private Gateway-Managed Internal Docker Registry | Ready | ✅ | ✅ | ✅ | ✅ |
 | SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Domain and DNS Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | External Database Connections and Explorers | Ready | ✅ | ✅ | ✅ | ✅ |
@@ -58,9 +59,12 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 | Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
 | Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
+| Git Repository Push-To-Deploy and Isolated Build Workers | Ready | — | — | ✅ | ✅ |
+| External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
+| Git Build Vulnerability Scanning and Admission Policy | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
-| Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
+| Broader Workload Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
 | Horizontal Application Clusters Across Multiple Nodes | In development | — | — | ✅ | ✅ |
 | Multiple Instances of One Workload on One Machine | In development | — | — | ✅ | ✅ |
 | External Compose Project Discovery, Monitoring, and Logs | Ready | ✅ | ✅ | ✅ | ✅ |
@@ -76,7 +80,7 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 
 Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 
-On downgrade, Gateway preserves existing premium resources and their data. New premium resources and one-shot operations such as archive import/export, migration, and audit export are blocked. Existing Secure Runtime workloads and blue/green deployments remain manageable, but selecting Secure Runtime for a new or previously default-runtime workload requires Business. Internal PKI, SIEM export, and structured logging are switchable modules: Gateway disables them when their entitlement is lost while preserving their configuration and stored data, and never automatically re-enables them after an upgrade.
+On downgrade, Gateway preserves existing premium resources and their data. New premium resources and one-shot operations such as archive import/export, migration, audit export, and Git build admission are blocked. Existing Git-delivered workloads, source settings, build history, and internal-registry artifacts remain readable; source bindings and Build Secrets can still be removed, but source mutation, manual builds, polling, and webhook-triggered builds stop until Business is restored. Image-based Docker deployment and private internal registry operation remain available. Gateway automatically disables external registry ingress when Business entitlement is lost, clears its persisted external binding, and checks Business again whenever the public token endpoint issues a registry JWT. Existing Secure Runtime workloads and blue/green deployments remain manageable, but selecting Secure Runtime for a new or previously default-runtime workload requires Business. Internal PKI, SIEM export, and structured logging are switchable modules: Gateway disables them when their entitlement is lost while preserving their configuration and stored data, and never automatically re-enables them after an upgrade.
 
 The Operations Console shows plan badges on whole premium modules and uses one shared upgrade dialog for blocked actions. This UI is explanatory only; the backend independently enforces the same entitlements across REST, OAuth/MCP, AI tools, background workers, public PKI routes, and domain services. Missing features return `LICENSE_ENTITLEMENT_REQUIRED` (HTTP 403), reached plan limits return `LICENSE_QUOTA_EXCEEDED` (HTTP 409), and an internally inconsistent protected policy fails closed with a generic `SERVICE_UNAVAILABLE` response.
 

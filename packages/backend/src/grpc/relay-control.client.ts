@@ -44,7 +44,7 @@ export interface RelayPolicySnapshot {
     maxConcurrentSessions: number;
     maxFrameBytes: number;
     disableIdleTimeout: boolean;
-    trafficClass: 'proxy' | 'database';
+    trafficClass: 'proxy' | 'database' | 'registry';
   }>;
   admissionPolicy: {
     enabled: boolean;

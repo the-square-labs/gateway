@@ -7,7 +7,9 @@ import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { isMinorCompatible } from '@/lib/semver.js';
 import { DockerRuntimeStatusSchema } from '@/modules/docker/docker.schemas.js';
+import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
+import { validateRegisteredDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
@@ -435,7 +437,26 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.end();
               return;
             }
-            const nodeType = node.type as 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay';
+            const nodeType = node.type as
+              | 'nginx'
+              | 'bastion'
+              | 'monitoring'
+              | 'docker'
+              | 'builder'
+              | 'databases'
+              | 'relay';
+            const profileError = validateRegisteredDaemonProfile(
+              nodeType,
+              msg.register.daemonType,
+              msg.register.capabilities
+            );
+            if (profileError) {
+              logger.error('Node registration profile mismatch', { nodeId: claimedNodeId, error: profileError });
+              registering = false;
+              clearPendingCommandRegistration(claimedNodeId, registrationToken);
+              stream.end();
+              return;
+            }
             if (nodeType === 'relay') {
               const [relayInstance] = await deps.db
                 .select({ id: relayInstances.id, faultDomainId: relayInstances.faultDomainId })
@@ -689,6 +710,17 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 })
                 .where(eq(relayInstances.id, instance.id));
               deps.registry.publishNodeChanged(activeNodeId, 'online');
+            } else if (msg.dockerBuildEvent) {
+              try {
+                await container.resolve(DockerBuildService).handleDaemonEvent(activeNodeId, msg.dockerBuildEvent);
+              } catch (error) {
+                logger.warn('Rejected Docker builder event', {
+                  nodeId: activeNodeId,
+                  buildId: msg.dockerBuildEvent.buildId,
+                  status: msg.dockerBuildEvent.status,
+                  error: (error as Error).message,
+                });
+              }
             } else if (msg.dockerRuntimeStatus) {
               const runtimeStatus = mapDockerRuntimeStatus(msg.dockerRuntimeStatus);
               if (!runtimeStatus) {

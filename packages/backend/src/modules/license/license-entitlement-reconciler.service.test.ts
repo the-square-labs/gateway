@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { LicenseEntitlementReconcilerService } from './license-entitlement-reconciler.service.js';
 
-function makeServices(features: string[]) {
+function makeServices(features: string[], plan: 'community' | 'business' | 'enterprise' = 'community') {
   const policy = {
     getSummary: vi.fn(async () => ({
       status: 'community',
-      plan: 'community',
+      plan,
       entitlements: { features },
     })),
   };
@@ -27,6 +27,9 @@ function makeServices(features: string[]) {
   const pages = {
     disableForEntitlementLoss: vi.fn(async () => undefined),
   };
+  const internalRegistry = {
+    disableExternalAccessForEntitlementLoss: vi.fn(async () => true),
+  };
   const eventBus = new EventBusService();
   const reconciler = new LicenseEntitlementReconcilerService(
     policy as never,
@@ -35,40 +38,42 @@ function makeServices(features: string[]) {
     eventBus
   );
   reconciler.setPageProfileService(pages as never);
+  reconciler.setDockerInternalRegistryService(internalRegistry as never);
   return {
     reconciler,
     policy,
     settings,
     logging,
     pages,
+    internalRegistry,
     eventBus,
   };
 }
 
 describe('LicenseEntitlementReconcilerService', () => {
   it('disables PKI, SIEM, and structured logging without clearing their stored configuration', async () => {
-    const { reconciler, settings, logging, pages } = makeServices([]);
+    const { reconciler, settings, logging, pages, internalRegistry } = makeServices([]);
 
     await reconciler.reconcile();
 
     expect(settings.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false, siemEnabled: false } });
     expect(logging.update).toHaveBeenCalledWith({ mode: 'disabled' });
     expect(pages.disableForEntitlementLoss).toHaveBeenCalledOnce();
+    expect(internalRegistry.disableExternalAccessForEntitlementLoss).toHaveBeenCalledOnce();
   });
 
   it('never auto-enables switchable features when entitlements return', async () => {
-    const { reconciler, settings, logging, pages } = makeServices([
-      'internal-pki',
-      'siem-export',
-      'structured-logging',
-      'pages',
-    ]);
+    const { reconciler, settings, logging, pages, internalRegistry } = makeServices(
+      ['internal-pki', 'siem-export', 'structured-logging', 'pages'],
+      'business'
+    );
 
     await reconciler.reconcile();
 
     expect(settings.updateConfig).not.toHaveBeenCalled();
     expect(logging.update).not.toHaveBeenCalled();
     expect(pages.disableForEntitlementLoss).not.toHaveBeenCalled();
+    expect(internalRegistry.disableExternalAccessForEntitlementLoss).not.toHaveBeenCalled();
   });
 
   it('reconciles changes published through the existing notification event bus', async () => {

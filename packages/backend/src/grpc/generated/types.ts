@@ -70,6 +70,26 @@ export interface DaemonMessage {
   execOutput?: ExecOutput;
   dockerRuntimeStatus?: DockerRuntimeStatus;
   relayRuntimeStatus?: RelayRuntimeStatus;
+  dockerBuildEvent?: DockerBuildEvent;
+}
+
+export interface DockerBuildEvent {
+  buildId: string;
+  status: string;
+  sequence: string;
+  logChunk: Buffer;
+  progressJson: string;
+  artifactRepository: string;
+  artifactDigest: string;
+  artifactSizeBytes: string;
+  platform: string;
+  sbomDigest: string;
+  provenanceDigest: string;
+  scanSummaryJson: string;
+  policyDecision: string;
+  errorCode: string;
+  errorMessage: string;
+  occurredAtUnixMs: string;
 }
 
 export interface DaemonLogEntry {
@@ -262,6 +282,9 @@ export interface GatewayCommand {
   setRelayDrain?: SetRelayDrainCommand;
   updateRelayWorker?: UpdateRelayWorkerCommand;
   commitRelaySupervisorUpdate?: CommitRelaySupervisorUpdateCommand;
+  syncDockerRegistryBindings?: SyncDockerRegistryBindingsCommand;
+  dockerBuild?: DockerBuildCommand;
+  dockerBuildCancel?: DockerBuildCancelCommand;
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
   applyTlsBundle?: ApplyTlsBundleCommand;
@@ -289,6 +312,33 @@ export interface GatewayCommand {
   pagesRemoveRuntimeConfig?: PagesRemoveRuntimeConfigCommand;
 }
 
+export interface DockerBuildCommand {
+  buildId: string;
+  repositoryUrl: string;
+  repositoryRemoteId: string;
+  repositoryFullPath: string;
+  ref: string;
+  commitSha: string;
+  dockerfilePath: string;
+  contextPath: string;
+  platform: string;
+  outputRepository: string;
+  outputTag: string;
+  buildArgs: Record<string, string>;
+  buildSecrets: Record<string, Buffer>;
+  checkoutCredential: Buffer;
+  allowedDependencies: string[];
+  cpuLimitMillis: string;
+  memoryLimitBytes: string;
+  diskLimitBytes: string;
+  timeoutSeconds: number;
+}
+
+export interface DockerBuildCancelCommand {
+  buildId: string;
+  reason: string;
+}
+
 export interface SyncRelayPolicyCommand {
   applySnapshotRequest: Buffer;
   revision: string;
@@ -309,6 +359,24 @@ export interface UpdateRelayWorkerCommand {
 
 export interface CommitRelaySupervisorUpdateCommand {
   targetVersion: string;
+}
+
+export interface SyncDockerRegistryBindingsCommand {
+  bindings: DockerRegistryBinding[];
+}
+
+export interface DockerRegistryBinding {
+  bindingId: string;
+  role: 'builder' | 'runtime' | 'ingress';
+  generation: string;
+  repository: string;
+  actions: Array<'pull' | 'push'>;
+  localAddress: string;
+  localPort: number;
+  relayOwnerKind: string;
+  relayOwnerId: string;
+  authorization: string;
+  authorizationExpiresAtUnix: string;
 }
 
 export interface PagesUploadInitCommand {

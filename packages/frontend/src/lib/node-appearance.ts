@@ -4,6 +4,7 @@ import type { NodeAppearanceColor, NodeType } from "@/types";
 export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   nginx: "Ingress",
   docker: "Docker",
+  builder: "Build Worker",
   databases: "Databases",
   monitoring: "Monitoring",
   bastion: "Bastion",

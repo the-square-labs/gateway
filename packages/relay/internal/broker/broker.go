@@ -1,10 +1,12 @@
 package broker
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/admission"
+	"github.com/wiolett-industries/gateway/relay/internal/config"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/peer"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
@@ -68,27 +71,39 @@ func (t *activeTunnel) close() { t.stopOnce.Do(func() { close(t.stop) }) }
 
 type Broker struct {
 	relayv1.UnimplementedTunnelBrokerServer
-	store          *policy.Store
-	verifier       grant.Verifier
-	mu             sync.Mutex
-	endpoints      map[string]*endpointRegistration
-	pending        map[string]*pendingTunnel
-	active         map[string]*activeTunnel
-	admission      *admission.Controller
-	activeProxy    uint64
-	activeDatabase uint64
-	proxyByRoute   map[string]uint64
-	activeByRoute  map[string]uint64
-	activeByTarget map[string]uint64
-	routeMetrics   map[string]*routeMetrics
-	metricsSince   time.Time
-	draining       atomic.Bool
+	store            *policy.Store
+	verifier         grant.Verifier
+	mu               sync.Mutex
+	endpoints        map[string]*endpointRegistration
+	pending          map[string]*pendingTunnel
+	active           map[string]*activeTunnel
+	admission        *admission.Controller
+	activeProxy      uint64
+	activeDatabase   uint64
+	activeRegistry   uint64
+	proxyByRoute     map[string]uint64
+	registryByRoute  map[string]uint64
+	activeByRoute    map[string]uint64
+	activeByTarget   map[string]uint64
+	routeMetrics     map[string]*routeMetrics
+	metricsSince     time.Time
+	draining         atomic.Bool
+	dialLocalService func(context.Context, string) (net.Conn, error)
 }
 
 func New(store *policy.Store) *Broker {
 	controller := admission.New()
 	controller.UpdatePolicy(store.Current().Admission)
-	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now()}
+	dialer := net.Dialer{}
+	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now(), dialLocalService: func(ctx context.Context, target string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "tcp", target)
+	}}
+}
+
+func (b *Broker) SetLocalServiceDialer(dial func(context.Context, string) (net.Conn, error)) {
+	if dial != nil {
+		b.dialLocalService = dial
+	}
 }
 
 const routeSetupLatencyWindow = 256
@@ -229,6 +244,7 @@ type RuntimeSnapshot struct {
 	ActiveTunnels         uint64
 	ActiveProxyTunnels    uint64
 	ActiveDatabaseTunnels uint64
+	ActiveRegistryTunnels uint64
 	Admission             admission.Snapshot
 	Draining              bool
 	AssignmentTunnels     []AssignmentTunnelCount
@@ -268,6 +284,7 @@ func (b *Broker) RuntimeSnapshot() RuntimeSnapshot {
 		ActiveTunnels:         uint64(len(b.active)),
 		ActiveProxyTunnels:    usage.ActiveProxy,
 		ActiveDatabaseTunnels: usage.ActiveDatabase,
+		ActiveRegistryTunnels: usage.ActiveRegistry,
 		Admission:             b.admission.GetSnapshot(),
 		Draining:              b.draining.Load(),
 		AssignmentTunnels:     assignmentTunnels,
@@ -495,6 +512,56 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	trafficClass := routeTrafficClass(route)
 	metrics := b.routeMetricsLocked(route.RouteId)
 	startedAt := time.Now()
+	if endpoint.SubjectKind == "local_service" {
+		target, targetErr := config.BuiltinLocalServiceTarget(endpoint.SubjectId)
+		if targetErr != nil {
+			metrics.opened.Add(1)
+			metrics.touch()
+			b.mu.Unlock()
+			metrics.recordFailedOpen(time.Since(startedAt))
+			return status.Error(codes.PermissionDenied, targetErr.Error())
+		}
+		if err := b.sessionCapacityErrorLocked(route, endpoint, claims.MaxConcurrentSessions, endpoint.MaxConcurrentSessions); err != nil {
+			metrics.throttled.Add(1)
+			metrics.touch()
+			b.mu.Unlock()
+			return err
+		}
+		if err := b.admission.Admit(trafficClass, route.RouteId, b.usageLocked()); err != nil {
+			metrics.throttled.Add(1)
+			metrics.touch()
+			b.mu.Unlock()
+			return status.Error(codes.ResourceExhausted, err.Error())
+		}
+		metrics.opened.Add(1)
+		metrics.touch()
+		session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
+		metrics.active.Add(1)
+		b.active[sessionID] = session
+		b.trackSessionLocked(session, 1)
+		b.mu.Unlock()
+		defer func() {
+			b.mu.Lock()
+			if current := b.active[sessionID]; current != nil {
+				b.trackSessionLocked(current, -1)
+				delete(b.active, sessionID)
+			}
+			b.mu.Unlock()
+			metrics.recordCompletion(time.Since(startedAt), resultErr)
+			b.pruneRouteMetrics(session.routeID, metrics)
+			session.close()
+		}()
+		connection, dialErr := b.dialLocalService(stream.Context(), target.Target)
+		if dialErr != nil {
+			return status.Error(codes.Unavailable, "built-in local service is unavailable")
+		}
+		defer connection.Close()
+		if err := stream.Send(readyFrame(frameLimit)); err != nil {
+			return err
+		}
+		resultErr = bridge(stream, &connectionTunnelStream{connection: connection, maxFrame: frameLimit}, frameLimit, session.stop, route.DisableIdleTimeout, false, metrics)
+		return resultErr
+	}
 	registration := b.endpoints[policyAssignmentKey(endpoint.EndpointId, claims.AssignmentGeneration)]
 	if registration == nil || time.Now().Unix() > registration.expiresAt.Load() {
 		metrics.opened.Add(1)
@@ -576,6 +643,9 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 }
 
 func routeTrafficClass(route *relayv1.RoutePolicy) string {
+	if route.TrafficClass == admission.TrafficClassRegistry {
+		return admission.TrafficClassRegistry
+	}
 	if route.TrafficClass == admission.TrafficClassDatabase {
 		return admission.TrafficClassDatabase
 	}
@@ -586,7 +656,7 @@ func routeTrafficClass(route *relayv1.RoutePolicy) string {
 }
 
 func (b *Broker) usageLocked() admission.Usage {
-	return admission.Usage{ActiveProxy: b.activeProxy, ActiveDatabase: b.activeDatabase, ProxyByRoute: b.proxyByRoute}
+	return admission.Usage{ActiveProxy: b.activeProxy, ActiveDatabase: b.activeDatabase, ActiveRegistry: b.activeRegistry, ProxyByRoute: b.proxyByRoute, RegistryByRoute: b.registryByRoute}
 }
 
 func (b *Broker) sessionCapacityErrorLocked(route *relayv1.RoutePolicy, endpoint *relayv1.EndpointPolicy, routeGrantLimit, endpointGrantLimit uint32) error {
@@ -623,6 +693,20 @@ func (b *Broker) trackSessionLocked(tunnel *activeTunnel, delta int) {
 			delete(b.proxyByRoute, tunnel.routeID)
 		} else {
 			b.proxyByRoute[tunnel.routeID]--
+		}
+		return
+	}
+	if tunnel.trafficClass == admission.TrafficClassRegistry {
+		if delta > 0 {
+			b.activeRegistry++
+			b.registryByRoute[tunnel.routeID]++
+			return
+		}
+		b.activeRegistry--
+		if b.registryByRoute[tunnel.routeID] <= 1 {
+			delete(b.registryByRoute, tunnel.routeID)
+		} else {
+			b.registryByRoute[tunnel.routeID]--
 		}
 		return
 	}
@@ -835,6 +919,49 @@ type tunnelReceiver interface {
 }
 type tunnelSender interface {
 	Send(*relayv1.TunnelFrame) error
+}
+
+type connectionTunnelStream struct {
+	connection net.Conn
+	maxFrame   int
+	writeMu    sync.Mutex
+}
+
+func (s *connectionTunnelStream) Recv() (*relayv1.TunnelFrame, error) {
+	buffer := make([]byte, s.maxFrame)
+	count, err := s.connection.Read(buffer)
+	if count > 0 {
+		return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: buffer[:count]}}}, nil
+	}
+	return nil, err
+}
+
+func (s *connectionTunnelStream) Send(frame *relayv1.TunnelFrame) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	switch payload := frame.Payload.(type) {
+	case *relayv1.TunnelFrame_Data:
+		for remaining := payload.Data.Data; len(remaining) > 0; {
+			written, err := s.connection.Write(remaining)
+			if err != nil {
+				return err
+			}
+			remaining = remaining[written:]
+		}
+		return nil
+	case *relayv1.TunnelFrame_HalfClose:
+		if tcp, ok := s.connection.(*net.TCPConn); ok {
+			return tcp.CloseWrite()
+		}
+		return nil
+	case *relayv1.TunnelFrame_Close:
+		return s.connection.Close()
+	case *relayv1.TunnelFrame_Error:
+		_ = s.connection.Close()
+		return fmt.Errorf("tunnel peer error: %s", payload.Error.Message)
+	default:
+		return status.Error(codes.InvalidArgument, "unexpected tunnel frame for local service")
+	}
 }
 
 type pumpResult struct {

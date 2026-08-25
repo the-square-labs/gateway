@@ -14,6 +14,7 @@ export * from './certificates.js';
 export * from './database-connection-folders.js';
 export * from './databases.js';
 export * from './docker-access-resources.js';
+export * from './docker-builds.js';
 export * from './docker-compose.js';
 export * from './docker-container-folder-assignments.js';
 export * from './docker-container-folders.js';

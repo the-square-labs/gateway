@@ -58,6 +58,44 @@ export class NodeDispatchService {
     }
   }
 
+  private async assertBuilderNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (
+      node.type !== 'builder' ||
+      node.status !== 'online' ||
+      !Array.isArray(reported) ||
+      !reported.includes('docker_builder_execution_v1') ||
+      !reported.includes('docker_builder_runsc_v1')
+    ) {
+      throw new AppError(
+        409,
+        'BUILDER_NODE_NOT_READY',
+        'Builder node must be online with the isolated BuildKit/containerd/runsc runtime ready'
+      );
+    }
+  }
+
+  async sendDockerBuildCommand(
+    nodeId: string,
+    command: NonNullable<GatewayCommand['dockerBuild']>
+  ): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    await this.assertBuilderNode(nodeId);
+    return this.registry.sendCommand(nodeId, { dockerBuild: command }, 30_000);
+  }
+
+  async cancelDockerBuild(nodeId: string, buildId: string, reason: string): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    await this.assertBuilderNode(nodeId);
+    return this.registry.sendCommand(nodeId, { dockerBuildCancel: { buildId, reason } }, 30_000);
+  }
+
   async applyConfig(
     nodeId: string,
     hostId: string,
@@ -475,6 +513,74 @@ export class NodeDispatchService {
     );
   }
 
+  async sendDockerRegistryBindings(
+    nodeId: string,
+    bindings: Array<{
+      bindingId: string;
+      role: 'builder' | 'runtime';
+      generation: number;
+      repository: string;
+      actions: Array<'pull' | 'push'>;
+      localAddress: '127.0.0.1';
+      localPort: number;
+      relayOwnerKind: 'registry_secure_link';
+      relayOwnerId: string;
+      authorization: string;
+      authorizationExpiresAtUnix: number;
+    }>,
+    timeoutMs = 30_000
+  ): Promise<CommandResult> {
+    await this.assertDockerRegistryProxyNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        syncDockerRegistryBindings: {
+          bindings: bindings.map((binding) => ({
+            ...binding,
+            generation: String(binding.generation),
+            authorizationExpiresAtUnix: String(binding.authorizationExpiresAtUnix),
+          })),
+        },
+      },
+      timeoutMs
+    );
+  }
+
+  async sendNginxRegistryBindings(
+    nodeId: string,
+    bindings: Array<{
+      bindingId: string;
+      role: 'ingress';
+      generation: number;
+      repository: '*';
+      actions: ['pull', 'push'];
+      localAddress: '127.0.0.1';
+      localPort: number;
+      relayOwnerKind: 'registry_ingress';
+      relayOwnerId: string;
+      authorization: '';
+      authorizationExpiresAtUnix: 0;
+    }>,
+    timeoutMs = 30_000
+  ): Promise<CommandResult> {
+    await this.assertNginxRegistryIngressNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        syncDockerRegistryBindings: {
+          bindings: bindings.map((binding) => ({
+            ...binding,
+            generation: String(binding.generation),
+            authorizationExpiresAtUnix: '0',
+          })),
+        },
+      },
+      timeoutMs
+    );
+  }
+
   async probeProxySecureLink(
     nodeId: string,
     input: {
@@ -524,6 +630,40 @@ export class NodeDispatchService {
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
         'Update both Nginx and Docker daemons before creating this Docker proxy link'
+      );
+    }
+  }
+
+  private async assertDockerRegistryProxyNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (!Array.isArray(reported) || !reported.includes('docker_registry_proxy_v1')) {
+      throw new AppError(
+        409,
+        'DOCKER_REGISTRY_PROXY_UPDATE_REQUIRED',
+        'Update the Docker daemon before enabling internal registry access on this node'
+      );
+    }
+  }
+
+  private async assertNginxRegistryIngressNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (node.type !== 'nginx' || !Array.isArray(reported) || !reported.includes('nginx_registry_ingress_v1')) {
+      throw new AppError(
+        409,
+        'NGINX_REGISTRY_INGRESS_UPDATE_REQUIRED',
+        'Update the selected Nginx daemon before enabling external registry access'
       );
     }
   }

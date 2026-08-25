@@ -213,6 +213,30 @@ describe('drizzle migration metadata', () => {
     expect(composeMigration).toContain('CREATE TABLE "docker_compose_projects"');
     expect(proxyMigration).toContain('REFERENCES "public"."docker_compose_projects"');
   });
+
+  it('adds the Docker build platform after the Compose migration tail', () => {
+    const entries = readMigrationJournal();
+    const composeCleanup = entries.findIndex((entry) => entry.tag === '0158_clear_darkstar');
+    const buildPlatform = entries.findIndex((entry) => entry.tag === '0159_rich_warbird');
+
+    expect(composeCleanup).toBeGreaterThanOrEqual(0);
+    expect(buildPlatform).toBe(composeCleanup + 1);
+
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0159_rich_warbird.sql'), 'utf8');
+    expect(migration).toContain('ALTER TYPE "public"."node_type" ADD VALUE \'builder\'');
+    expect(migration).toContain('CREATE TABLE "docker_builds"');
+    expect(migration).toContain('CREATE TABLE "docker_build_artifacts"');
+    expect(migration).toContain('CREATE TABLE "docker_build_secrets"');
+    expect(migration).toContain('CREATE TABLE "docker_source_bindings"');
+    expect(migration).toContain('CREATE TABLE "docker_source_webhook_deliveries"');
+    expect(migration).toContain('CREATE TABLE "docker_registry_node_bindings"');
+    expect(migration).toContain('CREATE TABLE "docker_internal_registry_state"');
+    expect(migration).toContain('ALTER TABLE "relay_endpoints" ALTER COLUMN "owner_id" SET DATA TYPE text');
+    expect(migration).toContain('"docker_builds_superseded_by_build_id_docker_builds_id_fk"');
+    expect(migration).toContain('"docker_build_artifacts_repository_digest_platform_idx"');
+    expect(migration).not.toContain('"docker_build_artifacts_repository_digest_platform_unique"');
+  });
+
   it('preserves existing AI Workspace grants when splitting inference access', () => {
     const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0155_split_ai_workspace_access.sql'), 'utf8');
 

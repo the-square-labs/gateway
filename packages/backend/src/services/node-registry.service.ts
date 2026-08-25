@@ -34,7 +34,7 @@ function closeStream(stream: { end?: () => void; destroy?: () => void } | null |
 export interface ConnectedNode {
   connectionId: string;
   nodeId: string;
-  type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay';
+  type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'builder' | 'databases' | 'relay';
   hostname: string;
   commandStream: ServerDuplexStream<DaemonMessage, GatewayCommand>;
   logStream: ServerDuplexStream<unknown, unknown> | null;
@@ -220,7 +220,7 @@ export class NodeRegistryService {
 
   async register(
     nodeId: string,
-    type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases' | 'relay',
+    type: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'builder' | 'databases' | 'relay',
     hostname: string,
     configVersionHash: string,
     commandStream: ServerDuplexStream<DaemonMessage, GatewayCommand>,

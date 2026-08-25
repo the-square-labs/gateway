@@ -1,5 +1,11 @@
 import type {
   ContainerCreateConfig,
+  DockerBuild,
+  DockerBuildAdmissionStatus,
+  DockerBuildLogChunk,
+  DockerBuildSecret,
+  DockerBuildSourceRepository,
+  DockerBuildStatus,
   DockerComposeOperation,
   DockerComposeOperationAction,
   DockerComposeProject,
@@ -13,10 +19,17 @@ import type {
   DockerFolderTreeNode,
   DockerHealthCheck,
   DockerImage,
+  DockerInternalRegistrySettings,
+  DockerInternalRegistryState,
   DockerNetwork,
   DockerRegistry,
   DockerRuntimeStatus,
   DockerSecret,
+  DockerSourceBinding,
+  DockerSourceBindingConfig,
+  DockerSourceResourceCreateRequest,
+  DockerSourceResourceCreateResult,
+  DockerSourceTarget,
   DockerTask,
   DockerVolume,
   FileEntry,
@@ -40,6 +53,17 @@ type DockerListEnvelope<T> = {
     appearanceColor?: Node["appearanceColor"];
   }>;
 };
+
+interface DockerBuildListParams {
+  sourceBindingId?: string;
+  builderNodeId?: string;
+  status?: DockerBuildStatus;
+  provider?: "gitlab" | "github" | "git";
+  branch?: string;
+  search?: string;
+  cursor?: string;
+  limit?: number;
+}
 
 type DockerListQuery = {
   search?: string;
@@ -1782,6 +1806,186 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         this.request<{ data: DockerTask }>(`/docker/tasks/${id}/force-cancel`, {
           method: "POST",
         })
+      );
+    }
+
+    // ── Docker Git sources and builds ─────────────────────────────────
+
+    async listDockerBuildPage(
+      params?: DockerBuildListParams
+    ): Promise<{ data: DockerBuild[]; nextCursor: string | null }> {
+      const query = new URLSearchParams();
+      if (params?.sourceBindingId) query.set("sourceBindingId", params.sourceBindingId);
+      if (params?.builderNodeId) query.set("builderNodeId", params.builderNodeId);
+      if (params?.status) query.set("status", params.status);
+      if (params?.provider) query.set("provider", params.provider);
+      if (params?.branch) query.set("branch", params.branch);
+      if (params?.search) query.set("search", params.search);
+      if (params?.cursor) query.set("cursor", params.cursor);
+      query.set("limit", String(params?.limit ?? 100));
+      return this.request<{ data: DockerBuild[]; nextCursor: string | null }>(
+        `/docker/builds?${query.toString()}`
+      );
+    }
+
+    async listDockerBuilds(params?: DockerBuildListParams): Promise<DockerBuild[]> {
+      return (await this.listDockerBuildPage(params)).data;
+    }
+
+    async getDockerBuildLogs(buildId: string): Promise<DockerBuildLogChunk[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuildLogChunk[] }>(`/docker/builds/${buildId}/logs?limit=500`)
+      );
+    }
+
+    async cancelDockerBuild(buildId: string): Promise<DockerBuild> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuild }>(`/docker/builds/${buildId}/cancel`, { method: "POST" })
+      );
+    }
+
+    async retryDockerBuild(buildId: string): Promise<DockerBuild> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuild }>(`/docker/builds/${buildId}/retry`, { method: "POST" })
+      );
+    }
+
+    async listDockerBuildRepositories(connectorId: string): Promise<DockerBuildSourceRepository[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuildSourceRepository[] }>(
+          `/docker/sources/connectors/${connectorId}/repositories`
+        )
+      );
+    }
+
+    async getDockerSource(target: DockerSourceTarget): Promise<DockerSourceBinding | null> {
+      const path =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
+      return this.unwrapData(this.request<{ data: DockerSourceBinding | null }>(path));
+    }
+
+    async upsertDockerSource(
+      target: DockerSourceTarget,
+      config: DockerSourceBindingConfig
+    ): Promise<DockerSourceBinding> {
+      const path =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
+      return this.unwrapData(
+        this.request<{ data: DockerSourceBinding }>(path, {
+          method: "PUT",
+          body: JSON.stringify(config),
+        })
+      );
+    }
+
+    async removeDockerSource(target: DockerSourceTarget): Promise<void> {
+      const path =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
+      await this.request<{ success: true; removed: boolean }>(path, { method: "DELETE" });
+    }
+
+    async listDockerBuildSecrets(target: DockerSourceTarget): Promise<DockerBuildSecret[]> {
+      const path =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/build-secrets`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/build-secrets`;
+      return this.unwrapData(this.request<{ data: DockerBuildSecret[] }>(path));
+    }
+
+    async upsertDockerBuildSecret(
+      target: DockerSourceTarget,
+      name: string,
+      value: string
+    ): Promise<DockerBuildSecret> {
+      const base =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/build-secrets`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/build-secrets`;
+      return this.unwrapData(
+        this.request<{ data: DockerBuildSecret }>(`${base}/${encodeURIComponent(name)}`, {
+          method: "PUT",
+          body: JSON.stringify({ value }),
+        })
+      );
+    }
+
+    async deleteDockerBuildSecret(target: DockerSourceTarget, name: string): Promise<void> {
+      const base =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/build-secrets`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/build-secrets`;
+      await this.request(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
+    }
+
+    async createDockerSourceBuild(
+      target: DockerSourceTarget,
+      input: { commitSha?: string; force?: boolean } = {}
+    ): Promise<DockerBuild> {
+      const path =
+        target.kind === "container"
+          ? `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source/builds`
+          : `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source/builds`;
+      const result = await this.unwrapData(
+        this.request<{ data: { build: DockerBuild; created: boolean } }>(path, {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+      return result.build;
+    }
+
+    async createDockerSourceResource(
+      nodeId: string,
+      input: DockerSourceResourceCreateRequest
+    ): Promise<DockerSourceResourceCreateResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerSourceResourceCreateResult }>(
+          `/docker/nodes/${nodeId}/source-resources`,
+          {
+            method: "POST",
+            body: JSON.stringify(input),
+          }
+        )
+      );
+    }
+
+    async getDockerBuildAdmission(nodeId: string): Promise<DockerBuildAdmissionStatus> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuildAdmissionStatus }>(
+          `/docker/nodes/${nodeId}/source-resources/admission`
+        )
+      );
+    }
+
+    async getDockerInternalRegistryState(): Promise<DockerInternalRegistryState> {
+      return this.unwrapData(
+        this.request<{ data: DockerInternalRegistryState }>("/docker/registries/internal/state")
+      );
+    }
+
+    async listDockerInternalRegistryRepositories(): Promise<string[]> {
+      return this.unwrapData(
+        this.request<{ data: string[] }>("/docker/registries/internal/repositories")
+      );
+    }
+
+    async updateDockerInternalRegistrySettings(
+      settings: DockerInternalRegistrySettings
+    ): Promise<DockerInternalRegistryState> {
+      return this.unwrapData(
+        this.request<{ data: DockerInternalRegistryState }>(
+          "/docker/registries/internal/settings",
+          {
+            method: "PUT",
+            body: JSON.stringify(settings),
+          }
+        )
       );
     }
 

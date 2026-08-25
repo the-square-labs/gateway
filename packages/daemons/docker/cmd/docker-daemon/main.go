@@ -181,11 +181,11 @@ func setupLogger(level, format string) *slog.Logger {
 
 func runInstall() {
 	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "Usage: docker-daemon install --gateway <address> --token <token> --gateway-cert-sha256 <sha256:hex> [--docker-socket <host>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: docker-daemon install --gateway <address> --token <token> --gateway-cert-sha256 <sha256:hex> [--mode builder] [--docker-socket <host>]\n")
 		os.Exit(1)
 	}
 
-	var address, token, certSHA256, dockerSocket string
+	var address, token, certSHA256, dockerSocket, mode string
 	for i := 2; i < len(os.Args)-1; i++ {
 		switch os.Args[i] {
 		case "--gateway":
@@ -196,6 +196,8 @@ func runInstall() {
 			certSHA256 = os.Args[i+1]
 		case "--docker-socket":
 			dockerSocket = os.Args[i+1]
+		case "--mode":
+			mode = os.Args[i+1]
 		}
 	}
 
@@ -207,11 +209,19 @@ func runInstall() {
 		fmt.Fprintf(os.Stderr, "--gateway-cert-sha256 must use sha256:<64-hex> format\n")
 		os.Exit(1)
 	}
+	if mode != "" && mode != "builder" {
+		fmt.Fprintln(os.Stderr, "--mode must be omitted or set to builder")
+		os.Exit(1)
+	}
 
 	configDir := "/etc/docker-daemon"
 	configPath := configDir + "/config.yaml"
-	if dockerSocket == "" {
+	if mode != "builder" && dockerSocket == "" {
 		dockerSocket = detectDockerSocket()
+	}
+	if mode == "builder" && dockerSocket != "" {
+		fmt.Fprintln(os.Stderr, "--docker-socket is not allowed in builder mode")
+		os.Exit(1)
 	}
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -219,6 +229,10 @@ func runInstall() {
 		os.Exit(1)
 	}
 
+	dockerConfig := fmt.Sprintf("  socket: %q\n  allowlist: [\"*\"]\n", dockerSocket)
+	if mode == "builder" {
+		dockerConfig = "  mode: \"builder\"\n"
+	}
 	configContent := fmt.Sprintf(`gateway:
   address: "%s"
   token: "%s"
@@ -234,9 +248,7 @@ log_level: "info"
 log_format: "json"
 
 docker:
-  socket: %q
-  allowlist: ["*"]
-`, address, token, certSHA256, dockerSocket)
+%s`, address, token, certSHA256, dockerConfig)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config: %v\n", err)
@@ -246,7 +258,7 @@ docker:
 	fmt.Printf("Config written to %s\n", configPath)
 
 	// Create systemd service unit
-	serviceContent := dockerDaemonSystemdUnit()
+	serviceContent := dockerDaemonSystemdUnitForMode(mode)
 	servicePath := "/etc/systemd/system/docker-daemon.service"
 	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write systemd unit: %v\n", err)
@@ -269,6 +281,13 @@ func detectDockerSocket() string {
 }
 
 func dockerDaemonSystemdUnit() string {
+	return dockerDaemonSystemdUnitForMode("")
+}
+
+func dockerDaemonSystemdUnitForMode(mode string) string {
+	if mode == "builder" {
+		return dockerDaemonSystemdUnitForDockerUnit("")
+	}
 	return dockerDaemonSystemdUnitForDockerUnit(detectDockerSystemdUnit())
 }
 

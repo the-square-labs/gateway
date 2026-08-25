@@ -1,0 +1,36 @@
+root = "/var/lib/gateway-builder/buildkit"
+insecure-entitlements = []
+
+[log]
+  format = "json"
+  level = "debug"
+
+[dns]
+  nameservers = ["1.1.1.1", "8.8.8.8"]
+
+[grpc]
+  address = ["unix:///run/gateway-builder/buildkit/buildkitd.sock"]
+  gid = 0
+
+[cdi]
+  disabled = true
+
+[worker.oci]
+  enabled = false
+
+[worker.containerd]
+  enabled = true
+  address = "/run/gateway-builder/containerd/containerd.sock"
+  namespace = "gateway-builds"
+  snapshotter = "native"
+  networkMode = "cni"
+  cniConfigPath = "/etc/gateway-builder/cni.conflist"
+  cniBinaryPath = "/opt/gateway-builder/cni/bin"
+  max-parallelism = 2
+
+[worker.containerd.runtime]
+  name = "io.containerd.runc.v2"
+  options = { BinaryName = "/usr/local/lib/gateway-builder/runsc-oci" }
+
+[frontend."gateway.v0"]
+  enabled = false

@@ -197,6 +197,8 @@ export const ALL_SCOPES = [
   'docker:registries:create',
   'docker:registries:edit',
   'docker:registries:delete',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
   // ── Docker: Tasks ────────────────────────────────────────────────
   'docker:tasks',
   'docker:tasks:manage',
@@ -468,6 +470,8 @@ export const ADMIN_SCOPES: readonly string[] = [
   'docker:networks:edit',
   'docker:networks:delete',
   'docker:registries:view',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
   'docker:tasks',
   'docker:tasks:manage',
   'databases:view',
@@ -748,6 +752,8 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:compose:create',
   'docker:compose:manage',
   'docker:compose:delete',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
   // Docker images
   'docker:images:view',
   'docker:images:pull',

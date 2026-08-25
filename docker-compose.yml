@@ -74,6 +74,7 @@ services:
       - GATEWAY_RELAY_SERVICE_NAME=relay
       - GATEWAY_RELAY_BUILD_VERSION=${GATEWAY_RELAY_BUILD_VERSION:-dev}
       - GATEWAY_RELAY_PROTOCOL_MAJOR=${GATEWAY_RELAY_PROTOCOL_MAJOR:-1}
+      - GATEWAY_REGISTRY_AUTH_DIR=/var/lib/gateway-registry-auth
       - PUBLIC_IPV4=${PUBLIC_IPV4:-}
       - PUBLIC_IPV6=${PUBLIC_IPV6:-}
       - APP_VERSION=${GATEWAY_VERSION:-dev}
@@ -81,6 +82,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - gateway_data:/var/lib/gateway
       - gateway_relay_identity:/var/lib/gateway-relay
+      - gateway_registry_auth:/var/lib/gateway-registry-auth
       # gateway-managed:start sandbox-workspace
       - ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
       # gateway-managed:end sandbox-workspace
@@ -88,6 +90,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      registry:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:3000/health || wget -qO- http://127.0.0.1:3000/health"]
@@ -118,6 +122,37 @@ services:
       interval: 5s
       timeout: 3s
       retries: 2
+      start_period: 20s
+
+  registry:
+    image: ${GATEWAY_REGISTRY_IMAGE_REF:-registry:3}
+    restart: unless-stopped
+    labels:
+      com.wiolett.gateway.managed-service: registry
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_HTTP_DEBUG_ADDR: 127.0.0.1:5001
+      REGISTRY_HTTP_SECRET: ${GATEWAY_REGISTRY_HTTP_SECRET:-gateway-development-registry-secret}
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: ${GATEWAY_REGISTRY_TOKEN_REALM:-https://gateway.invalid/api/docker/registry/token}
+      REGISTRY_AUTH_TOKEN_SERVICE: gateway-internal-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: gateway-internal-registry
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /var/lib/gateway-registry-auth/token-cert.pem
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_HEALTH_STORAGEDRIVER_ENABLED: "true"
+      REGISTRY_HEALTH_STORAGEDRIVER_INTERVAL: 10s
+      REGISTRY_HEALTH_STORAGEDRIVER_THRESHOLD: "3"
+    expose:
+      - "5000"
+    volumes:
+      - gateway_registry_data:/var/lib/registry
+      - gateway_registry_auth:/var/lib/gateway-registry-auth:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5001/debug/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
       start_period: 20s
 
   postgres:
@@ -151,5 +186,7 @@ volumes:
   gateway_data:
   gateway_relay_identity:
   gateway_relay_state:
+  gateway_registry_data:
+  gateway_registry_auth:
   postgres_data:
   redis_data:

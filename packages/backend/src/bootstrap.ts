@@ -14,6 +14,7 @@ import { NotificationRetryJob } from '@/jobs/notification-retry.job.js';
 import { SiemDeliveryJob } from '@/jobs/siem-delivery.job.js';
 import { UpdateCheckJob } from '@/jobs/update-check.job.js';
 import { logger } from '@/lib/logger.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { AccessListService } from '@/modules/access-lists/access-list.service.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
@@ -52,6 +53,9 @@ import { DockerComposeService } from '@/modules/docker/compose/compose.service.j
 import { DockerComposeNodeDispatcher } from '@/modules/docker/compose/compose-node-dispatcher.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
+import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
+import { DockerBuildRolloutService } from '@/modules/docker/docker-build-rollout.service.js';
+import { DockerBuildRunnerService } from '@/modules/docker/docker-build-runner.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { DockerEnvironmentService } from '@/modules/docker/docker-environment.service.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
@@ -64,10 +68,16 @@ import { DockerMigrationExecutor } from '@/modules/docker/docker-migration-execu
 import { DockerMigrationGuard } from '@/modules/docker/docker-migration-guard.js';
 import { DockerMigrationPreflightService } from '@/modules/docker/docker-migration-preflight.js';
 import { DockerRegistryService } from '@/modules/docker/docker-registry.service.js';
+import {
+  createDockerRegistryMaintenanceExecutor,
+  DockerInternalRegistryService,
+} from '@/modules/docker/docker-registry-internal.service.js';
+import { DockerRegistryTokenService } from '@/modules/docker/docker-registry-token.service.js';
 import { DockerRuntimeSettingsService } from '@/modules/docker/docker-runtime-settings.service.js';
 import { DockerSecretService } from '@/modules/docker/docker-secret.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
+import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { DockerTaskService } from '@/modules/docker/docker-task.service.js';
 import { DockerWebhookService } from '@/modules/docker/docker-webhook.service.js';
 import { detectPublicIP, initDnsResolver } from '@/modules/domains/dns.utils.js';
@@ -196,6 +206,8 @@ import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.ser
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
+import { RelayRegistryService } from '@/services/relay-registry.service.js';
+import { RelayRegistryIngressService } from '@/services/relay-registry-ingress.service.js';
 import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
@@ -667,7 +679,32 @@ export async function initializeContainer(): Promise<void> {
   const dockerFolderService = new DockerFolderService(db, auditService);
   container.registerInstance(DockerFolderService, dockerFolderService);
 
+  const dockerRegistryTokenService = new DockerRegistryTokenService();
+  await dockerRegistryTokenService.initialize();
+  container.registerInstance(DockerRegistryTokenService, dockerRegistryTokenService);
+  const dockerInternalRegistryService = new DockerInternalRegistryService(db, dockerRegistryTokenService, auditService);
+  dockerInternalRegistryService.setEventBus(eventBus);
+  dockerInternalRegistryService.setLicensePolicyService(licensePolicyService);
+  await dockerInternalRegistryService.initialize();
+  await dockerInternalRegistryService.probeHealth().catch((error) => {
+    logger.warn('Initial internal registry health probe failed', { error });
+  });
+  container.registerInstance(DockerInternalRegistryService, dockerInternalRegistryService);
+  let relayRegistryService: RelayRegistryService | undefined;
+  if (relayPolicyService) {
+    relayRegistryService = new RelayRegistryService(
+      db,
+      relayPolicyService,
+      nodeDispatch,
+      dockerInternalRegistryService
+    );
+    relayRegistryService.setEventBus(eventBus);
+    relayRegistryService.start();
+    container.registerInstance(RelayRegistryService, relayRegistryService);
+  }
+
   const dockerRegistryService = new DockerRegistryService(db, auditService, cryptoService, nodeDispatch);
+  dockerRegistryService.setInternalRegistryService(dockerInternalRegistryService);
   container.registerInstance(DockerRegistryService, dockerRegistryService);
   dockerManagementService.setRegistryService(dockerRegistryService);
   integrationsService.setDockerRegistryService(dockerRegistryService);
@@ -726,6 +763,38 @@ export async function initializeContainer(): Promise<void> {
     dockerDeploymentService
   );
   container.registerInstance(DockerWebhookService, dockerWebhookService);
+  const dockerBuildService = new DockerBuildService(db);
+  dockerBuildService.setEventBus(eventBus);
+  if (relayRegistryService) {
+    dockerBuildService.setBuildReleaseHandler((buildId) =>
+      relayRegistryService.revokeContextBinding({ contextKind: 'build', contextId: buildId })
+    );
+  }
+  container.registerInstance(DockerBuildService, dockerBuildService);
+  const dockerBuildRunnerService = relayRegistryService
+    ? new DockerBuildRunnerService(db, dockerBuildService, nodeDispatch, integrationsService, relayRegistryService)
+    : null;
+  if (dockerBuildRunnerService) container.registerInstance(DockerBuildRunnerService, dockerBuildRunnerService);
+  dockerBuildService.setLicenseGuard(() => licensePolicyService.requireMinimumPlan('business'));
+  dockerBuildService.setAdmissionGuard(async () => {
+    await dockerInternalRegistryService.assertBuildAdmission();
+    if (!dockerBuildRunnerService) {
+      throw new AppError(503, 'BUILD_RUNNER_UNAVAILABLE', 'Build scheduling is unavailable');
+    }
+    await dockerBuildRunnerService.assertBuildAdmission();
+  });
+  const dockerBuildRolloutService = relayRegistryService
+    ? new DockerBuildRolloutService(db, dockerManagementService, dockerDeploymentService, relayRegistryService)
+    : null;
+  if (dockerBuildRolloutService) {
+    container.registerInstance(DockerBuildRolloutService, dockerBuildRolloutService);
+    dockerBuildService.setArtifactRollout((buildId) => dockerBuildRolloutService.rollout(buildId));
+  }
+  const dockerSourceService = new DockerSourceService(db, auditService, integrationsService, cryptoService);
+  dockerSourceService.setBuildService(dockerBuildService);
+  dockerSourceService.setLicensePolicyService(licensePolicyService);
+  dockerBuildRunnerService?.setSourceService(dockerSourceService);
+  container.registerInstance(DockerSourceService, dockerSourceService);
 
   dockerManagementService.setTaskService(dockerTaskService);
   dockerManagementService.setEnvironmentService(dockerEnvironmentService);
@@ -866,6 +935,20 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
+  if (relayPolicyService && relayRegistryService) {
+    const relayRegistryIngressService = new RelayRegistryIngressService(
+      relayPolicyService,
+      nodeDispatch,
+      dockerInternalRegistryService,
+      proxyService
+    );
+    relayRegistryIngressService.setEventBus(eventBus);
+    dockerInternalRegistryService.setExternalAccessReconciler((next, previous, userId) =>
+      relayRegistryIngressService.reconcile(next, previous, userId)
+    );
+    relayRegistryIngressService.start();
+    container.registerInstance(RelayRegistryIngressService, relayRegistryIngressService);
+  }
   const additionalRouteService = new AdditionalRouteService(
     db,
     auditService,
@@ -891,7 +974,8 @@ export async function initializeContainer(): Promise<void> {
     db,
     proxyService,
     dockerSnapshotReconciler,
-    dockerAccessResourceService
+    dockerAccessResourceService,
+    relayRegistryService
   );
   container.registerInstance(DockerMigrationCoordinator, dockerMigrationCoordinator);
   const dockerMigrationExecutor = new DockerMigrationExecutor(
@@ -1156,6 +1240,12 @@ export async function initializeContainer(): Promise<void> {
 
   // Docker service (kept for self-update and image pruning only)
   const dockerService = new DockerService('/var/run/docker.sock', '');
+  dockerInternalRegistryService.setExecutor(
+    createDockerRegistryMaintenanceExecutor(dockerService, dockerRegistryTokenService)
+  );
+  await dockerInternalRegistryService.recoverInterruptedMaintenance().catch((error) => {
+    logger.error('Failed to recover interrupted internal registry maintenance', { error });
+  });
   container.registerInstance(DockerService, dockerService);
   container.resolve(ExternalSshService).setDockerService(dockerService);
 
@@ -1259,6 +1349,7 @@ export async function initializeContainer(): Promise<void> {
     eventBus
   );
   licenseEntitlementReconciler.setPageProfileService(pageProfileService);
+  licenseEntitlementReconciler.setDockerInternalRegistryService(dockerInternalRegistryService);
   container.registerInstance(LicenseEntitlementReconcilerService, licenseEntitlementReconciler);
   const loggingMaintenanceService = new LoggingMaintenanceService(loggingClickHouseService, loggingFeatureService);
   loggingMaintenanceService.setEventBus(eventBus);
@@ -1539,6 +1630,29 @@ export async function initializeContainer(): Promise<void> {
     notifEvaluatorService.reconcileProxyMaintenance()
   );
   scheduler.registerInterval('docker-health-check', 10000, () => dockerHealthCheckService.runDueChecks());
+  scheduler.registerInterval('docker-build-lease-recovery', 15000, async () => {
+    await dockerBuildService.recoverExpiredLeases();
+  });
+  if (dockerBuildRunnerService) {
+    scheduler.registerInterval('docker-build-runner', 5000, () => dockerBuildRunnerService.reconcile());
+  }
+  const runDockerSourceAutomation = async (task: () => Promise<unknown>): Promise<void> => {
+    try {
+      await task();
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'LICENSE_ENTITLEMENT_REQUIRED') return;
+      throw error;
+    }
+  };
+  scheduler.registerInterval('docker-source-poll', 60_000, async () => {
+    await runDockerSourceAutomation(() => dockerSourceService.pollDue());
+  });
+  scheduler.registerInterval('docker-source-webhooks', 15 * 60_000, async () => {
+    await runDockerSourceAutomation(() => dockerSourceService.reconcileWebhooks());
+  });
+  scheduler.registerInterval('docker-internal-registry-health', 10_000, async () => {
+    await dockerInternalRegistryService.probeHealth();
+  });
   scheduler.registerInterval('managed-database-reconcile', 30000, () =>
     managedDatabaseService.reconcilePendingOperations()
   );

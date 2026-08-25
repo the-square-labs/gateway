@@ -16,6 +16,23 @@ import (
 
 var dockerSHA256Digest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
+func restorableMigrationImageTags(tags []string) []string {
+	result := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || tag == "<none>:<none>" || strings.Contains(tag, "@") {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	return result
+}
+
 type migrationImageImportRequest struct {
 	ExpectedImageID      string   `json:"expectedImageId"`
 	ExpectedArtifactHash string   `json:"expectedArtifactDigest"`
@@ -67,7 +84,7 @@ func (p *DockerPlugin) prepareMigrationImage(ctx context.Context, migrationID, a
 	meta := migrationArtifactMetadata{
 		ArtifactID: artifactID, ArtifactType: "image", SizeBytes: size,
 		ArtifactDigest: hex.EncodeToString(hasher.Sum(nil)), ImageID: image.ID,
-		ImageTags: append([]string(nil), image.RepoTags...), Complete: true,
+		ImageTags: restorableMigrationImageTags(image.RepoTags), Complete: true,
 	}
 	if err := p.migrationStore.saveMetadata(migrationID, meta); err != nil {
 		return migrationArtifactMetadata{}, err
@@ -87,7 +104,8 @@ func (p *DockerPlugin) importMigrationImage(ctx context.Context, migrationID, ar
 		meta.ImageID == req.ExpectedImageID && meta.ArtifactDigest == req.ExpectedArtifactHash {
 		return meta, nil
 	}
-	for _, tag := range req.SourceTags {
+	sourceTags := restorableMigrationImageTags(req.SourceTags)
+	for _, tag := range sourceTags {
 		existing, err := p.client.cli.ImageInspect(ctx, tag)
 		if err == nil && existing.ID != req.ExpectedImageID {
 			return migrationArtifactMetadata{}, fmt.Errorf("target image tag %q points to a different digest", tag)
@@ -130,13 +148,13 @@ func (p *DockerPlugin) importMigrationImage(ctx context.Context, migrationID, ar
 	if loaded.ID != req.ExpectedImageID {
 		return migrationArtifactMetadata{}, fmt.Errorf("loaded Docker image digest mismatch")
 	}
-	if len(req.SourceTags) == 0 {
+	if len(sourceTags) == 0 {
 		internalTag := "gateway-migration:" + strings.TrimPrefix(req.ExpectedImageID, "sha256:")[:12]
 		if _, err := p.client.cli.ImageTag(ctx, mobyclient.ImageTagOptions{Source: loaded.ID, Target: internalTag}); err != nil {
 			return migrationArtifactMetadata{}, fmt.Errorf("tag untagged migration image: %w", err)
 		}
 	} else {
-		for _, tag := range req.SourceTags {
+		for _, tag := range sourceTags {
 			if _, err := p.client.cli.ImageTag(ctx, mobyclient.ImageTagOptions{Source: loaded.ID, Target: tag}); err != nil {
 				return migrationArtifactMetadata{}, fmt.Errorf("restore migration image tag %q: %w", tag, err)
 			}

@@ -114,6 +114,12 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('GATEWAY_RELAY_IMAGE_REF');
     expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay/identity:ro');
     expect(source).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
+    expect(source).toContain('ensure_env GATEWAY_REGISTRY_IMAGE_REF "registry:3"');
+    expect(source).toContain('ensure_env GATEWAY_REGISTRY_HTTP_SECRET "$(openssl rand -hex 32)"');
+    expect(source).toContain('com.wiolett.gateway.managed-service: registry');
+    expect(source).toContain('gateway_registry_data:/var/lib/registry');
+    expect(source).toContain('      - "5000"');
+    expect(source).not.toContain('      - "5000:5000"');
     expect(source).toContain('      - "9443:9443"');
     expect(source).toContain('Gateway recovery helper image pull');
     expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');
@@ -233,6 +239,20 @@ describe('database daemon installer prerequisites', () => {
     const setup = source.slice(setupStart, setupEnd);
 
     expect(setup).toContain('[[ "$DOCKER_MODE" == "docker" ]] || return 0');
+  });
+
+  it('installs the builder profile without Docker Engine or Docker socket access', () => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+    expect(source).toContain('docker|builder|databases');
+    expect(source).toContain('[[ "$DOCKER_MODE" != "builder" ]] || return 0');
+    expect(source).toContain('--mode builder');
+    expect(source).toContain('grep -Eq \'^[[:space:]]+mode:[[:space:]]*"?builder"?[[:space:]]*$\'');
+    expect(source).toContain('Builder profile must not contain Docker socket or allowlist access.');
+    expect(source).toContain('[[ "$DOCKER_MODE" != "builder" ]] && docker_group_exists');
+    expect(source).toContain('install_builder_runtime_bundle');
+    expect(source).toContain('docker-builder-runtime-linux-' + '$' + '{ARCH}.tar.gz');
+    expect(source).toContain('containerd-shim-runc-v2');
+    expect(source).toContain('Builder runtime checksum verification failed.');
   });
 });
 

@@ -16,6 +16,7 @@ import (
 const (
 	TrafficClassProxy    = "proxy"
 	TrafficClassDatabase = "database"
+	TrafficClassRegistry = "registry"
 
 	defaultProxyTargetPercent  = 70
 	defaultDatabaseReserve     = 20
@@ -39,9 +40,11 @@ func (p ResourcePressure) Maximum() uint32 {
 }
 
 type Usage struct {
-	ActiveProxy    uint64
-	ActiveDatabase uint64
-	ProxyByRoute   map[string]uint64
+	ActiveProxy     uint64
+	ActiveDatabase  uint64
+	ActiveRegistry  uint64
+	ProxyByRoute    map[string]uint64
+	RegistryByRoute map[string]uint64
 }
 
 type Snapshot struct {
@@ -120,6 +123,9 @@ func (c *Controller) Admit(trafficClass, routeID string, usage Usage) error {
 		return nil
 	}
 
+	if trafficClass != TrafficClassProxy && trafficClass != TrafficClassRegistry {
+		return &Rejected{TrafficClass: trafficClass, State: "unknown_traffic_class"}
+	}
 	if pressure >= proxyCutoff {
 		c.throttledProxyTotal++
 		return &Rejected{TrafficClass: TrafficClassProxy, State: "database_reserve"}

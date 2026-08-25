@@ -174,6 +174,7 @@ export class RelayPoolService {
     const rebalanceAvailable =
       readyFaultDomains.size > 0 &&
       endpoints.some((endpoint) => {
+        if (endpoint.ownerKind === 'internal_registry') return false;
         const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
         const selectedIds = chooseCandidates(
           endpoint.id,
@@ -349,6 +350,7 @@ export class RelayPoolService {
       }
       const created: Array<{ id: string; endpointId: string; generation: number; instanceIds: string[] }> = [];
       for (const endpoint of endpoints) {
+        if (endpoint.ownerKind === 'internal_registry') continue;
         const [staging] = await tx
           .select({ id: relayEndpointAssignmentGenerations.id })
           .from(relayEndpointAssignmentGenerations)

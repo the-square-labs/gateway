@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import type { InspectData } from "./helpers";
 
-export function ConfigTab({ data }: { data: InspectData }) {
+export function ConfigTab({ data, editorHeight }: { data: InspectData; editorHeight?: string }) {
   const jsonText = useMemo(() => JSON.stringify(data, null, 2), [data]);
 
   const [copied, setCopied] = useState(false);
@@ -46,7 +46,14 @@ export function ConfigTab({ data }: { data: InspectData }) {
         </Button>
       }
     >
-      <CodeEditor value={jsonText} onChange={() => {}} readOnly language="json" className="-m-px" />
+      <CodeEditor
+        value={jsonText}
+        onChange={() => {}}
+        readOnly
+        language="json"
+        height={editorHeight}
+        bordered={false}
+      />
     </PanelShell>
   );
 }

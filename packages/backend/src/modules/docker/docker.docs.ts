@@ -41,6 +41,7 @@ import {
   VolumeRenameSchema,
   VolumeResizeSchema,
 } from './docker.schemas.js';
+import { DockerInternalRegistrySettingsSchema, DockerSourceResourceCreateSchema } from './docker-build.schemas.js';
 import {
   DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
@@ -77,6 +78,32 @@ const taskParams = pathParamSchema('id');
 const containerSecretParams = pathParamSchema('nodeId', 'containerId', 'secretId');
 const deploymentSecretParams = pathParamSchema('nodeId', 'deploymentId', 'secretId');
 const dockerListQuery = z.object({ search: z.string().trim().optional() });
+
+export const getDockerBuildAdmissionRoute = appRoute({
+  method: 'get',
+  path: '/nodes/{nodeId}/source-resources/admission',
+  tags: ['Docker Builds'],
+  summary: 'Check internal registry and isolated Build Worker admission',
+  request: { params: nodeParams },
+  responses: okJson(
+    z.object({
+      data: z.object({
+        ready: z.boolean(),
+        code: z.string().nullable(),
+        message: z.string().nullable(),
+      }),
+    })
+  ),
+});
+
+export const createDockerSourceResourceRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/source-resources',
+  tags: ['Docker Builds'],
+  summary: 'Create a Business+ Docker resource from Git and queue its first immutable build',
+  request: { params: nodeParams, ...jsonBody(DockerSourceResourceCreateSchema) },
+  responses: createdJson(UnknownDataResponseSchema),
+});
 
 export const preflightDockerRuntimeRoute = appRoute({
   method: 'post',
@@ -1020,6 +1047,37 @@ export const testRegistryRoute = appRoute({
   tags: ['Docker Registries'],
   summary: 'Test a saved registry',
   request: { params: registryParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const getInternalRegistryRoute = appRoute({
+  method: 'get',
+  path: '/registries/internal/state',
+  tags: ['Docker Registries'],
+  summary: 'Get the Gateway internal registry state',
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const updateInternalRegistryRoute = appRoute({
+  method: 'put',
+  path: '/registries/internal/settings',
+  tags: ['Docker Registries'],
+  summary: 'Update Business+ external access settings for the Gateway internal registry',
+  request: jsonBody(DockerInternalRegistrySettingsSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const runInternalRegistryGcRoute = appRoute({
+  method: 'post',
+  path: '/registries/internal/gc',
+  tags: ['Docker Registries'],
+  summary: 'Run retention and garbage collection for the Gateway internal registry',
+  request: optionalJsonBody(z.object({ dryRun: z.boolean().default(false) })),
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const resumeInternalRegistryMaintenanceRoute = appRoute({
+  method: 'post',
+  path: '/registries/internal/maintenance/{runId}/resume',
+  tags: ['Docker Registries'],
+  summary: 'Resume an interrupted internal registry maintenance run',
+  request: { params: z.object({ runId: z.string().uuid() }) },
   responses: okJson(UnknownDataResponseSchema),
 });
 

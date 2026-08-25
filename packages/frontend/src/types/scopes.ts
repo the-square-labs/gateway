@@ -67,6 +67,8 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:compose:create",
   "docker:compose:manage",
   "docker:compose:delete",
+  "docker:registries:internal:pull",
+  "docker:registries:internal:push",
   "docker:images:view",
   "docker:images:pull",
   "docker:images:delete",
@@ -1251,6 +1253,18 @@ const RAW_TOKEN_SCOPES = [
     value: "docker:registries:delete",
     label: "Delete Registries",
     desc: "Remove Docker registries",
+    group: "Docker: Registries",
+  },
+  {
+    value: "docker:registries:internal:pull",
+    label: "Pull Internal Images",
+    desc: "Pull from all internal registry repositories or selected repository scopes",
+    group: "Docker: Registries",
+  },
+  {
+    value: "docker:registries:internal:push",
+    label: "Push Internal Images",
+    desc: "Push to all internal registry repositories or selected repository scopes",
     group: "Docker: Registries",
   },
   // Docker: Tasks

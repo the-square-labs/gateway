@@ -263,6 +263,13 @@ upstream {{secureLinkUpstreamName}} {
 }
 
 {{/if}}
+{{#if registryAuthRealm}}
+map $upstream_http_www_authenticate \${{registryAuthVariableName}} {
+    default "";
+    ~*^Bearer\\s+realm="[^"]+"(.*)$ 'Bearer realm="{{registryAuthRealm}}"$1';
+}
+
+{{/if}}
 {{#if cacheEnabled}}
 proxy_cache_path /tmp/nginx-cache-{{id}} levels=1:2 keys_zone=cache_{{id}}:10m max_size=100m inactive={{cacheMaxAge}}s;
 
@@ -393,6 +400,10 @@ ${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
 {{else}}
 {{#if secureLinkUpstream}}
         # gateway-managed-secure-link-upstream {{id}}
+{{/if}}
+{{#if registryAuthRealm}}
+        proxy_hide_header WWW-Authenticate;
+        add_header WWW-Authenticate \${{registryAuthVariableName}} always;
 {{/if}}
         proxy_pass {{upstream}};
 
@@ -1069,7 +1080,8 @@ ${rendered}`;
     const serverNames = host.domainNames.map((d) => d.replace(DANGEROUS_CHARS, '')).join(' ');
     const sanitizedHost = host.forwardHost ? host.forwardHost.replace(DANGEROUS_CHARS, '') : '';
     const secureLinkUpstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
-    const secureLinkSocketPath = `/run/gateway-secure-links/${host.id}.sock`;
+    const secureLinkSocketPath = host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`;
+    const registryAuthRealm = host.registryAuthRealm?.replace(DANGEROUS_CHARS, '');
     const upstream = host.secureLinkUpstream
       ? `${host.forwardScheme}://${secureLinkUpstreamName}`
       : `${host.forwardScheme}://${formatHostPort(sanitizedHost, host.forwardPort ?? 0)}`;
@@ -1126,6 +1138,8 @@ ${rendered}`;
       secureLinkUpstream: host.secureLinkUpstream === true,
       secureLinkUpstreamName,
       secureLinkSocketPath,
+      registryAuthRealm,
+      registryAuthVariableName: `gateway_registry_challenge_${host.id.replace(/-/g, '_')}`,
       sslCertPath: host.sslCertPath,
       sslKeyPath: host.sslKeyPath,
       sslChainPath: host.sslChainPath,

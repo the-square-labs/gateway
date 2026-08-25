@@ -19,6 +19,16 @@ func TestDockerDaemonSystemdUnitDoesNotHardRequireDocker(t *testing.T) {
 	}
 }
 
+func TestBuilderSystemdUnitHasNoDockerDependency(t *testing.T) {
+	unit := dockerDaemonSystemdUnitForMode("builder")
+	if strings.Contains(unit, "docker.service") || strings.Contains(unit, "snap.docker") {
+		t.Fatalf("builder unit must not depend on Docker Engine:\n%s", unit)
+	}
+	if !strings.Contains(unit, "After=network-online.target") || !strings.Contains(unit, "Wants=network-online.target") {
+		t.Fatalf("builder unit must retain network ordering:\n%s", unit)
+	}
+}
+
 func TestGatewayCertSHA256Pattern(t *testing.T) {
 	valid := "sha256:0123456789abcdef0123456789abcdef0123456789ABCDEF0123456789ABCDEF"
 	if !gatewayCertSHA256Pattern.MatchString(valid) {

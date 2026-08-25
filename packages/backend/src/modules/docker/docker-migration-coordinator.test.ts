@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { dockerSourceBindings } from '@/db/schema/index.js';
 import { DockerMigrationCoordinator } from './docker-migration-coordinator.js';
 
 function createExecutor() {
@@ -23,11 +24,13 @@ describe('DockerMigrationCoordinator access scopes', () => {
       moveDeploymentWithExecutor: vi.fn().mockResolvedValue(undefined),
     };
     const snapshots = { refreshNow: vi.fn().mockResolvedValue(undefined) };
+    const registry = { moveRuntimeContextBinding: vi.fn().mockResolvedValue(undefined) };
     const coordinator = new DockerMigrationCoordinator(
       db as never,
       {} as never,
       snapshots as never,
-      accessResources as never
+      accessResources as never,
+      registry as never
     );
     const row = {
       id: 'migration-1',
@@ -47,6 +50,14 @@ describe('DockerMigrationCoordinator access scopes', () => {
       'api',
       'target-runtime-id'
     );
+    expect(tx.update).toHaveBeenCalledWith(dockerSourceBindings);
+    expect(registry.moveRuntimeContextBinding).toHaveBeenCalledWith({
+      contextKind: 'container',
+      sourceContextId: 'source-node:api',
+      targetContextId: 'target-node:api',
+      sourceNodeId: 'source-node',
+      targetNodeId: 'target-node',
+    });
     expect(accessResources.moveDeploymentWithExecutor).not.toHaveBeenCalled();
   });
 
@@ -59,11 +70,13 @@ describe('DockerMigrationCoordinator access scopes', () => {
       moveContainerWithExecutor: vi.fn().mockResolvedValue(undefined),
       moveDeploymentWithExecutor: vi.fn().mockResolvedValue(undefined),
     };
+    const registry = { moveRuntimeContextBinding: vi.fn().mockResolvedValue(undefined) };
     const coordinator = new DockerMigrationCoordinator(
       db as never,
       {} as never,
       { refreshNow: vi.fn().mockResolvedValue(undefined) } as never,
-      accessResources as never
+      accessResources as never,
+      registry as never
     );
     const row = {
       id: 'migration-2',
@@ -85,5 +98,12 @@ describe('DockerMigrationCoordinator access scopes', () => {
       'deployment-1'
     );
     expect(accessResources.moveContainerWithExecutor).not.toHaveBeenCalled();
+    expect(registry.moveRuntimeContextBinding).toHaveBeenCalledWith({
+      contextKind: 'deployment',
+      sourceContextId: 'deployment-1',
+      targetContextId: 'deployment-1',
+      sourceNodeId: 'source-node',
+      targetNodeId: 'target-node',
+    });
   });
 });

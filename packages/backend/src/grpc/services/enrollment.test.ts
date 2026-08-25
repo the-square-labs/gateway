@@ -315,6 +315,27 @@ describe('Enroll token lookup', () => {
     compareSpy.mockRestore();
   });
 
+  it('rejects a builder enrollment token presented by a non-docker daemon', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const pending = {
+      ...makePendingNode(tokenHash, enrollmentToken.selector),
+      type: 'builder',
+    };
+    const deps = makeDeps(makeEnrollDb([pending]));
+    const callback = vi.fn();
+    const call = makeEnrollCall(enrollmentToken.token);
+    call.request.daemonType = 'nginx';
+
+    await createEnrollmentHandlers(deps).Enroll(call, callback);
+
+    expect(deps.systemCA.issueNodeCert).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith({
+      code: 7,
+      message: 'Builder node enrollment requires docker-daemon identity',
+    });
+  });
+
   it('keeps legacy pending-token compatibility without exiting early', async () => {
     const legacyToken = `gw_node_${'a'.repeat(48)}`;
     const wrongHash = await bcrypt.hash(`gw_node_${'b'.repeat(48)}`, 4);

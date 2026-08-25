@@ -400,6 +400,9 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
   if (channel.startsWith('docker.webhook')) {
     return hasDockerEventAccess(scopes, 'docker:containers:webhooks', payload);
   }
+  if (channel.startsWith('docker.build')) {
+    return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
+  }
   if (channel.startsWith('docker.deployment') || channel.startsWith('docker.health')) {
     return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
   }

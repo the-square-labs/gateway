@@ -6,7 +6,7 @@ Gateway is an AI-first but not AI-dependent self-hosted infrastructure control p
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
 
-For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, while Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
+For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, Git source automation stops while source history remains readable/removable, and Business-only external registry ingress is disabled. Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
 
 ## Ingress
 
@@ -95,6 +95,9 @@ Container workflows:
 - Keep sanitized inventory snapshots so read views can show the last synchronized Docker state while a node is offline or refreshing; mutations remain unavailable until the node reconnects.
 - Manage Docker images and cleanup old images.
 - Manage private registry credentials and image registry mappings.
+- On Business and Enterprise, create a container or blue/green deployment from an allowlisted GitLab, GitHub, or generic Git repository, or attach a repository directly to an existing Docker resource. Gateway resolves an exact branch commit, queues a durable build, stores the approved artifact by immutable digest, and uses safe container recreate with automatic rollback or the existing health-checked blue/green deployment path. The UI permits configuring the full repository deployment before enforcing the plan when **Create and build** is pressed; the backend independently enforces Business at build admission.
+- Review global build history, Build Worker assignment, logs, vulnerability findings/policy results, desired and deployed commits, and per-resource source settings. Repository, integration, branch, Dockerfile path, build context, separate automatic-build and automatic-deploy controls, and source-scoped Build Secrets remain part of the Docker resource rather than a separate application entity.
+- Use the Gateway-managed internal Distribution registry on every plan without assigning a domain or publishing a host port. It keeps three successful artifacts plus active, rollback, in-progress, and manually pinned digests. Optional Business+ external Docker-client access is configured under **Settings > Features** and is exposed only through a selected nginx node, domain, TLS certificate, and repository/action-scoped token. Entitlement loss disables that ingress and every public token request rechecks the current plan.
 - Configure a trusted HTTPS token-service origin only for registries whose Bearer auth service is intentionally hosted on a separate origin.
 - Track long-running Docker operations in the Tasks view.
 
@@ -109,6 +112,8 @@ Deployment workflows:
 Safety controls:
 
 - Mount editing is separated from normal container editing and constrained to Gateway-managed local volumes. Legacy mounts remain visible only where needed for compatibility and cannot be reintroduced after removal.
+- Repository builds are admitted only while the internal registry is writable and an online Build Worker advertises the isolated BuildKit, containerd, runsc, and enforced-resource-profile capabilities. A Build Worker is the existing `docker-daemon` in `builder` mode and has no Docker Engine socket.
+- The current hardened builder profile accepts one build at a time, uses a dedicated containerd namespace and runsc runtime, disables OCI-worker and insecure entitlements, applies fixed CPU/RAM/PID limits, accounts job/runtime disk use, and clears BuildKit cache between jobs. Builder egress is installer-selectable and defaults to public internet with metadata/private/control-plane denial. Source-scoped Build Secrets use BuildKit secret mounts and log redaction; scanner SBOM data is ephemeral, and provenance is not published.
 - Secrets are masked by default.
 - Dangerous operations are permission-scoped and audited.
 

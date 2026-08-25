@@ -209,6 +209,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:registries:create | Add registries |
 | docker:registries:edit | Edit/test registries |
 | docker:registries:delete | Remove registries |
+| docker:registries:internal:pull | Pull from repository-scoped internal-registry paths |
+| docker:registries:internal:push | Push to repository-scoped internal-registry paths |
 
 ### Docker: Tasks
 | Scope | Description |

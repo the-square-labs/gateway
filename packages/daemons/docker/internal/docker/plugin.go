@@ -22,6 +22,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
+	builderruntime "github.com/wiolett-industries/gateway/docker-daemon/internal/builder"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 	runtimemanager "github.com/wiolett-industries/gateway/docker-daemon/internal/runtime"
 )
@@ -53,6 +54,8 @@ type DockerPlugin struct {
 	relayTunnels    map[string]*relayTunnelRouter
 	relaySelection  uint64
 	relayListener   net.Listener
+	registryProxy   *dockerRegistryProxyManager
+	builderManager  *builderruntime.Manager
 	secureLinks     *dockerSecureLinkManager
 	secureLinkState *securelink.StateStore
 	runtimeManager  *runtimemanager.Manager
@@ -106,14 +109,44 @@ func (p *DockerPlugin) SetLogger(logger *slog.Logger) {
 // Init initializes the Docker client, pings the engine, and stores its version.
 func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) error {
 	p.logger = logger
+	ctx := context.Background()
+
+	if p.cfg.Docker.Mode == "builder" {
+		var err error
+		p.relayGrants, err = newRelayGrantStore(p.cfg.StateDir)
+		if err != nil {
+			return fmt.Errorf("initialize relay grant store: %w", err)
+		}
+		p.registryProxy, err = newDockerRegistryProxyManager(p)
+		if err != nil {
+			return fmt.Errorf("initialize builder registry proxy: %w", err)
+		}
+		runtimeConfig := builderruntime.DefaultRuntimeConfig(0)
+		runtimeConfig.EgressProfile = p.cfg.Docker.Builder.EgressProfile
+		runtimeConfig.ControlPlaneAddress = p.cfg.Gateway.Address
+		runtimeSupervisor := builderruntime.NewRuntimeSupervisor(runtimeConfig)
+		if err := runtimeSupervisor.InstallConfiguration(); err != nil {
+			return fmt.Errorf("install isolated builder runtime configuration: %w", err)
+		}
+		if err := runtimeSupervisor.Start(); err != nil {
+			return fmt.Errorf("start isolated builder runtime: %w", err)
+		}
+		p.registryCreds = make(map[string]string)
+		p.builderManager = builderruntime.NewManager(
+			runtimeConfig,
+			filepath.Join(p.cfg.StateDir, "builder", "jobs"),
+			builderruntime.DefaultGitAskpassPath,
+			p.emitBuildEvent,
+		)
+		p.logger.Info("builder profile initialized without Docker Engine access")
+		return nil
+	}
 
 	c, err := NewClient(p.cfg.Docker.Socket, p.cfg.StateDir, logger)
 	if err != nil {
 		return fmt.Errorf("init docker client: %w", err)
 	}
 	p.client = c
-
-	ctx := context.Background()
 
 	if err := c.Ping(ctx); err != nil {
 		return fmt.Errorf("docker ping failed: %w", err)
@@ -147,6 +180,12 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	p.relayGrants, err = newRelayGrantStore(p.cfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
+	}
+	if p.cfg.Docker.Mode != "databases" {
+		p.registryProxy, err = newDockerRegistryProxyManager(p)
+		if err != nil {
+			return fmt.Errorf("initialize docker registry proxy: %w", err)
+		}
 	}
 	if p.cfg.Docker.Mode == "databases" {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
@@ -275,6 +314,23 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 	kernelVer := sysmetrics.GetKernelVersion()
 
 	capabilities := func() []string {
+		if p.cfg.Docker.Mode == "builder" {
+			values := []string{
+				"docker_builder_profile_v1",
+				"docker_registry_proxy_v1",
+				"generic_relay_tunnel_v1",
+				"relay_pool_v1",
+			}
+			if p.builderManager != nil && p.builderManager.Ready() == nil {
+				values = append(
+					values,
+					"docker_builder_execution_v1",
+					"docker_builder_runsc_v1",
+					"docker_builder_resource_limits_v1",
+				)
+			}
+			return values
+		}
 		if p.cfg.Docker.Mode == "databases" {
 			return []string{
 				"managed_databases_v1",
@@ -284,7 +340,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"relay_pool_v1",
 			}
 		}
-		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
+		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")
 		}
@@ -296,7 +352,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		}
 		return values
 	}()
-	return &pb.RegisterMessage{
+	message := &pb.RegisterMessage{
 		NodeId:        nodeID,
 		Hostname:      hostname,
 		DaemonVersion: lifecycle.Version,
@@ -307,15 +363,49 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		KernelVersion: kernelVer,
 		// Store docker version in the NginxVersion field as a capability hint.
 		// The gateway uses DaemonType to interpret this field correctly.
-		NginxVersion:        p.version,
-		Capabilities:        capabilities,
-		DockerRuntimeStatus: protobufRuntimeStatus(p.getRuntimeStatus()),
+		NginxVersion: p.version,
+		Capabilities: capabilities,
 	}
+	if p.cfg.Docker.Mode != "builder" {
+		message.DockerRuntimeStatus = protobufRuntimeStatus(p.getRuntimeStatus())
+	}
+	return message
 }
 
 // HandleCommand dispatches a gateway command to the appropriate handler.
 func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+	if p.cfg.Docker.Mode == "builder" {
+		switch payload := cmd.Payload.(type) {
+		case *pb.GatewayCommand_DockerBuild:
+			if p.builderManager == nil {
+				result.Success = false
+				result.Error = "builder execution is not initialized"
+			} else if err := p.builderManager.Start(payload.DockerBuild); err != nil {
+				result.Success = false
+				result.Error = err.Error()
+			}
+		case *pb.GatewayCommand_DockerBuildCancel:
+			if p.builderManager == nil || !p.builderManager.Cancel(payload.DockerBuildCancel.GetBuildId()) {
+				result.Success = false
+				result.Error = "build is not running"
+			}
+		case *pb.GatewayCommand_SyncDockerRegistryBindings:
+			detail, err := p.SyncDockerRegistryBindings(payload.SyncDockerRegistryBindings)
+			if err != nil {
+				result.Success = false
+				result.Error = err.Error()
+			} else {
+				result.Detail = detail
+			}
+		case *pb.GatewayCommand_SetDaemonLogStream:
+			stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)
+		default:
+			result.Success = false
+			result.Error = "builder-profile daemon accepts only docker_build, docker_build_cancel, and registry binding commands"
+		}
+		return result
+	}
 	if p.cfg.Docker.Mode == "databases" {
 		switch payload := cmd.Payload.(type) {
 		case *pb.GatewayCommand_DockerDatabase:
@@ -367,6 +457,15 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	case *pb.GatewayCommand_DockerMigration:
 		p.handleMigrationCommand(payload.DockerMigration, result)
 
+	case *pb.GatewayCommand_SyncDockerRegistryBindings:
+		detail, err := p.SyncDockerRegistryBindings(payload.SyncDockerRegistryBindings)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		} else {
+			result.Detail = detail
+		}
+
 	case *pb.GatewayCommand_DockerDatabase:
 		result.Success = false
 		result.Error = "managed database commands require docker.mode=databases"
@@ -381,6 +480,15 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	}
 
 	return result
+}
+
+func (p *DockerPlugin) emitBuildEvent(event *pb.DockerBuildEvent) {
+	if event == nil || p.writer == nil {
+		return
+	}
+	if err := p.writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_DockerBuildEvent{DockerBuildEvent: event}}); err != nil && p.logger != nil {
+		p.logger.Warn("failed to report Docker build event", "build_id", event.GetBuildId(), "error", err)
+	}
 }
 
 func (p *DockerPlugin) handleRuntimeCommand(cmd *pb.DockerRuntimeCommand, result *pb.CommandResult) {
@@ -1725,6 +1833,9 @@ func encodeBase64(data []byte) string {
 
 // CollectHealth enriches the base health report with Docker-specific metrics.
 func (p *DockerPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
+	if p.cfg.Docker.Mode == "builder" {
+		return base
+	}
 	base.DockerVersion = p.version
 
 	ctx := context.Background()
@@ -1760,6 +1871,12 @@ func (p *DockerPlugin) CollectStats() *pb.StatsReport {
 
 // OnSessionStart is called when a new gRPC session is established.
 func (p *DockerPlugin) OnSessionStart(ctx context.Context, writer *stream.Writer) error {
+	p.writer = writer
+	p.sessionCtx = ctx
+	p.logStreamCancel = make(map[string]context.CancelFunc)
+	if p.cfg.Docker.Mode == "builder" {
+		return nil
+	}
 	// Start stats collector goroutine
 	p.statsCollector = NewStatsCollector(p.client, p.allowlist, p.logger)
 	go p.statsCollector.Run(ctx)
@@ -1767,11 +1884,6 @@ func (p *DockerPlugin) OnSessionStart(ctx context.Context, writer *stream.Writer
 
 	// Create exec manager with stream writer for async output
 	p.execMgr = NewExecManager(p.client, writer, p.logger)
-
-	// Store writer and initialize log stream tracking
-	p.writer = writer
-	p.sessionCtx = ctx
-	p.logStreamCancel = make(map[string]context.CancelFunc)
 
 	return nil
 }

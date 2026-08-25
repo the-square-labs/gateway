@@ -49,6 +49,7 @@ DOCKER_USE_SUDO=0
 DOCKER_SYSTEMD_UNIT=""
 DOCKER_SOCKET="unix:///var/run/docker.sock"
 DOCKER_MODE="${GATEWAY_DOCKER_MODE:-}"
+BUILDER_EGRESS_PROFILE="${GATEWAY_BUILDER_EGRESS_PROFILE:-internet}"
 DATABASE_STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RESOLVED_DAEMON_VERSION=""
 EXISTING_INSTALL=0
@@ -114,6 +115,7 @@ complete_incomplete() {
 show_logo() {
     local subtitle="Docker daemon installer"
     [[ "$DOCKER_MODE" == "databases" ]] && subtitle="Database daemon installer"
+    [[ "$DOCKER_MODE" == "builder" ]] && subtitle="Builder daemon installer"
     echo -e "${BRAND_MINT}╭───────────────────────────────────╮${NC}"
     printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-33s${NC} ${BRAND_MINT}│${NC}\n" "Gateway Node Setup"
     printf "${BRAND_MINT}│${NC} ${GRAY}%-33s${NC} ${BRAND_MINT}│${NC}\n" "$subtitle"
@@ -314,6 +316,52 @@ preflight_database_docker() {
     [[ "$DOCKER_SOCKET" == unix://* ]] || die "Database nodes require a local Docker Engine socket; refusing remote Docker context '${DOCKER_SOCKET}'."
     [[ -S "${DOCKER_SOCKET#unix://}" ]] || die "Docker Engine socket is unavailable at ${DOCKER_SOCKET#unix://}."
     ok "Docker Engine preflight passed (${DOCKER_SOCKET})"
+}
+
+preflight_builder_runtime() {
+    [[ "$DOCKER_MODE" == "builder" ]] || return 0
+    has_systemd || die "Builder nodes require systemd to supervise the isolated containerd and BuildKit services."
+    local required=(containerd buildkitd buildctl runsc containerd-shim-runc-v2 git syft grype iptables getent)
+    local missing=() binary
+    for binary in "${required[@]}"; do
+        command_exists "$binary" || missing+=("$binary")
+    done
+    if [[ "${#missing[@]}" -gt 0 ]]; then
+        die "Builder runtime bundle is incomplete. Missing: ${missing[*]}. Re-run the Gateway builder installer before enrollment."
+    fi
+    if [[ "$BUILDER_EGRESS_PROFILE" == "internet" ]]; then
+        local plugin
+        for plugin in bridge host-local firewall loopback; do
+            [[ -x "/opt/gateway-builder/cni/bin/${plugin}" ]] || die "Builder internet egress requires CNI plugin ${plugin} in /opt/gateway-builder/cni/bin."
+        done
+    fi
+    ok "Builder runtime preflight passed (BuildKit + dedicated containerd + runsc)"
+}
+
+ensure_builder_system_packages() {
+    [[ "$DOCKER_MODE" == "builder" ]] || return 0
+    case "$ARCH" in
+        amd64|arm64) ;;
+        *) die "Builder runtime is supported only on amd64 and arm64 hosts." ;;
+    esac
+    local missing=() binary
+    for binary in git iptables getent tar gzip sha256sum; do
+        command_exists "$binary" || missing+=("$binary")
+    done
+    [[ "${#missing[@]}" -gt 0 ]] || return 0
+    log "Installing Build Worker system dependencies..."
+    case "$OS_ID" in
+        ubuntu|debian)
+            install_system_packages git iptables libc-bin tar gzip coreutils ca-certificates
+            ;;
+        alpine)
+            install_system_packages git iptables musl-utils tar gzip coreutils ca-certificates
+            ;;
+        fedora|rhel|centos|centos_stream)
+            install_system_packages git iptables glibc-common tar gzip coreutils ca-certificates
+            ;;
+        *) die "Automatic Build Worker dependency installation is unsupported on ${OS_ID}." ;;
+    esac
 }
 
 guide_end() {
@@ -748,6 +796,7 @@ ensure_docker_running() {
 }
 
 ensure_docker_installed() {
+    [[ "$DOCKER_MODE" != "builder" ]] || return 0
     ensure_curl_installed
     if ! command_exists docker; then
         log "Docker not found, installing it..."
@@ -845,6 +894,7 @@ Options:
   --gateway-cert-sha256 <fp>
                            Gateway gRPC TLS leaf fingerprint from the generated setup command
   --version <ver>          Daemon version to install (default: latest)
+  --mode <profile>         Node profile: docker, builder, or databases (default: docker)
   --user <user>            Run daemon as this user (default: root)
   --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
   --gitlab-project <proj>  GitLab project path (default: wiolett/gateway)
@@ -860,6 +910,8 @@ Environment variables:
   GATEWAY_NODE_TOKEN            Same as --token
   GATEWAY_NODE_CERT_SHA256      Same as --gateway-cert-sha256
   GATEWAY_NODE_DAEMON_VERSION   Same as --version
+  GATEWAY_DOCKER_MODE           Same as --mode
+  GATEWAY_BUILDER_EGRESS_PROFILE Same as --builder-egress (internet or offline; default: internet)
   GATEWAY_GITLAB_URL            Same as --gitlab-url
   GATEWAY_GITLAB_PROJECT        Same as --gitlab-project
 
@@ -884,6 +936,8 @@ while [[ $# -gt 0 ]]; do
         --token)          ENROLL_TOKEN="$2"; shift 2 ;;
         --gateway-cert-sha256) GATEWAY_CERT_SHA256="$2"; shift 2 ;;
         --version)        DAEMON_VERSION="$2"; shift 2 ;;
+        --mode)           DOCKER_MODE="$2"; shift 2 ;;
+        --builder-egress) BUILDER_EGRESS_PROFILE="$2"; shift 2 ;;
         --user)           RUN_USER="$2"; shift 2 ;;
         --gitlab-url)     GITLAB_URL="$2"; shift 2 ;;
         --gitlab-project) GITLAB_PROJECT="$2"; shift 2 ;;
@@ -894,6 +948,16 @@ while [[ $# -gt 0 ]]; do
         *) die "Unknown option: $1. Use --help for usage." ;;
     esac
 done
+
+[[ -n "$DOCKER_MODE" ]] || DOCKER_MODE="docker"
+case "$DOCKER_MODE" in
+    docker|builder|databases) ;;
+    *) die "Invalid --mode '${DOCKER_MODE}'. Expected docker, builder, or databases." ;;
+esac
+case "$BUILDER_EGRESS_PROFILE" in
+    internet|offline) ;;
+    *) die "Invalid --builder-egress '${BUILDER_EGRESS_PROFILE}'. Expected internet or offline." ;;
+esac
 
 # Resolve GATEWAY_ADDR from --host/--port if --gateway not given
 if [[ -n "$GATEWAY_HOST" && -z "$GATEWAY_ADDR" ]]; then
@@ -931,7 +995,9 @@ if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
     fi
 fi
 
-if command_exists docker; then
+if [[ "$DOCKER_MODE" == "builder" ]]; then
+    DOCKER_VER="not required"
+elif command_exists docker; then
     DOCKER_VER=$(docker_run version --format '{{.Server.Version}}' 2>/dev/null || echo "unreachable")
 else
     DOCKER_VER="not installed"
@@ -1021,6 +1087,10 @@ else
     preflight_database_storage
 fi
 
+if [[ "$DOCKER_MODE" == "builder" && "$RUN_USER" != "root" ]]; then
+    die "Builder docker-daemon profile must run as root to manage its isolated BuildKit/containerd runtime."
+fi
+
 # ── Resolve run user/group ───────────────────────────────────────────
 RUN_GROUP=""
 if [[ "$RUN_USER" == "root" ]]; then
@@ -1061,6 +1131,7 @@ summary_row "Docker:      ${DOCKER_VER}"
 summary_row "Install ver: ${RESOLVED_DAEMON_VERSION}"
 summary_row "Current ver: $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "${EXISTING_VERSION}" || echo "not installed")"
 summary_row "Mode:        $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "update" || echo "fresh install")"
+summary_row "Profile:     ${DOCKER_MODE}"
 summary_row "Run as:      ${RUN_USER}:${RUN_GROUP}"
 summary_row "GitLab:      ${GITLAB_URL}"
 summary_end
@@ -1084,10 +1155,17 @@ dry_run_preview() {
     log "Verifying checksum..."
     ok "Checksum verified (dry run)"
     ok "docker-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
+    if [[ "$DOCKER_MODE" == "builder" ]]; then
+        log "Downloading Gateway builder runtime bundle..."
+        log "Verifying builder runtime checksum..."
+        ok "Builder runtime installed (dry run)"
+    fi
     log "Writing config and enrolling with Gateway..."
     ok "Config written to /etc/docker-daemon/config.yaml (dry run)"
     if [[ "$DOCKER_MODE" == "databases" ]]; then
         ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT}; dry run)"
+    elif [[ "$DOCKER_MODE" == "builder" ]]; then
+        ok "Builder docker profile written (no Docker socket; dry run)"
     fi
     log "Enabling and starting docker-daemon..."
     ok "docker-daemon is running (dry run)"
@@ -1101,6 +1179,7 @@ fi
 
 ensure_docker_installed
 preflight_database_docker
+ensure_builder_system_packages
 
 if [[ "$RUN_USER" != "root" ]]; then
     if docker_group_exists && ! groups "$RUN_USER" 2>/dev/null | grep -qw docker; then
@@ -1116,6 +1195,12 @@ create_directories() {
     log "Creating required directories..."
     mkdir -p /etc/docker-daemon/certs
     mkdir -p /var/lib/docker-daemon
+
+    if [[ "$DOCKER_MODE" == "builder" ]]; then
+        mkdir -p /etc/gateway-builder /usr/local/lib/gateway-builder
+        mkdir -p /var/lib/docker-daemon/builder /run/gateway-builder/buildkit /run/gateway-builder/containerd
+        chmod 700 /etc/gateway-builder /usr/local/lib/gateway-builder /var/lib/docker-daemon/builder
+    fi
 
     if [[ "$RUN_USER" != "root" ]]; then
         chown -R "${RUN_USER}:${RUN_GROUP}" /etc/docker-daemon
@@ -1184,6 +1269,73 @@ install_daemon() {
         rm -f "${target}.tmp"
         die "Failed to download docker-daemon ${RESOLVED_DAEMON_VERSION} from releases"
     fi
+}
+
+install_builder_runtime_bundle() {
+    [[ "$DOCKER_MODE" == "builder" ]] || return 0
+    local bundle_name="docker-builder-runtime-linux-${ARCH}.tar.gz"
+    local bundle_file="/tmp/${bundle_name}"
+    local checksums_file="/tmp/gateway_builder_runtime_checksums.txt"
+    local staging_dir
+    local installed_manifest="/opt/gateway-builder/runtime-manifest"
+
+    if [[ -f "$installed_manifest" ]] && grep -Fqx "gateway_release=${RESOLVED_DAEMON_VERSION}" "$installed_manifest"; then
+        local complete=1 binary plugin
+        for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runsc syft grype; do
+            command_exists "$binary" || complete=0
+        done
+        for plugin in bridge host-local firewall loopback; do
+            [[ -x "/opt/gateway-builder/cni/bin/${plugin}" ]] || complete=0
+        done
+        if [[ "$complete" -eq 1 ]]; then
+            ok "Builder runtime already installed for ${RESOLVED_DAEMON_VERSION}"
+            return 0
+        fi
+    fi
+
+    log "Downloading Gateway builder runtime bundle..."
+    if ! download_with_progress "${RELEASE_BASE}/${bundle_name}" "$bundle_file"; then
+        rm -f "$bundle_file"
+        die "Builder runtime bundle is unavailable for docker-daemon ${RESOLVED_DAEMON_VERSION}."
+    fi
+    if ! curl -fsSL "${RELEASE_BASE}/checksums.txt" -o "$checksums_file" >> "$LOG_FILE" 2>&1; then
+        rm -f "$bundle_file" "$checksums_file"
+        die "Could not download checksums.txt for builder runtime verification."
+    fi
+    local expected actual
+    expected=$(awk -v name="$bundle_name" '$2 == name {print $1; exit}' "$checksums_file")
+    actual=$(sha256sum "$bundle_file" | awk '{print $1}')
+    rm -f "$checksums_file"
+    [[ -n "$expected" ]] || die "No checksum found for ${bundle_name} in checksums.txt."
+    [[ "$expected" == "$actual" ]] || die "Builder runtime checksum verification failed."
+
+    staging_dir=$(mktemp -d /tmp/gateway-builder-runtime.XXXXXX)
+    trap 'rm -rf "$staging_dir" "$bundle_file"' RETURN
+    tar -xzf "$bundle_file" -C "$staging_dir"
+    local binary plugin
+    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runsc syft grype; do
+        [[ -f "${staging_dir}/bin/${binary}" && ! -L "${staging_dir}/bin/${binary}" && -x "${staging_dir}/bin/${binary}" ]] || \
+            die "Builder runtime bundle is missing regular executable bin/${binary}."
+    done
+    for plugin in bridge host-local firewall loopback; do
+        [[ -f "${staging_dir}/cni/bin/${plugin}" && ! -L "${staging_dir}/cni/bin/${plugin}" && -x "${staging_dir}/cni/bin/${plugin}" ]] || \
+            die "Builder runtime bundle is missing regular CNI plugin ${plugin}."
+    done
+    [[ -f "${staging_dir}/runtime-manifest" && ! -L "${staging_dir}/runtime-manifest" ]] || die "Builder runtime bundle has no regular manifest."
+    grep -Fqx "gateway_release=${RESOLVED_DAEMON_VERSION}" "${staging_dir}/runtime-manifest" || \
+        die "Builder runtime bundle release does not match ${RESOLVED_DAEMON_VERSION}."
+
+    install -d -m 0755 /usr/local/bin /opt/gateway-builder/cni/bin
+    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runsc syft grype; do
+        install -m 0755 "${staging_dir}/bin/${binary}" "/usr/local/bin/${binary}"
+    done
+    for plugin in bridge host-local firewall loopback; do
+        install -m 0755 "${staging_dir}/cni/bin/${plugin}" "/opt/gateway-builder/cni/bin/${plugin}"
+    done
+    install -m 0644 "${staging_dir}/runtime-manifest" "$installed_manifest"
+    rm -rf "$staging_dir" "$bundle_file"
+    trap - RETURN
+    ok "Builder runtime installed for ${RESOLVED_DAEMON_VERSION}"
 }
 
 setup_secure_runtime() {
@@ -1270,6 +1422,27 @@ write_database_profile_config() {
     ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT})"
 }
 
+write_builder_profile_config() {
+    [[ "$DOCKER_MODE" == "builder" ]] || return 0
+    [[ "$RUN_USER" == "root" ]] || die "Builder docker-daemon profile must run as root."
+    local config_path="/etc/docker-daemon/config.yaml"
+    [[ -f "$config_path" ]] || die "docker-daemon config was not created by enrollment."
+    grep -q '^docker:$' "$config_path" || die "docker-daemon config has no docker section."
+    grep -Eq '^[[:space:]]+mode:[[:space:]]*"?builder"?[[:space:]]*$' "$config_path" || die "Refusing a builder profile without docker.mode=builder."
+    if grep -Eq '^[[:space:]]+(socket|allowlist):' "$config_path"; then
+        die "Builder profile must not contain Docker socket or allowlist access."
+    fi
+    if grep -Eq '^[[:space:]]+builder:' "$config_path"; then
+        sed -i -E "s/^([[:space:]]+)egress_profile:.*/\1egress_profile: \"${BUILDER_EGRESS_PROFILE}\"/" "$config_path"
+    else
+        sed -i "/^docker:$/a\\
+    builder:\\
+        egress_profile: \"${BUILDER_EGRESS_PROFILE}\"" "$config_path"
+    fi
+    chmod 600 "$config_path"
+    ok "Builder docker profile written without Docker Engine access (egress: ${BUILDER_EGRESS_PROFILE})"
+}
+
 # ── Step 3: Install and enroll ───────────────────────────────────────
 enroll_daemon() {
     local target="/usr/local/bin/docker-daemon"
@@ -1281,7 +1454,11 @@ enroll_daemon() {
     fi
 
     log "Writing config and enrolling with Gateway..."
-    if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
+    if [[ "$DOCKER_MODE" == "builder" ]]; then
+        if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --mode builder >> "$LOG_FILE" 2>&1; then
+            die "Failed to enroll builder docker-daemon. Check ${LOG_FILE} for details."
+        fi
+    elif ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll docker-daemon. Check ${LOG_FILE} for details."
     fi
     ok "Config written to /etc/docker-daemon/config.yaml"
@@ -1296,15 +1473,15 @@ start_daemon() {
         local docker_after="network-online.target"
         local docker_wants="network-online.target"
         local supplementary_groups=""
-        if [[ -n "$DOCKER_SYSTEMD_UNIT" ]]; then
+        if [[ "$DOCKER_MODE" != "builder" && -n "$DOCKER_SYSTEMD_UNIT" ]]; then
             docker_after="${docker_after} ${DOCKER_SYSTEMD_UNIT}"
             docker_wants="${docker_wants} ${DOCKER_SYSTEMD_UNIT}"
-        elif detect_docker_access; then
+        elif [[ "$DOCKER_MODE" != "builder" ]] && detect_docker_access; then
             warn "Docker is reachable, but no systemd Docker unit was detected. docker-daemon will start without a Docker service dependency."
-        else
+        elif [[ "$DOCKER_MODE" != "builder" ]]; then
             warn "No systemd Docker unit was detected. docker-daemon will start without a Docker service dependency."
         fi
-        if docker_group_exists; then
+        if [[ "$DOCKER_MODE" != "builder" ]] && docker_group_exists; then
             supplementary_groups="SupplementaryGroups=docker"
         fi
 
@@ -1339,6 +1516,8 @@ UNIT
             warn "docker-daemon may not have started. Check: journalctl -u docker-daemon -f"
         fi
     elif has_openrc; then
+        local openrc_need="net docker"
+        [[ "$DOCKER_MODE" != "builder" ]] || openrc_need="net"
         cat > /etc/init.d/docker-daemon <<UNIT
 #!/sbin/openrc-run
 name="Gateway Docker Daemon"
@@ -1353,7 +1532,7 @@ output_log="/var/log/docker-daemon.log"
 error_log="/var/log/docker-daemon.err"
 
 depend() {
-    need net docker
+    need ${openrc_need}
 }
 UNIT
         chmod +x /etc/init.d/docker-daemon
@@ -1374,9 +1553,12 @@ UNIT
 # ── Run ──────────────────────────────────────────────────────────────
 create_directories
 install_daemon
+install_builder_runtime_bundle
+preflight_builder_runtime
 setup_secure_runtime
 enroll_daemon
 write_database_profile_config
+write_builder_profile_config
 start_daemon
 
 echo ""

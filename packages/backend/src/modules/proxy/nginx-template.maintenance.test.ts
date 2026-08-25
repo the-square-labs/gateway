@@ -49,6 +49,33 @@ function service() {
 }
 
 describe('canonical Gateway nginx pages', () => {
+  it('renders registry ingress through its dedicated Unix socket and rewrites only the token realm', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        id: '00000000-0000-4000-8000-000000000002',
+        domainNames: ['registry.example.com'],
+        secureLinkUpstream: true,
+        secureLinkSocketPath: '/run/gateway-registry-links/00000000-0000-4000-8000-000000000002.sock',
+        registryAuthRealm: 'https://gateway.example.com/api/docker/registry/token',
+        websocketSupport: false,
+        cacheEnabled: false,
+        rateLimitEnabled: false,
+        advancedConfig: 'client_max_body_size 0;\nproxy_request_buffering off;\nproxy_buffering off;',
+      },
+      null
+    );
+
+    expect(rendered).toContain('server unix:/run/gateway-registry-links/00000000-0000-4000-8000-000000000002.sock;');
+    expect(rendered).toContain('proxy_hide_header WWW-Authenticate;');
+    expect(rendered).toContain('map $upstream_http_www_authenticate $gateway_registry_challenge_');
+    expect(rendered).toContain('https://gateway.example.com/api/docker/registry/token');
+    expect(rendered).toContain('add_header WWW-Authenticate $gateway_registry_challenge_');
+    expect(rendered).toContain('proxy_send_timeout 2h;');
+    expect(rendered).toContain('client_max_body_size 0;');
+    expect(rendered).not.toContain('gateway.invalid');
+  });
+
   it('renders a Pages Route as a static root include without an upstream proxy', async () => {
     const rendered = await service().renderForHost(
       {

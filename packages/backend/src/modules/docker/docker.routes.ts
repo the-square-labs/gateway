@@ -7,6 +7,7 @@ import { authMiddleware } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { registerDockerComposeRoutes } from './compose/compose.routes.js';
 import { getDockerNodeBySlugRoute } from './docker.docs.js';
+import { registerDockerBuildRoutes } from './docker-build.routes.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
 import { registerDockerDeploymentRoutes } from './docker-deployment.routes.js';
 import { registerDockerFolderRoutes } from './docker-folder.routes.js';
@@ -18,6 +19,7 @@ import { registerRegistryRoutes } from './docker-registry.routes.js';
 import { hasDockerNodeRouteAccess, resolveDockerNodeBySlug } from './docker-route-resolvers.js';
 import { registerDockerRuntimeRoutes } from './docker-runtime.routes.js';
 import { registerDockerSnapshotRoutes } from './docker-snapshot.routes.js';
+import { registerDockerSourceRoutes } from './docker-source.routes.js';
 import { registerTaskRoutes } from './docker-task.routes.js';
 import { registerVolumeRoutes } from './docker-volume.routes.js';
 import { registerWebhookConfigRoutes } from './docker-webhook.routes.js';
@@ -37,6 +39,7 @@ dockerRoutes.openapi(getDockerNodeBySlugRoute, async (c) => {
 
 // Register all route groups
 registerDockerSnapshotRoutes(dockerRoutes);
+registerDockerBuildRoutes(dockerRoutes);
 registerWebhookConfigRoutes(dockerRoutes);
 registerDockerDeploymentRoutes(dockerRoutes);
 registerDockerComposeRoutes(dockerRoutes);
@@ -44,6 +47,7 @@ registerDockerHealthCheckRoutes(dockerRoutes);
 registerDockerMigrationRoutes(dockerRoutes);
 registerDockerRuntimeRoutes(dockerRoutes);
 registerDockerFolderRoutes(dockerRoutes);
+registerDockerSourceRoutes(dockerRoutes);
 registerContainerRoutes(dockerRoutes);
 registerImageRoutes(dockerRoutes);
 registerVolumeRoutes(dockerRoutes);

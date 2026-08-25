@@ -43,7 +43,7 @@ func (a *migrationIncomingArtifact) write(data []byte) (int, error) {
 }
 
 func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string) {
-	if p.cfg.Docker.Mode == "databases" {
+	if !migrationStreamEnabled(p.cfg.Docker.Mode) {
 		return
 	}
 	for ctx.Err() == nil {
@@ -56,6 +56,10 @@ func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.Client
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+func migrationStreamEnabled(mode string) bool {
+	return mode != "databases" && mode != "builder"
 }
 
 func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string) error {

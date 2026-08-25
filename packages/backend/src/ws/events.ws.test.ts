@@ -889,6 +889,59 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('filters Docker build events by the target resource scope', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['docker:containers:view:node-1/api'] },
+      effectiveScopes: ['docker:containers:view:node-1/api'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.build.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['docker.build.changed'], rejected: [] })
+    );
+
+    eventBus.publish('docker.build.changed', {
+      buildId: 'build-other',
+      nodeId: 'node-1',
+      scopeResourceId: 'other',
+      status: 'building',
+    });
+    eventBus.publish('docker.build.changed', {
+      buildId: 'build-api',
+      nodeId: 'node-1',
+      scopeResourceId: 'api',
+      status: 'building',
+    });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('build-other'));
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: 'docker.build.changed',
+        payload: {
+          buildId: 'build-api',
+          nodeId: 'node-1',
+          scopeResourceId: 'api',
+          status: 'building',
+        },
+      })
+    );
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('filters node changes for Docker-scoped users to their Docker node', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

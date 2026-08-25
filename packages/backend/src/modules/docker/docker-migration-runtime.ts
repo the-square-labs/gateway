@@ -177,10 +177,16 @@ export function assertMigrationManifest(source: Record<string, any>, target: Rec
     );
     return { ...(networkingConfig ?? {}), EndpointsConfig: normalizedEndpoints };
   };
+  const normalizeConfig = (manifest: Record<string, any>) => ({
+    ...(manifest.config ?? {}),
+    // The target is created from the imported, separately verified image ID.
+    // ImageReference still preserves the configured repository reference.
+    Image: manifest.imageId ?? manifest.config?.Image,
+  });
   const normalize = (manifest: Record<string, any>) => ({
     imageId: manifest.imageId,
     imageReference: manifest.imageReference,
-    config: manifest.config,
+    config: normalizeConfig(manifest),
     hostConfig: normalizeHostConfig(manifest.hostConfig),
     networkingConfig: normalizeNetworkingConfig(manifest.networkingConfig),
     envKeys: manifest.envKeys,

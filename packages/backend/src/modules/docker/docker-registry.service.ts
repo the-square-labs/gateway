@@ -15,6 +15,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { type DockerInternalRegistryService, INTERNAL_DOCKER_REGISTRY_ID } from './docker-registry-internal.service.js';
 
 const logger = createChildLogger('DockerRegistryService');
 
@@ -55,6 +56,7 @@ interface RegistryUseContext {
 
 export class DockerRegistryService {
   private eventBus?: EventBusService;
+  private internalRegistryService?: DockerInternalRegistryService;
 
   constructor(
     private db: DrizzleClient,
@@ -65,6 +67,10 @@ export class DockerRegistryService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+  }
+
+  setInternalRegistryService(service: DockerInternalRegistryService): void {
+    this.internalRegistryService = service;
   }
 
   private emitRegistry(id: string, action: string) {
@@ -83,10 +89,13 @@ export class DockerRegistryService {
       .where(buildWhere(conditions))
       .orderBy(desc(dockerRegistries.createdAt));
 
-    return this.toSafeRegistries(rows);
+    const registries = await this.toSafeRegistries(rows);
+    if (!this.internalRegistryService) return registries;
+    return [await this.internalRegistryView(), ...registries];
   }
 
   async get(id: string) {
+    if (id === INTERNAL_DOCKER_REGISTRY_ID) return this.internalRegistryView();
     const row = await this.getRegistryRow(id);
     return this.toSafeRegistry(row);
   }
@@ -155,6 +164,7 @@ export class DockerRegistryService {
     },
     userId: string
   ) {
+    this.assertNotInternalRegistry(id);
     const existing = await this.getRegistryRow(id);
     await this.assertManualRegistry(existing);
     this.assertOriginChangeHasReplacementPassword(existing, input);
@@ -196,6 +206,7 @@ export class DockerRegistryService {
   }
 
   async delete(id: string, userId: string) {
+    this.assertNotInternalRegistry(id);
     const registry = await this.getRegistryRow(id);
     await this.assertManualRegistry(registry);
 
@@ -213,6 +224,13 @@ export class DockerRegistryService {
   }
 
   async testConnection(id: string, _context: RegistryUseContext = {}) {
+    if (id === INTERNAL_DOCKER_REGISTRY_ID) {
+      const registry = await this.internalRegistryView();
+      return {
+        success: registry.internal.status === 'ready' || registry.internal.status === 'read_only',
+        statusText: registry.internal.status,
+      };
+    }
     const [row] = await this.db.select().from(dockerRegistries).where(eq(dockerRegistries.id, id)).limit(1);
     if (!row) throw new AppError(404, 'NOT_FOUND', 'Docker registry not found');
 
@@ -712,6 +730,38 @@ export class DockerRegistryService {
   private async toSafeRegistries(rows: DockerRegistryRow[]): Promise<SafeDockerRegistry[]> {
     const metadata = await this.loadIntegrationMetadata(rows);
     return rows.map((row) => this.toSafeRegistrySync(row, metadata.get(row.id)));
+  }
+
+  private async internalRegistryView() {
+    if (!this.internalRegistryService) {
+      throw new AppError(503, 'INTERNAL_REGISTRY_UNAVAILABLE', 'Internal Docker registry service is unavailable');
+    }
+    const state = await this.internalRegistryService.getState();
+    return {
+      id: INTERNAL_DOCKER_REGISTRY_ID,
+      name: 'Gateway Internal Registry',
+      url: 'registry:5000',
+      username: null,
+      trustedAuthRealm: null,
+      source: 'system' as const,
+      provider: 'gateway' as const,
+      readOnly: true,
+      scope: 'global',
+      nodeId: null,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+      internal: state,
+    };
+  }
+
+  private assertNotInternalRegistry(id: string): void {
+    if (id === INTERNAL_DOCKER_REGISTRY_ID) {
+      throw new AppError(
+        409,
+        'REGISTRY_SYSTEM_MANAGED',
+        'The Gateway internal registry is managed through internal registry settings'
+      );
+    }
   }
 
   private async toSafeRegistry(row: DockerRegistryRow): Promise<SafeDockerRegistry> {
