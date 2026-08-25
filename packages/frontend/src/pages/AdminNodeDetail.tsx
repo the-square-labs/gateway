@@ -49,6 +49,7 @@ import {
   isNodeUpdating,
 } from "@/types";
 import { Databases } from "./Databases";
+import { DockerComposeProjects } from "./DockerComposeProjects";
 import { DockerContainers } from "./DockerContainers";
 import { DockerImages } from "./DockerImages";
 import { DockerNetworks } from "./DockerNetworks";
@@ -132,6 +133,7 @@ export function AdminNodeDetail({
       "images",
       "volumes",
       "networks",
+      "compose",
       "daemon-logs",
     ],
     "details",
@@ -748,6 +750,9 @@ export function AdminNodeDetail({
                 <TabsTrigger value="networks" disabled={nodeUpdating}>
                   Networks
                 </TabsTrigger>
+                <TabsTrigger value="compose" disabled={nodeUpdating}>
+                  Compose
+                </TabsTrigger>
               </>
             )}
             {canShowNodeConsole && (
@@ -857,6 +862,11 @@ export function AdminNodeDetail({
                 </TabsContent>
                 <TabsContent value="networks">
                   {activeTab === "networks" && <DockerNetworks embedded fixedNodeId={node.id} />}
+                </TabsContent>
+                <TabsContent value="compose">
+                  {activeTab === "compose" && (
+                    <DockerComposeProjects embedded fixedNodeId={node.id} />
+                  )}
                 </TabsContent>
               </>
             )}

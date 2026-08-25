@@ -59,7 +59,20 @@ const DOCKER_VIEW_SCOPE_BY_RESOURCE_TYPE = {
   image: 'docker:images:view',
   network: 'docker:networks:view',
   volume: 'docker:volumes:view',
+  compose: 'docker:compose:view',
 } as const;
+
+function composeFolderVisibility(scopes: string[], viewScope: string) {
+  const targets =
+    allowedResourceIdsForScopes(scopes, viewScope)?.filter((target) => !target.startsWith('folder/')) ?? [];
+  return {
+    allowedNodeIds: targets.filter((target) => !target.includes('/')),
+    allowedResourceRefs: targets.flatMap((target) => {
+      const [nodeId, resourceKey, ...rest] = target.split('/');
+      return nodeId && resourceKey && rest.length === 0 ? [{ nodeId, resourceKey }] : [];
+    }),
+  };
+}
 
 function resourceTypeArg(value: unknown): ResourceType {
   if (
@@ -284,10 +297,11 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
     const viewScope = DOCKER_VIEW_SCOPE_BY_RESOURCE_TYPE[resourceType];
     ensureAnyScope(user, [viewScope]);
     if (hasScope(user.scopes, viewScope)) return service.getFolderTree({ resourceType });
-    return service.getFolderTree({
-      resourceType,
-      allowedNodeIds: allowedResourceIdsForScopes(user.scopes, viewScope),
-    });
+    return service.getFolderTree(
+      resourceType === 'compose'
+        ? { resourceType, ...composeFolderVisibility(user.scopes, viewScope) }
+        : { resourceType, allowedNodeIds: allowedResourceIdsForScopes(user.scopes, viewScope) }
+    );
   }
 
   ensureScope(user, 'docker:containers:folders:manage');

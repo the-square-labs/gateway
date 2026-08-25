@@ -8,6 +8,7 @@ export const DOCKER_VIEW_NODE_SCOPES = [
   "docker:images:view",
   "docker:volumes:view",
   "docker:networks:view",
+  "docker:compose:view",
 ] as const;
 
 export type DockerViewNodeScope = (typeof DOCKER_VIEW_NODE_SCOPES)[number];

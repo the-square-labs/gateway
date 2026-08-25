@@ -166,6 +166,7 @@ Gateway уже ориентирован на production operations, а не на
 - [x] Gateway and daemon update workflows with signature-verified artifacts.
 - [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
 - [x] Docker-to-nginx Secure Links.
+- [x] First-class Compose Projects на одной Docker-ноде: discovery, inventory, monitoring и logs внешних проектов в Community; deployment и lifecycle management с Personal и выше, включая immutable revisions, adoption, folders, drift и защиту дочерних ресурсов.
 
 Планируемая работа:
 
@@ -174,7 +175,6 @@ Gateway уже ориентирован на production operations, а не на
 - [ ] Vulnerability and security scanning для Business и Enterprise.
 - [ ] Горизонтальное масштабирование приложений для Business и Enterprise: объединение нескольких Docker nodes в кластер и deployment приложения на этот кластер. **In development.**
 - [ ] Вертикальное масштабирование workloads для Business и Enterprise: несколько managed instances одного workload на одной машине. **In development.**
-- [ ] Deployment и lifecycle Compose applications для Business и Enterprise. **In development.** Текущее распознавание Compose labels, protected grouping и aggregated logs не является этой deployment-функцией.
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
@@ -241,9 +241,9 @@ Community предназначен только для некоммерческ�
 
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. Pages недоступны. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченные plan quotas для managed nodes/users/groups, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages, Pages static-site hosting и registry discovery. Находящиеся в разработке application-cluster функции сюда не входят. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal (включая Pages), а также Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning после выпуска и находящиеся в разработке application clusters, same-node multi-instance и Compose applications. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Некоммерческое использование ядра платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups; read-only discovery, inventory, monitoring и logs Compose-проектов. Pages недоступны. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Право коммерческого использования, неограниченные plan quotas для managed nodes/users/groups, deployment и lifecycle management Compose-проектов, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages, Pages static-site hosting и registry discovery. Находящиеся в разработке application-cluster функции сюда не входят. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal (включая Compose management и Pages), Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning после выпуска и находящиеся в разработке application clusters и same-node multi-instance. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business (включая Pages), а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
 
 Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).

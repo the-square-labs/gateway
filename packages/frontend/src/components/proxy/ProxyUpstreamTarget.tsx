@@ -8,6 +8,7 @@ import {
   proxyUpstreamText,
 } from "@/lib/proxy-upstream-label";
 import {
+  dockerComposeProjectRoute,
   dockerContainerRoute,
   dockerDeploymentRoute,
   pageProjectRoute,
@@ -37,6 +38,26 @@ export function ProxyUpstreamTarget({
       </Badge>
     );
     return linkToResource ? <Link to={pageProjectRoute(projectSlug, "tags")}>{badge}</Link> : badge;
+  }
+
+  if (
+    host.upstreamKind === "docker_container" &&
+    host.dockerComposeProjectId &&
+    host.dockerComposeServiceName
+  ) {
+    const label = `Compose / ${host.dockerComposeServiceName}`;
+    const appearance = getNodeAppearanceColor(host.dockerNodeAppearanceColor);
+    const badge = (
+      <Badge variant="secondary" size={size} className={appearance?.badgeClassName} title={label}>
+        <Box className="mr-1.5 h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{label}</span>
+      </Badge>
+    );
+    return linkToResource ? (
+      <Link to={dockerComposeProjectRoute(host.dockerComposeProjectId)}>{badge}</Link>
+    ) : (
+      badge
+    );
   }
 
   const resourceName = proxyUpstreamResourceName(host);

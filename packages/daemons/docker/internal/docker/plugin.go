@@ -46,6 +46,7 @@ type DockerPlugin struct {
 	migrationStore  *migrationArtifactStore
 	archiveStreams  *archiveLiveStore
 	databaseManager *managedDatabaseManager
+	composeExecutor *composeExecutor
 	volumeImages    *volumeImageManager
 	relayGrants     *relayGrantStore
 	relayTunnelMu   sync.Mutex
@@ -157,6 +158,12 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 	}
 	if p.cfg.Docker.Mode != "databases" {
+		composeExecutor, composeErr := newComposeExecutor(p.cfg, p.client, p.logger)
+		if composeErr != nil {
+			p.logger.Warn("docker compose executor unavailable", "reason", composeErr.Error())
+		} else {
+			p.composeExecutor = composeExecutor
+		}
 		p.volumeImages, err = newVolumeImageManager(p.cfg.StateDir, p.client, p.logger)
 		if err != nil {
 			return fmt.Errorf("initialize disk-image volume storage: %w", err)
@@ -284,6 +291,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		if p.getRuntimeStatus().State == runtimemanager.StateHealthy {
 			values = append(values, "docker_runsc_healthy_v1")
 		}
+		if p.composeExecutor != nil {
+			values = append(values, "docker_compose_v1")
+		}
 		return values
 	}()
 	return &pb.RegisterMessage{
@@ -332,6 +342,9 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 
 	case *pb.GatewayCommand_DockerDeployment:
 		p.handleDeploymentCommand(payload.DockerDeployment, result)
+
+	case *pb.GatewayCommand_DockerCompose:
+		p.handleComposeCommand(payload.DockerCompose, result)
 
 	case *pb.GatewayCommand_DockerRuntime:
 		p.handleRuntimeCommand(payload.DockerRuntime, result)
@@ -1777,6 +1790,9 @@ func (p *DockerPlugin) OnSessionEnd() {
 		delete(p.logStreamCancel, containerID)
 	}
 	p.logStreamMu.Unlock()
+	if p.composeExecutor != nil {
+		p.composeExecutor.cancelAll()
+	}
 	p.writer = nil
 	p.sessionCtx = nil
 }

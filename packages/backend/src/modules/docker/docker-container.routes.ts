@@ -8,6 +8,8 @@ import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.m
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
+import { assertComposeChildMutationAllowed } from './compose/compose-child.guard.js';
+import { isComposeOwnedContainer } from './compose/compose-discovery.service.js';
 import {
   abortContainerFileUploadRoute,
   completeContainerFileUploadRoute,
@@ -192,7 +194,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
     assertDockerNodeScope(c.get('effectiveScopes') ?? [], 'docker:containers:view', nodeId);
     await snapshots.assertDockerNode(nodeId);
     const snapshot = await snapshots.getList<any[]>(nodeId, 'containers');
-    const data = await service.decoratePublicContainerSnapshot(nodeId, snapshot.data);
+    const data = await service.decoratePublicContainerSnapshot(
+      nodeId,
+      snapshot.data.filter((item) => !isComposeOwnedContainer(item))
+    );
     if (!Array.isArray(data)) return c.json({ data });
     const search = c.req.query('search')?.trim().toLowerCase();
     const visible = filterDockerResourcesForScope(
@@ -326,6 +331,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       await service.startContainer(nodeId, containerId, user.id);
       return c.json({ success: true });
     }
@@ -339,6 +345,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json().catch(() => ({}));
       const { timeout } = ContainerStopSchema.parse(body);
       await service.stopContainer(nodeId, containerId, timeout, user.id);
@@ -354,6 +361,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json().catch(() => ({}));
       const { timeout } = ContainerStopSchema.parse(body);
       await service.restartContainer(nodeId, containerId, timeout, user.id);
@@ -374,6 +382,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json().catch(() => ({}));
       const { signal } = ContainerKillSchema.parse(body);
       await service.killContainer(nodeId, containerId, signal, user.id);
@@ -389,6 +398,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const force = c.req.query('force') === 'true';
       await service.removeContainer(nodeId, containerId, force, user.id);
       return c.json({ success: true });
@@ -403,6 +413,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const { name } = ContainerRenameSchema.parse(body);
       await service.renameContainer(nodeId, containerId, name, user.id);
@@ -418,6 +429,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const { name } = ContainerDuplicateSchema.parse(body);
       const data = await service.duplicateContainer(nodeId, containerId, name, user.id, c.get('effectiveScopes') || []);
@@ -667,6 +679,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const config = ContainerUpdateSchema.parse(body);
       const data = await service.updateContainer(nodeId, containerId, config, user.id, c.get('effectiveScopes') || []);
@@ -682,6 +695,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const config = ContainerLiveUpdateSchema.parse(body);
       await service.liveUpdateContainer(nodeId, containerId, config, user.id);
@@ -697,6 +711,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const config = ContainerRecreateSchema.parse(body);
       const data = await service.recreateWithConfig(nodeId, containerId, config, user.id, {
@@ -790,6 +805,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const { env, removeEnv } = EnvUpdateSchema.parse(body);
       const data = await service.updateContainerEnv(nodeId, containerId, env, removeEnv, user.id);
@@ -820,6 +836,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const containerName = await resolveContainerName(nodeId, containerId);
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const user = c.get('user')!;
       const body = await c.req.json();
       const { key, value } = SecretCreateSchema.parse(body);
@@ -835,6 +852,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
       const secretId = c.req.param('secretId')!;
+      await assertComposeChildMutationAllowed(nodeId, c.req.param('containerId')!);
       const user = c.get('user')!;
       const body = await c.req.json();
       const { value } = SecretUpdateSchema.parse(body);
@@ -850,6 +868,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
       const secretId = c.req.param('secretId')!;
+      await assertComposeChildMutationAllowed(nodeId, c.req.param('containerId')!);
       const user = c.get('user')!;
       await service.delete(secretId, nodeId, user.id);
       return c.json({ success: true });

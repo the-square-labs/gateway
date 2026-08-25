@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClientUuid } from "@/lib/client-id";
 import { useAuthStore } from "@/stores/auth";
 import type { AIComposerAttachment, AIComposerLocalImageAttachment } from "@/types/ai";
 
@@ -166,7 +167,7 @@ export async function filesToComposerAttachments(
     files.map(async (file) => {
       const dataUrl = await fileToDataUrl(file);
       return {
-        localId: `${Date.now()}-${crypto.randomUUID()}`,
+        localId: `${Date.now()}-${createClientUuid()}`,
         filename: file.name,
         mediaType: file.type || "application/octet-stream",
         sizeBytes: file.size,

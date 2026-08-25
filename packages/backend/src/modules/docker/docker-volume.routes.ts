@@ -5,6 +5,8 @@ import { sanitizeFilename } from '@/lib/utils.js';
 import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
+import { assertComposeVolumeMutationAllowed } from './compose/compose-child.guard.js';
+import { isComposeOwnedVolume } from './compose/compose-discovery.service.js';
 import {
   abortVolumeFileUploadRoute,
   adoptVolumeRoute,
@@ -146,6 +148,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       if (!Array.isArray(data)) return c.json({ data });
       const search = c.req.query('search')?.trim().toLowerCase();
       const compacted = data
+        .filter((item) => !isComposeOwnedVolume(item))
         .filter((item) => matchesVolumeSearch(item, search))
         .map((item) => ({
           ...compactVolumeListItem(item),
@@ -230,6 +233,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { path, content } = await parseFileContentRequest(c);
       await service.writeVolumeFile(nodeId, name, path, content, user.id);
       return c.json({ success: true });
@@ -243,6 +247,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { path, content } = await parseFileContentRequest(c);
       await service.createVolumeFile(nodeId, name, path, content, user.id);
       return c.json({ success: true });
@@ -256,6 +261,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { path, totalBytes } = FileUploadInitSchema.parse(await c.req.json());
       const data = await service.initVolumeFileUpload(nodeId, name, path, totalBytes, user.id);
       return c.json({ data });
@@ -269,6 +275,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const uploadId = c.req.param('uploadId')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { offset } = FileUploadChunkQuerySchema.parse(c.req.query());
       const content = Buffer.from(await c.req.arrayBuffer());
       const data = await service.appendVolumeFileUploadChunk(nodeId, name, uploadId, offset, content);
@@ -283,6 +290,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const uploadId = c.req.param('uploadId')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { path, totalBytes } = FileUploadCompleteSchema.parse(await c.req.json());
       await service.completeVolumeFileUpload(nodeId, name, uploadId, path, totalBytes);
       return c.json({ success: true });
@@ -296,6 +304,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const uploadId = c.req.param('uploadId')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       await service.abortVolumeFileUpload(nodeId, name, uploadId);
       return c.json({ success: true });
     }
@@ -308,6 +317,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { path } = FileBrowseSchema.parse(await c.req.json());
       await service.createVolumeDirectory(nodeId, name, path, user.id);
       return c.json({ success: true });
@@ -321,6 +331,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const rawQuery = Object.fromEntries(new URL(c.req.url).searchParams.entries());
       const { path } = FileBrowseSchema.parse(rawQuery);
       await service.deleteVolumeFile(nodeId, name, path, user.id);
@@ -335,6 +346,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { fromPath, toPath } = FileMoveSchema.parse(await c.req.json());
       await service.moveVolumeFile(nodeId, name, fromPath, toPath, user.id);
       return c.json({ success: true });
@@ -366,6 +378,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const scopes = c.get('effectiveScopes') ?? [];
       if (!TokensService.hasScope(scopes, `docker:volumes:delete:${nodeId}`)) {
         throw new HTTPException(403, { message: `Missing required scope: docker:volumes:delete:${nodeId}` });
@@ -385,6 +398,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const scopes = c.get('effectiveScopes') ?? [];
       if (!TokensService.hasScope(scopes, `docker:volumes:delete:${nodeId}`)) {
         throw new HTTPException(403, { message: `Missing required scope: docker:volumes:delete:${nodeId}` });
@@ -427,6 +441,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const { capacityBytes } = VolumeResizeSchema.parse(await c.req.json());
       await service.resizeVolume(nodeId, name, capacityBytes, user.id);
       return c.json({ success: true });
@@ -441,6 +456,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const data = await service.adoptVolume(nodeId, name, user.id);
       return c.json({ data });
     }
@@ -454,6 +470,7 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const force = c.req.query('force') === 'true';
       await service.removeVolume(nodeId, name, force, user.id);
       return c.json({ success: true });

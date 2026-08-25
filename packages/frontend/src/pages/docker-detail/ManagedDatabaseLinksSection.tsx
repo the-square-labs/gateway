@@ -1,6 +1,14 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Link2, Plus, RotateCcw, Trash2, Undo2 } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import {
+  forwardRef,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -156,6 +164,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart?: (transition: "updating" | "recreating") => void;
     onMutationEnd?: () => void;
     onRecreating?: () => void | Promise<void>;
+    targetSelector?: ReactNode;
   }
 >(function ManagedDatabaseLinksSection(
   {
@@ -171,6 +180,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart,
     onMutationEnd,
     onRecreating,
+    targetSelector,
   },
   ref
 ) {
@@ -470,7 +480,10 @@ export const ManagedDatabaseLinksSection = forwardRef<
     if (!hasChanges) return;
     const ok = await confirm({
       title: "Save & Recreate",
-      description: `Apply managed database link changes to “${containerName}”? The container will be recreated and experience downtime.`,
+      description:
+        targetType === "compose_service"
+          ? `Apply managed database link changes to “${containerName}”? A new immutable Compose revision will be applied and the service will be recreated.`
+          : `Apply managed database link changes to “${containerName}”? The container will be recreated and experience downtime.`,
       confirmLabel: "Recreate",
       variant: "default",
     });
@@ -480,7 +493,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart?.("recreating");
     try {
       await applyChanges();
-      toast.success("Managed database links updated — recreating container");
+      toast.success(
+        targetType === "compose_service"
+          ? "Managed database links updated — applying Compose revision"
+          : "Managed database links updated — recreating container"
+      );
       void Promise.resolve(onRecreating?.());
     } catch (error) {
       onMutationEnd?.();
@@ -503,7 +520,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
     <>
       <PanelShell
         title="Managed Database Links"
-        description="Private sidecar connections. Changes apply with Save & Recreate."
+        description={
+          targetType === "compose_service"
+            ? "Private sidecar connections stored in the selected service's Compose revision."
+            : "Private sidecar connections. Changes apply with Save & Recreate."
+        }
         dirty={hasChanges}
         bodyClassName={displayBindings.length > 0 ? "divide-y divide-border" : undefined}
         actions={
@@ -524,6 +545,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
           </div>
         }
       >
+        {targetSelector ? <div className="border-b border-border">{targetSelector}</div> : null}
         {initialLoading ? (
           <div
             className="divide-y divide-border"

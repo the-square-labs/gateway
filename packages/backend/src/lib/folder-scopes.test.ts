@@ -88,4 +88,41 @@ describe('folder-scoped permissions', () => {
       'docker:containers:view:node-1/deployment-1',
     ]);
   });
+
+  it('expands Compose folders to stable project resource IDs only', async () => {
+    const select = vi.fn((fields: Record<string, unknown>) => ({
+      from: vi.fn(() => {
+        if ('parentId' in fields) {
+          return Promise.resolve([{ id: 'compose-folder-1', parentId: null, resourceType: 'compose' }]);
+        }
+        if ('folderId' in fields) {
+          return {
+            where: vi.fn().mockResolvedValue([
+              {
+                folderId: 'compose-folder-1',
+                nodeId: 'node-1',
+                resourceType: 'compose',
+                resourceKey: 'project-1',
+              },
+              {
+                folderId: 'compose-folder-1',
+                nodeId: 'node-1',
+                resourceType: 'container',
+                resourceKey: 'standalone',
+              },
+            ]),
+          };
+        }
+        return {
+          where: vi.fn().mockResolvedValue([{ id: 'project-1', nodeId: 'node-1' }]),
+        };
+      }),
+    }));
+
+    const scopes = await expandFolderScopes({ select } as any, [
+      folderScopedScope('docker:compose:view', 'compose-folder-1'),
+    ]);
+
+    expect(scopes).toEqual(['docker:compose:view:folder/compose-folder-1', 'docker:compose:view:node-1/project-1']);
+  });
 });

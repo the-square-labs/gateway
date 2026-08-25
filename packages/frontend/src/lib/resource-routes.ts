@@ -18,3 +18,7 @@ export const dockerDeploymentRoute = (nodeSlug: string, name: string, tab?: stri
   withTab(`/docker/deployments/${segment(nodeSlug)}/${segment(name)}`, tab);
 export const dockerVolumeRoute = (nodeSlug: string, name: string, tab?: string) =>
   withTab(`/docker/volumes/${segment(nodeSlug)}/${segment(name)}`, tab);
+export const dockerComposeRootRoute = () => "/docker/compose";
+export const dockerComposeProjectRoute = (projectId: string, tab?: string) =>
+  withTab(`${dockerComposeRootRoute()}/${segment(projectId)}`, tab);
+export const dockerComposeNewRoute = () => `${dockerComposeRootRoute()}/new`;

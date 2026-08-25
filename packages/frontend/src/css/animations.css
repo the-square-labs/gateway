@@ -163,7 +163,7 @@
 [data-sonner-toaster],
 [data-sonner-toaster][data-sonner-theme='light'],
 [data-sonner-toaster][data-sonner-theme='dark'] {
-  z-index: 60 !important;
+  z-index: 1000 !important;
   pointer-events: auto !important;
   --normal-bg: #27272a !important;
   --normal-border: #3f3f46 !important;

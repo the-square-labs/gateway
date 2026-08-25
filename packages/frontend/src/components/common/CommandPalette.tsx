@@ -56,7 +56,7 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
-import type { DockerContainer, Node, ResourceSearchResult } from "@/types";
+import { AI_SCOPE, type DockerContainer, type Node, type ResourceSearchResult } from "@/types";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -171,7 +171,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const isCommandMode = search.startsWith(">");
   const commandQuery = isCommandMode ? search.slice(1).trim().toLowerCase() : "";
   const searchQuery = isCommandMode ? "" : search.toLowerCase().trim();
-  const aiScopeOk = hasScope("feat:ai:use");
+  const aiScopeOk = hasScope(AI_SCOPE);
   const routeSection = location.pathname.split("/").filter(Boolean)[0] ?? "dashboard";
   const activePageResource =
     resolvedPageStatus === "ready" &&

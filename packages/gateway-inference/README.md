@@ -23,9 +23,9 @@ npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --tok
 npx -y @wiolett/gateway-inference@latest logout
 ```
 
-`login` asks for the Gateway URL when it is omitted in an interactive terminal. It discovers the Gateway instance, opens its OAuth consent screen, and completes Authorization Code with PKCE through a random loopback callback. It requests only the isolated `inference:setup` resource.
+`login` asks for the Gateway URL when it is omitted in an interactive terminal, then offers **Browser OAuth** or **Existing inference token**. Browser OAuth discovers the Gateway instance, opens its consent screen, and completes Authorization Code with PKCE through a random loopback callback. It requests only the isolated `inference:setup` resource.
 
-An existing `gwi_` inference token can be used instead of OAuth with `--token`. The token itself identifies its Gateway user; no email or separate account identifier is required. Treat the command as sensitive because command-line arguments may be retained by shell history or process inspection.
+The interactive token prompt masks an existing `gwi_` inference token and validates it with Gateway before saving it. The token itself identifies its Gateway user; no email or separate account identifier is required. For non-interactive use, pass `--token`; treat that command as sensitive because command-line arguments may be retained by shell history or process inspection.
 
 OAuth and inference runtime credentials are stored in the operating-system credential store. If none is available, an interactive warning can opt into a mode-`0600` file. The dedicated `gwi_` runtime token stays in that Gateway-owned credential store and is never written to Codex configuration or `$CODEX_HOME/auth.json`. `logout` removes setup authorization but leaves an already configured harness and its dedicated runtime token unchanged.
 
@@ -57,7 +57,7 @@ Gateway model entries reuse the full model instructions bundled with the install
 
 The installed helper owns the loopback proxy, refreshes the catalog at startup, follows Gateway invalidation events, and falls back to conditional polling. Runtime auth, proxy, and MCP lifecycle modes are private implementation details and are not public CLI commands.
 
-Codex usage and quota displays are not overridden. View Gateway limits in the Gateway UI; Codex Desktop and CLI continue to show their native account usage. Version 0.3.6 removes the experimental usage wrappers from 0.3.4 and 0.3.5. Running `setup codex` cleans up package-owned legacy wrapper artifacts automatically. The offline cleanup command remains available for affected installations:
+Codex usage and quota displays are not overridden. View Gateway limits in the Gateway UI; Codex Desktop and CLI continue to show their native account usage. Version 0.3.6 and later remove the experimental usage wrappers from 0.3.4 and 0.3.5. Running `setup codex` cleans up package-owned legacy wrapper artifacts automatically. The offline cleanup command remains available for affected installations:
 
 ```sh
 npx -y @wiolett/gateway-inference@latest uninstall codex-usage

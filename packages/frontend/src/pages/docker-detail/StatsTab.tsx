@@ -74,10 +74,12 @@ export function StatsTab({
   nodeId,
   containerId,
   data,
+  showProcesses = true,
 }: {
   nodeId: string;
   containerId: string;
   data: InspectData;
+  showProcesses?: boolean;
 }) {
   const [current, setCurrent] = useState<ContainerStats | null>(null);
   const [gpuDevices, setGpuDevices] = useState<NodeGpuDevice[]>([]);
@@ -240,6 +242,10 @@ export function StatsTab({
 
   // Fetch process list (separate from SSE — needs direct call)
   useEffect(() => {
+    if (!showProcesses) {
+      setProcesses(null);
+      return;
+    }
     const fetchTop = async () => {
       try {
         const p = await api.getContainerTop(nodeId, containerId);
@@ -251,7 +257,7 @@ export function StatsTab({
     fetchTop();
     const interval = setInterval(fetchTop, 10000);
     return () => clearInterval(interval);
-  }, [nodeId, containerId]);
+  }, [nodeId, containerId, showProcesses]);
 
   // Uptime — ticks every second
   const state = data.State ?? {};
@@ -380,7 +386,7 @@ export function StatsTab({
           ))}
 
           {/* Process List */}
-          {filteredProcesses.length > 0 && (
+          {showProcesses && filteredProcesses.length > 0 && (
             <PanelShell
               title="Process List"
               description={

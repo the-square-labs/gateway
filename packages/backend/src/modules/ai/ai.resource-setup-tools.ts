@@ -476,12 +476,18 @@ async function manageLoggingBackend(user: User, args: Record<string, unknown>) {
 
 function ensureBindingTargetScopes(
   user: User,
-  target: { targetType: 'container' | 'deployment'; targetNodeId: string; targetResourceId: string }
+  target: {
+    targetType: 'container' | 'deployment' | 'compose_service';
+    targetNodeId: string;
+    targetResourceId: string;
+  }
 ) {
   const scopes =
-    target.targetType === 'deployment'
-      ? ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']
-      : ['docker:containers:environment', 'docker:containers:secrets'];
+    target.targetType === 'compose_service'
+      ? ['docker:compose:manage']
+      : target.targetType === 'deployment'
+        ? ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']
+        : ['docker:containers:environment', 'docker:containers:secrets'];
   for (const scope of scopes) ensureScope(user, scope);
 }
 

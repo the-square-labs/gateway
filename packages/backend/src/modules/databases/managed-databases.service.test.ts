@@ -319,6 +319,20 @@ describe('managed database catalog and input guardrails', () => {
     });
   });
 
+  it('accepts a stable Compose service binding target', () => {
+    const result = CreateManagedDatabaseBindingSchema.safeParse({
+      targetNodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      targetType: 'compose_service',
+      targetResourceId: '44444444-4444-4444-8444-444444444444:api',
+      environment: { connectionUri: 'DATABASE_URL' },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { targetType: 'compose_service' },
+    });
+  });
+
   it('warms the PostgreSQL extension catalog when a database becomes ready', async () => {
     const ready = {
       ...managedRow,

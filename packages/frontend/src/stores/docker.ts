@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { filterUserDockerNetworks } from "@/lib/docker-networks";
 import { api } from "@/services/api";
 import type {
+  DockerComposeProjectSummary,
   DockerContainer,
   DockerFolderResourceType,
   DockerImage,
@@ -50,13 +51,21 @@ async function attachFolderPlacements<T extends object>(
 const dockerImageResourceKey = (image: DockerImage) => image.id;
 const dockerVolumeResourceKey = (volume: DockerVolume) => volume.name;
 const dockerNetworkResourceKey = (network: DockerNetwork) => network.id;
+const dockerComposeResourceKey = (project: DockerComposeProjectSummary) => project.id;
 
 interface DockerFilters {
   search: string;
   status: string;
 }
 
-type DockerResource = "containers" | "images" | "volumes" | "networks" | "tasks" | "registries";
+type DockerResource =
+  | "containers"
+  | "images"
+  | "volumes"
+  | "networks"
+  | "compose"
+  | "tasks"
+  | "registries";
 
 interface DockerState {
   containers: DockerContainer[];
@@ -64,6 +73,7 @@ interface DockerState {
   images: DockerImage[];
   volumes: DockerVolume[];
   networks: DockerNetwork[];
+  composeProjects: DockerComposeProjectSummary[];
   tasks: DockerTask[];
   registries: DockerRegistry[];
   /** null = all nodes */
@@ -107,6 +117,7 @@ interface DockerState {
     searchOverride?: string,
     nodesOverride?: Node[]
   ) => Promise<void>;
+  fetchComposeProjects: (nodeIdOverride?: string | null) => Promise<void>;
   fetchTasks: (nodeIdOverride?: string | null) => Promise<void>;
   fetchRegistries: () => Promise<void>;
   requestSnapshotRefresh: (
@@ -170,6 +181,7 @@ const dockerRequestIds = {
   images: 0,
   volumes: 0,
   networks: 0,
+  compose: 0,
   tasks: 0,
   registries: 0,
 };
@@ -180,6 +192,7 @@ const initialLoading: Record<DockerResource, boolean> = {
   images: false,
   volumes: false,
   networks: false,
+  compose: false,
   tasks: false,
   registries: false,
 };
@@ -202,6 +215,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
   images: [],
   volumes: [],
   networks: [],
+  composeProjects: [],
   tasks: [],
   registries: [],
   selectedNodeId: null,
@@ -446,6 +460,39 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     }
   },
 
+  fetchComposeProjects: async (nodeIdOverride) => {
+    const requestId = ++dockerRequestIds.compose;
+    const effectiveNodeId = nodeIdOverride ?? get().selectedNodeId;
+    set((state) => loadingState(state.loading, "compose", get().composeProjects.length === 0));
+    try {
+      const projects = await api.listDockerComposeProjects(effectiveNodeId ?? undefined);
+      const placements = await attachFolderPlacements(
+        "compose",
+        projects.map((project) => ({ ...project, _nodeId: project.nodeId })),
+        dockerComposeResourceKey
+      );
+      if (requestId !== dockerRequestIds.compose) return;
+      const nodesById = new Map(get().dockerNodes.map((node) => [node.id, node]));
+      const items = placements.map((project) => {
+        const node = nodesById.get(project.nodeId);
+        return {
+          ...project,
+          _nodeId: project.nodeId,
+          _nodeSlug: node?.slug ?? project.nodeId,
+          _nodeName: node?.displayName || node?.hostname || project.nodeId,
+          _nodeColor: node?.appearanceColor ?? null,
+        };
+      });
+      set((state) => ({
+        composeProjects: items,
+        ...loadingState(state.loading, "compose", false),
+      }));
+    } catch {
+      if (requestId !== dockerRequestIds.compose) return;
+      set((state) => loadingState(state.loading, "compose", false));
+    }
+  },
+
   fetchTasks: async (nodeIdOverride) => {
     const requestId = ++dockerRequestIds.tasks;
     const effectiveNodeId = nodeIdOverride ?? get().selectedNodeId;
@@ -496,6 +543,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
       images: s.fetchImages,
       volumes: s.fetchVolumes,
       networks: s.fetchNetworks,
+      compose: s.fetchComposeProjects,
       tasks: s.fetchTasks,
       registries: s.fetchRegistries,
     };

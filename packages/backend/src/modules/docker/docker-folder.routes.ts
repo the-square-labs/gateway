@@ -38,6 +38,7 @@ const VIEW_SCOPE_BY_RESOURCE_TYPE = {
   image: 'docker:images:view',
   network: 'docker:networks:view',
   volume: 'docker:volumes:view',
+  compose: 'docker:compose:view',
 } as const;
 
 function hasAnyDockerScope(scopes: string[], prefix: string): boolean {
@@ -48,6 +49,17 @@ function requireAnyDockerScope(scopes: string[], prefix: string, message: string
   if (!hasAnyDockerScope(scopes, prefix)) {
     throw new AppError(403, 'FORBIDDEN', message);
   }
+}
+
+function composeFolderVisibility(scopes: string[], viewScope: string) {
+  const targets = getResourceScopedIds(scopes, viewScope).filter((target) => !target.startsWith('folder/'));
+  return {
+    allowedNodeIds: targets.filter((target) => !target.includes('/')),
+    allowedResourceRefs: targets.flatMap((target) => {
+      const [nodeId, resourceKey, ...rest] = target.split('/');
+      return nodeId && resourceKey && rest.length === 0 ? [{ nodeId, resourceKey }] : [];
+    }),
+  };
 }
 
 async function assertContainerScopes(
@@ -83,10 +95,11 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
         ? { resourceType, includeAllFolders: canManageFolders }
         : {
             resourceType,
-            allowedNodeIds:
-              resourceType === 'container'
-                ? dockerScopedNodeIds(scopes, [viewScope])
-                : getResourceScopedIds(scopes, viewScope),
+            ...(resourceType === 'container'
+              ? { allowedNodeIds: dockerScopedNodeIds(scopes, [viewScope]) }
+              : resourceType === 'compose'
+                ? composeFolderVisibility(scopes, viewScope)
+                : { allowedNodeIds: getResourceScopedIds(scopes, viewScope) }),
           }
     );
     return c.json({ data });

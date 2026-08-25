@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerDeploymentRoutes, dockerDeployments, nodes } from '@/db/schema/index.js';
+import { dockerComposeProjects, dockerDeploymentRoutes, dockerDeployments, nodes } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   type DockerAccessResourceService,
@@ -17,6 +17,8 @@ export interface DockerUpstreamReference {
   upstreamKind: ProxyUpstreamKind;
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;
@@ -29,6 +31,8 @@ export interface ResolvedDockerUpstream {
   forwardPort: number;
   dockerNodeId: string | null;
   dockerContainerName: string | null;
+  dockerComposeProjectId: string | null;
+  dockerComposeServiceName: string | null;
   dockerDeploymentId: string | null;
   dockerContainerPort: number;
   dockerHostPort: number | null;
@@ -78,6 +82,11 @@ function readContainerName(container: Record<string, unknown>): string {
   return String(container.name ?? container.Name ?? '').replace(/^\/+/, '');
 }
 
+function readLabels(container: Record<string, unknown>): Record<string, unknown> {
+  const labels = container.labels ?? container.Labels;
+  return labels && typeof labels === 'object' && !Array.isArray(labels) ? (labels as Record<string, unknown>) : {};
+}
+
 function isDeploymentInternal(container: Record<string, unknown>): boolean {
   const labels = container.labels ?? container.Labels;
   return (
@@ -92,6 +101,8 @@ export function clearDockerUpstreamFields() {
   return {
     dockerNodeId: null,
     dockerContainerName: null,
+    dockerComposeProjectId: null,
+    dockerComposeServiceName: null,
     dockerDeploymentId: null,
     dockerContainerPort: null,
     dockerHostPort: null,
@@ -120,6 +131,12 @@ export class ProxyDockerUpstreamService {
   private assertDockerViewScope(nodeId: string, resourceId: string, actorScopes?: string[]) {
     if (actorScopes && !hasDockerResourceScope(actorScopes, 'docker:containers:view', nodeId, resourceId)) {
       throw new AppError(403, 'FORBIDDEN', 'Docker container access is required for this upstream');
+    }
+  }
+
+  private assertComposeViewScope(nodeId: string, projectId: string, actorScopes?: string[]) {
+    if (actorScopes && !hasDockerResourceScope(actorScopes, 'docker:compose:view', nodeId, projectId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Docker Compose project access is required for this upstream');
     }
   }
 
@@ -173,27 +190,62 @@ export class ProxyDockerUpstreamService {
     options: ResolveOptions
   ): Promise<ResolvedDockerUpstream> {
     const nodeId = reference.dockerNodeId;
-    const containerName = reference.dockerContainerName?.replace(/^\/+/, '');
-    if (!nodeId || !containerName) {
-      throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and exact container name are required');
-    }
-    this.assertDockerNodeVisibility(nodeId, options.actorScopes);
+    if (!nodeId) throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node is required');
+    const composeTarget = Boolean(reference.dockerComposeProjectId || reference.dockerComposeServiceName);
+    if (!composeTarget) this.assertDockerNodeVisibility(nodeId, options.actorScopes);
     await this.getDockerNode(nodeId, options);
     const snapshot = await this.snapshots.getList<Record<string, unknown>[]>(nodeId, 'containers');
     if (options.requireAvailable && (snapshot.revision === 0 || snapshot.refreshStatus === 'error')) {
       throw new AppError(409, 'DOCKER_TARGET_UNAVAILABLE', 'Docker container snapshot is unavailable');
     }
-    const container = Array.isArray(snapshot.data)
-      ? snapshot.data.find((item) => readContainerName(item) === containerName)
-      : undefined;
+    let containerName = reference.dockerContainerName?.replace(/^\/+/, '') ?? '';
+    let container: Record<string, unknown> | undefined;
+    if (composeTarget) {
+      if (!reference.dockerComposeProjectId || !reference.dockerComposeServiceName) {
+        throw new AppError(400, 'INVALID_COMPOSE_TARGET', 'Select one Compose project service target');
+      }
+      const [project] = await this.db
+        .select({ id: dockerComposeProjects.id, name: dockerComposeProjects.name })
+        .from(dockerComposeProjects)
+        .where(
+          and(eq(dockerComposeProjects.id, reference.dockerComposeProjectId), eq(dockerComposeProjects.nodeId, nodeId))
+        )
+        .limit(1);
+      if (!project) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+      this.assertComposeViewScope(nodeId, project.id, options.actorScopes);
+      const matches = Array.isArray(snapshot.data)
+        ? snapshot.data.filter((item) => {
+            const labels = readLabels(item);
+            return (
+              labels['com.docker.compose.project'] === project.name &&
+              labels['com.docker.compose.service'] === reference.dockerComposeServiceName &&
+              !isDeploymentInternal(item)
+            );
+          })
+        : [];
+      if (matches.length > 1) {
+        throw new AppError(409, 'COMPOSE_SERVICE_AMBIGUOUS', 'Compose service has more than one container');
+      }
+      container = matches[0];
+      containerName = container ? readContainerName(container) : '';
+    } else {
+      if (!containerName) {
+        throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and exact container name are required');
+      }
+      container = Array.isArray(snapshot.data)
+        ? snapshot.data.find((item) => readContainerName(item) === containerName)
+        : undefined;
+    }
     if (!container || isDeploymentInternal(container)) {
       throw new AppError(404, 'DOCKER_CONTAINER_NOT_FOUND', 'Docker container snapshot not found');
     }
-    const runtimeId = String(container.id ?? container.Id ?? '');
-    const resourceId = this.accessResources
-      ? await this.accessResources.ensureContainer(nodeId, containerName, runtimeId, false)
-      : '';
-    this.assertDockerViewScope(nodeId, resourceId, options.actorScopes);
+    if (!reference.dockerComposeProjectId) {
+      const runtimeId = String(container.id ?? container.Id ?? '');
+      const resourceId = this.accessResources
+        ? await this.accessResources.ensureContainer(nodeId, containerName, runtimeId, false)
+        : '';
+      this.assertDockerViewScope(nodeId, resourceId, options.actorScopes);
+    }
     const selectedPort = this.choosePort(reference, readPorts(container));
     return {
       upstreamKind: 'docker_container',
@@ -201,6 +253,8 @@ export class ProxyDockerUpstreamService {
       forwardPort: 1,
       dockerNodeId: nodeId,
       dockerContainerName: containerName,
+      dockerComposeProjectId: reference.dockerComposeProjectId ?? null,
+      dockerComposeServiceName: reference.dockerComposeServiceName ?? null,
       dockerDeploymentId: null,
       dockerContainerPort: selectedPort,
       dockerHostPort: null,
@@ -249,6 +303,8 @@ export class ProxyDockerUpstreamService {
       forwardPort: 1,
       dockerNodeId: deployment.nodeId,
       dockerContainerName: null,
+      dockerComposeProjectId: null,
+      dockerComposeServiceName: null,
       dockerDeploymentId: deploymentId,
       dockerContainerPort: route.containerPort,
       dockerHostPort: route.hostPort,

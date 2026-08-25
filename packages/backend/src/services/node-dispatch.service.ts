@@ -17,6 +17,7 @@ const managedDatabaseCommandTimeoutMs = 15 * 60 * 1000;
 // SelfUpdate can spend up to five minutes downloading the binary before it
 // acknowledges the command. Leave a small margin for verification and replace.
 const daemonUpdateCommandTimeoutMs = 5 * 60 * 1000 + 30_000;
+const dockerComposeCommandTimeoutMs = 30 * 60 * 1000;
 
 export class NodeDispatchService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -750,6 +751,55 @@ export class NodeDispatchService {
       nodeId,
       {
         dockerDeployment: { action, ...options } as any,
+      },
+      timeoutMs
+    );
+  }
+
+  async sendDockerComposeCommand(
+    nodeId: string,
+    action: string,
+    options: {
+      operationId: string;
+      projectId: string;
+      projectName: string;
+      revisionId?: string;
+      configDigest?: string;
+      composeYaml?: Buffer;
+      normalizedModelJson?: string;
+      variables?: Record<string, string>;
+      secrets?: Record<string, string>;
+      removeOrphans?: boolean;
+      volumeNames?: string[];
+    },
+    timeoutMs = dockerComposeCommandTimeoutMs
+  ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    if (!this.registry.hasCapability(nodeId, 'docker_compose_v1')) {
+      throw new AppError(
+        409,
+        'COMPOSE_CAPABILITY_UNAVAILABLE',
+        'The connected Docker daemon does not support first-class Compose operations'
+      );
+    }
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        dockerCompose: {
+          action,
+          operationId: options.operationId,
+          projectId: options.projectId,
+          projectName: options.projectName,
+          revisionId: options.revisionId ?? '',
+          configDigest: options.configDigest ?? '',
+          composeYaml: options.composeYaml ?? Buffer.alloc(0),
+          normalizedModelJson: options.normalizedModelJson ?? '',
+          variables: options.variables ?? {},
+          secrets: options.secrets ?? {},
+          removeOrphans: options.removeOrphans ?? false,
+          volumeNames: options.volumeNames ?? [],
+        },
       },
       timeoutMs
     );

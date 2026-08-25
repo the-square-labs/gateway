@@ -406,6 +406,12 @@ export class ProxyService {
       dockerNodeId: input.dockerNodeId === undefined ? existing.dockerNodeId : input.dockerNodeId,
       dockerContainerName:
         input.dockerContainerName === undefined ? existing.dockerContainerName : input.dockerContainerName,
+      dockerComposeProjectId:
+        input.dockerComposeProjectId === undefined ? existing.dockerComposeProjectId : input.dockerComposeProjectId,
+      dockerComposeServiceName:
+        input.dockerComposeServiceName === undefined
+          ? existing.dockerComposeServiceName
+          : input.dockerComposeServiceName,
       dockerDeploymentId:
         input.dockerDeploymentId === undefined ? existing.dockerDeploymentId : input.dockerDeploymentId,
       dockerContainerPort:
@@ -417,6 +423,8 @@ export class ProxyService {
       existing.upstreamKind !== effectiveKind ||
       existing.dockerNodeId !== reference.dockerNodeId ||
       existing.dockerContainerName !== reference.dockerContainerName ||
+      existing.dockerComposeProjectId !== reference.dockerComposeProjectId ||
+      existing.dockerComposeServiceName !== reference.dockerComposeServiceName ||
       existing.dockerDeploymentId !== reference.dockerDeploymentId ||
       existing.dockerContainerPort !== reference.dockerContainerPort ||
       (existing.dockerProtocol ?? 'tcp') !== (reference.dockerProtocol ?? 'tcp');
@@ -1254,10 +1262,15 @@ export class ProxyService {
     }));
   }
 
-  async createAdditionalSecureLink(id: string, input: CreateProxyAdditionalSecureLinkInput, userId: string) {
+  async createAdditionalSecureLink(
+    id: string,
+    input: CreateProxyAdditionalSecureLinkInput,
+    userId: string,
+    actorScopes?: string[]
+  ) {
     const host = await this.requireManagedProxyHost(id);
     if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
-    const binding = await this.secureLinks.createAdditional(host, input);
+    const binding = await this.secureLinks.createAdditional(host, input, actorScopes);
     await this.auditService.log({
       userId,
       action: 'proxy_host.additional_secure_link.create',
@@ -1268,10 +1281,10 @@ export class ProxyService {
     return binding;
   }
 
-  async retryAdditionalSecureLink(id: string, bindingId: string, userId: string) {
+  async retryAdditionalSecureLink(id: string, bindingId: string, userId: string, actorScopes?: string[]) {
     const host = await this.requireManagedProxyHost(id);
     if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
-    const binding = await this.secureLinks.retryAdditional(host, bindingId);
+    const binding = await this.secureLinks.retryAdditional(host, bindingId, actorScopes);
     await this.auditService.log({
       userId,
       action: 'proxy_host.additional_secure_link.retry',
@@ -2104,6 +2117,8 @@ export class ProxyService {
       host.dockerContainerPort !== resolved.dockerContainerPort ||
       host.dockerNodeId !== resolved.dockerNodeId ||
       host.dockerContainerName !== resolved.dockerContainerName ||
+      host.dockerComposeProjectId !== resolved.dockerComposeProjectId ||
+      host.dockerComposeServiceName !== resolved.dockerComposeServiceName ||
       host.dockerDeploymentId !== resolved.dockerDeploymentId;
     if (!changed && host.secureLinkStatus === 'active' && !force) return host;
     let updated = host;
@@ -2114,6 +2129,8 @@ export class ProxyService {
           upstreamKind: resolved.upstreamKind,
           dockerNodeId: resolved.dockerNodeId,
           dockerContainerName: resolved.dockerContainerName,
+          dockerComposeProjectId: resolved.dockerComposeProjectId,
+          dockerComposeServiceName: resolved.dockerComposeServiceName,
           dockerDeploymentId: resolved.dockerDeploymentId,
           dockerContainerPort: resolved.dockerContainerPort,
           dockerProtocol: resolved.dockerProtocol,

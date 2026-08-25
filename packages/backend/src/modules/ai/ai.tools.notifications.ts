@@ -463,6 +463,6 @@ export const WEB_SEARCH_AI_TOOL: AIToolDefinition = {
   },
   destructive: false,
   category: 'Web Search',
-  requiredScope: 'feat:ai:use',
+  requiredScope: 'ai:workspace:use',
   invalidateStores: [],
 };

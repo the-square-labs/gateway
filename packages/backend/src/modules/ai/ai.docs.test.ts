@@ -47,14 +47,14 @@ describe('AI internal docs registry', () => {
       'troubleshooting',
     ]);
     expect(DOC_TOPIC_SCOPES).toMatchObject({
-      discovery: 'feat:ai:use',
-      permissions: 'feat:ai:use',
-      docker: 'docker:containers:view',
+      discovery: 'ai:workspace:use',
+      permissions: 'ai:workspace:use',
+      docker: ['docker:containers:view', 'docker:compose:view'],
       logging: ['logs:environments:view', 'logs:schemas:view', 'logs:read', 'logs:manage'],
       folders: expect.arrayContaining(['nodes:folders:manage', 'domains:folders:manage']),
       'node-files': ['nodes:files:read', 'nodes:files:write'],
       sandbox: 'ai:sandbox:use',
-      conversations: 'feat:ai:use',
+      conversations: 'ai:workspace:use',
       'ai-settings': 'feat:ai:configure',
       'status-page': 'status-page:view',
       'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
@@ -62,16 +62,16 @@ describe('AI internal docs registry', () => {
       gitlab: 'integrations:gitlab:view',
       notifications: ['notifications:view', 'audit:siem:view'],
       siem: 'audit:siem:view',
-      overview: 'feat:ai:use',
-      installation: 'feat:ai:use',
-      authentication: 'feat:ai:use',
+      overview: 'ai:workspace:use',
+      installation: 'ai:workspace:use',
+      authentication: 'ai:workspace:use',
       cloudflare: 'integrations:cloudflare:view',
       'docker-registries': 'docker:registries:view',
       clickhouse: 'databases:view',
-      troubleshooting: 'feat:ai:use',
+      troubleshooting: 'ai:workspace:use',
       proxy: 'proxy:view',
       pages: 'pages:view',
-      inference: expect.arrayContaining(['feat:ai:use', 'inference:providers:manage', 'inference:models:manage']),
+      inference: expect.arrayContaining(['ai:workspace:use', 'inference:providers:manage', 'inference:models:manage']),
     });
   });
 
@@ -85,17 +85,18 @@ describe('AI internal docs registry', () => {
   });
 
   it('returns allowed documentation and preserves permission topic content', () => {
-    expect(getInternalDocumentation('permissions', ['feat:ai:use'])).toEqual({
+    expect(getInternalDocumentation('permissions', ['ai:workspace:use'])).toEqual({
       topic: 'permissions',
       content: INTERNAL_DOCS.permissions,
     });
     expect(INTERNAL_DOCS.permissions).toContain('# Permissions');
     expect(INTERNAL_DOCS.permissions).toContain('Resource-Scoped Permissions');
     expect(INTERNAL_DOCS.permissions).toContain('docker:containers:view');
+    expect(INTERNAL_DOCS.permissions).toContain('docker:compose:view');
 
-    expect(getInternalDocumentation('discovery', ['feat:ai:use']).content).toContain('discover_tools');
-    expect(getInternalDocumentation('discovery', ['feat:ai:use']).content).toContain('get_current_context');
-    expect(getInternalDocumentation('discovery', ['feat:ai:use']).content).toContain('find_resource');
+    expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('discover_tools');
+    expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('get_current_context');
+    expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('find_resource');
     expect(getInternalDocumentation('logging', ['logs:schemas:view']).content).toContain('manage_logging');
     expect(getInternalDocumentation('logging', ['logs:read:env-1']).content).toContain('External Logging');
     expect(getInternalDocumentation('folders', ['nodes:folders:manage']).content).toContain('list_resource_folders');
@@ -108,6 +109,10 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('pages', ['pages:view']).content).toContain('manage_pages');
     expect(getInternalDocumentation('users', ['admin:users']).content).toContain('additional per-user scopes');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Cross-Node Migrations');
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain('Compose Boundaries');
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain(
+      'Personal and higher can deploy and manage'
+    );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Isolation Profiles');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
@@ -134,24 +139,24 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain(
       'run_process returns as soon as the process starts'
     );
-    expect(getInternalDocumentation('conversations', ['feat:ai:use']).content).toContain('manage_ai_conversation');
-    expect(getInternalDocumentation('conversations', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('conversations', ['ai:workspace:use']).content).toContain('manage_ai_conversation');
+    expect(getInternalDocumentation('conversations', ['ai:workspace:use']).content).toContain(
       'reasoning effort are pinned to the conversation'
     );
-    expect(getInternalDocumentation('conversations', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('conversations', ['ai:workspace:use']).content).toContain(
       'up to three supported images'
     );
-    expect(getInternalDocumentation('api', ['feat:ai:use']).content).toContain('manage_oauth_authorization');
-    expect(getInternalDocumentation('api', ['feat:ai:use']).content).toContain('manage_api_token');
-    expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('api', ['ai:workspace:use']).content).toContain('manage_oauth_authorization');
+    expect(getInternalDocumentation('api', ['ai:workspace:use']).content).toContain('manage_api_token');
+    expect(getInternalDocumentation('overview', ['ai:workspace:use']).content).toContain(
       'self-hosted infrastructure control plane'
     );
-    expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain('set_resource_pin');
-    expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('overview', ['ai:workspace:use']).content).toContain('set_resource_pin');
+    expect(getInternalDocumentation('overview', ['ai:workspace:use']).content).toContain(
       'Yellow means at least one warning card is visible'
     );
-    expect(getInternalDocumentation('installation', ['feat:ai:use']).content).toContain('Browser Setup Wizard');
-    expect(getInternalDocumentation('authentication', ['feat:ai:use']).content).toContain('email one-time-code');
+    expect(getInternalDocumentation('installation', ['ai:workspace:use']).content).toContain('Browser Setup Wizard');
+    expect(getInternalDocumentation('authentication', ['ai:workspace:use']).content).toContain('email one-time-code');
     expect(getInternalDocumentation('cloudflare', ['integrations:cloudflare:view']).content).toContain(
       'encrypted API token'
     );
@@ -177,7 +182,7 @@ describe('AI internal docs registry', () => {
       'docker:containers:files:write'
     );
     expect(getInternalDocumentation('clickhouse', ['databases:view']).content).toContain('native TLS endpoint');
-    expect(getInternalDocumentation('troubleshooting', ['feat:ai:use']).content).toContain('Start With Evidence');
+    expect(getInternalDocumentation('troubleshooting', ['ai:workspace:use']).content).toContain('Start With Evidence');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('update_ai_settings');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('providerUrl');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).not.toContain('baseUrl:');
@@ -189,32 +194,37 @@ describe('AI internal docs registry', () => {
     );
     expect(getInternalDocumentation('licensing-updates', ['license:view']).content).toContain('get_license_status');
     expect(getInternalDocumentation('licensing-updates', ['admin:update']).content).toContain('manage_system_updates');
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup codex'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+      'Gateway Inference access and personal usage visibility'
+    );
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup claude-code'
     );
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'generalSettings.features.inferenceEnabled'
     );
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('Claude Code 2.1.129 or newer');
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
+      'Claude Code 2.1.129 or newer'
+    );
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'Claude Desktop and the Claude Code VS Code extension'
     );
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('/api/inference/v1');
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('/api/inference/v1/messages');
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain('/api/inference/v1');
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain('/api/inference/v1/messages');
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'Profile > Authorizations > Inference API tokens'
     );
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'models whose usable sources are API-only are omitted'
     );
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'reasoningEfforts array order is preserved'
     );
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('API accounting ignores it');
-    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain('API accounting ignores it');
+    expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'current Assistant model tool does not expose reorder'
     );
     expect(getInternalDocumentation('inference', ['inference:providers:manage']).content).toContain(
@@ -262,12 +272,12 @@ describe('AI internal docs registry', () => {
   });
 
   it('filters unknown-topic suggestions and denies unauthorized topics', () => {
-    expect(getInternalDocumentation('docker', ['feat:ai:use'])).toEqual({
+    expect(getInternalDocumentation('docker', ['ai:workspace:use'])).toEqual({
       topic: 'docker',
       content: 'You do not have permission to access documentation for "docker".',
     });
 
-    const unknown = getInternalDocumentation('missing', ['feat:ai:use']);
+    const unknown = getInternalDocumentation('missing', ['ai:workspace:use']);
     expect(unknown.topic).toBe('missing');
     expect(unknown.content).toContain('Unknown topic "missing".');
     expect(unknown.content).toContain('permissions');

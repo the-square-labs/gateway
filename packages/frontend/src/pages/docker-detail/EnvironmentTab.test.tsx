@@ -419,11 +419,8 @@ describe("EnvironmentTab managed database links", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
 
     await waitFor(() => expect(api.deleteDockerSecret).toHaveBeenCalledOnce());
-    expect(updateContainerEnv).toHaveBeenCalledWith(
-      "node-1",
-      "container-1",
-      { PATH: "/usr/bin" },
-      ["OPENAI_API_KEY"]
-    );
+    expect(updateContainerEnv).toHaveBeenCalledWith("node-1", "container-1", { PATH: "/usr/bin" }, [
+      "OPENAI_API_KEY",
+    ]);
   });
 });

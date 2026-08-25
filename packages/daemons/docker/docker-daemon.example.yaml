@@ -15,3 +15,8 @@ console:
 docker:
   socket: "unix:///var/run/docker.sock"
   allowlist: ["*"]  # "*" = all containers, or explicit names
+  compose:
+    # Optional override. The daemon defaults to Docker's official multi-arch
+    # compose-bin image pinned by digest and pulls it when absent.
+    sidecar_image: "docker.io/docker/compose-bin@sha256:962d5ea7017e5ef425bfa47e492efa2c27d0492e8af58c497011e73b2ce98ee0"
+    command_timeout_seconds: 900

@@ -16,9 +16,11 @@ import { RequireScope } from "@/components/common/RequireScope";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
+import { hasDashboardContent } from "@/lib/app-navigation";
 import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
 import {
+  hasLowInferenceUsage,
   INFERENCE_CATALOG_CHANGED_CHANNEL,
   INFERENCE_USAGE_CHANGED_CHANNEL,
   type InferenceUsageChangedEvent,
@@ -48,6 +50,7 @@ import { DatabaseDetail } from "@/pages/DatabaseDetail";
 import { Databases } from "@/pages/Databases";
 import { Docker } from "@/pages/Docker";
 import { DockerComposeLogsPopout } from "@/pages/DockerComposeLogsPopout";
+import { DockerComposeProjectDetail } from "@/pages/DockerComposeProjectDetail";
 import { DockerConsolePopout } from "@/pages/DockerConsolePopout";
 import { DockerContainerDetail } from "@/pages/DockerContainerDetail";
 import { DockerDeploymentDetail } from "@/pages/DockerDeploymentDetail";
@@ -91,7 +94,7 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { syncAILiteModeFromStorageValue, UI_STORAGE_KEY, useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
-import type { DockerMigration } from "@/types";
+import { AI_SCOPE, type DockerMigration } from "@/types";
 
 const REALTIME_RECONCILIATION_CACHE_PREFIXES = [
   "req:/api/ui/bootstrap",
@@ -156,6 +159,32 @@ const REALTIME_RECONCILIATION_CACHE_PREFIXES = [
 /** Helper to wrap a page element with a scope guard */
 function scoped(scope: string, element: React.ReactElement) {
   return <RequireScope scope={scope}>{element}</RequireScope>;
+}
+
+function DashboardPageGuard() {
+  const scopes = useAuthStore((state) => state.user?.scopes ?? []);
+  const features = useSystemConfigStore((state) => state.config.features);
+  const uiBootstrap = useUIBootstrapStore((state) => state.snapshot);
+  const dashboardBootstrap = useDashboardBootstrapStore((state) => state.snapshot);
+  const canAccess = hasDashboardContent({
+    scopes,
+    pkiEnabled: features.pkiEnabled,
+    siemEnabled: features.siemEnabled,
+    loggingEnabled: features.loggingEnabled,
+    inferenceEnabled: features.inferenceEnabled,
+    hasLowInferenceUsage: hasLowInferenceUsage(dashboardBootstrap?.inferenceUsage ?? null),
+    statusPageEnabled: uiBootstrap?.navigation.statusPageEnabled ?? false,
+    pagesEnabled: uiBootstrap?.navigation.pagesEnabled ?? false,
+    hasCloudflareIntegration: uiBootstrap?.navigation.hasCloudflareIntegration ?? false,
+  });
+
+  if (canAccess) return <Dashboard />;
+  return <Navigate to="/profile" replace />;
+}
+
+function AIWorkspaceRouteGuard() {
+  const canUseAIWorkspace = useAuthStore((state) => state.hasScope(AI_SCOPE));
+  return canUseAIWorkspace ? <Dashboard /> : <Navigate to="/profile" replace />;
 }
 
 function PopoutAuthGate({ children }: { children: React.ReactElement }) {
@@ -608,6 +637,7 @@ function DockerPageGuard() {
     hasScopedAccess("docker:images:view") ||
     hasScopedAccess("docker:volumes:view") ||
     hasScopedAccess("docker:networks:view") ||
+    hasScopedAccess("docker:compose:view") ||
     hasScopedAccess("docker:tasks") ||
     hasScope("docker:containers:folders:manage");
 
@@ -616,6 +646,11 @@ function DockerPageGuard() {
   }
 
   return <Docker />;
+}
+
+function DockerComposeDetailGuard() {
+  const canAccess = useAuthStore((state) => state.hasScopedAccess("docker:compose:view"));
+  return canAccess ? <DockerComposeProjectDetail /> : <Navigate to="/docker" replace />;
 }
 
 function DatabasesPageGuard() {
@@ -823,6 +858,7 @@ function RealtimeBridge() {
   const canViewCAs = useAuthStore(
     (s) => s.hasScope("pki:ca:view:root") || s.hasScope("pki:ca:view:intermediate")
   );
+  const canUseAIWorkspace = useAuthStore((s) => s.hasScope(AI_SCOPE));
   const canUseInference = useAuthStore((s) => s.hasScope("feat:ai:use"));
   const canViewLogging = useAuthStore((s) => s.hasScope("housekeeping:view"));
   const canViewAudit = useAuthStore((s) => s.hasScopedAccess("admin:audit"));
@@ -892,6 +928,7 @@ function RealtimeBridge() {
       [auth.hasScopedAccess("admin:audit"), "siem.delivery.changed"],
       [
         auth.hasAnyScope(
+          AI_SCOPE,
           "feat:ai:use",
           "inference:providers:view",
           "inference:models:manage",
@@ -1028,7 +1065,7 @@ function RealtimeBridge() {
   }, [canViewCAs, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
-    if (!user || !canUseInference) return;
+    if (!user || (!canUseAIWorkspace && !canUseInference)) return;
     return eventStream.subscribe(INFERENCE_USAGE_CHANGED_CHANNEL, (payload) => {
       const event = payload as InferenceUsageChangedEvent;
       // Settlements already refresh quota consumers. A policy change also changes
@@ -1036,7 +1073,13 @@ function RealtimeBridge() {
       if (event.reason === "limits") void refreshAIProviderStatus().catch(() => {});
       invalidateDashboardBootstrap();
     });
-  }, [canUseInference, invalidateDashboardBootstrap, refreshAIProviderStatus, user]);
+  }, [
+    canUseAIWorkspace,
+    canUseInference,
+    invalidateDashboardBootstrap,
+    refreshAIProviderStatus,
+    user,
+  ]);
 
   useEffect(() => {
     if (!user || !canViewLogging) return;
@@ -1356,9 +1399,9 @@ export default function App() {
               }
             />
             <Route element={<DashboardLayout key={authRouteKey} />}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/ai/chats/:conversationId" element={<Dashboard />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/" element={<DashboardPageGuard />} />
+              <Route path="/ai/chats/:conversationId" element={<AIWorkspaceRouteGuard />} />
+              <Route path="/dashboard" element={<DashboardPageGuard />} />
               <Route path="/proxy-hosts" element={<ProxyHostsPageGuard />} />
               <Route path="/proxy-hosts/new" element={<ProxyHostsPageGuard create />} />
               <Route path="/proxy-hosts/:proxySlug/:tab?" element={<ProxyHostDetailGuard />} />
@@ -1412,6 +1455,14 @@ export default function App() {
               />
               <Route path="/nodes" element={<NodesPageGuard />} />
               <Route path="/nodes/:nodeSlug/:tab?" element={<NodeDetailGuard />} />
+              <Route
+                path="/docker/compose/new"
+                element={<Navigate to="/docker/compose" replace />}
+              />
+              <Route
+                path="/docker/compose/:projectId/:tab?"
+                element={<DockerComposeDetailGuard />}
+              />
               <Route path="/docker/:tab?" element={<DockerPageGuard />} />
               <Route
                 path="/docker/containers/:nodeSlug/:containerName/:tab?"

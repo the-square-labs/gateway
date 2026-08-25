@@ -44,6 +44,7 @@ export interface ConnectedNode {
   lastStatsReport: NodeStatsReport | null;
   lastTrafficStats: Record<string, unknown> | null;
   configVersionHash: string;
+  capabilities: ReadonlySet<string>;
   pendingCommands: Map<
     string,
     {
@@ -223,7 +224,7 @@ export class NodeRegistryService {
     hostname: string,
     configVersionHash: string,
     commandStream: ServerDuplexStream<DaemonMessage, GatewayCommand>,
-    options: { isCurrentRegistration?: () => boolean } = {}
+    options: { isCurrentRegistration?: () => boolean; capabilities?: string[] } = {}
   ): Promise<void> {
     const connectionId = randomUUID();
 
@@ -273,6 +274,7 @@ export class NodeRegistryService {
       lastStatsReport: null,
       lastTrafficStats: null,
       configVersionHash,
+      capabilities: new Set(options.capabilities ?? []),
       pendingCommands: new Map(),
     });
 
@@ -325,6 +327,10 @@ export class NodeRegistryService {
 
   getNode(nodeId: string): ConnectedNode | undefined {
     return this.nodes.get(nodeId);
+  }
+
+  hasCapability(nodeId: string, capability: string): boolean {
+    return this.nodes.get(nodeId)?.capabilities.has(capability) ?? false;
   }
 
   getAllNodes(): ConnectedNode[] {

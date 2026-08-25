@@ -138,6 +138,30 @@ describe('canonical scope definitions', () => {
     expect(ALL_SCOPES).toContain('docker:containers:mounts');
   });
 
+  it('applies the Compose project scope contract', () => {
+    const composeScopes = [
+      'docker:compose:view',
+      'docker:compose:create',
+      'docker:compose:manage',
+      'docker:compose:delete',
+    ];
+    for (const scope of composeScopes) {
+      expect(SYSTEM_ADMIN_SCOPES).toContain(scope);
+      expect(ADMIN_SCOPES).toContain(scope);
+      expect(RESOURCE_SCOPABLE).toContain(scope);
+      expect(isApiTokenScope(`${scope}:node-1/project-1`)).toBe(true);
+    }
+    expect(OPERATOR_SCOPES).toEqual(expect.arrayContaining(['docker:compose:view', 'docker:compose:manage']));
+    expect(OPERATOR_SCOPES).not.toContain('docker:compose:create');
+    expect(OPERATOR_SCOPES).not.toContain('docker:compose:delete');
+    expect(VIEWER_SCOPES).toContain('docker:compose:view');
+    expect(VIEWER_SCOPES).not.toContain('docker:compose:manage');
+    expect(FOLDER_SCOPABLE).toEqual(
+      expect.arrayContaining(['docker:compose:view', 'docker:compose:manage', 'docker:compose:delete'])
+    );
+    expect(FOLDER_SCOPABLE).not.toContain('docker:compose:create');
+  });
+
   it('uses Docker operation scopes instead of provider-specific GitLab registry scopes', () => {
     expect(ALL_SCOPES).not.toContain('integrations:gitlab:registry:use');
     expect(ALL_SCOPES).not.toContain('integrations:gitlab:registry:view');
@@ -316,9 +340,14 @@ describe('canonical scope definitions', () => {
       expect(OPERATOR_SCOPES).not.toContain(scope);
     }
 
+    for (const scopes of [SYSTEM_ADMIN_SCOPES, ADMIN_SCOPES, OPERATOR_SCOPES, VIEWER_SCOPES]) {
+      expect(scopes).toContain('ai:workspace:use');
+    }
+
     expect(SYSTEM_ADMIN_SCOPES).toContain('feat:ai:use');
     expect(ADMIN_SCOPES).toContain('feat:ai:use');
     expect(OPERATOR_SCOPES).toContain('feat:ai:use');
+    expect(VIEWER_SCOPES).not.toContain('feat:ai:use');
 
     expect(isValidBaseScope('inference:tokens:create')).toBe(false);
     expect(isValidBaseScope('inference:tokens:revoke')).toBe(false);

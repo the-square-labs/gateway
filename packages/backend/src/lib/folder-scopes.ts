@@ -4,6 +4,7 @@ import {
   databaseConnectionFolders,
   databaseConnections,
   dockerAccessResources,
+  dockerComposeProjects,
   dockerContainerFolderAssignments,
   dockerContainerFolders,
   dockerDeployments,
@@ -125,38 +126,50 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
     .from(dockerContainerFolderAssignments)
     .where(inArray(dockerContainerFolderAssignments.folderId, [...visibleFolderIds]));
   const containerAssignments = assignments.filter((assignment) => assignment.resourceType === 'container');
+  const composeAssignments = assignments.filter((assignment) => assignment.resourceType === 'compose');
   const assignmentNodeIds = [...new Set(containerAssignments.map((assignment) => assignment.nodeId))];
-  const [containerResourceIds, deploymentIds] =
+  const composeNodeIds = [...new Set(composeAssignments.map((assignment) => assignment.nodeId))];
+  const [containerResourceIds, deploymentIds, composeProjects] = await Promise.all([
     assignmentNodeIds.length === 0
-      ? [[], []]
-      : await Promise.all([
-          db
-            .select({
-              id: dockerAccessResources.id,
-              nodeId: dockerAccessResources.nodeId,
-              resourceKey: dockerAccessResources.resourceKey,
-            })
-            .from(dockerAccessResources)
-            .where(
-              and(
-                eq(dockerAccessResources.resourceType, 'container'),
-                inArray(dockerAccessResources.nodeId, assignmentNodeIds)
-              )
-            ),
-          db
-            .select({
-              id: dockerDeployments.id,
-              nodeId: dockerDeployments.nodeId,
-              name: dockerDeployments.name,
-            })
-            .from(dockerDeployments)
-            .where(inArray(dockerDeployments.nodeId, assignmentNodeIds)),
-        ]);
+      ? []
+      : db
+          .select({
+            id: dockerAccessResources.id,
+            nodeId: dockerAccessResources.nodeId,
+            resourceKey: dockerAccessResources.resourceKey,
+          })
+          .from(dockerAccessResources)
+          .where(
+            and(
+              eq(dockerAccessResources.resourceType, 'container'),
+              inArray(dockerAccessResources.nodeId, assignmentNodeIds)
+            )
+          ),
+    assignmentNodeIds.length === 0
+      ? []
+      : db
+          .select({
+            id: dockerDeployments.id,
+            nodeId: dockerDeployments.nodeId,
+            name: dockerDeployments.name,
+          })
+          .from(dockerDeployments)
+          .where(inArray(dockerDeployments.nodeId, assignmentNodeIds)),
+    composeNodeIds.length === 0
+      ? []
+      : db
+          .select({ id: dockerComposeProjects.id, nodeId: dockerComposeProjects.nodeId })
+          .from(dockerComposeProjects)
+          .where(inArray(dockerComposeProjects.nodeId, composeNodeIds)),
+  ]);
   const containerIdByRef = new Map(
     containerResourceIds.map((resource) => [`${resource.nodeId}\u0000${resource.resourceKey}`, resource.id])
   );
   const deploymentIdByRef = new Map(
     deploymentIds.map((deployment) => [`${deployment.nodeId}\u0000${deployment.name}`, deployment.id])
+  );
+  const composeIdByRef = new Map(
+    composeProjects.map((project) => [`${project.nodeId}\u0000${project.id}`, project.id])
   );
 
   return grants.flatMap((grant) => {
@@ -165,8 +178,13 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
       ...[...folderIds].map((folderId) => folderScopedScope(grant.baseScope, folderId)),
       ...assignments.flatMap((assignment) => {
         if (!assignment.folderId || !folderIds.has(assignment.folderId)) return [];
+        const expectedType = grant.baseScope.startsWith('docker:compose:') ? 'compose' : 'container';
+        if (assignment.resourceType !== expectedType) return [];
         const ref = `${assignment.nodeId}\u0000${assignment.resourceKey}`;
-        const resourceId = deploymentIdByRef.get(ref) ?? containerIdByRef.get(ref);
+        const resourceId =
+          assignment.resourceType === 'compose'
+            ? composeIdByRef.get(ref)
+            : (deploymentIdByRef.get(ref) ?? containerIdByRef.get(ref));
         return resourceId ? [`${grant.baseScope}:${assignment.nodeId}/${resourceId}`] : [];
       }),
     ];
@@ -178,6 +196,7 @@ function familyForBaseScope(baseScope: string) {
   if (baseScope.startsWith('proxy:')) return 'proxy';
   if (baseScope.startsWith('nodes:')) return 'nodes';
   if (baseScope.startsWith('docker:containers:')) return 'docker';
+  if (baseScope.startsWith('docker:compose:')) return 'docker';
   if (baseScope.startsWith('databases:')) return 'databases';
   if (baseScope.startsWith('logs:schemas:')) return 'logging-schemas';
   if (baseScope.startsWith('logs:environments:') || baseScope === 'logs:read') return 'logging-environments';

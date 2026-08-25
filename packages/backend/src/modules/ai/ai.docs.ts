@@ -21,7 +21,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 - If the needed operation is not available, call discover_tools first.
 - Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
 - Use discover_tools({ categories: ["Logging"], includeTools: true }) before managing logging environments/schemas/logs.
-- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks.
+- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks or inspecting Compose projects.
 - Use discover_tools({ categories: ["Ingress"], includeTools: true }) before managing domains, routes, route folders, nginx templates, or access lists.
 - Use discover_tools({ categories: ["Inference"], includeTools: true }) before configuring inference providers, models, limits, or tokens.
 - Use discover_tools({ query: "certificate" }) when you know the task but not the category.
@@ -136,7 +136,7 @@ The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route,
 - nodeId: the nginx ingress node this route is deployed on (required when creating).
 - domainNames: array of domains this route serves. Registered domains must be assigned to the same nginx node.
 - forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
-- upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a stable container name or deployment ID plus a published TCP port; Pages stores a Page Project and mutable Tag target.
+- upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a standalone container name, a Compose project/service identity, or a deployment ID plus a TCP application port; Pages stores a Page Project and mutable Tag target.
 - sslEnabled: enable HTTPS. Requires sslCertificateId (SSL cert UUID, NOT PKI cert UUID).
 - sslForced: redirect HTTP to HTTPS.
 - http2Support: enable HTTP/2.
@@ -158,15 +158,15 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 - Use \`set_route_maintenance({ routeId, enabled })\`. Do not emulate maintenance by disabling the route or rewriting its config.
 
 ## Docker Upstreams
-- The UI, REST API, AI Workspace, and remote MCP Ingress toolset can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
-- For \`docker_container\`, pass \`dockerNodeId\`, \`dockerContainerName\`, and \`dockerContainerPort\`. For \`docker_deployment\`, pass \`dockerNodeId\`, \`dockerDeploymentId\`, and \`dockerContainerPort\`. The caller must hold the same delegated Docker scopes enforced by the REST API.
+- The UI, REST API, AI Workspace, and remote MCP Ingress toolset can bind a route to a standalone Docker container, a Compose service, or a blue/green deployment. Compose targets persist project/service identity and automatically re-resolve the current container after Compose recreates it.
+- For a standalone \`docker_container\`, pass \`dockerNodeId\`, \`dockerContainerName\`, and \`dockerContainerPort\`. For a Compose service, still use \`upstreamKind: "docker_container"\`, but pass \`dockerNodeId\`, \`dockerComposeProjectId\`, \`dockerComposeServiceName\`, and \`dockerContainerPort\` without \`dockerContainerName\`. For \`docker_deployment\`, pass \`dockerNodeId\`, \`dockerDeploymentId\`, and \`dockerContainerPort\`. The caller must hold the matching container, Compose-project, or deployment view scope enforced by the REST API.
 
 ## Pages Upstreams
 - Use \`upstreamKind: "pages"\` with \`pageProjectId\` and \`pageTagId\`. Routes target a mutable ready Tag, never an immutable Deployment.
 - Pages route creation and retargeting require the Pages feature and profile plus view access to the selected Project.
 
 ## Additional Routes And Secure Links
-- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
+- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, standalone Docker containers, Compose services, Docker deployments, or a ready Pages Tag. Compose targets use \`dockerComposeProjectId\` plus \`dockerComposeServiceName\` and are re-resolved after container recreation. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
 - Custom proxy templates support Additional Routes when the template includes \`{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}\` inside the intended \`server\` block.
 - Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config and pass the parent \`routeId\`. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
 
@@ -630,9 +630,12 @@ other stable hint to locate the recreated container and continue with its new ID
 - Networks: list, create, remove, connect/disconnect containers
 
 ## Compose Boundaries
-- Gateway recognizes existing Compose projects by canonical Docker labels, keeps their containers in protected project folders, and can stream aggregated project logs. Compose-managed resources cannot use Gateway cross-node migration.
-- Gateway-managed Compose application deployment is still in development for Business and Enterprise. Do not claim that Gateway can create or roll out an application from a Compose file today.
-- Multi-node application clusters and multiple managed instances of one workload on one machine are also in development for Business and Enterprise. Do not confuse them with current cross-node migration or blue/green deployment slots.
+- Community and paid plans discover existing Compose projects from canonical Docker labels and expose read-only inventory, status, monitoring, and logs. Adoption always requires a complete user-supplied single-file YAML document; Gateway never reads host Compose files or trusts label paths.
+- Personal and higher can deploy and manage single-node image-only Compose Projects with immutable revisions, explicit Pull & Apply, lifecycle operations, folders, logs, masked secrets, operation history, drift reporting, ordinary non-Swarm CPU/memory/PID limits, managed database links, and Route/Secure Link targeting by project/service identity.
+- The Assistant can inspect Compose resources and manage their folder placement when the user's scopes allow it. It does not currently expose direct Compose deployment or lifecycle tools; guide the user to the Compose UI or REST API instead of inventing a tool call.
+- Always reject \`build\` even when an image is also present. Also reject host bind mounts, privileged/device access, swarm/PaaS features, and direct mutations of project-owned child containers, named volumes, or non-external networks.
+- Images and external/shared volumes or networks remain global. Compose-managed resources cannot use Gateway cross-node migration.
+- Multi-node application clusters and multiple managed instances of one workload on one machine remain in development. Do not confuse them with current Compose Projects, cross-node migration, or blue/green deployment slots.
 
 ## Inventory Availability
 - Gateway keeps sanitized container, deployment, image, volume, and network inventory snapshots. Read views can show the last synchronized state while a Docker node is offline or refreshing.
@@ -852,7 +855,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - admin_users
 - permission_groups
 - routes
-- docker with dockerResourceType: container, image, network, or volume
+- docker with dockerResourceType: container, compose, image, network, or volume
 
 ## Operations
 - create: { name, parentId? }
@@ -872,7 +875,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.
 - permission_groups: list with admin:groups or admin:groups:folders:manage; mutate with admin:groups:folders:manage.
 - routes: list with proxy:view or proxy:folders:manage; mutate folders with proxy:folders:manage; moving routes also checks proxy:edit for each route.
-- docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
+- docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:compose:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; Compose, image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
 
   'node-files': `# Node File Management
 
@@ -1198,7 +1201,7 @@ Published model order is persisted separately and controls API catalog, companio
 
 ## User Tokens And Harness Setup
 
-Users need \`feat:ai:use\`, which grants both AI Workspace and Gateway Inference access, including personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`.
+Users need \`feat:ai:use\` for Gateway Inference access and personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`. AI Workspace access is controlled separately by \`ai:workspace:use\`.
 
 Token options:
 
@@ -1215,7 +1218,7 @@ No global installation or PATH change is required:
 npx -y @wiolett/gateway-inference@latest
 \`\`\`
 
-An administrator must first enable **Inference** in **Settings > General**. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report \`generalSettings.features.inferenceEnabled\`. Without that read permission, do not guess its value: explain that an administrator must confirm it. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. Direct commands are \`login [gateway]\`, \`logout\`, \`setup [harness]\`, and the offline recovery command \`uninstall codex-usage\`. Login also accepts an existing \`gwi_\` token with \`--token\`; the token identifies its owning user and no email is required. \`--home /data/inference\` or \`GATEWAY_INFERENCE_HOME=/data/inference\` keeps all companion-owned filesystem state and mode-0600 credentials below one directory and is propagated to installed helper processes. Harness configuration still remains in the native Codex or Claude Code directory. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
+An administrator must first enable **Inference** in **Settings > General**. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report \`generalSettings.features.inferenceEnabled\`. Without that read permission, do not guess its value: explain that an administrator must confirm it. The interactive manager asks for the Gateway URL and offers either isolated browser OAuth/PKCE or a masked existing \`gwi_\` token, then can configure, diagnose, repair, or remove supported harness integrations. The token is validated before it is saved, identifies its owning user, and requires no email. Direct commands are \`login [gateway]\`, \`logout\`, \`setup [harness]\`, and the offline recovery command \`uninstall codex-usage\`; non-interactive token login uses \`--token\`. \`--home /data/inference\` or \`GATEWAY_INFERENCE_HOME=/data/inference\` keeps all companion-owned filesystem state and mode-0600 credentials below one directory and is propagated to installed helper processes. Harness configuration still remains in the native Codex or Claude Code directory. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
 
 #### Codex CLI and Desktop
 
@@ -1462,12 +1465,12 @@ Gateway is a self-hosted infrastructure control plane. It combines secure access
 ## Main Capabilities
 - **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.
 - **Traffic, Pages, and certificates**: nginx ingress nodes, proxy/redirect/404 routes, Pages Projects/Deployments/Tags, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
-- **Compute**: Docker nodes, containers, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
+- **Compute**: Docker nodes, containers, Compose projects, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
 - **Databases and logging**: saved PostgreSQL, Redis, and ClickHouse connections; dedicated nodes for Gateway-managed database instances; optional structured logging in managed or external ClickHouse.
 - **Operations**: daemon and Relay Pool health, notifications, housekeeping, status pages, updates, licensing, GitLab/GitHub/generic Git/external SSH/Cloudflare integrations, and a separate Gateway Inference service.
 
 ## Availability Boundaries
-Horizontal application clusters, multiple instances of one workload on one machine, and Gateway-managed Compose application deployment are in development for Business and Enterprise. Existing cross-node migration, blue/green slots, and Compose-label discovery/log aggregation must not be described as those unreleased capabilities.
+Single-node first-class Compose Projects provide read-only discovery, monitoring, and logs on Community and every paid plan; deployment and lifecycle management require Personal or higher. Horizontal application clusters and multiple instances of one workload on one machine remain in development. Existing Compose Projects, cross-node migration, and blue/green slots must not be described as those unreleased scaling capabilities.
 
 ## How To Guide A User
 Start with the user goal, then read the focused topic before explaining a workflow or calling tools. Use installation for a new deployment, authentication for access/sign-in questions, gateway-settings for control-plane settings and MCP, and troubleshooting for failures. A feature being described here does not grant permission to view or change it; always respect the user's scopes and confirm destructive changes.
@@ -1588,7 +1591,7 @@ If evidence is insufficient, state what could be verified and direct an administ
 
 /** Map doc topics to the scope required to read them */
 export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
-  discovery: 'feat:ai:use',
+  discovery: 'ai:workspace:use',
   pki: 'pki:ca:view:root',
   ssl: 'ssl:cert:view',
   proxy: 'proxy:view',
@@ -1614,9 +1617,9 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
     'docker:containers:folders:manage',
   ],
   'node-files': ['nodes:files:read', 'nodes:files:write'],
-  docker: 'docker:containers:view',
+  docker: ['docker:containers:view', 'docker:compose:view'],
   sandbox: 'ai:sandbox:use',
-  conversations: 'feat:ai:use',
+  conversations: 'ai:workspace:use',
   databases: 'databases:view',
   postgres: 'databases:view',
   redis: 'databases:view',
@@ -1624,11 +1627,12 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'ai-settings': 'feat:ai:configure',
   'status-page': 'status-page:view',
   housekeeping: 'housekeeping:view',
-  permissions: 'feat:ai:use',
-  api: 'feat:ai:use',
+  permissions: 'ai:workspace:use',
+  api: 'ai:workspace:use',
   'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
   'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
   inference: [
+    'ai:workspace:use',
     'feat:ai:use',
     'inference:tokens:manage',
     'inference:providers:view',
@@ -1640,13 +1644,13 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   ],
   gitlab: 'integrations:gitlab:view',
   notifications: ['notifications:view', 'audit:siem:view'],
-  overview: 'feat:ai:use',
-  installation: 'feat:ai:use',
-  authentication: 'feat:ai:use',
+  overview: 'ai:workspace:use',
+  installation: 'ai:workspace:use',
+  authentication: 'ai:workspace:use',
   cloudflare: 'integrations:cloudflare:view',
   'docker-registries': 'docker:registries:view',
   clickhouse: 'databases:view',
-  troubleshooting: 'feat:ai:use',
+  troubleshooting: 'ai:workspace:use',
 };
 
 export function getInternalDocumentation(topic: string, userScopes: string[]): { topic: string; content: string } {

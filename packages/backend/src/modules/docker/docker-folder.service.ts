@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerContainerFolderAssignments, dockerContainerFolders } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -244,6 +244,7 @@ export class DockerFolderService {
     resourceType?: DockerFolderResourceType;
     includeAllFolders?: boolean;
     allowedNodeIds?: string[];
+    allowedResourceRefs?: DockerFolderResourceRef[];
   }): Promise<DockerFolderTreeNode[]> {
     const resourceType = options?.resourceType ?? 'container';
     const allFolders = await this.db
@@ -252,17 +253,23 @@ export class DockerFolderService {
       .where(eq(dockerContainerFolders.resourceType, resourceType))
       .orderBy(asc(dockerContainerFolders.depth), asc(dockerContainerFolders.sortOrder));
 
-    if (!options?.includeAllFolders && options?.allowedNodeIds) {
-      if (options.allowedNodeIds.length === 0) return [];
+    if (!options?.includeAllFolders && (options?.allowedNodeIds || options?.allowedResourceRefs)) {
+      const allowedNodeIds = options.allowedNodeIds ?? [];
+      const allowedResourceRefs = options.allowedResourceRefs ?? [];
+      if (allowedNodeIds.length === 0 && allowedResourceRefs.length === 0) return [];
+      const visibilityFilters = [
+        allowedNodeIds.length > 0 ? inArray(dockerContainerFolderAssignments.nodeId, allowedNodeIds) : undefined,
+        ...allowedResourceRefs.map((resource) =>
+          and(
+            eq(dockerContainerFolderAssignments.nodeId, resource.nodeId),
+            eq(dockerContainerFolderAssignments.resourceKey, resource.resourceKey)
+          )
+        ),
+      ].filter((condition): condition is NonNullable<typeof condition> => !!condition);
       const assignments = await this.db
         .select({ folderId: dockerContainerFolderAssignments.folderId })
         .from(dockerContainerFolderAssignments)
-        .where(
-          and(
-            eq(dockerContainerFolderAssignments.resourceType, resourceType),
-            inArray(dockerContainerFolderAssignments.nodeId, options.allowedNodeIds)
-          )
-        );
+        .where(and(eq(dockerContainerFolderAssignments.resourceType, resourceType), or(...visibilityFilters)));
       const visibleIds = new Set(assignments.map((row) => row.folderId).filter((id): id is string => !!id));
       for (const folder of [...allFolders].sort((a, b) => b.depth - a.depth)) {
         if (visibleIds.has(folder.id) && folder.parentId) visibleIds.add(folder.parentId);

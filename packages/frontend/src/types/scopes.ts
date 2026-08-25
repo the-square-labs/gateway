@@ -1,5 +1,5 @@
 /** The scope that grants access to AI Workspace — must match backend canUseAI() */
-export const AI_SCOPE = "feat:ai:use" as const;
+export const AI_SCOPE = "ai:workspace:use" as const;
 
 export const RESOURCE_SCOPABLE_SCOPES = [
   "pki:ca:create:intermediate",
@@ -63,6 +63,10 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:containers:webhooks",
   "docker:containers:mounts",
   "docker:containers:migrate",
+  "docker:compose:view",
+  "docker:compose:create",
+  "docker:compose:manage",
+  "docker:compose:delete",
   "docker:images:view",
   "docker:images:pull",
   "docker:images:delete",
@@ -142,6 +146,9 @@ export const FOLDER_SCOPABLE_SCOPES = [
   "docker:containers:webhooks",
   "docker:containers:mounts",
   "docker:containers:migrate",
+  "docker:compose:view",
+  "docker:compose:manage",
+  "docker:compose:delete",
   "databases:view",
   "databases:edit",
   "databases:delete",
@@ -927,9 +934,15 @@ const RAW_TOKEN_SCOPES = [
   },
   // Features
   {
+    value: "ai:workspace:use",
+    label: "Use AI Workspace",
+    desc: "Use the AI Workspace interface and embedded assistant",
+    group: "Features",
+  },
+  {
     value: "feat:ai:use",
-    label: "Use AI",
-    desc: "Use AI Workspace, Gateway Inference, and view personal inference usage",
+    label: "Use Gateway Inference",
+    desc: "Use Gateway Inference and view personal inference usage",
     group: "Features",
   },
   {
@@ -1105,9 +1118,34 @@ const RAW_TOKEN_SCOPES = [
   },
   {
     value: "docker:containers:folders:manage",
-    label: "Manage Container Folders",
-    desc: "Create, reorder, and remove Docker container folders",
+    label: "Manage Docker Folders",
+    desc: "Create, reorder, and remove Docker resource folders",
     group: "Docker: Containers",
+  },
+  // Docker: Compose Projects
+  {
+    value: "docker:compose:view",
+    label: "View Compose Projects",
+    desc: "Discover and inspect Compose projects, services, monitoring, logs, revisions, and activity",
+    group: "Docker: Compose",
+  },
+  {
+    value: "docker:compose:create",
+    label: "Create Compose Projects",
+    desc: "Validate and deploy managed Compose projects; adoption also requires Manage Compose Projects",
+    group: "Docker: Compose",
+  },
+  {
+    value: "docker:compose:manage",
+    label: "Manage Compose Projects",
+    desc: "Adopt projects and manage lifecycle, revisions, secrets, and bindings",
+    group: "Docker: Compose",
+  },
+  {
+    value: "docker:compose:delete",
+    label: "Delete Compose Projects",
+    desc: "Delete Compose projects or run destructive down/delete-volume actions",
+    group: "Docker: Compose",
   },
   // Docker: Images
   {
@@ -1378,6 +1416,7 @@ const RAW_TOKEN_SCOPES = [
 export const TOKEN_SCOPES = RAW_TOKEN_SCOPES;
 
 const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
+  "ai:workspace:use",
   "feat:ai:use",
   "feat:ai:configure",
   "ai:skills:manage",

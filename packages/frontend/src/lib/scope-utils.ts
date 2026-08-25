@@ -6,7 +6,8 @@ const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE_SCOPES].sort(
 const ALL_SCOPE_VALUES = new Set<string>(TOKEN_SCOPES.map((scope) => scope.value));
 
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (!baseScope.startsWith("docker:containers:")) return null;
+  if (!baseScope.startsWith("docker:containers:") && !baseScope.startsWith("docker:compose:"))
+    return null;
   if (!resourceId) return null;
   const separator = resourceId.indexOf("/");
   return separator > 0 ? resourceId.slice(0, separator) : null;

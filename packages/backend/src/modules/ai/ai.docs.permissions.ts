@@ -129,7 +129,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Features
 | Scope | Description |
 |-------|-------------|
-| feat:ai:use | Access AI Workspace and Gateway Inference, including personal inference usage |
+| ai:workspace:use | Access AI Workspace |
+| feat:ai:use | Access Gateway Inference, including personal inference usage |
 | feat:ai:configure | Configure AI Workspace settings |
 | ai:skills:manage | Create, edit, enable, disable, and delete shared AI Workspace skills |
 | ai:sandbox:use | Use AI sandbox runner tools |
@@ -168,6 +169,14 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:containers:webhooks | Configure CI/CD webhook URLs |
 | docker:containers:mounts | Add, remove, or change container/deployment mounts using Gateway-managed volumes; new host bind mounts are prohibited (resource-scopable) |
 | docker:containers:folders:manage | Manage Docker resource folders and placement |
+
+### Docker: Compose Projects
+| Scope | Description |
+|-------|-------------|
+| docker:compose:view | Discover and inspect Compose projects, services, monitoring, logs, revisions, and activity (resource-scopable) |
+| docker:compose:create | Validate and deploy a managed Compose project on an allowed node |
+| docker:compose:manage | Adopt projects and manage lifecycle, revisions, secrets, and bindings (resource-scopable) |
+| docker:compose:delete | Delete projects or run destructive down/delete-volume actions (resource-scopable) |
 
 ### Docker: Images
 | Scope | Description |
@@ -268,7 +277,7 @@ Custom groups can be created with any combination of scopes.
 Groups can have a parent group. Inherited scopes from all ancestors are added to the effective scopes. Cycle detection prevents circular inheritance. Built-in groups cannot be modified.
 
 ## Resource-Scoped Permissions
-Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid" or "nodes:details:node-uuid"). Docker container scopes use "docker:containers:<action>:<node-id>" for a whole node or "docker:containers:<action>:<node-id>/<stable-resource-id>" for one container or deployment. Without a suffix, the scope applies to all resources.
+Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid" or "nodes:details:node-uuid"). Docker container scopes use "docker:containers:<action>:<node-id>" for a whole node or "docker:containers:<action>:<node-id>/<stable-resource-id>" for one container or deployment. Compose scopes use "docker:compose:<action>:<node-id>" for a whole node or "docker:compose:<action>:<node-id>/<project-id>" for one project. Without a suffix, the scope applies to all resources.
 
 ## Scope Containment Rule
 A user can only manage another user whose scopes are a subset of their own.`;

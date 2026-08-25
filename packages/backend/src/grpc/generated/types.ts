@@ -248,6 +248,7 @@ export interface GatewayCommand {
   dockerVolume?: DockerVolumeCommand;
   dockerNetwork?: DockerNetworkCommand;
   dockerDeployment?: DockerDeploymentCommand;
+  dockerCompose?: DockerComposeCommand;
   dockerRuntime?: DockerRuntimeCommand;
   dockerExec?: DockerExecCommand;
   dockerFile?: DockerFileCommand;
@@ -561,6 +562,21 @@ export interface DockerDeploymentCommand {
   slot: string;
   configJson: string;
   force: boolean;
+}
+
+export interface DockerComposeCommand {
+  action: string;
+  operationId: string;
+  projectId: string;
+  projectName: string;
+  revisionId: string;
+  configDigest: string;
+  composeYaml: Buffer;
+  normalizedModelJson: string;
+  variables: Record<string, string>;
+  secrets: Record<string, string>;
+  removeOrphans: boolean;
+  volumeNames: string[];
 }
 
 export interface DockerRuntimeCommand {

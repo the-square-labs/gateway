@@ -119,6 +119,41 @@ func TestCreateManagedVolumeRejectsExistingVolumeWithoutCreating(t *testing.T) {
 	}
 }
 
+func TestLiveUpdateContainerDerivesCompatibleSwapForMemoryOnlyUpdate(t *testing.T) {
+	var update container.Resources
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/container-1/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"container-1","HostConfig":{"Memory":0,"MemorySwap":0}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-1/update"):
+			if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+				t.Fatalf("decode update: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	const memory = int64(64 * 1024 * 1024)
+	if err := c.LiveUpdateContainer(context.Background(), "container-1", `{"memoryLimit":67108864}`); err != nil {
+		t.Fatalf("live update: %v", err)
+	}
+	if update.Memory != memory || update.MemorySwap != memory {
+		t.Fatalf("memory update = memory %d swap %d, want %d/%d", update.Memory, update.MemorySwap, memory, memory)
+	}
+}
+
 func TestCreateManagedVolumeRejectsConcurrentUnmanagedResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

@@ -198,6 +198,32 @@ describe('drizzle migration metadata', () => {
     expect(migration).not.toContain('UPDATE "oauth_refresh_tokens"');
   });
 
+  it('preserves the published 0155 migration before creating Compose tables and proxy bindings', () => {
+    const entries = readMigrationJournal();
+    const publishedScopeMigration = entries.findIndex((entry) => entry.tag === '0155_split_ai_workspace_access');
+    const composeTables = entries.findIndex((entry) => entry.tag === '0156_organic_microbe');
+    const composeProxyBindings = entries.findIndex((entry) => entry.tag === '0157_blue_network');
+
+    expect(publishedScopeMigration).toBeGreaterThanOrEqual(0);
+    expect(composeTables).toBe(publishedScopeMigration + 1);
+    expect(composeProxyBindings).toBe(composeTables + 1);
+
+    const composeMigration = readFileSync(join(process.cwd(), 'src/db/migrations/0156_organic_microbe.sql'), 'utf8');
+    const proxyMigration = readFileSync(join(process.cwd(), 'src/db/migrations/0157_blue_network.sql'), 'utf8');
+    expect(composeMigration).toContain('CREATE TABLE "docker_compose_projects"');
+    expect(proxyMigration).toContain('REFERENCES "public"."docker_compose_projects"');
+  });
+
+  it('preserves existing AI Workspace grants when splitting inference access', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0155_split_ai_workspace_access.sql'), 'utf8');
+
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain("'feat:ai:use'");
+    expect(migration).toContain("'ai:workspace:use'");
+    expect(migration).not.toContain('UPDATE "api_tokens"');
+  });
+
   it('adds the inference core runtime tables without touching existing inference rows', () => {
     const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0139_inference_core_runtime.sql'), 'utf8');
 

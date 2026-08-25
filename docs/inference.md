@@ -47,7 +47,7 @@ There is no user-visible or administrator-managed Pool entity. One logical model
 
 ## User setup
 
-Users need `feat:ai:use`, which grants both AI Workspace and Gateway Inference access, including personal usage visibility. Token creation and revocation additionally require `inference:tokens:manage`.
+Users need `feat:ai:use` for Gateway Inference access and personal usage visibility. Token creation and revocation additionally require `inference:tokens:manage`. AI Workspace access is controlled separately by `ai:workspace:use`.
 
 Create a token under **Profile > Authorizations > Inference API tokens**. The `gwi_` secret is shown once.
 
@@ -67,7 +67,7 @@ For Codex and Claude Code, prefer the companion package instead of editing confi
 npx -y @wiolett/gateway-inference@latest
 ```
 
-The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, and offers each supported harness. An existing `gwi_` token can authenticate `login` directly; the token already identifies its user, so no email is required. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available:
+The interactive package asks for the Gateway URL and then offers browser OAuth with resource-isolated PKCE or a masked existing `gwi_` token. The token is validated before it is saved and already identifies its user, so no email is required. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available; non-interactive token login uses `--token`:
 
 ```bash
 npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...

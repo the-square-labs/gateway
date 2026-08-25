@@ -548,9 +548,10 @@ export class DockerHealthCheckService {
 
   private async recheckTarget(
     nodeId: string,
-    target: 'container' | 'deployment',
+    target: 'container' | 'deployment' | 'compose_service',
     targetResourceId: string
   ): Promise<void> {
+    if (target === 'compose_service') return;
     const row = await this.db.query.dockerHealthChecks.findFirst({
       where:
         target === 'deployment'

@@ -18,6 +18,7 @@ function createReconciler(dispatchOverrides: Record<string, unknown> = {}) {
   const snapshots = {
     markListRefreshing: vi.fn().mockResolvedValue(undefined),
     replaceList: vi.fn().mockResolvedValue(undefined),
+    reconcileComposeProjects: vi.fn().mockResolvedValue(undefined),
     markListError: vi.fn().mockResolvedValue(undefined),
     replaceDetail: vi.fn().mockResolvedValue(undefined),
     markDetailError: vi.fn().mockResolvedValue(undefined),
@@ -59,6 +60,7 @@ describe('DockerSnapshotReconciler', () => {
 
     expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'list', {}, 10_000);
     expect(snapshots.replaceList).toHaveBeenCalledWith('node-1', 'containers', []);
+    expect(snapshots.reconcileComposeProjects).toHaveBeenCalledWith('node-1');
   });
 
   it('coalesces an in-flight duplicate into exactly one follow-up refresh', async () => {

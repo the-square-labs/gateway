@@ -219,7 +219,9 @@ describe('Enroll token lookup', () => {
     const db = {
       select: vi.fn(() => ({
         from: (table: unknown) => ({
-          where: () => ({ limit: async () => (table === nodes ? [pending] : table === relayInstances ? [instance] : []) }),
+          where: () => ({
+            limit: async () => (table === nodes ? [pending] : table === relayInstances ? [instance] : []),
+          }),
         }),
       })),
       update: vi.fn(() => ({

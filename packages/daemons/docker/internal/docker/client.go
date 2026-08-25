@@ -1179,6 +1179,24 @@ func (c *Client) LiveUpdateContainer(ctx context.Context, id string, configJSON 
 	hasResources := false
 	if params.MemoryLimit != nil {
 		resources.Memory = *params.MemoryLimit
+		if params.MemorySwap == nil {
+			inspect, err := c.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+			if err != nil {
+				return fmt.Errorf("inspect container before memory update: %w", err)
+			}
+			currentSwap := inspect.Container.HostConfig.MemorySwap
+			switch {
+			case *params.MemoryLimit <= 0:
+				resources.MemorySwap = 0
+			case currentSwap == -1 || currentSwap >= *params.MemoryLimit:
+				resources.MemorySwap = currentSwap
+			default:
+				// Docker rejects a memory-only live update when the existing swap
+				// limit is unset or lower than the new memory limit. Default to no
+				// swap unless the container already has a compatible explicit limit.
+				resources.MemorySwap = *params.MemoryLimit
+			}
+		}
 		hasResources = true
 	}
 	if params.MemorySwap != nil {

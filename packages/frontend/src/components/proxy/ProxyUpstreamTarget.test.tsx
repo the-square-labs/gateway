@@ -99,4 +99,28 @@ describe("ProxyUpstreamTarget", () => {
     expect(link).toHaveAttribute("href", "/docker/containers/docker-one/backend");
     expect(link.firstElementChild).toHaveClass("bg-muted");
   });
+
+  it("links a Compose service target to its Compose project", () => {
+    render(
+      <MemoryRouter>
+        <ProxyUpstreamTarget
+          linkToResource
+          host={{
+            type: "proxy",
+            upstreamKind: "docker_container",
+            forwardHost: null,
+            forwardPort: null,
+            forwardScheme: "http",
+            dockerNodeId: "node-1",
+            dockerContainerName: "storefront-api-2",
+            dockerComposeProjectId: "project-1",
+            dockerComposeServiceName: "api",
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole("link", { name: "Compose / api" });
+    expect(link).toHaveAttribute("href", "/docker/compose/project-1");
+  });
 });

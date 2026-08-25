@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   nginxTemplates,
@@ -43,6 +43,8 @@ interface NormalizedTarget {
   forwardScheme: 'http' | 'https';
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;
@@ -296,6 +298,18 @@ export class AdditionalRouteService {
             (sameKind ? existing?.dockerContainerName : null) ??
             null)
           : null,
+      dockerComposeProjectId:
+        targetKind === 'docker_container'
+          ? ((value('dockerComposeProjectId') as string | null | undefined) ??
+            (sameKind ? existing?.dockerComposeProjectId : null) ??
+            null)
+          : null,
+      dockerComposeServiceName:
+        targetKind === 'docker_container'
+          ? ((value('dockerComposeServiceName') as string | null | undefined) ??
+            (sameKind ? existing?.dockerComposeServiceName : null) ??
+            null)
+          : null,
       dockerDeploymentId:
         targetKind === 'docker_deployment'
           ? ((value('dockerDeploymentId') as string | null | undefined) ??
@@ -352,6 +366,8 @@ export class AdditionalRouteService {
           upstreamKind: target.targetKind,
           dockerNodeId: target.dockerNodeId,
           dockerContainerName: target.dockerContainerName,
+          dockerComposeProjectId: target.dockerComposeProjectId,
+          dockerComposeServiceName: target.dockerComposeServiceName,
           dockerDeploymentId: target.dockerDeploymentId,
           dockerContainerPort: target.dockerContainerPort,
           dockerHostPort: target.dockerHostPort,
@@ -397,6 +413,8 @@ export class AdditionalRouteService {
       forwardScheme: target.forwardScheme,
       dockerNodeId: target.dockerNodeId,
       dockerContainerName: target.dockerContainerName,
+      dockerComposeProjectId: target.dockerComposeProjectId,
+      dockerComposeServiceName: target.dockerComposeServiceName,
       dockerDeploymentId: target.dockerDeploymentId,
       dockerContainerPort: target.dockerContainerPort,
     };
@@ -1240,6 +1258,42 @@ export class AdditionalRouteService {
             this.asSecureLinkInput(this.normalizeTarget(current as unknown as Input, current))
           );
           if (ready.status !== 'active') throw new Error(ready.lastError ?? 'Secure Link reconciliation failed');
+          const routeBindingChanged = current.secureLinkId !== ready.id;
+          const containerChanged =
+            Boolean(current.dockerComposeProjectId) &&
+            Boolean(ready.dockerContainerName) &&
+            current.dockerContainerName !== ready.dockerContainerName;
+          if (routeBindingChanged || containerChanged) {
+            const [updated] = await this.db
+              .update(proxyAdditionalRoutes)
+              .set({
+                secureLinkId: ready.id,
+                ...(ready.dockerContainerName ? { dockerContainerName: ready.dockerContainerName } : {}),
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(proxyAdditionalRoutes.id, current.id),
+                  eq(proxyAdditionalRoutes.generation, current.generation),
+                  eq(proxyAdditionalRoutes.status, 'ready')
+                )
+              )
+              .returning({ id: proxyAdditionalRoutes.id });
+            if (!updated) return;
+            await this.hostRuntime?.reconcileAdditionalRouteHost(host.id);
+          }
+
+          const staleBindings = await this.db.query.proxyAdditionalSecureLinks.findMany({
+            where: and(
+              eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+              eq(proxyAdditionalSecureLinks.purpose, 'additional_route'),
+              eq(proxyAdditionalSecureLinks.referenceId, current.id),
+              ne(proxyAdditionalSecureLinks.id, ready.id)
+            ),
+          });
+          for (const stale of staleBindings) {
+            await this.secureLinks!.deleteManagedRouteBinding(host, stale.id);
+          }
         });
       } catch (error) {
         retry = true;
@@ -1780,6 +1834,8 @@ export class AdditionalRouteService {
       existing.forwardScheme !== target.forwardScheme ||
       existing.dockerNodeId !== target.dockerNodeId ||
       existing.dockerContainerName !== target.dockerContainerName ||
+      existing.dockerComposeProjectId !== target.dockerComposeProjectId ||
+      existing.dockerComposeServiceName !== target.dockerComposeServiceName ||
       existing.dockerDeploymentId !== target.dockerDeploymentId ||
       existing.dockerContainerPort !== target.dockerContainerPort ||
       existing.dockerHostPort !== target.dockerHostPort ||

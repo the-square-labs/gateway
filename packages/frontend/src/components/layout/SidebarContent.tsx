@@ -1,14 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowUpCircle,
-  Expand,
-  PanelLeft,
-  PanelLeftClose,
-  Search,
-  UserRoundX,
-  X,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowUpCircle, PanelLeft, PanelLeftClose, Search, UserRoundX, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AIButton } from "@/components/ai/AIButton";
@@ -243,11 +235,6 @@ export function SidebarContent({
 
   const isExpanded = alwaysExpanded || sidebarOpen;
 
-  const handleOpenAIWorkspace = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
-    onNavigate?.();
-  }, [onNavigate]);
-
   const effectiveGroups = visibleNavigationGroups({
     scopes: user?.scopes ?? [],
     pkiEnabled,
@@ -349,22 +336,6 @@ export function SidebarContent({
               <div className="flex-1" />
 
               {hasScope(AI_SCOPE) && <AIButton iconOnly />}
-
-              {
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
-                      onClick={handleOpenAIWorkspace}
-                    >
-                      <Expand className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">Open AI Workspace</TooltipContent>
-                </Tooltip>
-              }
 
               {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
                 <Tooltip>
@@ -550,22 +521,6 @@ export function SidebarContent({
             </ScrollArea>
 
             <Separator />
-
-            {
-              <>
-                <div className="px-2 py-2">
-                  <button
-                    type="button"
-                    onClick={handleOpenAIWorkspace}
-                    className="flex w-full items-center gap-2 bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground/80 transition-colors hover:bg-muted hover:text-sidebar-accent-foreground"
-                  >
-                    <Expand className="h-4 w-4 shrink-0" />
-                    <span className="truncate">Open AI Workspace</span>
-                  </button>
-                </div>
-                <Separator />
-              </>
-            }
 
             {/* Update notification */}
             {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (

@@ -166,6 +166,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] Gateway and daemon update workflows with signature-verified artifacts.
 - [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
 - [x] Docker-to-nginx Secure Links。
+- [x] 单节点 first-class Compose Projects：Community 提供外部项目发现、inventory、monitoring 和 logs；Personal 及以上提供 deployment 与 lifecycle management，包括不可变修订、adoption、folders、drift 与子资源保护。
 
 计划中的工作：
 
@@ -174,7 +175,6 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [ ] Business 和 Enterprise 的 vulnerability and security scanning。
 - [ ] Business 和 Enterprise 的横向应用扩展：把多个 Docker nodes 组成 cluster，并把 application 部署到该 cluster。**In development.**
 - [ ] Business 和 Enterprise 的纵向 workload 扩展：在同一台机器上运行同一 workload 的多个 managed instances。**In development.**
-- [ ] Business 和 Enterprise 的 Compose application deployment 与 lifecycle management。**In development.** 当前的 Compose label discovery、protected grouping 和 aggregated logs 不等同于该 deployment feature。
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
@@ -241,9 +241,9 @@ Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商�
 
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 仅限非商业使用的核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；Pages 不可用。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权，managed nodes/users/groups 的 plan quotas 不限，并包含 container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；不包含正在开发的 application-cluster 功能。 |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Pages）的全部功能，并增加 Docker Secure Runtime、structured logging、audit export、guided onboarding、发布后的 security scanning，以及正在开发的 application cluster、same-node multi-instance 和 Compose application 功能。 |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 仅限非商业使用的核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权，managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；不包含正在开发的 application-cluster 功能。 |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Compose management 和 Pages）的全部功能，并增加 Docker Secure Runtime、structured logging、audit export、guided onboarding、发布后的 security scanning，以及正在开发的 application cluster 和 same-node multi-instance 功能。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business（包括 Pages）的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。

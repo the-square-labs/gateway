@@ -18,6 +18,7 @@ export interface InteractiveCliUi {
   info(message: string): void;
   error(message: string): void;
   gatewayOrigin(): Promise<string | null>;
+  inferenceToken(): Promise<string | null>;
   select(message: string, options: InteractiveOption[]): Promise<string | null>;
   confirm(message: string): Promise<boolean | null>;
   spinner(message: string): InteractiveSpinner;
@@ -52,6 +53,20 @@ export function createInteractiveCliUi(): InteractiveCliUi {
       });
       if (prompts.isCancel(value)) return null;
       return normalizeGatewayOrigin(value.trim());
+    },
+    async inferenceToken() {
+      const value = await prompts.password({
+        message: 'Gateway inference token',
+        mask: '*',
+        clearOnError: true,
+        validate(input) {
+          const token = input?.trim() ?? '';
+          if (!token) return 'Enter an existing Gateway inference token.';
+          if (!token.startsWith('gwi_')) return 'Gateway inference tokens must start with gwi_.';
+        },
+      });
+      if (prompts.isCancel(value)) return null;
+      return value.trim();
     },
     async select(message, options) {
       const value = await prompts.select({ message, options });

@@ -1,0 +1,162 @@
+/// <reference types="node" />
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const source = (path: string) => readFileSync(resolve(process.cwd(), "src", path), "utf8");
+
+describe("Compose UI contract", () => {
+  it("does not expose a standalone configure route", () => {
+    const app = source("App.tsx");
+    expect(app).not.toContain("/docker/compose/:projectId/configure");
+  });
+
+  it("uses shared dialogs, tables, tabs, and separate Variables instead of custom pages", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(list).toContain("<DialogContent");
+    expect(detail).toContain("<DataTable");
+    expect(detail).toContain('<TabsTrigger value="variables"');
+    expect(detail).toContain("<ComposeVariablesTab");
+    expect(detail).toContain("<ComposeProjectEditor");
+  });
+
+  it("leaves ordinary list and detail tabs to the shared page scroll owner", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(list).not.toContain("h-full space-y-4 overflow-y-auto p-6");
+    expect(detail).toContain('usesInternalScroll ? "overflow-hidden" : "overflow-y-auto"');
+    expect(detail).toContain("className={`flex h-full flex-col gap-4 p-6");
+  });
+
+  it("opens a Compose service through the canonical container name", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain("api.inspectContainer(project.nodeId, containerId, true)");
+    expect(detail).toContain("dockerContainerRoute(node.slug, canonicalName, tab)");
+    expect(detail).not.toContain("dockerContainerRoute(node.slug, containerId, tab)");
+  });
+
+  it("confirms list Stop actions and keeps Compose immediately after Containers", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    const docker = source("pages/Docker.tsx");
+    expect(list).toContain('action === "stop"');
+    expect(list).toContain('confirmLabel: "Stop"');
+    expect(list).toContain('variant: "destructive"');
+    expect(docker.indexOf('{ value: "compose"')).toBeGreaterThan(
+      docker.indexOf('{ value: "containers"')
+    );
+    expect(docker.indexOf('{ value: "compose"')).toBeLessThan(docker.indexOf('{ value: "images"'));
+  });
+
+  it("keeps discovery readable while routing every managed entry point through the shared paywall", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    const editor = source("pages/compose/ComposeProjectEditor.tsx");
+    expect(list).toContain('requireLicenseFeature("compose-applications", "Compose projects")');
+    expect(list).toContain('requireLicenseFeature("compose-applications", "Compose adoption")');
+    expect(list).toContain('requireLicenseFeature("compose-applications", "Compose lifecycle")');
+    expect(detail).toContain('requireLicenseFeature("compose-applications", "Compose lifecycle")');
+    expect(editor).toContain('requireLicenseFeature("compose-applications", "Compose projects")');
+    expect(list).toContain("void fetchProjects(fixedNodeId)");
+  });
+
+  it("refreshes Compose lists and details through the resource-scoped Compose event channel", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(list).toContain('useRealtime("docker.compose.changed"');
+    expect(detail).toContain('useRealtime("docker.compose.changed"');
+    expect(detail).toContain("event.projectId !== projectId");
+  });
+
+  it("keeps Compose list lifecycle actions visibly transitional until summaries converge", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    expect(list).toContain('label: "starting" | "stopping" | "applying"');
+    expect(list).toContain('action === "start" ? "starting"');
+    expect(list).toContain('action === "stop" ? "stopping"');
+    expect(list).toContain("operationId: operation.id");
+    expect(list).toContain("window.setInterval(() => void fetchProjects(fixedNodeId), 1_000)");
+    expect(list).toContain("!ACTIVE_OPERATION_STATUSES.has(operation.status)");
+    expect(list).toContain('<Loader2 className="h-3 w-3 animate-spin" />');
+    expect(list).toContain("disabled={Boolean(projectTransitions[project.id])}");
+  });
+
+  it("disables stopped monitoring and omits services without a running container", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain('project?.status === "stopped" && activeTab === "monitoring"');
+    expect(detail).toContain('setActiveTab("overview")');
+    expect(detail).toContain('disabled={project.status === "stopped"}');
+    expect(detail).toContain('service.state === "running" && Boolean(service.containerIds[0])');
+    expect(detail).toContain("<ComposeProcessesTable services={monitoredServices}");
+    expect(detail).not.toContain("No runtime container is available for this service.");
+  });
+
+  it("retains Activity details through the close animation and matches failed badge text", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain("open={activityDetailsOpen}");
+    expect(detail).toContain("onAnimationEnd={(event) =>");
+    expect(detail).toContain('event.currentTarget.dataset.state === "closed"');
+    expect(detail).toContain('operation.error ? "text-red-600 dark:text-red-400"');
+  });
+
+  it("uses one explicit column sizing contract for Compose process headers and rows", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain("const PROCESS_COLUMN_WIDTHS");
+    expect(detail.match(/processColumnStyle\(title, columnIndex, titles\)/g)).toHaveLength(2);
+    expect(detail).toContain('PID: "88px"');
+    expect(detail).toContain('USER: "140px"');
+  });
+
+  it("edits source Compose YAML while runtime overlays remain internal", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    const editor = source("pages/compose/ComposeProjectEditor.tsx");
+    const variables = source("pages/compose/ComposeVariablesTab.tsx");
+    expect(detail).toContain("project.activeRevision.sourceYaml");
+    expect(editor).toContain("loaded.activeRevision.sourceYaml");
+    expect(variables).toContain("yaml: activeRevision.sourceYaml");
+  });
+
+  it("keeps editors bounded and portals Sonner above dialog overlays", () => {
+    const editor = source("components/ui/code-editor.tsx");
+    const sonner = source("components/ui/sonner.tsx");
+    const animations = source("css/animations.css");
+    expect(editor).toContain("...(height ? { height } : {})");
+    expect(sonner).toContain("createPortal(toaster, document.body)");
+    expect(sonner).toContain('"--z-index": "1000"');
+    expect(animations).toContain("z-index: 1000 !important");
+  });
+
+  it("keeps Services content-sized and moves cursor-loaded Activity into Overview", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    const api = source("services/api-docker.ts");
+    expect(detail).toContain('new Set(["services", "configuration", "logs"]).has(activeTab)');
+    expect(detail).toContain(
+      '<TabsContent value="services" className="flex min-h-0 flex-1 flex-col pb-0">'
+    );
+    expect(detail).not.toContain('<TabsTrigger value="activity"');
+    expect(detail).not.toContain('<TabsContent value="activity"');
+    expect(detail).toContain('title="Recent activity"');
+    expect(detail).toContain("columns={recentActivityColumns}");
+    expect(detail).toContain("rows={recentActivity}");
+    expect(detail).toContain("limit: 6");
+    expect(detail).toContain("open={activityOpen}");
+    expect(detail).toContain("scrollRef={activityScrollRef}");
+    expect(detail).toContain("ref={activitySentinelRef}");
+    expect(detail).toContain("activityNextCursor");
+    expect(
+      detail.match(/h-fit w-full max-h-full \[&_\[data-route-scroll-container\]\]:flex-1/g)
+    ).toHaveLength(1);
+    expect(detail).not.toContain("End of activity history");
+    expect(api).toContain("input: { cursor?: string; limit?: number } = {}");
+  });
+
+  it("hides Compose folders and their containers from the general Containers tree", () => {
+    const containers = source("pages/DockerContainers.tsx");
+    expect(containers).toContain("const composeFolderIds = useMemo");
+    expect(containers).toContain("const generalFolders = useMemo");
+    expect(containers).toContain("const generalContainers = useMemo");
+    expect(containers).toContain("attachContainersToFolders(generalFolders, filteredContainers)");
+    expect(containers).toContain("collectFolderTreeIds(generalFolders)");
+    expect(containers).not.toContain("renderFolderBadges");
+  });
+});

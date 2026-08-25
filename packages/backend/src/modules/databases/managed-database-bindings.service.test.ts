@@ -409,4 +409,54 @@ describe('managed database binding provisioning guardrails', () => {
     expect(deleteWhere).not.toHaveBeenCalled();
     expect(db.update).toHaveBeenCalledTimes(2);
   });
+
+  it('applies and removes a managed database link through Compose revisions', async () => {
+    const applyManagedDatabaseBinding = vi.fn().mockResolvedValue(undefined);
+    const removeManagedDatabaseBinding = vi.fn().mockResolvedValue(undefined);
+    const instance = new ManagedDatabaseBindingService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      DEVELOPMENT_DATABASE_CONNECTOR_IMAGE,
+      true,
+      undefined,
+      { applyManagedDatabaseBinding, removeManagedDatabaseBinding } as never
+    ) as any;
+    const database = { type: 'postgres' };
+    const binding = {
+      id: '55555555-5555-4555-8555-555555555555',
+      targetNodeId: '22222222-2222-4222-8222-222222222222',
+      targetType: 'compose_service',
+      targetResourceId: '44444444-4444-4444-8444-444444444444:api',
+      networkName: 'gateway-db-5555555555554555',
+      connectorAlias: 'db-5555555555554555',
+      environment: { connectionUri: 'DATABASE_URL' },
+    };
+    const credentials = { username: 'app', password: 'secret', databaseName: 'app' };
+
+    await instance.applyTargetBinding(database, binding, credentials, 'user-1');
+    instance.bindingCredentials = vi.fn(() => credentials);
+    await instance.removeTargetBinding(database, binding, 'user-1');
+
+    expect(applyManagedDatabaseBinding).toHaveBeenCalledWith(
+      binding.targetNodeId,
+      binding.targetResourceId,
+      binding.id,
+      binding.networkName,
+      expect.objectContaining({ DATABASE_URL: expect.stringContaining('postgresql://') }),
+      'user-1'
+    );
+    expect(removeManagedDatabaseBinding).toHaveBeenCalledWith(
+      binding.targetNodeId,
+      binding.targetResourceId,
+      binding.id,
+      binding.networkName,
+      expect.objectContaining({ DATABASE_URL: expect.stringContaining('postgresql://') }),
+      'user-1'
+    );
+  });
 });

@@ -61,6 +61,8 @@ export const CreateProxyHostSchema = z
     forwardScheme: z.enum(['http', 'https']).default('http'),
     dockerNodeId: z.string().uuid().optional(),
     dockerContainerName: z.string().min(1).max(255).optional(),
+    dockerComposeProjectId: z.string().uuid().optional(),
+    dockerComposeServiceName: z.string().min(1).max(255).optional(),
     dockerDeploymentId: z.string().uuid().optional(),
     dockerContainerPort: z.number().int().min(1).max(65535).optional(),
     dockerHostPort: z.number().int().min(1).max(65535).optional(),
@@ -159,12 +161,20 @@ export const CreateProxyHostSchema = z
     if (data.type === 'proxy' && data.upstreamKind === 'docker_container') {
       for (const [field, value, message] of [
         ['dockerNodeId', data.dockerNodeId, 'Docker node is required'],
-        ['dockerContainerName', data.dockerContainerName, 'Container is required'],
         ['dockerContainerPort', data.dockerContainerPort, 'Container port is required'],
       ] as const) {
         if (value === undefined) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [field] });
         }
+      }
+      const hasContainer = Boolean(data.dockerContainerName);
+      const hasCompose = Boolean(data.dockerComposeProjectId && data.dockerComposeServiceName);
+      if (hasContainer === hasCompose) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Select either a container or a Compose service',
+          path: ['dockerContainerName'],
+        });
       }
     }
 
@@ -251,6 +261,8 @@ export const UpdateProxyHostSchema = z.object({
   forwardScheme: z.enum(['http', 'https']).optional(),
   dockerNodeId: z.string().uuid().optional().nullable(),
   dockerContainerName: z.string().min(1).max(255).optional().nullable(),
+  dockerComposeProjectId: z.string().uuid().optional().nullable(),
+  dockerComposeServiceName: z.string().min(1).max(255).optional().nullable(),
   dockerDeploymentId: z.string().uuid().optional().nullable(),
   dockerContainerPort: z.number().int().min(1).max(65535).optional().nullable(),
   dockerHostPort: z.number().int().min(1).max(65535).optional().nullable(),

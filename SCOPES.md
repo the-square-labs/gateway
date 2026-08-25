@@ -50,7 +50,7 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - Resource-scoped write-capable scopes keep the same resource boundary. For example, `databases:query:read:<databaseId>` can make that database visible in a filtered database list, but it does not grant global `databases:view`.
 - Create-only and destructive-only scopes do not imply view/discovery access. For example, `proxy:create`, `proxy:delete`, `databases:create`, and `notifications:webhooks:create` do not grant browse permissions by themselves.
 - `logs:schemas:view:<schemaId>` does not imply global `logs:schemas:view`. Resource-scoped schema view/edit access can list only the matching schema rows.
-- `proxy:folders:manage` and `docker:containers:folders:manage` grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit scope.
+- `proxy:folders:manage` and `docker:containers:folders:manage` grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit or manage scope.
 - `pages:folders:manage` grants full Page Project folder-tree visibility and folder mutation rights, but moving or reordering Projects also requires `pages:edit:<projectId>` for every affected Project.
 - Every resource-qualified Pages scope uses the Page Project ID, including Deployment, Tag, and deploy-token operations.
 - Docker container scopes accept either `<nodeId>` for every container and deployment on a node or `<nodeId>/<stableResourceId>` for exactly one standalone container or blue/green deployment. Node grants cover their child resources; child grants do not cover siblings.
@@ -175,7 +175,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `housekeeping:configure` |  |
 | `license:view` |  |
 | `license:manage` |  |
-| `feat:ai:use` | Use AI Workspace and Gateway Inference, including personal inference usage. |
+| `ai:workspace:use` | Use AI Workspace. Granted to the built-in viewer group and above. |
+| `feat:ai:use` | Use Gateway Inference, including personal inference usage. |
 | `feat:ai:configure` |  |
 | `ai:skills:manage` | Manage shared user-defined AI Workspace skills. |
 | `ai:sandbox:use` |  |
@@ -206,6 +207,10 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:mounts` | Yes |
 | `docker:containers:migrate` | Yes |
 | `docker:containers:folders:manage` |  |
+| `docker:compose:view` | Yes |
+| `docker:compose:create` | Yes |
+| `docker:compose:manage` | Yes |
+| `docker:compose:delete` | Yes |
 | `docker:images:view` | Yes |
 | `docker:images:pull` | Yes |
 | `docker:images:delete` | Yes |
@@ -273,7 +278,8 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 
 | Scope | Reason |
 |-------|--------|
-| `feat:ai:use` | User/session-only AI Workspace and Gateway Inference access. |
+| `ai:workspace:use` | User/session-only AI Workspace access. |
+| `feat:ai:use` | User/session-only Gateway Inference access. |
 | `feat:ai:configure` | User/session-only AI configuration. |
 | `ai:skills:manage` | User/session-only shared AI skill management. |
 | `ai:sandbox:use` | User/session-only sandbox runner access. |

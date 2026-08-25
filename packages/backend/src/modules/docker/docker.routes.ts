@@ -5,6 +5,7 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
+import { registerDockerComposeRoutes } from './compose/compose.routes.js';
 import { getDockerNodeBySlugRoute } from './docker.docs.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
 import { registerDockerDeploymentRoutes } from './docker-deployment.routes.js';
@@ -38,6 +39,7 @@ dockerRoutes.openapi(getDockerNodeBySlugRoute, async (c) => {
 registerDockerSnapshotRoutes(dockerRoutes);
 registerWebhookConfigRoutes(dockerRoutes);
 registerDockerDeploymentRoutes(dockerRoutes);
+registerDockerComposeRoutes(dockerRoutes);
 registerDockerHealthCheckRoutes(dockerRoutes);
 registerDockerMigrationRoutes(dockerRoutes);
 registerDockerRuntimeRoutes(dockerRoutes);

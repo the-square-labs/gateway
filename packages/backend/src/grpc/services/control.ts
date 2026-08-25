@@ -467,7 +467,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 msg.register.hostname,
                 msg.register.configVersionHash,
                 stream as any,
-                { isCurrentRegistration: () => pendingCommandRegistrations.get(claimedNodeId) === registrationToken }
+                {
+                  isCurrentRegistration: () => pendingCommandRegistrations.get(claimedNodeId) === registrationToken,
+                  capabilities: msg.register.capabilities ?? [],
+                }
               );
             } catch (err) {
               const reason = (err as Error).message;
@@ -524,6 +527,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     ...(msg.register.capabilities?.includes('docker_deployments_v1')
                       ? { dockerDeploymentsV1: true }
                       : {}),
+                    ...(msg.register.capabilities?.includes('docker_compose_v1') ? { dockerComposeV1: true } : {}),
                     ...(msg.register.capabilities?.includes('docker_gpu_v1') ? { dockerGpuV1: true } : {}),
                     ...(msg.register.capabilities?.includes('docker_migration_v1') ? { dockerMigrationV1: true } : {}),
                     ...(reportedRuntimeStatus ? { dockerRuntimeStatus: reportedRuntimeStatus } : {}),

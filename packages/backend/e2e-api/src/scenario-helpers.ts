@@ -18,6 +18,9 @@ export async function listRows(
   query?: Record<string, string | number>
 ) {
   const response = await ctx.client.get(path, { query });
+  if ((response.status === 403 || response.status === 503) && response.text.includes('"code":"FEATURE_DISABLED"')) {
+    return [];
+  }
   expectApiAccessible(response, `GET ${path}`);
   return asArray<Row>(response.body);
 }
@@ -25,6 +28,18 @@ export async function listRows(
 export async function findDockerNode(ctx: Parameters<TestCase['run']>[0]) {
   const nodes = await listRows(ctx, '/api/nodes', { type: 'docker', limit: 20 });
   return nodes.find((row) => row.status === 'online' && row.isConnected !== false) ?? null;
+}
+
+export async function findDockerComposeNode(ctx: Parameters<TestCase['run']>[0]) {
+  const nodes = await listRows(ctx, '/api/nodes', { type: 'docker', limit: 20 });
+  return (
+    nodes.find(
+      (row) =>
+        row.status === 'online' &&
+        row.isConnected !== false &&
+        (row.capabilities?.dockerComposeV1 === true || row.capabilities?.capabilities?.includes('docker_compose_v1'))
+    ) ?? null
+  );
 }
 
 export async function getSystemConfig(ctx: Parameters<TestCase['run']>[0]) {
@@ -66,7 +81,11 @@ export async function resolveDockerRuntimeImage(ctx: Parameters<TestCase['run']>
   const images = await listRows(ctx, `/api/docker/nodes/${nodeId}/images`);
   const tags = images.flatMap((image) => (Array.isArray(image.repoTags) ? image.repoTags : []));
   const candidates = ['nginx', 'caddy', 'httpd', 'traefik', 'redis', 'busybox', 'alpine', 'node', 'wiolett', 'gateway'];
-  return tags.find((tag) => candidates.some((candidate) => String(tag).toLowerCase().includes(candidate))) ?? null;
+  for (const candidate of candidates) {
+    const tag = tags.find((value) => String(value).toLowerCase().includes(candidate));
+    if (tag) return tag;
+  }
+  return null;
 }
 
 export function skipWithoutMutations(ctx: Parameters<NonNullable<TestCase['skip']>>[0]) {

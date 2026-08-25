@@ -9,7 +9,7 @@ const USER = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
-  scopes: ['feat:ai:use'],
+  scopes: ['ai:workspace:use'],
   isBlocked: false,
 };
 

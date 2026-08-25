@@ -8,7 +8,7 @@ import {
   useLicensePaywallStore,
 } from "./license-paywall";
 
-function setLicense(plan: "community" | "business", features: string[]) {
+function setLicense(plan: "community" | "personal" | "business", features: string[]) {
   useUIBootstrapStore.setState({
     snapshot: {
       license: { plan, entitlements: { features } },
@@ -58,6 +58,22 @@ describe("license paywall store", () => {
     setLicense("business", ["pages"]);
     useLicensePaywallStore.setState({ request: null });
     expect(requireLicenseFeature("pages", "Pages")).toBe(true);
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+  });
+
+  it("keeps Compose discovery visible but gates management behind Personal+", () => {
+    setLicense("community", []);
+
+    expect(requireLicenseFeature("compose-applications", "Compose projects")).toBe(false);
+    expect(useLicensePaywallStore.getState().request).toEqual({
+      capability: "Compose projects",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+
+    setLicense("personal", ["compose-applications"]);
+    useLicensePaywallStore.setState({ request: null });
+    expect(requireLicenseFeature("compose-applications", "Compose projects")).toBe(true);
     expect(useLicensePaywallStore.getState().request).toBeNull();
   });
 

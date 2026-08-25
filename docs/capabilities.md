@@ -87,7 +87,9 @@ Container workflows:
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. New and changed mounts accept only Gateway-managed local volumes; new host bind mounts are rejected. Existing legacy mounts are preserved during normal image, environment, and webhook updates.
 - Browse container logs with search and follow mode.
-- Recognize externally created Docker Compose projects from canonical Compose labels, keep their containers in protected project folders, and stream aggregated project logs. Compose-managed resources are not eligible for Gateway cross-node migration. This is read/organization support for existing Compose workloads, not Gateway-managed Compose application deployment.
+- On Community and every paid plan, discover externally created Docker Compose projects from canonical labels and inspect their inventory, status, monitoring, and logs as read-only Compose Projects. Gateway can adopt a project only after the user supplies its complete single-file YAML; Gateway never reads host Compose files from label paths.
+- On Personal and higher, deploy and manage single-node, image-only Compose Projects with immutable revisions, validation, explicit Pull & Apply, start/stop/restart/down, aggregated logs, operation history, folders, masked secrets, drift reporting, ordinary non-Swarm CPU/memory/PID limits, managed database links, and Route/Secure Link targeting by project/service identity. `build`, host bind mounts, privileged/device access, and swarm/PaaS features are rejected before mutation.
+- Hide project-owned containers, named volumes, and non-external networks from standalone lists and block their direct mutations. Images and external/shared resources remain global. Compose resources are not eligible for cross-node migration.
 - Open an interactive container console.
 - Browse and edit container files when permitted.
 - Keep sanitized inventory snapshots so read views can show the last synchronized Docker state while a node is offline or refreshing; mutations remain unavailable until the node reconnects.
@@ -277,15 +279,13 @@ Gateway includes connector and operational communication surfaces:
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.
 
-## Application Scaling And Compose
+## Application Scaling
 
-The following application-orchestration capabilities are **In development** for Business and Enterprise. They are included in those plan positions when released, but they are not generally available runtime features today:
+The following application-scaling capabilities are **In development** for Business and Enterprise. They are included in those plan positions when released, but they are not generally available runtime features today:
 
 - **Horizontal application scaling:** group multiple Docker nodes as one application cluster and deploy an application to that cluster.
 - **Vertical workload scaling:** run multiple managed instances of one workload on the same managed machine.
-- **Compose applications:** deploy and manage a multi-service application from a Compose definition.
-
-Existing multi-node resource management, cross-node migration, blue/green deployments, and Compose-label discovery/log aggregation do not constitute these scaling or Compose deployment capabilities.
+Existing single-node Compose Projects, multi-node resource management, cross-node migration, and blue/green deployments do not constitute horizontal clustering or same-node replica scaling.
 
 ## Vulnerability And Security Scanning
 

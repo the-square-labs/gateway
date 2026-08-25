@@ -96,6 +96,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'docker.snapshot.changed') return 'docker:containers:view';
   if (channel === 'docker.migration.changed') return 'docker:containers:view';
   if (channel === 'docker.runtime.changed') return 'nodes:details';
+  if (channel.startsWith('docker.compose')) return 'docker:compose:view';
   if (channel === 'node.file.changed') return 'nodes:files:read';
   if (channel.startsWith('docker.container')) return 'docker:containers:view';
   if (channel.startsWith('docker.image')) return 'docker:images:view';
@@ -164,6 +165,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScopeBase(scopes, 'docker:images:view') ||
       hasScopeBase(scopes, 'docker:volumes:view') ||
       hasScopeBase(scopes, 'docker:networks:view') ||
+      hasScopeBase(scopes, 'docker:compose:view') ||
       hasScope(scopes, 'docker:containers:folders:manage')
     );
   }
@@ -253,6 +255,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === INFERENCE_SETUP_EVENT_CHANNEL) {
     return (
+      hasScope(scopes, 'ai:workspace:use') ||
       hasScope(scopes, 'feat:ai:use') ||
       hasScope(scopes, 'inference:providers:view') ||
       hasScope(scopes, 'inference:models:manage') ||
@@ -262,6 +265,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
     return (
+      hasScope(scopes, 'ai:workspace:use') ||
       hasScope(scopes, 'feat:ai:use') ||
       hasScope(scopes, 'inference:usage:view') ||
       hasScope(scopes, 'inference:limits:manage')
@@ -312,9 +316,11 @@ function dockerEventResourceId(payload: unknown): string | null {
         id?: string;
         containerName?: string;
         name?: string;
+        projectId?: string;
       }
     | undefined;
   if (event?.scopeResourceId) return event.scopeResourceId;
+  if (event?.projectId) return event.projectId;
   if (event?.deploymentId) return event.deploymentId;
   if (!event?.nodeId) return null;
   try {
@@ -371,6 +377,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       hasScope(scopes, 'docker:images:view') ||
       hasScope(scopes, 'docker:volumes:view') ||
       hasScope(scopes, 'docker:networks:view') ||
+      hasScope(scopes, 'docker:compose:view') ||
       hasScope(scopes, 'docker:containers:folders:manage')
     ) {
       return true;
@@ -385,6 +392,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
           hasScope(scopes, `docker:images:view:${nodeId}`) ||
           hasScope(scopes, `docker:volumes:view:${nodeId}`) ||
           hasScope(scopes, `docker:networks:view:${nodeId}`) ||
+          hasScope(scopes, `docker:compose:view:${nodeId}`) ||
           childScopedNodeIds.has(nodeId)
       )
     );
@@ -397,6 +405,9 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
   }
   if (channel.startsWith('docker.task')) {
     return hasScope(scopes, 'docker:tasks');
+  }
+  if (channel.startsWith('docker.compose')) {
+    return hasDockerEventAccess(scopes, 'docker:compose:view', payload);
   }
   if (channel === 'docker.migration.changed') {
     const event = payload as { sourceNodeId?: string; targetNodeId?: string; scopeResourceId?: string } | undefined;

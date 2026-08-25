@@ -1,6 +1,7 @@
 import {
   ArchiveRestore,
   Box,
+  Boxes,
   FolderPlus,
   HardDrive,
   Layers,
@@ -22,6 +23,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { Node as GatewayNode } from "@/types";
+import { DockerComposeProjects } from "./DockerComposeProjects";
 import { DockerContainers } from "./DockerContainers";
 import { DockerImages } from "./DockerImages";
 import { DockerNetworks } from "./DockerNetworks";
@@ -31,6 +33,7 @@ import { GwcaImportDialog } from "./docker/GwcaImportDialog";
 
 const TABS = [
   { value: "containers", label: "Containers", icon: Box, scope: "docker:containers:view" },
+  { value: "compose", label: "Compose", icon: Boxes, scope: "docker:compose:view" },
   { value: "images", label: "Images", icon: Layers, scope: "docker:images:view" },
   { value: "volumes", label: "Volumes", icon: HardDrive, scope: "docker:volumes:view" },
   { value: "networks", label: "Networks", icon: Network, scope: "docker:networks:view" },
@@ -44,6 +47,7 @@ const DOCKER_NODE_SCOPES_BY_TAB: Partial<
   images: ["docker:images:view"],
   volumes: ["docker:volumes:view"],
   networks: ["docker:networks:view"],
+  compose: ["docker:compose:view"],
 };
 
 export function Docker() {
@@ -57,6 +61,7 @@ export function Docker() {
   const fetchVolumes = useDockerStore((s) => s.fetchVolumes);
   const fetchNetworks = useDockerStore((s) => s.fetchNetworks);
   const fetchTasks = useDockerStore((s) => s.fetchTasks);
+  const fetchComposeProjects = useDockerStore((s) => s.fetchComposeProjects);
   const loading = useDockerStore((s) => s.loading);
   const dockerNodes = useDockerStore((s) => s.dockerNodes);
   const [importOpen, setImportOpen] = useState(false);
@@ -71,6 +76,8 @@ export function Docker() {
   const createImageFolderRef = useRef<(() => void) | null>(null);
   const createVolumeFolderRef = useRef<(() => void) | null>(null);
   const createNetworkFolderRef = useRef<(() => void) | null>(null);
+  const createComposeFolderRef = useRef<(() => void) | null>(null);
+  const createComposeRef = useRef<(() => void) | null>(null);
   const pullImageRef = useRef<(() => void) | null>(null);
   const createVolumeRef = useRef<(() => void) | null>(null);
   const createNetworkRef = useRef<(() => void) | null>(null);
@@ -78,6 +85,7 @@ export function Docker() {
   const refreshImagesRef = useRef<(() => void) | null>(null);
   const refreshVolumesRef = useRef<(() => void) | null>(null);
   const refreshNetworksRef = useRef<(() => void) | null>(null);
+  const refreshComposeRef = useRef<(() => void) | null>(null);
 
   const canManageContainerFolders = hasScope("docker:containers:folders:manage");
   const visibleTabs = TABS.filter(
@@ -98,9 +106,11 @@ export function Docker() {
           ? loading.volumes
           : activeTab === "networks"
             ? loading.networks
-            : activeTab === "tasks"
-              ? loading.tasks
-              : false;
+            : activeTab === "compose"
+              ? loading.compose
+              : activeTab === "tasks"
+                ? loading.tasks
+                : false;
 
   useEffect(() => {
     setSelectedNode(null);
@@ -148,6 +158,7 @@ export function Docker() {
         if (tab === "images") await fetchImages(nodeIdOverride, "", nodesOverride);
         if (tab === "volumes") await fetchVolumes(nodeIdOverride, "", nodesOverride);
         if (tab === "networks") await fetchNetworks(nodeIdOverride, "", nodesOverride);
+        if (tab === "compose") await fetchComposeProjects(nodeIdOverride);
         if (tab === "tasks") await fetchTasks(null);
       }
     };
@@ -161,6 +172,7 @@ export function Docker() {
     fetchContainers,
     fetchImages,
     fetchNetworks,
+    fetchComposeProjects,
     fetchTasks,
     fetchVolumes,
     hasScopedAccess,
@@ -182,6 +194,8 @@ export function Docker() {
         return refreshVolumesRef.current?.();
       case "networks":
         return refreshNetworksRef.current?.();
+      case "compose":
+        return refreshComposeRef.current?.();
       case "tasks":
         return fetchTasks();
     }
@@ -284,6 +298,23 @@ export function Docker() {
             )}
           </>
         );
+      case "compose":
+        return (
+          <>
+            {canManageContainerFolders && (
+              <Button variant="outline" onClick={() => createComposeFolderRef.current?.()}>
+                <FolderPlus className="h-4 w-4 mr-1" />
+                New Folder
+              </Button>
+            )}
+            {hasScopedAccess("docker:compose:create") && (
+              <Button onClick={() => createComposeRef.current?.()}>
+                <Plus className="h-4 w-4 mr-1" />
+                New Project
+              </Button>
+            )}
+          </>
+        );
       default:
         return null;
     }
@@ -367,6 +398,24 @@ export function Docker() {
           },
         ]
       : []),
+    ...(activeTab === "compose" && canManageContainerFolders
+      ? [
+          {
+            label: "New Folder",
+            icon: <FolderPlus className="h-4 w-4" />,
+            onClick: () => createComposeFolderRef.current?.(),
+          },
+        ]
+      : []),
+    ...(activeTab === "compose" && hasScopedAccess("docker:compose:create")
+      ? [
+          {
+            label: "New Project",
+            icon: <Plus className="h-4 w-4" />,
+            onClick: () => createComposeRef.current?.(),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -387,7 +436,7 @@ export function Docker() {
             <div className="min-w-0">
               <h1 className="text-2xl font-bold">Docker</h1>
               <p className="text-sm text-muted-foreground">
-                Manage containers, images, volumes, and networks
+                Manage containers, images, volumes, networks, and Compose projects
               </p>
             </div>
           </div>
@@ -465,6 +514,20 @@ export function Docker() {
               }}
               onRefreshRef={(fn) => {
                 refreshNetworksRef.current = fn;
+              }}
+            />
+          </TabsContent>
+          <TabsContent value="compose">
+            <DockerComposeProjects
+              embedded
+              onCreateRef={(fn) => {
+                createComposeRef.current = fn;
+              }}
+              onCreateFolderRef={(fn) => {
+                createComposeFolderRef.current = fn;
+              }}
+              onRefreshRef={(fn) => {
+                refreshComposeRef.current = fn;
               }}
             />
           </TabsContent>

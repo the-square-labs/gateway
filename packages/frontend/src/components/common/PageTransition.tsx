@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   createContext,
   type ReactNode,
@@ -21,6 +21,7 @@ export function PageTransition({
   children: ReactNode;
   className?: string;
 }) {
+  const prefersReducedMotion = useReducedMotion();
   const [pendingInitialLoads, setPendingInitialLoads] = useState(0);
   const [initialLoadCollectionComplete, setInitialLoadCollectionComplete] = useState(false);
   const [entranceComplete, setEntranceComplete] = useState(false);
@@ -54,10 +55,16 @@ export function PageTransition({
     <InitialPageLoadContext.Provider value={registerInitialLoad}>
       <InitialPageReadyContext.Provider value={!waitingForInitialData && entranceComplete}>
         <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={waitingForInitialData ? { opacity: 0, y: 8 } : { opacity: 1, y: 0 }}
+          initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
+          animate={
+            waitingForInitialData
+              ? { opacity: 0, y: prefersReducedMotion ? 0 : 8 }
+              : { opacity: 1, y: 0 }
+          }
           transition={
-            waitingForInitialData ? { duration: 0 } : { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }
+            waitingForInitialData || prefersReducedMotion
+              ? { duration: 0 }
+              : { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }
           }
           className={cn("h-full", className)}
           style={{ visibility: waitingForInitialData ? "hidden" : "visible" }}

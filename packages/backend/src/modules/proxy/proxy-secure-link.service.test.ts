@@ -71,6 +71,62 @@ describe('ProxySecureLinkService migration rollback', () => {
     expect(deprovision).not.toHaveBeenCalled();
   });
 
+  it('reuses a daemon-materialized network for an unchanged managed container route', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      rawConfigEnabled: false,
+      nodeId: 'nginx-node',
+    } as any;
+    const current = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      purpose: 'additional_route',
+      referenceId: 'route-1',
+      status: 'active',
+      generation: 3,
+      sourceNodeId: host.nodeId,
+      upstreamKind: 'docker_container',
+      forwardScheme: 'http',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'compose-web-1',
+      dockerComposeProjectId: '33333333-3333-4333-8333-333333333333',
+      dockerComposeServiceName: 'web',
+      dockerDeploymentId: null,
+      dockerContainerPort: 8080,
+      dockerHostPort: 8080,
+      targetNetwork: 'daemon-selected-network',
+      targetContainer: 'compose-web-1',
+      createdAt: new Date('2026-08-25T00:00:00Z'),
+    } as any;
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([current]) } },
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveAdditionalTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: '',
+      container: 'compose-web-1',
+      targetPort: 8080,
+    });
+    const provision = vi.spyOn(service as any, 'createAdditionalFromExisting');
+
+    await expect(
+      service.createManagedRoute(host, 'route-1', {
+        name: 'route-1',
+        upstreamKind: 'docker_container',
+        forwardScheme: 'http',
+        dockerNodeId: 'docker-node',
+        dockerComposeProjectId: current.dockerComposeProjectId,
+        dockerComposeServiceName: 'web',
+        dockerContainerPort: 8080,
+      })
+    ).resolves.toBe(current);
+
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it('reconciles active Docker targets with a connector image supplied by a Relay update', async () => {
     const db = {
       query: {

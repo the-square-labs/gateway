@@ -28,7 +28,11 @@ export const managedDatabaseStatusEnum = pgEnum('managed_database_status', [
   'error',
   'deleting',
 ]);
-export const databaseBindingTargetTypeEnum = pgEnum('database_binding_target_type', ['container', 'deployment']);
+export const databaseBindingTargetTypeEnum = pgEnum('database_binding_target_type', [
+  'container',
+  'deployment',
+  'compose_service',
+]);
 export const databaseBindingStatusEnum = pgEnum('database_binding_status', ['creating', 'ready', 'error', 'deleting']);
 
 export interface DatabaseHealthEntry {

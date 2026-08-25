@@ -51,4 +51,16 @@ describe("canonicalizeScopeSelection", () => {
     ).toBe(false);
     expect(scopeMatches(["proxy:view:folder"], "proxy:view:folder/host")).toBe(false);
   });
+
+  it("matches Compose node scopes against projects only on the same node", () => {
+    expect(
+      scopeMatches(["docker:compose:manage:node-1"], "docker:compose:manage:node-1/project-1")
+    ).toBe(true);
+    expect(
+      scopeMatches(
+        ["docker:compose:manage:node-1/project-1"],
+        "docker:compose:manage:node-1/project-2"
+      )
+    ).toBe(false);
+  });
 });

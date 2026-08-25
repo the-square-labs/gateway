@@ -3,33 +3,13 @@
   "edges": [
     {
       "from_id": "j6oni2tm",
-      "to_id": "ac5muwri",
-      "relation": "same_workflow",
-      "weight": 0.88,
-      "reason": "Both define coordinated Gateway documentation updates and user-visible feature claims.",
+      "to_id": "lvklfxgs",
+      "relation": "related_to",
+      "weight": 0.58,
+      "reason": "Both address Docker Compose project handling; this release-upgrade harness is a separate disposable validation workflow, not the unshipped first-class product feature.",
       "source": "auto",
-      "created_at": 1787483491511,
-      "updated_at": 1787483491511
-    },
-    {
-      "from_id": "j6oni2tm",
-      "to_id": "x2uskhdm",
-      "relation": "same_area",
-      "weight": 0.84,
-      "reason": "Both document the shipped Pages capability, including implementation and deployment behavior.",
-      "source": "auto",
-      "created_at": 1787483491511,
-      "updated_at": 1787483491511
-    },
-    {
-      "from_id": "j6oni2tm",
-      "to_id": "3ta908aa",
-      "relation": "same_area",
-      "weight": 0.82,
-      "reason": "Both establish the standalone relay as a first-class Gateway data-plane service and public port owner.",
-      "source": "auto",
-      "created_at": 1787483491511,
-      "updated_at": 1787483491511
+      "created_at": 1787532793008,
+      "updated_at": 1787532793008
     }
   ]
 }

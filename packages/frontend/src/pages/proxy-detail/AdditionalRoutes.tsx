@@ -131,7 +131,9 @@ function draftFromRoute(route: ProxyAdditionalRoute): AdditionalRouteDraft {
       manualHost: route.forwardHost ?? "",
       manualPort: route.forwardPort ?? 80,
       dockerNodeId: route.dockerNodeId,
-      containerName: route.dockerContainerName,
+      containerName: route.dockerComposeProjectId ? null : route.dockerContainerName,
+      composeProjectId: route.dockerComposeProjectId,
+      composeServiceName: route.dockerComposeServiceName,
       deploymentId: route.dockerDeploymentId,
       containerPort: route.dockerContainerPort,
     },
@@ -232,6 +234,8 @@ export function routeRequestFromDraft(
   } else if (draft.targetKind === "docker_container") {
     request.dockerNodeId = draft.upstream.dockerNodeId;
     request.dockerContainerName = draft.upstream.containerName;
+    request.dockerComposeProjectId = draft.upstream.composeProjectId;
+    request.dockerComposeServiceName = draft.upstream.composeServiceName;
     request.dockerContainerPort = draft.upstream.containerPort;
   } else if (draft.targetKind === "docker_deployment") {
     request.dockerDeploymentId = draft.upstream.deploymentId;
@@ -260,7 +264,9 @@ function routeTargetSummary(route: ProxyAdditionalRoute): string {
     return `${route.forwardScheme.toUpperCase()} ${route.forwardHost ?? "—"}:${route.forwardPort ?? "—"}`;
   }
   if (route.targetKind === "docker_container") {
-    return route.dockerContainerName ?? "Container";
+    return route.dockerComposeServiceName
+      ? `Compose / ${route.dockerComposeServiceName}`
+      : (route.dockerContainerName ?? "Container");
   }
   if (route.targetKind === "docker_deployment") {
     return route.dockerDeploymentName ?? route.dockerDeploymentId ?? "Deployment";
@@ -285,6 +291,8 @@ function routeTarget(
         forwardScheme: route.forwardScheme,
         dockerNodeId: route.dockerNodeId,
         dockerContainerName: route.dockerContainerName ?? "Container",
+        dockerComposeProjectId: route.dockerComposeProjectId,
+        dockerComposeServiceName: route.dockerComposeServiceName,
         dockerDeploymentId: route.dockerDeploymentId ?? "deployment",
         dockerDeploymentName:
           route.dockerDeploymentName ?? route.dockerDeploymentId ?? "Deployment",

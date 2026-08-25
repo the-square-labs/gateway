@@ -139,7 +139,7 @@ export class UIBootstrapService {
       this.getStatusPageConfigSnapshot(),
       this.getCloudflareIntegrationSnapshot(),
       hasScope(scopes, 'admin:update') ? this.updates.getCachedStatus() : Promise.resolve(null),
-      hasScope(scopes, 'feat:ai:use') ? this.aiRuntime.statusForUser(user) : Promise.resolve(null),
+      hasScope(scopes, 'ai:workspace:use') ? this.aiRuntime.statusForUser(user) : Promise.resolve(null),
       this.aiSettings.isEnabled(),
       this.finalizeSetup.isOwner(user.id),
       this.licensePolicy.getSummary(),

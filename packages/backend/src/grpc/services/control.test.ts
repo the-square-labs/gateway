@@ -450,7 +450,7 @@ describe('CommandStream daemon certificate identity', () => {
         architecture: 'x64',
         kernelVersion: '6.0',
         daemonType: 'docker',
-        capabilities: ['docker_deployments_v1', 'docker_gpu_v1'],
+        capabilities: ['docker_deployments_v1', 'docker_compose_v1', 'docker_gpu_v1'],
       },
     });
 
@@ -461,6 +461,7 @@ describe('CommandStream daemon certificate identity', () => {
       daemonType: 'docker',
       dockerVersion: '27.5.1',
       dockerDeploymentsV1: true,
+      dockerComposeV1: true,
       dockerGpuV1: true,
     });
     expect(metadata.capabilities).not.toHaveProperty('nginxVersion');
@@ -480,7 +481,7 @@ describe('CommandStream daemon certificate identity', () => {
       'node-1',
       'hash-daemon',
       expect.anything(),
-      expect.objectContaining({ isCurrentRegistration: expect.any(Function) })
+      expect.objectContaining({ isCurrentRegistration: expect.any(Function), capabilities: [] })
     );
   });
 
@@ -614,9 +615,7 @@ describe('CommandStream daemon certificate identity', () => {
             limit: vi.fn(() => {
               selectCount += 1;
               if (selectCount === 1) return nodeRows;
-              return Promise.resolve([
-                { id: '22222222-2222-4222-8222-222222222222', faultDomainId: 'host-relay-1' },
-              ]);
+              return Promise.resolve([{ id: '22222222-2222-4222-8222-222222222222', faultDomainId: 'host-relay-1' }]);
             }),
           })),
         })),

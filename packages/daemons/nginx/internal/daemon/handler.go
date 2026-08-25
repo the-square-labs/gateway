@@ -161,6 +161,12 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 
 	// Read old config for rollback
 	oldConfig, _ := nginx.ReadFile(path)
+	rollbackConfig := func() error {
+		if oldConfig != nil {
+			return nginx.WriteAtomic(path, oldConfig)
+		}
+		return nginx.RemoveFile(path)
+	}
 	restoreOwnership, err := h.setConfigOwnership(cmd.HostId, cmd.ConfigOwnership)
 	if err != nil {
 		result.Success = false
@@ -179,12 +185,7 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 	result.Detail = output
 
 	if !valid {
-		// Rollback
-		if oldConfig != nil {
-			nginx.WriteAtomic(path, oldConfig)
-		} else {
-			nginx.RemoveFile(path)
-		}
+		_ = rollbackConfig()
 		restoreOwnership()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed: %s", output)
@@ -193,19 +194,20 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 
 	if cmd.TestOnly {
 		// Test passed, don't reload. Restore old config.
-		if oldConfig != nil {
-			nginx.WriteAtomic(path, oldConfig)
-		} else {
-			nginx.RemoveFile(path)
-		}
+		_ = rollbackConfig()
 		restoreOwnership()
 		return
 	}
 
 	if err := h.mgr.Reload(); err != nil {
-		// Config tested OK but reload failed — leave config in place
+		rollbackErr := rollbackConfig()
+		restoreOwnership()
 		result.Success = false
-		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
+		if rollbackErr != nil {
+			result.Error = fmt.Sprintf("nginx reload failed: %v; rollback config: %v", err, rollbackErr)
+		} else {
+			result.Error = fmt.Sprintf("nginx reload failed: %v", err)
+		}
 		return
 	}
 	h.logger.Info("config applied", "host_id", cmd.HostId)

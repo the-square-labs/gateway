@@ -240,12 +240,12 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
-  it('authorizes catalog invalidations for inference users', async () => {
+  it('authorizes catalog invalidations for AI Workspace users', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['feat:ai:use'] },
-      effectiveScopes: ['feat:ai:use'],
+      user: { ...USER, scopes: ['ai:workspace:use'] },
+      effectiveScopes: ['ai:workspace:use'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();
@@ -475,6 +475,39 @@ describe('events websocket authentication', () => {
         type: 'event',
         channel: 'docker.folder.changed',
         payload: { nodeIds: ['node-1'] },
+      })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('filters Compose project events by project-scoped view access', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['docker:compose:view:node-1/project-1'] },
+      effectiveScopes: ['docker:compose:view:node-1/project-1'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.compose.changed'] }),
+      }),
+      ws as any
+    );
+
+    eventBus.publish('docker.compose.changed', { nodeId: 'node-1', projectId: 'project-2' });
+    eventBus.publish('docker.compose.changed', { nodeId: 'node-1', projectId: 'project-1' });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('project-2'));
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: 'docker.compose.changed',
+        payload: { nodeId: 'node-1', projectId: 'project-1' },
       })
     );
     handlers.onClose(new Event('close'), ws as any);

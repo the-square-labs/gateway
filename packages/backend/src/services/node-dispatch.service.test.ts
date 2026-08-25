@@ -7,6 +7,7 @@ function createService(
 ) {
   const registry = {
     sendCommand: vi.fn().mockResolvedValue({ success: true }),
+    hasCapability: vi.fn().mockReturnValue(true),
   };
   const db = {
     select: () => ({
@@ -104,6 +105,55 @@ describe('NodeDispatchService', () => {
       'node-1',
       { dockerDatabase: { action: 'create', managedDatabaseId: 'database-1', configJson: '{"operationId":"op-1"}' } },
       15 * 60 * 1000
+    );
+  });
+
+  it('capability-gates and dispatches typed Compose commands', async () => {
+    const unsupported = createService();
+    unsupported.registry.hasCapability.mockReturnValue(false);
+    await expect(
+      unsupported.service.sendDockerComposeCommand('node-1', 'apply', {
+        operationId: 'operation-1',
+        projectId: 'project-1',
+        projectName: 'demo',
+      })
+    ).rejects.toMatchObject({ code: 'COMPOSE_CAPABILITY_UNAVAILABLE' });
+    expect(unsupported.registry.sendCommand).not.toHaveBeenCalled();
+
+    const supported = createService();
+    await supported.service.sendDockerComposeCommand('node-1', 'apply', {
+      operationId: 'operation-1',
+      projectId: 'project-1',
+      projectName: 'demo',
+      revisionId: 'revision-1',
+      configDigest: 'sha256:digest',
+      composeYaml: Buffer.from('services: {}'),
+      normalizedModelJson: '{"services":{}}',
+      variables: { TAG: 'latest' },
+      secrets: { TOKEN: 'secret' },
+      removeOrphans: true,
+      volumeNames: ['data'],
+    });
+
+    expect(supported.registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      {
+        dockerCompose: {
+          action: 'apply',
+          operationId: 'operation-1',
+          projectId: 'project-1',
+          projectName: 'demo',
+          revisionId: 'revision-1',
+          configDigest: 'sha256:digest',
+          composeYaml: Buffer.from('services: {}'),
+          normalizedModelJson: '{"services":{}}',
+          variables: { TAG: 'latest' },
+          secrets: { TOKEN: 'secret' },
+          removeOrphans: true,
+          volumeNames: ['data'],
+        },
+      },
+      30 * 60 * 1000
     );
   });
 

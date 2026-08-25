@@ -137,6 +137,7 @@ export const ALL_SCOPES = [
   'license:view',
   'license:manage',
   // ── Features ─────────────────────────────────────────────────────
+  'ai:workspace:use',
   'feat:ai:use',
   'feat:ai:configure',
   'ai:skills:manage',
@@ -170,6 +171,11 @@ export const ALL_SCOPES = [
   'docker:containers:mounts',
   'docker:containers:migrate',
   'docker:containers:folders:manage',
+  // ── Docker: Compose Projects ─────────────────────────────────────
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
   // ── Docker: Images ───────────────────────────────────────────────
   'docker:images:view',
   'docker:images:pull',
@@ -244,6 +250,7 @@ export const ALL_SCOPES = [
 export type Scope = (typeof ALL_SCOPES)[number];
 
 export const USER_ONLY_SCOPES = [
+  'ai:workspace:use',
   'feat:ai:use',
   'feat:ai:configure',
   'ai:skills:manage',
@@ -413,6 +420,7 @@ export const ADMIN_SCOPES: readonly string[] = [
   'housekeeping:run',
   'license:view',
   'license:manage',
+  'ai:workspace:use',
   'feat:ai:use',
   'feat:ai:configure',
   'ai:sandbox:use',
@@ -442,6 +450,10 @@ export const ADMIN_SCOPES: readonly string[] = [
   'docker:containers:mounts',
   'docker:containers:migrate',
   'docker:containers:folders:manage',
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
   'docker:images:view',
   'docker:images:pull',
   'docker:images:delete',
@@ -545,6 +557,7 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'nodes:files:write',
   'nodes:rename',
   'nodes:folders:manage',
+  'ai:workspace:use',
   'feat:ai:use',
   'ai:sandbox:use',
   'mcp:use',
@@ -560,6 +573,8 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'docker:containers:environment',
   'docker:containers:webhooks',
   'docker:containers:folders:manage',
+  'docker:compose:view',
+  'docker:compose:manage',
   'docker:images:view',
   'docker:volumes:view',
   'docker:volumes:files:read',
@@ -610,6 +625,7 @@ export const VIEWER_SCOPES: readonly string[] = [
   'ssl:cert:view',
   'acl:view',
   'docker:containers:view',
+  'docker:compose:view',
   'docker:images:view',
   'docker:volumes:view',
   'docker:volumes:files:read',
@@ -627,6 +643,7 @@ export const VIEWER_SCOPES: readonly string[] = [
   'integrations:gitlab:view',
   'integrations:gitlab:projects:view',
   'integrations:cloudflare:view',
+  'ai:workspace:use',
 ];
 
 /** Guest group: authenticated account access without infrastructure permissions. */
@@ -726,6 +743,11 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  // Docker Compose Projects
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
   // Docker images
   'docker:images:view',
   'docker:images:pull',
@@ -821,6 +843,10 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  // Docker Compose Projects
+  'docker:compose:view',
+  'docker:compose:manage',
+  'docker:compose:delete',
   // Databases
   'databases:view',
   'databases:edit',

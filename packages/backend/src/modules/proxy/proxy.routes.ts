@@ -146,15 +146,30 @@ proxyRoutes.post(
   }
 );
 
-const AdditionalSecureLinkSchema = z.object({
-  name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
-  upstreamKind: z.enum(['docker_container', 'docker_deployment']),
-  forwardScheme: z.enum(['http', 'https']).default('http'),
-  dockerNodeId: z.string().uuid().nullable().optional(),
-  dockerContainerName: z.string().min(1).max(255).nullable().optional(),
-  dockerDeploymentId: z.string().uuid().nullable().optional(),
-  dockerContainerPort: z.number().int().min(1).max(65535),
-});
+const AdditionalSecureLinkSchema = z
+  .object({
+    name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
+    upstreamKind: z.enum(['docker_container', 'docker_deployment']),
+    forwardScheme: z.enum(['http', 'https']).default('http'),
+    dockerNodeId: z.string().uuid().nullable().optional(),
+    dockerContainerName: z.string().min(1).max(255).nullable().optional(),
+    dockerComposeProjectId: z.string().uuid().nullable().optional(),
+    dockerComposeServiceName: z.string().min(1).max(255).nullable().optional(),
+    dockerDeploymentId: z.string().uuid().nullable().optional(),
+    dockerContainerPort: z.number().int().min(1).max(65535),
+  })
+  .superRefine((data, ctx) => {
+    if (data.upstreamKind !== 'docker_container') return;
+    const hasContainer = Boolean(data.dockerContainerName);
+    const hasCompose = Boolean(data.dockerComposeProjectId && data.dockerComposeServiceName);
+    if (!data.dockerNodeId || hasContainer === hasCompose) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dockerContainerName'],
+        message: 'Select either a container or a Compose service',
+      });
+    }
+  });
 
 proxyRoutes.get('/:id/additional-secure-links', requireScopeForResource('proxy:view', 'id'), async (c) => {
   const data = await container.resolve(ProxyService).listAdditionalSecureLinks(c.req.param('id')!);
@@ -167,7 +182,8 @@ proxyRoutes.post('/:id/additional-secure-links', requireScopeForResource('proxy:
     .createAdditionalSecureLink(
       c.req.param('id')!,
       AdditionalSecureLinkSchema.parse(await c.req.json()),
-      c.get('user')!.id
+      c.get('user')!.id,
+      c.get('effectiveScopes') || []
     );
   return c.json({ data }, 201);
 });
@@ -178,7 +194,12 @@ proxyRoutes.post(
   async (c) => {
     const data = await container
       .resolve(ProxyService)
-      .retryAdditionalSecureLink(c.req.param('id')!, c.req.param('bindingId')!, c.get('user')!.id);
+      .retryAdditionalSecureLink(
+        c.req.param('id')!,
+        c.req.param('bindingId')!,
+        c.get('user')!.id,
+        c.get('effectiveScopes') || []
+      );
     return c.json({ data });
   }
 );

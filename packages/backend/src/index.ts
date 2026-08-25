@@ -260,10 +260,7 @@ async function main() {
           ];
         },
         drainUserWork: async (deadline) => {
-          await Promise.allSettled([
-            ...userDrainPromises,
-            container.resolve(AIRunService).waitForIdle(deadline),
-          ]);
+          await Promise.allSettled([...userDrainPromises, container.resolve(AIRunService).waitForIdle(deadline)]);
         },
         forceCloseUserWork: async () => {
           forceUserPromise ??= container.resolve(AIRunService).stopAllForShutdown();

@@ -293,6 +293,9 @@ message GatewayCommand {
     SetRelayDrainCommand set_relay_drain = 59;
     UpdateRelayWorkerCommand update_relay_worker = 60;
     CommitRelaySupervisorUpdateCommand commit_relay_supervisor_update = 61;
+    // First-class Docker Compose lifecycle. Accepted only by a general Docker
+    // daemon advertising docker_compose_v1.
+    DockerComposeCommand docker_compose = 62;
   }
 }
 
@@ -756,6 +759,21 @@ message DockerDeploymentCommand {
   string slot = 3;
   string config_json = 4;
   bool force = 5;
+}
+
+message DockerComposeCommand {
+  string action = 1;
+  string operation_id = 2;
+  string project_id = 3;
+  string project_name = 4;
+  string revision_id = 5;
+  string config_digest = 6;
+  bytes compose_yaml = 7;
+  string normalized_model_json = 8;
+  map<string, string> variables = 9;
+  map<string, string> secrets = 10;
+  bool remove_orphans = 11;
+  repeated string volume_names = 12;
 }
 
 message DockerRuntimeCommand {

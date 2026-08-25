@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveDockerRuntimeImage } from './scenario-helpers.js';
 import { scenarios } from './scenarios.js';
 import type { TestContext } from './test-harness.js';
 
@@ -20,6 +21,7 @@ const scenarioContract = [
   ['logging mutations cover schema, environment, token, and ingest when available', true],
   ['Docker node safe mutations cover folders, volumes, and networks', true],
   ['Docker container runtime mutations cover disposable container lifecycle', true],
+  ['Docker Compose runtime mutations cover validation, revisions, ownership, and lifecycle', true],
 ] as const;
 
 function contextWithFlags(flags: Partial<TestContext['config']>): TestContext {
@@ -59,5 +61,24 @@ describe('API e2e scenarios contract', () => {
       'set GATEWAY_E2E_ALLOW_RUNTIME_MUTATIONS=1'
     );
     expect(runtimeMutation?.skip?.(contextWithFlags({ allowRuntimeMutations: true }))).toBe(false);
+  });
+
+  it('prefers a general-purpose runtime image over Gateway connector images', async () => {
+    const ctx = contextWithFlags({});
+    ctx.client = {
+      get: async () => ({
+        status: 200,
+        headers: new Headers(),
+        text: '',
+        body: {
+          data: [
+            { repoTags: ['localhost:5000/gateway/secure-link-connector:e2e'] },
+            { repoTags: ['nginx:1.29-alpine'] },
+          ],
+        },
+      }),
+    } as TestContext['client'];
+
+    await expect(resolveDockerRuntimeImage(ctx, 'node-1')).resolves.toBe('nginx:1.29-alpine');
   });
 });

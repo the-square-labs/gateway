@@ -1,0 +1,369 @@
+import { CheckCircle2, Loader2, Save } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { CodeEditor } from "@/components/ui/code-editor";
+import { DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { createClientUuid } from "@/lib/client-id";
+import {
+  canAdoptComposeProject,
+  hasComposeNodeScope,
+  hasComposeProjectScope,
+} from "@/lib/compose-access";
+import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { dockerComposeProjectRoute } from "@/lib/resource-routes";
+import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import type { DockerComposeProject, Node } from "@/types";
+
+const DEFAULT_YAML = `services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+`;
+
+function parseVariables(value: string): Record<string, string> {
+  if (!value.trim()) return {};
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("Variables must be a JSON object");
+  return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [key, String(item)]));
+}
+
+export function ComposeProjectEditor({
+  onClose,
+  defaultNodeId,
+  projectIdOverride,
+  adoptionOverride,
+  compactRevision,
+}: {
+  onClose?: () => void;
+  defaultNodeId?: string;
+  projectIdOverride?: string;
+  adoptionOverride?: boolean;
+  compactRevision?: boolean;
+} = {}) {
+  const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
+  const projectId = projectIdOverride ?? routeProjectId;
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { hasScopedAccess, user } = useAuthStore();
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [project, setProject] = useState<DockerComposeProject | null>(null);
+  const [nodeId, setNodeId] = useState(defaultNodeId ?? "");
+  const [name, setName] = useState("");
+  const [yaml, setYaml] = useState(DEFAULT_YAML);
+  const [variablesText, setVariablesText] = useState("{}");
+  const [loading, setLoading] = useState(!!projectId);
+  const [validating, setValidating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const adoption =
+    adoptionOverride ||
+    project?.managementState === "external" ||
+    searchParams.get("adopt") === "1";
+  const editing = !!projectId && !adoption;
+  const canSubmit = projectId
+    ? adoption
+      ? canAdoptComposeProject(user?.scopes ?? [], nodeId, projectId)
+      : hasComposeProjectScope(user?.scopes ?? [], "docker:compose:manage", nodeId, projectId)
+    : !!nodeId && hasComposeNodeScope(user?.scopes ?? [], "docker:compose:create", nodeId);
+
+  useEffect(() => {
+    loadVisibleDockerNodes(
+      user?.scopes ?? [],
+      ["docker:compose:view"],
+      hasScopedAccess("nodes:details")
+    )
+      .then((available) => {
+        setNodes(available);
+        if (!nodeId && available.length === 1) setNodeId(available[0].id);
+      })
+      .catch(() => toast.error("Failed to load Docker nodes"));
+  }, [hasScopedAccess, nodeId, user?.scopes]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    setLoading(true);
+    api
+      .listDockerComposeProjects()
+      .then((projects) => projects.find((candidate) => candidate.id === projectId) ?? null)
+      .then(async (summary) =>
+        summary ? api.getDockerComposeProject(summary.nodeId, summary.id) : null
+      )
+      .then((loaded) => {
+        if (cancelled) return;
+        if (!loaded) throw new Error("Compose project not found");
+        setProject(loaded);
+        setNodeId(loaded.nodeId);
+        setName(loaded.name);
+        if (loaded.activeRevision) {
+          setYaml(loaded.activeRevision.sourceYaml);
+          setVariablesText(JSON.stringify(loaded.activeRevision.variables ?? {}, null, 2));
+        }
+      })
+      .catch((error) =>
+        toast.error(error instanceof Error ? error.message : "Failed to load Compose project")
+      )
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const selectedNode = nodes.find((node) => node.id === nodeId);
+  const supportsCompose = useMemo(() => {
+    const capabilities = selectedNode?.capabilities as Record<string, unknown> | undefined;
+    const advertised = Array.isArray(capabilities?.capabilities) ? capabilities.capabilities : [];
+    return capabilities?.dockerComposeV1 === true || advertised.includes("docker_compose_v1");
+  }, [selectedNode]);
+
+  const input = useCallback(() => {
+    const variables = parseVariables(variablesText);
+    return {
+      projectName: name.trim(),
+      yaml,
+      variables,
+      secretKeys: project?.activeRevision?.secretKeys ?? [],
+      secretValues: {},
+    };
+  }, [name, project?.activeRevision?.secretKeys, variablesText, yaml]);
+
+  const validate = useCallback(
+    async (notify = true) => {
+      if (!nodeId || !name.trim() || !yaml.trim())
+        throw new Error("Project name, node, and YAML are required");
+      const values = input();
+      setValidating(true);
+      try {
+        const result = await api.validateDockerComposeProject(nodeId, values);
+        if (notify) {
+          if (result.valid) {
+            toast.success("Configuration is valid");
+          } else {
+            const firstDiagnostic = result.diagnostics[0];
+            toast.error("Configuration is invalid", {
+              description: firstDiagnostic
+                ? `${firstDiagnostic.path ? `${firstDiagnostic.path}: ` : ""}${firstDiagnostic.message}${
+                    result.diagnostics.length > 1 ? ` · ${result.diagnostics.length - 1} more` : ""
+                  }`
+                : undefined,
+            });
+          }
+        }
+        return result;
+      } finally {
+        setValidating(false);
+      }
+    },
+    [input, name, nodeId, yaml]
+  );
+
+  const save = async () => {
+    if (!requireLicenseFeature("compose-applications", "Compose projects")) return;
+    if (!canSubmit) {
+      toast.error(
+        adoption
+          ? "Compose create and manage access are required to adopt this project"
+          : "You do not have permission to apply this Compose configuration"
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const values = input();
+      const result = await validate(false);
+      if (!result.valid) throw new Error("Fix validation errors before applying");
+      let targetProjectId = projectId;
+      let revisionId: string | undefined;
+      if (!projectId) {
+        const created = await api.createDockerComposeProject(nodeId, values);
+        targetProjectId = created.project.id;
+        revisionId = created.revision.id;
+      } else if (adoption) {
+        const prepared = await api.adoptDockerComposeProject(nodeId, projectId, values);
+        revisionId = prepared.revision.id;
+      } else {
+        const revision = await api.createDockerComposeRevision(nodeId, projectId, values);
+        revisionId = revision.id;
+      }
+      if (!targetProjectId || !revisionId) throw new Error("Compose revision was not created");
+      await api.startDockerComposeOperation(nodeId, targetProjectId, "apply", {
+        revisionId,
+        idempotencyKey: createClientUuid(),
+      });
+      toast.success(
+        adoption
+          ? "Adoption apply started"
+          : editing
+            ? "Revision apply started"
+            : "Compose project apply started"
+      );
+      if (compactRevision && onClose) onClose();
+      else navigate(dockerComposeProjectRoute(targetProjectId), { replace: true });
+    } catch (error) {
+      if (!handleLicenseApiError(error, "Compose projects"))
+        toast.error(error instanceof Error ? error.message : "Failed to apply Compose project");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading)
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+
+  if (compactRevision && editing) {
+    return (
+      <div className="flex min-h-0 flex-col gap-4">
+        <div className="h-[min(56dvh,560px)] min-h-80 overflow-hidden border border-border">
+          <CodeEditor
+            value={yaml}
+            onChange={setYaml}
+            language="yaml"
+            minHeight="0"
+            height="100%"
+            bordered={false}
+          />
+        </div>
+        <DialogFooter className="pt-1">
+          <Button variant="outline" onClick={onClose} disabled={validating || saving}>
+            Cancel
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void validate().catch((error) => toast.error(error.message))}
+            disabled={validating || saving}
+          >
+            {validating ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="mr-1 h-4 w-4" />
+            )}
+            Validate
+          </Button>
+          <Button
+            onClick={() => void save()}
+            disabled={validating || saving || !supportsCompose || !canSubmit}
+          >
+            {saving ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="mr-1 h-4 w-4" />
+            )}
+            Apply
+          </Button>
+        </DialogFooter>
+      </div>
+    );
+  }
+
+  if (onClose) {
+    return (
+      <div className="flex min-h-0 flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <label htmlFor="compose-name-modal" className="text-sm font-medium">
+              Project name
+            </label>
+            <Input
+              id="compose-name-modal"
+              value={name}
+              onChange={(event) => setName(event.target.value.toLowerCase())}
+              disabled={editing}
+              placeholder="my-project"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Target node</label>
+            <Select
+              value={nodeId}
+              onValueChange={setNodeId}
+              disabled={editing || adoption || !!defaultNodeId}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select node" />
+              </SelectTrigger>
+              <SelectContent>
+                {nodes.map((node) => (
+                  <SelectItem key={node.id} value={node.id}>
+                    {node.displayName || node.hostname}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!supportsCompose && nodeId && (
+              <p className="text-xs text-warning">Compose runtime is unavailable on this node.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Compose YAML</label>
+            <p className="text-xs text-muted-foreground">
+              Images are required; build, host paths, privileged and swarm-only fields are rejected.
+            </p>
+          </div>
+          <div className="h-[min(48dvh,440px)] min-h-72 overflow-hidden border border-border">
+            <CodeEditor
+              value={yaml}
+              onChange={setYaml}
+              language="yaml"
+              minHeight="0"
+              height="100%"
+              bordered={false}
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={validating || saving}>
+            Cancel
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void validate().catch((error) => toast.error(error.message))}
+            disabled={validating || saving}
+          >
+            {validating ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="mr-1 h-4 w-4" />
+            )}
+            Validate
+          </Button>
+          <Button
+            onClick={() => void save()}
+            disabled={validating || saving || !supportsCompose || !canSubmit}
+          >
+            {saving ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="mr-1 h-4 w-4" />
+            )}
+            {adoption ? "Adopt & Apply" : editing ? "Apply" : "Deploy"}
+          </Button>
+        </DialogFooter>
+      </div>
+    );
+  }
+
+  return null;
+}

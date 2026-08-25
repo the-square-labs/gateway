@@ -166,6 +166,7 @@ Completed foundations:
 - [x] Gateway and daemon update workflows with signature-verified artifacts.
 - [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
 - [x] Docker-to-nginx Secure Links.
+- [x] First-class single-node Docker Compose Projects: Community discovery, inventory, monitoring, and logs; Personal-or-higher deployment and lifecycle management with immutable revisions, adoption, folders, drift reporting, and protected child resources.
 
 Planned work:
 
@@ -174,7 +175,6 @@ Planned work:
 - [ ] Vulnerability and security scanning for Business and Enterprise.
 - [ ] Horizontal application scaling for Business and Enterprise: group multiple Docker nodes into a cluster and deploy an application to that cluster. **In development.**
 - [ ] Vertical workload scaling for Business and Enterprise: run multiple managed instances of one workload on the same machine. **In development.**
-- [ ] Compose application deployment and lifecycle management for Business and Enterprise. **In development.** Existing Compose-label discovery, protected grouping, and aggregated logs are not this deployment feature.
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
@@ -241,9 +241,9 @@ Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LIC
 
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. Pages unavailable. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited managed-node/user/group plan quotas, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. This does not include the in-development application-cluster features. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Pages) plus Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning when released, and the in-development application cluster, same-node multi-instance, and Compose application features. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Noncommercial use of the core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups; read-only Compose discovery, inventory, monitoring, and logs. Pages unavailable. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Commercial-use grant, unlimited managed-node/user/group plan quotas, Compose deployment and lifecycle management, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. This does not include the in-development application-cluster features. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Compose management and Pages) plus Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning when released, and the in-development application cluster and same-node multi-instance features. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business (including Pages) plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.

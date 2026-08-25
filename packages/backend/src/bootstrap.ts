@@ -48,6 +48,8 @@ import { DatabaseConnectionService } from '@/modules/databases/databases.service
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
+import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
+import { DockerComposeNodeDispatcher } from '@/modules/docker/compose/compose-node-dispatcher.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
@@ -684,6 +686,16 @@ export async function initializeContainer(): Promise<void> {
 
   const dockerTaskService = new DockerTaskService(db);
   container.registerInstance(DockerTaskService, dockerTaskService);
+  const dockerComposeService = new DockerComposeService(
+    db,
+    auditService,
+    dockerTaskService,
+    dockerSecretService,
+    dockerSnapshotService
+  );
+  dockerComposeService.setDispatcher(new DockerComposeNodeDispatcher(nodeDispatch));
+  dockerComposeService.setEventBus(eventBus);
+  container.registerInstance(DockerComposeService, dockerComposeService);
   const dockerDeploymentService = new DockerDeploymentService(
     db,
     auditService,
@@ -726,6 +738,9 @@ export async function initializeContainer(): Promise<void> {
   dockerTaskService.setEventBus(eventBus);
   void dockerTaskService.markActiveTasksLostOnStartup().catch((error) => {
     logger.warn('Failed to mark interrupted Docker tasks during bootstrap', { error });
+  });
+  void dockerComposeService.recoverInterruptedOperations().catch((error) => {
+    logger.warn('Failed to recover interrupted Compose operations during bootstrap', { error });
   });
   dockerDeploymentService.setEventBus(eventBus);
   dockerHealthCheckService.setEventBus(eventBus);
@@ -791,7 +806,8 @@ export async function initializeContainer(): Promise<void> {
     dockerSecretService,
     getEnv().DATABASE_CONNECTOR_IMAGE,
     getEnv().NODE_ENV === 'development',
-    relayPolicyService
+    relayPolicyService,
+    dockerComposeService
   );
   managedDatabaseBindingService.setEventBus(eventBus);
   managedDatabaseBindingService.setLicensePolicyService(licensePolicyService);
@@ -817,7 +833,13 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(ProxyDockerUpstreamService, proxyDockerUpstreamService);
   const proxySecureLinkService = relayPolicyService
-    ? new ProxySecureLinkService(db, nodeDispatch, relayPolicyService, getEnv().SECURE_LINK_CONNECTOR_IMAGE)
+    ? new ProxySecureLinkService(
+        db,
+        nodeDispatch,
+        relayPolicyService,
+        getEnv().SECURE_LINK_CONNECTOR_IMAGE,
+        proxyDockerUpstreamService
+      )
     : undefined;
   proxySecureLinkService?.setEventBus(eventBus);
   if (proxySecureLinkService) container.registerInstance(ProxySecureLinkService, proxySecureLinkService);

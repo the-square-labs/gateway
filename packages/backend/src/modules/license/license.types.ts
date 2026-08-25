@@ -1,5 +1,6 @@
 export const LICENSE_SERVER_URL = 'https://license.wiolett.cloud';
-export const LICENSE_ENTITLEMENTS_VERSION = 3;
+export const LICENSE_LEGACY_ENTITLEMENTS_VERSION = 3;
+export const LICENSE_ENTITLEMENTS_VERSION = 4;
 export const LICENSE_OFFLINE_GRACE_DAYS = 30;
 export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -140,7 +141,7 @@ const SHARED_FEATURES = [
   'signed-updates',
 ] as const;
 
-const PERSONAL_FEATURES = [
+const PERSONAL_FEATURES_V3 = [
   ...SHARED_FEATURES,
   'container-export',
   'blue-green',
@@ -151,6 +152,17 @@ const PERSONAL_FEATURES = [
   'pages',
 ] as const;
 
+const PERSONAL_FEATURES = [...PERSONAL_FEATURES_V3, 'compose-applications'] as const;
+
+const BUSINESS_FEATURES_V3 = [
+  ...PERSONAL_FEATURES_V3,
+  'secure-runtime',
+  'structured-logging',
+  'audit-export',
+  'security-scanning',
+  'guided-onboarding',
+] as const;
+
 const BUSINESS_FEATURES = [
   ...PERSONAL_FEATURES,
   'secure-runtime',
@@ -158,6 +170,16 @@ const BUSINESS_FEATURES = [
   'audit-export',
   'security-scanning',
   'guided-onboarding',
+] as const;
+
+const ENTERPRISE_FEATURES_V3 = [
+  ...BUSINESS_FEATURES_V3,
+  'internal-pki',
+  'siem-export',
+  'oidc-group-mapping',
+  'scim',
+  'dedicated-contact',
+  'assisted-migration',
 ] as const;
 
 export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
@@ -201,8 +223,41 @@ export const LICENSE_PLAN_ENTITLEMENTS: Record<LicensePlan, LicenseEntitlements>
   },
 };
 
-export function isCanonicalEntitlements(plan: LicensePlan, value: unknown): value is LicenseEntitlements {
-  const expected = LICENSE_PLAN_ENTITLEMENTS[plan];
+export const LICENSE_PLAN_ENTITLEMENTS_V3: Record<LicensePlan, LicenseEntitlements> = {
+  community: COMMUNITY_ENTITLEMENTS,
+  personal: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'standard',
+    features: [...PERSONAL_FEATURES_V3],
+  },
+  business: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority',
+    features: [...BUSINESS_FEATURES_V3],
+  },
+  enterprise: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority-dedicated',
+    features: [...ENTERPRISE_FEATURES_V3],
+  },
+};
+
+export function isCanonicalEntitlements(
+  plan: LicensePlan,
+  value: unknown,
+  version = LICENSE_ENTITLEMENTS_VERSION
+): value is LicenseEntitlements {
+  const contracts: Partial<Record<number, Record<LicensePlan, LicenseEntitlements>>> = {
+    [LICENSE_LEGACY_ENTITLEMENTS_VERSION]: LICENSE_PLAN_ENTITLEMENTS_V3,
+    [LICENSE_ENTITLEMENTS_VERSION]: LICENSE_PLAN_ENTITLEMENTS,
+  };
+  const expected = contracts[version]?.[plan];
   if (
     !expected ||
     !value ||

@@ -342,8 +342,37 @@ export function DockerContainers({
   const visibleContainers = optimisticContainers ?? containers;
   const truncatedListMeta = visibleContainers.find((container) => container._listTruncated);
 
+  const composeFolderIds = useMemo(() => {
+    const hiddenIds = new Set(
+      folders.filter((folder) => Boolean(folder.composeProject)).map((folder) => folder.id)
+    );
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const folder of folders) {
+        if (folder.parentId && hiddenIds.has(folder.parentId) && !hiddenIds.has(folder.id)) {
+          hiddenIds.add(folder.id);
+          changed = true;
+        }
+      }
+    }
+    return hiddenIds;
+  }, [folders]);
+
+  const generalFolders = useMemo(
+    () => folders.filter((folder) => !composeFolderIds.has(folder.id)),
+    [composeFolderIds, folders]
+  );
+  const generalContainers = useMemo(
+    () =>
+      visibleContainers.filter(
+        (container) => !container.folderId || !composeFolderIds.has(container.folderId)
+      ),
+    [composeFolderIds, visibleContainers]
+  );
+
   const filteredContainers = useMemo(() => {
-    let result = [...visibleContainers];
+    let result = [...generalContainers];
     if (filters.status !== "all") {
       result = result.filter((container) =>
         matchesDockerContainerStatus(container, filters.status)
@@ -359,18 +388,18 @@ export function DockerContainers({
       );
     }
     return result;
-  }, [filters, visibleContainers]);
+  }, [filters, generalContainers]);
 
   const rawFolderTree = useMemo(
-    () => attachContainersToFolders(folders, filteredContainers),
-    [folders, filteredContainers]
+    () => attachContainersToFolders(generalFolders, filteredContainers),
+    [filteredContainers, generalFolders]
   );
   const folderTree = useMemo(
     () => (fixedNodeId || filters.search.trim() ? pruneEmptyFolders(rawFolderTree) : rawFolderTree),
     [filters.search, fixedNodeId, rawFolderTree]
   );
 
-  const folderIds = useMemo(() => collectFolderTreeIds(folders), [folders]);
+  const folderIds = useMemo(() => collectFolderTreeIds(generalFolders), [generalFolders]);
   const ungroupedContainers = useMemo(
     () =>
       sortContainers(
@@ -1072,12 +1101,6 @@ export function DockerContainers({
           canManageFolder: (folder) => canManageFolders && !folder.isSystem,
           canReorderFolder: (folder) => canDragFolders && !folder.isSystem,
           canCreateSubfolder: (folder) => folder.depth < 2,
-          renderFolderBadges: (folder) =>
-            folder.isSystem && folder.composeProject ? (
-              <Badge variant="outline" size="inline">
-                COMPOSE
-              </Badge>
-            ) : null,
           onToggleFolder: fixedNodeId ? () => {} : (id) => toggleFolder(id),
           onRenameFolder: handleRenameFolder,
           onDeleteFolder: handleDeleteFolder,

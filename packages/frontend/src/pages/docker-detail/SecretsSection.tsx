@@ -25,6 +25,7 @@ interface SecretsSectionProps {
   duplicateSecretIndices: Set<number>;
   invalidKeyPattern: RegExp;
   hiddenKeys?: Set<string>;
+  description?: string;
 }
 
 export function SecretsSection({
@@ -39,6 +40,7 @@ export function SecretsSection({
   duplicateSecretIndices,
   invalidKeyPattern,
   hiddenKeys = new Set(),
+  description,
 }: SecretsSectionProps) {
   const [revealedSecrets, setRevealedSecrets] = useState<Set<number>>(new Set());
   const visibleSecretRows = secretRows
@@ -82,7 +84,7 @@ export function SecretsSection({
           <span>Secrets</span>
         </span>
       }
-      description="Encrypted at rest — injected as env vars on container start"
+      description={description ?? "Encrypted at rest — injected as env vars on container start"}
       actions={
         canManageSecrets ? (
           <div className="flex items-center gap-2">

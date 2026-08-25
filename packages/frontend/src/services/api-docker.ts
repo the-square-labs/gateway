@@ -1,5 +1,11 @@
 import type {
   ContainerCreateConfig,
+  DockerComposeOperation,
+  DockerComposeOperationAction,
+  DockerComposeProject,
+  DockerComposeProjectSummary,
+  DockerComposeRevision,
+  DockerComposeValidationResult,
   DockerContainer,
   DockerContainerFolder,
   DockerDeployment,
@@ -191,6 +197,206 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return this.request<void>("/docker/folders/reorder-resources", {
         method: "PUT",
         body: JSON.stringify({ resourceType, items }),
+      });
+    }
+
+    // ── Docker Compose Projects ───────────────────────────────────────
+
+    async listDockerComposeProjects(nodeId?: string): Promise<DockerComposeProjectSummary[]> {
+      const query = nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "";
+      return this.unwrapData(
+        this.request<{ data: DockerComposeProjectSummary[] }>(`/docker/compose-projects${query}`)
+      );
+    }
+
+    async getDockerComposeProject(
+      nodeId: string,
+      projectId: string
+    ): Promise<DockerComposeProject> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeProject }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}`
+        )
+      );
+    }
+
+    async validateDockerComposeProject(
+      nodeId: string,
+      input: {
+        projectName: string;
+        yaml: string;
+        variables?: Record<string, string>;
+        secretKeys?: string[];
+      }
+    ): Promise<DockerComposeValidationResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeValidationResult }>(
+          `/docker/nodes/${nodeId}/compose-projects/validate`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async createDockerComposeProject(
+      nodeId: string,
+      input: {
+        projectName: string;
+        yaml: string;
+        variables?: Record<string, string>;
+        secretKeys?: string[];
+      }
+    ): Promise<{ project: DockerComposeProjectSummary; revision: DockerComposeRevision }> {
+      return this.unwrapData(
+        this.request<{
+          data: { project: DockerComposeProjectSummary; revision: DockerComposeRevision };
+        }>(`/docker/nodes/${nodeId}/compose-projects`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async adoptDockerComposeProject(
+      nodeId: string,
+      projectId: string,
+      input: { yaml: string; variables?: Record<string, string>; secretKeys?: string[] }
+    ): Promise<{
+      project: DockerComposeProjectSummary;
+      revision: DockerComposeRevision;
+      validation: DockerComposeValidationResult;
+    }> {
+      return this.unwrapData(
+        this.request<{
+          data: {
+            project: DockerComposeProjectSummary;
+            revision: DockerComposeRevision;
+            validation: DockerComposeValidationResult;
+          };
+        }>(`/docker/nodes/${nodeId}/compose-projects/${projectId}/adopt`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async createDockerComposeRevision(
+      nodeId: string,
+      projectId: string,
+      input: { yaml: string; variables?: Record<string, string>; secretKeys?: string[] }
+    ): Promise<DockerComposeRevision> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeRevision }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/revisions`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async listDockerComposeRevisions(
+      nodeId: string,
+      projectId: string
+    ): Promise<DockerComposeRevision[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeRevision[] }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/revisions`
+        )
+      );
+    }
+
+    async deleteDockerComposeRevision(
+      nodeId: string,
+      projectId: string,
+      revisionId: string
+    ): Promise<void> {
+      await this.request(
+        `/docker/nodes/${nodeId}/compose-projects/${projectId}/revisions/${revisionId}`,
+        { method: "DELETE" }
+      );
+    }
+
+    async listDockerComposeOperations(
+      nodeId: string,
+      projectId: string,
+      input: { cursor?: string; limit?: number } = {}
+    ): Promise<{ data: DockerComposeOperation[]; nextCursor: string | null }> {
+      const query = new URLSearchParams();
+      if (input.cursor) query.set("cursor", input.cursor);
+      if (input.limit) query.set("limit", String(input.limit));
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      return this.request<{ data: DockerComposeOperation[]; nextCursor: string | null }>(
+        `/docker/nodes/${nodeId}/compose-projects/${projectId}/operations${suffix}`
+      );
+    }
+
+    async listDockerComposeSecrets(nodeId: string, projectId: string): Promise<DockerSecret[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerSecret[] }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets`
+        )
+      );
+    }
+
+    async createDockerComposeSecret(
+      nodeId: string,
+      projectId: string,
+      key: string,
+      value: string
+    ): Promise<DockerSecret> {
+      return this.unwrapData(
+        this.request<{ data: DockerSecret }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets`,
+          { method: "POST", body: JSON.stringify({ key, value }) }
+        )
+      );
+    }
+
+    async updateDockerComposeSecret(
+      nodeId: string,
+      projectId: string,
+      secretId: string,
+      value: string
+    ): Promise<DockerSecret> {
+      return this.unwrapData(
+        this.request<{ data: DockerSecret }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets/${secretId}`,
+          { method: "PUT", body: JSON.stringify({ value }) }
+        )
+      );
+    }
+
+    async deleteDockerComposeSecret(
+      nodeId: string,
+      projectId: string,
+      secretId: string
+    ): Promise<void> {
+      await this.request(
+        `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets/${secretId}`,
+        { method: "DELETE" }
+      );
+    }
+
+    async startDockerComposeOperation(
+      nodeId: string,
+      projectId: string,
+      action: DockerComposeOperationAction,
+      input: {
+        revisionId?: string;
+        idempotencyKey: string;
+        removeOrphans?: boolean;
+        volumeNames?: string[];
+      }
+    ): Promise<DockerComposeOperation> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeOperation }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/actions/${action}`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async deleteDockerComposeProject(nodeId: string, projectId: string): Promise<void> {
+      await this.request(`/docker/nodes/${nodeId}/compose-projects/${projectId}`, {
+        method: "DELETE",
       });
     }
 

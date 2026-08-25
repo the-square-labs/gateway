@@ -117,7 +117,7 @@ describe('UIBootstrapService', () => {
     const scopes = [
       'nodes:details:node-nginx',
       'docker:containers:view:node-docker',
-      'feat:ai:use',
+      'ai:workspace:use',
       'status-page:view',
       'pages:view',
     ];
