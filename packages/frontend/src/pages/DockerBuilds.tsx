@@ -1,5 +1,6 @@
-import { GitBranch, RefreshCw, RotateCcw, Square } from "lucide-react";
+import { GitBranch, Pin, RefreshCw, RotateCcw, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
@@ -7,14 +8,24 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
+import { useDockerStore } from "@/stores/docker";
+import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import type { DockerBuild, DockerBuildLogChunk, DockerBuildStatus } from "@/types";
 import { DockerBuildDetailsDialog } from "./docker-detail/DockerBuildDetailsDialog";
 
@@ -66,6 +77,7 @@ export interface DockerBuildsProps {
 }
 
 export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<DockerBuild[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -78,12 +90,44 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [branch, setBranch] = useState("all");
   const [selected, setSelected] = useState<DockerBuild | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [pinBuild, setPinBuild] = useState<DockerBuild | null>(null);
+  const [pinOpen, setPinOpen] = useState(false);
   const [logs, setLogs] = useState<DockerBuildLogChunk[]>([]);
   const requestId = useRef(0);
   const pollRequestId = useRef(0);
   const loadingMore = useRef(false);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const dockerNodes = useDockerStore((state) => state.dockerNodes);
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
+    usePinnedContainersStore();
+
+  useEffect(() => {
+    const buildId = searchParams.get("build");
+    if (!buildId || detailsOpen) return;
+    let cancelled = false;
+    void api
+      .getDockerBuild(buildId)
+      .then((build) => {
+        if (cancelled) return;
+        setSelected(build);
+        setDetailsOpen(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSearchParams(
+          (current) => {
+            const next = new URLSearchParams(current);
+            next.delete("build");
+            return next;
+          },
+          { replace: true }
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailsOpen, searchParams, setSearchParams]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 180);
@@ -372,6 +416,17 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         width: "4rem",
         render: (build) => (
           <span className="flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Pin build"
+              onClick={() => {
+                setPinBuild(build);
+                setPinOpen(true);
+              }}
+            >
+              <Pin className="h-4 w-4" />
+            </Button>
             {ACTIVE.has(build.status) && (
               <Button
                 size="icon"
@@ -540,9 +595,94 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         open={detailsOpen}
         build={selected}
         logs={logs}
-        onOpenChange={setDetailsOpen}
+        onOpenChange={(open) => {
+          setDetailsOpen(open);
+          if (!open && searchParams.has("build")) {
+            setSearchParams(
+              (current) => {
+                const next = new URLSearchParams(current);
+                next.delete("build");
+                return next;
+              },
+              { replace: true }
+            );
+          }
+        }}
         onExited={() => setSelected(null)}
       />
+      <Dialog
+        open={pinOpen}
+        onOpenChange={(open) => {
+          setPinOpen(open);
+          if (!open) setPinBuild(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Pin build</DialogTitle>
+            <DialogDescription>
+              Keep{" "}
+              {pinBuild ? `${pinBuild.target.name} · ${shortSha(pinBuild.commitSha)}` : "build"}{" "}
+              visible.
+            </DialogDescription>
+          </DialogHeader>
+          {pinBuild &&
+            (() => {
+              const scopeBase =
+                pinBuild.target.kind === "compose_project"
+                  ? ("docker:compose:view" as const)
+                  : ("docker:containers:view" as const);
+              const scopeResourceId =
+                pinBuild.target.kind === "container"
+                  ? pinBuild.target.containerName
+                  : pinBuild.target.kind === "deployment"
+                    ? pinBuild.target.deploymentId
+                    : pinBuild.target.composeProjectId;
+              const nodeSlug =
+                dockerNodes.find((node) => node.id === pinBuild.target.nodeId)?.slug ??
+                pinBuild.target.nodeId;
+              const meta = {
+                nodeId: pinBuild.target.nodeId,
+                nodeSlug,
+                name: `${pinBuild.target.name} · ${shortSha(pinBuild.commitSha)}`,
+                state: pinBuild.status,
+                kind: "build" as const,
+                scopeBase,
+                scopeResourceId,
+              };
+              return (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium">Add to dashboard</p>
+                      <p className="text-xs text-muted-foreground">Show current build status</p>
+                    </div>
+                    <Switch
+                      checked={isPinnedDashboard(pinBuild.id)}
+                      onChange={() => {
+                        toggleDashboard(pinBuild.id, meta);
+                        usePinnedContainersStore.getState().invalidate();
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium">Add to sidebar</p>
+                      <p className="text-xs text-muted-foreground">Quick access to build details</p>
+                    </div>
+                    <Switch
+                      checked={isPinnedSidebar(pinBuild.id)}
+                      onChange={() => {
+                        toggleSidebar(pinBuild.id, meta);
+                        usePinnedContainersStore.getState().invalidate();
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

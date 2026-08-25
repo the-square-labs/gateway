@@ -1,10 +1,11 @@
-import { Box, Database, GitBranch, Globe, Server } from "lucide-react";
+import { Box, Boxes, Database, GitBranch, Globe, Hammer, Server } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   databaseRoute,
+  dockerComposeProjectRoute,
   dockerContainerRoute,
   dockerDeploymentRoute,
   nodeRoute,
@@ -48,10 +49,14 @@ export function SidebarPinnedResources({
   const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
   const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
-  const canViewContainerDetails = useCallback(
-    (nodeId: string, scopeResourceId?: string) =>
-      hasScope("docker:containers:view") ||
-      hasScope(`docker:containers:view:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`),
+  const canViewDockerResource = useCallback(
+    (
+      nodeId: string,
+      scopeResourceId?: string,
+      scopeBase: "docker:containers:view" | "docker:compose:view" = "docker:containers:view"
+    ) =>
+      hasScope(scopeBase) ||
+      hasScope(`${scopeBase}:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`),
     [hasScope]
   );
   const canViewDatabaseDetails = useCallback(
@@ -176,7 +181,7 @@ export function SidebarPinnedResources({
     sidebarPinnedContainerIds.some((id) => {
       const meta = pinnedContainerMeta[id];
       return meta
-        ? canViewContainerDetails(meta.nodeId, meta.scopeResourceId)
+        ? canViewDockerResource(meta.nodeId, meta.scopeResourceId, meta.scopeBase)
         : hasScope("docker:containers:view");
     });
   // Pin placement is local, while resource visibility is server-authoritative.
@@ -263,18 +268,29 @@ export function SidebarPinnedResources({
     }
     return cn(
       base,
-      status === "running"
+      status === "running" || status === "succeeded" || status === "healthy"
         ? "bg-emerald-500"
-        : status === "exited" || status === "dead"
+        : status === "exited" || status === "dead" || status === "failed"
           ? "bg-red-400"
-          : status === "stopping" ||
-              status === "restarting" ||
-              status === "recreating" ||
-              status === "killing" ||
-              status === "updating" ||
-              status === "migrating"
-            ? "animate-pulse bg-warning"
-            : "bg-muted-foreground/40"
+          : status === "degraded"
+            ? "bg-warning"
+            : status === "stopping" ||
+                status === "restarting" ||
+                status === "recreating" ||
+                status === "killing" ||
+                status === "updating" ||
+                status === "migrating" ||
+                status === "queued" ||
+                status === "claimed" ||
+                status === "checking_out" ||
+                status === "building" ||
+                status === "scanning" ||
+                status === "pushing" ||
+                status === "deploying" ||
+                status === "applying" ||
+                status === "validating"
+              ? "animate-pulse bg-warning"
+              : "bg-muted-foreground/40"
     );
   };
 
@@ -340,13 +356,27 @@ export function SidebarPinnedResources({
         })}
         {sidebarPinnedContainerIds.map((id) => {
           const meta = pinnedContainerMeta[id];
-          if (!meta?.nodeSlug || !canViewContainerDetails(meta.nodeId, meta.scopeResourceId))
+          if (
+            !meta?.nodeSlug ||
+            !canViewDockerResource(meta.nodeId, meta.scopeResourceId, meta.scopeBase)
+          )
             return null;
-          const deployment = meta.kind === "deployment";
-          const path = deployment
-            ? dockerDeploymentRoute(meta.nodeSlug, meta.name)
-            : dockerContainerRoute(meta.nodeSlug, meta.name);
-          const Icon = deployment ? GitBranch : Box;
+          const path =
+            meta.kind === "deployment"
+              ? dockerDeploymentRoute(meta.nodeSlug, meta.name)
+              : meta.kind === "compose"
+                ? dockerComposeProjectRoute(id)
+                : meta.kind === "build"
+                  ? `/docker/builds?build=${encodeURIComponent(id)}`
+                  : dockerContainerRoute(meta.nodeSlug, meta.name);
+          const Icon =
+            meta.kind === "deployment"
+              ? GitBranch
+              : meta.kind === "compose"
+                ? Boxes
+                : meta.kind === "build"
+                  ? Hammer
+                  : Box;
           return (
             <Link
               key={id}

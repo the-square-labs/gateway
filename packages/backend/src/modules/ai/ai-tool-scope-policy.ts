@@ -120,7 +120,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'status-page:incidents:delete',
   ],
   manage_inference_provider: ['inference:providers:view', 'inference:providers:manage'],
-  manage_inference_token: ['inference:tokens:manage'],
+  manage_inference_token: ['feat:ai:use'],
   list_resource_folders: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_resource_folder: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_node_config: ['nodes:config:view', 'nodes:config:edit'],

@@ -33,7 +33,6 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
-import { AI_SCOPE } from "@/types";
 import { dashboardAttentionDotClass, dashboardAttentionLabel } from "./dashboard-attention";
 import { navigationAttentionForItem, navigationAttentionLabel } from "./navigation-attention";
 import { SidebarPinnedResources } from "./SidebarPinnedResources";
@@ -335,7 +334,7 @@ export function SidebarContent({
 
               <div className="flex-1" />
 
-              {hasScope(AI_SCOPE) && <AIButton iconOnly />}
+              <AIButton iconOnly />
 
               {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
                 <Tooltip>
@@ -422,7 +421,7 @@ export function SidebarContent({
               </span>
 
               <div className="flex items-center gap-0.5">
-                {hasScope(AI_SCOPE) && <AIButton />}
+                <AIButton />
                 {alwaysExpanded ? (
                   <Button variant="ghost" size="icon" className="h-10 w-10" onClick={onNavigate}>
                     <X className="h-4 w-4" />

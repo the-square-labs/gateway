@@ -992,12 +992,6 @@ const RAW_TOKEN_SCOPES = [
   // Inference administration. inference:setup is an OAuth-only protocol
   // scope rendered by OAuthConsent and must not be user-assignable.
   {
-    value: "inference:tokens:manage",
-    label: "Manage Inference Tokens",
-    desc: "Create and revoke personal Gateway Inference tokens",
-    group: "Inference",
-  },
-  {
     value: "inference:providers:view",
     label: "View Inference Providers",
     desc: "View inference providers, connections, discovery, and quota",
@@ -1440,7 +1434,6 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "ai:sandbox:manage",
   "mcp:use",
   "inference:setup",
-  "inference:tokens:manage",
   "inference:providers:view",
   "inference:providers:manage",
   "inference:models:manage",

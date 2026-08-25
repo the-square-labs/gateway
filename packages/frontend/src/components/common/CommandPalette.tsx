@@ -813,14 +813,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         },
       });
     }
-    if (aiEnabled !== false && aiScopeOk) {
-      actions.push({
-        id: "action:open-ai",
-        label: "Open AI Workspace",
-        icon: Sparkles,
-        action: () => useUIStore.getState().setAIPanelOpen(true),
-      });
-    }
+    actions.push({
+      id: "action:open-ai",
+      label: "Open AI Workspace",
+      icon: Sparkles,
+      action: () => {
+        if (aiEnabled === false || !aiScopeOk) {
+          window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
+          return;
+        }
+        useUIStore.getState().setAIPanelOpen(true);
+      },
+    });
     return actions;
   }, [aiEnabled, aiScopeOk, hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
 

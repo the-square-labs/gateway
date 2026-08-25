@@ -34,6 +34,8 @@ export const SEVERITY_COLOR: Record<Severity, number> = {
 export type AlertCategory =
   | 'node'
   | 'container'
+  | 'build'
+  | 'compose'
   | 'proxy'
   | 'pages'
   | 'gateway'
@@ -206,6 +208,43 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{health.status}}', description: 'HTTP health status' },
       { name: '{{fired.at}}', description: 'When the alert started firing' },
       { name: '{{fired.duration}}', description: 'How long alert has been firing' },
+    ],
+  },
+  {
+    id: 'build',
+    label: 'Docker Build',
+    metrics: [],
+    events: [
+      { id: 'succeeded', label: 'Build Succeeded', defaultSeverity: 'info' },
+      { id: 'failed', label: 'Build Failed', defaultSeverity: 'critical' },
+      { id: 'cancelled', label: 'Build Cancelled', defaultSeverity: 'warning' },
+      { id: 'superseded', label: 'Build Superseded', defaultSeverity: 'info' },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Build target name' },
+      { name: '{{resource.id}}', description: 'Build source binding ID' },
+      { name: '{{resource.key}}', description: 'Internal alert resource key' },
+      { name: '{{operation.phase}}', description: 'Build status' },
+      { name: '{{failure.code}}', description: 'Build failure code' },
+    ],
+  },
+  {
+    id: 'compose',
+    label: 'Compose Project',
+    metrics: [],
+    events: [
+      { id: 'operation.succeeded', label: 'Operation Succeeded', defaultSeverity: 'info' },
+      { id: 'operation.failed', label: 'Operation Failed', defaultSeverity: 'critical' },
+      { id: 'operation.cancelled', label: 'Operation Cancelled', defaultSeverity: 'warning' },
+      { id: 'revision.activated', label: 'Revision Activated', defaultSeverity: 'info' },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Compose project name' },
+      { name: '{{resource.id}}', description: 'Compose project ID' },
+      { name: '{{resource.key}}', description: 'Internal alert resource key' },
+      { name: '{{operation.kind}}', description: 'Compose operation kind' },
+      { name: '{{operation.phase}}', description: 'Compose operation phase' },
+      { name: '{{failure.code}}', description: 'Compose failure message or code' },
     ],
   },
   {
@@ -585,6 +624,59 @@ export interface EventMapping {
 }
 
 export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
+  'docker.build.changed': [
+    ...(['succeeded', 'failed', 'cancelled', 'superseded'] as const).map((status) => ({
+      category: 'build' as const,
+      eventId: status,
+      match: (p: any) => p.status === status,
+      extractResource: (p: any) => ({
+        type: 'docker_build_source',
+        id: p.sourceBindingId,
+        name: p.targetName ?? p.sourceBindingId,
+      }),
+      extractData: (p: any) => ({
+        operation_kind: 'build',
+        operation_phase: p.status,
+        failure_code: p.errorCode ?? null,
+        failure_message: p.errorMessage ?? null,
+        target_node_id: p.nodeId ?? null,
+      }),
+    })),
+  ],
+  'docker.compose.changed': [
+    {
+      category: 'compose',
+      eventId: 'operation.succeeded',
+      match: (p) => p.action === 'operation_succeeded',
+      extractResource: (p) => ({ type: 'docker_compose_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({ operation_kind: p.operationAction ?? p.action, operation_phase: 'succeeded' }),
+    },
+    {
+      category: 'compose',
+      eventId: 'operation.failed',
+      match: (p) => p.action === 'operation_failed',
+      extractResource: (p) => ({ type: 'docker_compose_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({
+        operation_kind: p.operationAction ?? p.action,
+        operation_phase: 'failed',
+        failure_code: p.error ?? 'compose_operation_failed',
+      }),
+    },
+    {
+      category: 'compose',
+      eventId: 'operation.cancelled',
+      match: (p) => p.action === 'operation_cancelled',
+      extractResource: (p) => ({ type: 'docker_compose_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: (p) => ({ operation_kind: p.operationAction ?? p.action, operation_phase: 'cancelled' }),
+    },
+    {
+      category: 'compose',
+      eventId: 'revision.activated',
+      match: (p) => p.action === 'revision_activated',
+      extractResource: (p) => ({ type: 'docker_compose_project', id: p.projectId, name: p.projectName ?? p.projectId }),
+      extractData: () => ({ operation_kind: 'revision', operation_phase: 'activated' }),
+    },
+  ],
   'pages.deployment.changed': [
     {
       category: 'pages',

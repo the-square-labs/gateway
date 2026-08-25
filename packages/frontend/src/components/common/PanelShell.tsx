@@ -4,6 +4,7 @@ import { SectionHeader } from "./SectionHeader";
 
 interface PanelShellProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
   title?: React.ReactNode;
+  icon?: React.ReactNode;
   description?: React.ReactNode;
   actions?: React.ReactNode;
   header?: React.ReactNode;
@@ -20,6 +21,7 @@ interface PanelShellProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "ti
 
 export function PanelShell({
   title,
+  icon,
   description,
   actions,
   header,
@@ -49,6 +51,7 @@ export function PanelShell({
         (title !== undefined ? (
           <SectionHeader
             title={title}
+            icon={icon}
             description={description}
             actions={actions}
             withBorder={resolvedHeaderBorder}

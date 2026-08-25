@@ -650,6 +650,7 @@ export class DockerBuildService {
           nodeId: build.target.nodeId,
           scopeResourceId,
           targetKind: build.target.kind,
+          targetName: build.target.name,
         });
       })
       .catch(() => undefined);

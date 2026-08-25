@@ -346,7 +346,7 @@ describe('OAuthService.createConsentRequest', () => {
     const { service } = createService();
     const setupUser = {
       ...USER,
-      scopes: ['feat:ai:use', 'inference:tokens:manage', 'nodes:details'],
+      scopes: ['feat:ai:use', 'nodes:details'],
     };
 
     const pending = await service.createConsentRequest(setupUser, {
@@ -363,12 +363,12 @@ describe('OAuthService.createConsentRequest', () => {
     expect(pending.unavailableScopes).toEqual(['nodes:details']);
   });
 
-  it('rejects setup OAuth when the user cannot manage inference tokens', async () => {
+  it('rejects setup OAuth when the user cannot use Gateway Inference', async () => {
     const { service } = createService();
 
     await expect(
       service.createConsentRequest(
-        { ...USER, scopes: ['feat:ai:use'] },
+        { ...USER, scopes: [] },
         {
           response_type: 'code',
           client_id: 'goc_client',
@@ -784,7 +784,7 @@ describe('OAuthService.validateAccessToken', () => {
   it('accepts setup access tokens only for the inference setup resource', async () => {
     const setupResource = 'https://gateway.example.com/api/inference/setup';
     const { service } = createService({
-      groupScopes: ['feat:ai:use', 'inference:tokens:manage'],
+      groupScopes: ['feat:ai:use'],
       accessToken: {
         id: 'access-setup',
         tokenHash: 'hash',

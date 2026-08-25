@@ -8,6 +8,8 @@ export interface AlertRule {
   category:
     | "node"
     | "container"
+    | "build"
+    | "compose"
     | "proxy"
     | "gateway"
     | "logging"

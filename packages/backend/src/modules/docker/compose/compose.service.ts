@@ -1422,6 +1422,7 @@ export class DockerComposeService {
     this.eventBus?.publish('docker.compose.changed', {
       action,
       projectId: project.id,
+      projectName: project.name,
       nodeId: project.nodeId,
       ...extra,
     });

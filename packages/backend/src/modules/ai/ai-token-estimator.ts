@@ -5,9 +5,14 @@ const MESSAGE_OVERHEAD_TOKENS = 4;
 const TOOL_CALL_OVERHEAD_TOKENS = 20;
 const IMAGE_BASE_TOKENS = 85;
 const IMAGE_BYTES_PER_TOKEN = 512;
+const TEXT_BYTES_PER_TOKEN = 3;
 
 export function estimateTextTokens(value: string): number {
-  return Math.max(0, Math.ceil(Buffer.byteLength(value, 'utf8') / 4));
+  // Tool-heavy conversations contain JSON, source code, paths, and identifiers,
+  // which tokenize materially denser than natural-language prose. A 4-byte
+  // estimate allowed the provider context to cross the configured compaction
+  // threshold before Gateway initiated compaction.
+  return Math.max(0, Math.ceil(Buffer.byteLength(value, 'utf8') / TEXT_BYTES_PER_TOKEN));
 }
 
 export function estimateProviderMessagesTokens(messages: Record<string, unknown>[]): number {

@@ -106,7 +106,7 @@ export function Profile() {
   const canUseAI = hasScope(AI_SCOPE);
   const canUseInference = inferenceEnabled && hasScope("feat:ai:use");
   const canViewInferenceUsage = hasScope("feat:ai:use");
-  const canManageInferenceTokens = hasScope("inference:tokens:manage");
+  const canManageInferenceTokens = hasScope("feat:ai:use");
   const canViewSystemCertificates = hasScope("admin:details:certificates");
   const userScopes = user?.scopes;
 

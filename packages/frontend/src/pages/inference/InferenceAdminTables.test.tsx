@@ -47,7 +47,7 @@ describe("InferenceUsersTable", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     const policyTitle = screen.getByText("Default policy");
     const accessSwitch = screen.getByRole("button", { name: "Inference access" });
-    expect(policyTitle.parentElement?.parentElement).toContainElement(accessSwitch);
+    expect(policyTitle.closest(".border.border-border.bg-card")).toContainElement(accessSwitch);
     expect(screen.queryByText("Inference access")).not.toBeInTheDocument();
     expect(
       screen.getByText("Inherited by users without an individual override")

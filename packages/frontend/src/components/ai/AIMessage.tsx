@@ -720,6 +720,7 @@ function formatBytes(bytes: number): string {
 
 function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
   const [expanded, setExpanded] = useState(() => toolGroupExpansionPreference(toolCalls) === true);
+  const [renderContent, setRenderContent] = useState(expanded);
   const [showWaiting, setShowWaiting] = useState(false);
   const failedCount = toolCalls.filter((toolCall) => toolCall.status === "failed").length;
   const waitingCount = toolCalls.filter((toolCall) => toolCall.status === "running").length;
@@ -742,8 +743,15 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
     const preference = toolGroupExpansionPreference(toolCalls);
     if (preference === null) return;
     setExpanded(preference);
+    if (preference) setRenderContent(true);
     setToolGroupExpansionPreference(toolCalls, preference);
   }, [toolCalls]);
+
+  useEffect(() => {
+    if (expanded || !renderContent) return;
+    const timeout = window.setTimeout(() => setRenderContent(false), 160);
+    return () => window.clearTimeout(timeout);
+  }, [expanded, renderContent]);
 
   return (
     <div className="my-0.5 text-sm">
@@ -753,6 +761,7 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
         onClick={() => {
           setExpanded((value) => {
             const next = !value;
+            if (next) setRenderContent(true);
             setToolGroupExpansionPreference(toolCalls, next);
             return next;
           });
@@ -772,11 +781,13 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden">
-          <div className="py-1">
-            {toolCalls.map((toolCall) => (
-              <AIToolCallBlock key={toolCall.id} toolCall={toolCall} />
-            ))}
-          </div>
+          {renderContent ? (
+            <div className="py-1">
+              {toolCalls.map((toolCall) => (
+                <AIToolCallBlock key={toolCall.id} toolCall={toolCall} />
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

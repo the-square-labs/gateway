@@ -1843,6 +1843,12 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return (await this.listDockerBuildPage(params)).data;
     }
 
+    async getDockerBuild(buildId: string): Promise<DockerBuild> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuild }>(`/docker/builds/${encodeURIComponent(buildId)}`)
+      );
+    }
+
     async getDockerBuildLogs(buildId: string): Promise<DockerBuildLogChunk[]> {
       return this.unwrapData(
         this.request<{ data: DockerBuildLogChunk[] }>(`/docker/builds/${buildId}/logs?limit=500`)

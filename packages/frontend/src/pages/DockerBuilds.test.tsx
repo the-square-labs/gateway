@@ -89,6 +89,17 @@ describe("DockerBuilds", () => {
     expect(await screen.findByText("SHA")).toBeInTheDocument();
   });
 
+  it("opens build details from a pinned build link", async () => {
+    const pinned = build("pinned-build");
+    vi.spyOn(api, "getDockerBuild").mockResolvedValue(pinned);
+
+    renderWithRouter(<DockerBuilds />, { route: "/docker/builds?build=pinned-build" });
+
+    await waitFor(() => expect(api.getDockerBuild).toHaveBeenCalledWith("pinned-build"));
+    expect(await screen.findByRole("heading", { name: "Build details" })).toBeInTheDocument();
+    expect(screen.getByText(pinned.repositoryFullPath)).toBeInTheDocument();
+  });
+
   it("polls active builds every 5 seconds", async () => {
     vi.useFakeTimers();
     const active = build("active");

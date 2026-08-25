@@ -240,6 +240,37 @@ describe('evaluateWindowRatio', () => {
     expect(migration?.match({ status: 'failed', projectId: 'project-1' })).toBe(true);
   });
 
+  it('maps Docker build and Compose lifecycle events to alert resources', () => {
+    const buildCategory = ALERT_CATEGORIES.find((candidate) => candidate.id === 'build');
+    const composeCategory = ALERT_CATEGORIES.find((candidate) => candidate.id === 'compose');
+    const buildMapping = EVENT_BUS_MAPPINGS['docker.build.changed'].find((candidate) => candidate.eventId === 'failed');
+    const composeMapping = EVENT_BUS_MAPPINGS['docker.compose.changed'].find(
+      (candidate) => candidate.eventId === 'operation.failed'
+    );
+
+    expect(buildCategory?.events.map((event) => event.id)).toContain('failed');
+    expect(composeCategory?.events.map((event) => event.id)).toContain('operation.failed');
+    expect(
+      buildMapping?.extractResource({
+        buildId: 'build-1',
+        sourceBindingId: 'source-1',
+        targetName: 'api',
+        status: 'failed',
+      })
+    ).toEqual({
+      type: 'docker_build_source',
+      id: 'source-1',
+      name: 'api',
+    });
+    expect(
+      composeMapping?.extractResource({
+        projectId: 'compose-1',
+        projectName: 'storefront',
+        action: 'operation_failed',
+      })
+    ).toEqual({ type: 'docker_compose_project', id: 'compose-1', name: 'storefront' });
+  });
+
   it('projects license grace and downgrade transitions onto the notification bus', () => {
     const mapping = EVENT_BUS_MAPPINGS['system.license.changed'][0];
     const payload = {

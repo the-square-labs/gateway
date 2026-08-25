@@ -176,7 +176,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `license:view` |  |
 | `license:manage` |  |
 | `ai:workspace:use` | Use AI Workspace. Granted to the built-in viewer group and above. |
-| `feat:ai:use` | Use Gateway Inference, including personal inference usage. |
+| `feat:ai:use` | Use Gateway Inference, view personal usage, and create or revoke personal inference tokens. |
 | `feat:ai:configure` |  |
 | `ai:skills:manage` | Manage shared user-defined AI Workspace skills. |
 | `ai:sandbox:use` |  |
@@ -185,7 +185,6 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `ai:sandbox:manage` |  |
 | `mcp:use` |  |
 | `inference:setup` | OAuth-only companion setup token scope; not assignable to users or groups. |
-| `inference:tokens:manage` |  |
 | `inference:providers:view` |  |
 | `inference:providers:manage` |  |
 | `inference:models:manage` |  |
@@ -281,7 +280,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | Scope | Reason |
 |-------|--------|
 | `ai:workspace:use` | User/session-only AI Workspace access. |
-| `feat:ai:use` | User/session-only Gateway Inference access. |
+| `feat:ai:use` | User/session-only Gateway Inference access, usage visibility, and personal token management. |
 | `feat:ai:configure` | User/session-only AI configuration. |
 | `ai:skills:manage` | User/session-only shared AI skill management. |
 | `ai:sandbox:use` | User/session-only sandbox runner access. |
@@ -290,7 +289,6 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
 | `inference:setup` | OAuth-only companion CLI authorization resource; not assignable to users or groups. |
-| `inference:tokens:manage` | User/session-only inference token creation and revocation. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |
 | `admin:users:impersonate` | Browser-only protected user impersonation. |

@@ -204,7 +204,7 @@ describe('AI internal docs registry', () => {
       'npx -y @wiolett/gateway-inference@latest setup codex'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
-      'Gateway Inference access and personal usage visibility'
+      'Gateway Inference access, personal usage visibility, and creation or revocation'
     );
     expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup claude-code'

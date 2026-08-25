@@ -920,7 +920,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               onSendNow={steerQueuedMessage}
               onEdit={handleEditQueued}
               onRemove={cancelQueuedMessage}
-              className="border-x-0"
+              className="border-x-0 border-b-0"
             />
             <AIComposer
               textareaRef={textareaRef}

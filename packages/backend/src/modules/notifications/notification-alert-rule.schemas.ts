@@ -3,6 +3,8 @@ import { z } from 'zod';
 const alertCategorySchema = z.enum([
   'node',
   'container',
+  'build',
+  'compose',
   'proxy',
   'gateway',
   'logging',

@@ -1224,7 +1224,7 @@ Published model order is persisted separately and controls API catalog, companio
 
 ## User Tokens And Harness Setup
 
-Users need \`feat:ai:use\` for Gateway Inference access and personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`. AI Workspace access is controlled separately by \`ai:workspace:use\`.
+Users need \`feat:ai:use\` for Gateway Inference access, personal usage visibility, and creation or revocation of their own inference tokens. AI Workspace access is controlled separately by \`ai:workspace:use\`.
 
 Token options:
 
@@ -1659,7 +1659,6 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   inference: [
     'ai:workspace:use',
     'feat:ai:use',
-    'inference:tokens:manage',
     'inference:providers:view',
     'inference:providers:manage',
     'inference:models:manage',

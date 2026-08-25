@@ -588,6 +588,7 @@ function GitLabIntegrationsSection() {
   return (
     <>
       <PanelShell
+        icon={<Gitlab className="h-4 w-4" />}
         title="GitLab Integrations"
         description="System connectors for GitLab repositories, CI, and registries."
         actions={

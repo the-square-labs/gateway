@@ -2,7 +2,9 @@ import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAIStore } from "@/stores/ai";
+import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
+import { AI_SCOPE } from "@/types";
 
 interface AIButtonProps {
   iconOnly?: boolean;
@@ -10,17 +12,16 @@ interface AIButtonProps {
 
 export function AIButton({ iconOnly = false }: AIButtonProps) {
   const { toggleAIPanel, aiPanelOpen, aiLiteMode } = useUIStore();
-  const isEnabled = useAIStore((s) => s.isEnabled);
+  const isEnabled = useAIStore((state) => state.isEnabled);
+  const canUseAIWorkspace = useAuthStore((state) => state.hasScope(AI_SCOPE));
 
   const handleClick = () => {
-    if (aiLiteMode) {
+    if (isEnabled === false || !canUseAIWorkspace || aiLiteMode) {
       window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
       return;
     }
     toggleAIPanel();
   };
-
-  if (isEnabled === false) return null;
 
   if (iconOnly) {
     return (

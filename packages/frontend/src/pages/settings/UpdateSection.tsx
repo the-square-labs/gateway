@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, ServerCog } from "lucide-react";
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import { toast } from "sonner";
@@ -104,6 +104,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     <>
       {gatewayUpdateAvailable && (
         <PanelShell
+          icon={<RefreshCw className="h-4 w-4" />}
           id="system-updates"
           title={<span className="text-warning">Gateway Update Available</span>}
           description="A Gateway update is ready to install"
@@ -155,6 +156,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
 
       {relayUpdateAvailable && (
         <PanelShell
+          icon={<RefreshCw className="h-4 w-4" />}
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
           title={<span className="text-warning">Relay Pool Update Available</span>}
           description="A signed Relay release is ready for a one-instance-at-a-time rollout"
@@ -207,6 +209,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
 
       {/* About */}
       <PanelShell
+        icon={<ServerCog className="h-4 w-4" />}
         title="About"
         description="Application info and updates"
         actions={

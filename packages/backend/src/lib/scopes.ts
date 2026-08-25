@@ -148,7 +148,6 @@ export const ALL_SCOPES = [
   'mcp:use',
   // ── Inference ────────────────────────────────────────────────────
   'inference:setup',
-  'inference:tokens:manage',
   'inference:providers:view',
   'inference:providers:manage',
   'inference:models:manage',
@@ -262,7 +261,6 @@ export const USER_ONLY_SCOPES = [
   'ai:sandbox:manage',
   'mcp:use',
   'inference:setup',
-  'inference:tokens:manage',
 ] as const;
 export const PROGRAMMATIC_DENIED_BASE_SCOPES = [
   ...USER_ONLY_SCOPES,
@@ -430,7 +428,6 @@ export const ADMIN_SCOPES: readonly string[] = [
   'ai:sandbox:tier:high',
   'ai:sandbox:manage',
   'mcp:use',
-  'inference:tokens:manage',
   'inference:providers:view',
   'inference:providers:manage',
   'inference:models:manage',

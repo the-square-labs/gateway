@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertProviderInputWithinLimits,
   estimateProviderMessagesTokens,
+  estimateTextTokens,
   estimateToolSchemaTokens,
 } from './ai-token-estimator.js';
 
@@ -27,6 +28,10 @@ describe('AI token estimator', () => {
 
     expect(estimateProviderMessagesTokens(messages)).toBeGreaterThan(100);
     expect(estimateToolSchemaTokens(tools)).toBeGreaterThan(10);
+  });
+
+  it('uses a conservative estimate for code and tool-heavy context', () => {
+    expect(estimateTextTokens('x'.repeat(1_116_000))).toBe(372_000);
   });
 
   it('fails explicitly instead of trimming a request over the hard input limit', () => {

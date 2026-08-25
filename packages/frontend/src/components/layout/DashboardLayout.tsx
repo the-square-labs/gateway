@@ -756,11 +756,9 @@ export function DashboardLayout() {
                 <img src="/android-chrome-192x192.png" alt="Gateway" className="h-5 w-5" />
                 Gateway
               </span>
-              {useAuthStore.getState().hasScope(AI_SCOPE) && (
-                <div className="ml-2">
-                  <AIButton />
-                </div>
-              )}
+              <div className="ml-2">
+                <AIButton />
+              </div>
             </div>
           </header>
 

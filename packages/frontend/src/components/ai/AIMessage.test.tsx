@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { AIMessage as AIMessageType, AIToolCall } from "@/types/ai";
@@ -253,6 +253,24 @@ describe("AIMessage tool call groups", () => {
 
     expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
     expect(screen.getByRole("button", { name: /read process output/i })).toBeInTheDocument();
+  });
+
+  it("unmounts collapsed tool details only after the close animation", async () => {
+    render(
+      <AIMessage message={message([toolCall("animation-tool-1"), toolCall("animation-tool-2")])} />
+    );
+
+    const group = screen.getByRole("button", { name: /called 2 tools/i });
+    fireEvent.click(group);
+    expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
+
+    fireEvent.click(group);
+    expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
+    await waitFor(
+      () =>
+        expect(screen.queryByRole("button", { name: /find resource/i })).not.toBeInTheDocument(),
+      { timeout: 500 }
+    );
   });
 
   it("keeps a manual tool group preference across changing first tool calls", () => {

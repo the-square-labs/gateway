@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 
 interface SectionHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
   title: React.ReactNode;
+  icon?: React.ReactNode;
   description?: React.ReactNode;
   actions?: React.ReactNode;
   children?: React.ReactNode;
@@ -16,6 +17,7 @@ interface SectionHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 
 
 export function SectionHeader({
   title,
+  icon,
   description,
   actions,
   children,
@@ -42,11 +44,20 @@ export function SectionHeader({
       )}
       {...props}
     >
-      <div className={cn("min-w-0", contentClassName)}>
-        <h3 className={cn("text-sm font-semibold", titleClassName)}>{title}</h3>
-        {description ? (
-          <p className={cn("text-xs text-muted-foreground", descriptionClassName)}>{description}</p>
+      <div className={cn("flex min-w-0 items-start gap-3", contentClassName)}>
+        {icon ? (
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-background text-muted-foreground">
+            {icon}
+          </span>
         ) : null}
+        <div className="min-w-0">
+          <h3 className={cn("text-sm font-semibold", titleClassName)}>{title}</h3>
+          {description ? (
+            <p className={cn("text-xs text-muted-foreground", descriptionClassName)}>
+              {description}
+            </p>
+          ) : null}
+        </div>
       </div>
       {rightSlot ? (
         <div className={cn("flex shrink-0 items-center gap-2", actionsClassName)}>{rightSlot}</div>

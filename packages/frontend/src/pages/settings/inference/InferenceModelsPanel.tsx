@@ -13,7 +13,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Plus, Trash2 } from "lucide-react";
+import { Boxes, GripVertical, Plus, Trash2 } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -273,6 +273,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
     <>
       {loading && <Skeleton />}
       <PanelShell
+        icon={<Boxes className="h-4 w-4" />}
         title="Models"
         description="Models exposed to users and the provider account group serving each model"
         actions={

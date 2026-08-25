@@ -36,7 +36,7 @@ describe("Profile", () => {
         name: "Alex Gateway",
         email: "alex@example.com",
         authMethod: "oidc",
-        scopes: ["ai:workspace:use", "feat:ai:use", "inference:tokens:manage"],
+        scopes: ["ai:workspace:use", "feat:ai:use"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -103,7 +103,7 @@ describe("Profile", () => {
 
   it("keeps inference preferences but hides AI Workspace controls without Workspace access", () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["feat:ai:use", "inference:tokens:manage"] }),
+      user: makeUser({ scopes: ["feat:ai:use"] }),
       isAuthenticated: true,
       isLoading: false,
     });

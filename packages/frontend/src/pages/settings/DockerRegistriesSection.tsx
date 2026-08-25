@@ -1,4 +1,14 @@
-import { ChevronDown, Gitlab, Globe, Play, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  Container,
+  Gitlab,
+  Globe,
+  Play,
+  Plus,
+  RefreshCw,
+  Server,
+  Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -310,6 +320,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
   return (
     <>
       <PanelShell
+        icon={<Container className="h-4 w-4" />}
         title="Docker Registries"
         description="Configure private container registries for pulling images"
         actions={

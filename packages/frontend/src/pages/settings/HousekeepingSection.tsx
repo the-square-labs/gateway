@@ -1,4 +1,4 @@
-import { Check, Loader2, Play, Save, X } from "lucide-react";
+import { Archive, Check, Loader2, Play, Save, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -204,6 +204,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
   return (
     <>
       <PanelShell
+        icon={<Archive className="h-4 w-4" />}
         id="housekeeping"
         title="Housekeeping"
         description="Automated cleanup of logs, old data, and unused resources"

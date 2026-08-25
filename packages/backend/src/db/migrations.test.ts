@@ -167,6 +167,25 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain("COALESCE(\"scopes\", '[]'::jsonb) - 'inference:use' - 'inference:usage:view:self'");
   });
 
+  it('merges inference token management into AI use and backfills Workspace access', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0161_merge_inference_tokens_into_ai_use.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain("WHEN entry.value = 'inference:tokens:manage' THEN 'feat:ai:use'");
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain('UPDATE "api_tokens"');
+    expect(migration).toContain('UPDATE "oauth_authorization_codes"');
+    expect(migration).toContain('UPDATE "oauth_refresh_tokens"');
+    expect(migration).toContain('UPDATE "oauth_access_tokens"');
+    expect(migration).toContain('UPDATE "ai_run_tool_calls"');
+    expect(migration).toContain('UPDATE "sandbox_jobs"');
+    expect(migration).toContain("WHERE \"name\" IN ('viewer', 'operator', 'admin', 'system-admin')");
+    expect(migration).toContain("'ai:workspace:use'");
+  });
+
   it('collapses GitLab registry-view grants into the canonical Docker registry permission', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0126_collapse_gitlab_registry_view.sql'),

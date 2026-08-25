@@ -296,7 +296,7 @@ describe('canonical scope definitions', () => {
     expect(API_TOKEN_SCOPES).not.toContain('mcp:use');
     expect(ALL_SCOPES).not.toContain('inference:use');
     expect(ALL_SCOPES).not.toContain('inference:usage:view:self');
-    expect(API_TOKEN_SCOPES).not.toContain('inference:tokens:manage');
+    expect(ALL_SCOPES).not.toContain('inference:tokens:manage');
     expect(API_TOKEN_SCOPES).not.toContain('inference:providers:manage');
     expect(API_TOKEN_SCOPES).not.toContain('admin:users');
     expect(API_TOKEN_SCOPES).not.toContain('admin:users:impersonate');
@@ -328,7 +328,6 @@ describe('canonical scope definitions', () => {
 
   it('grants inference administration only to built-in admin tiers by default', () => {
     for (const scope of [
-      'inference:tokens:manage',
       'inference:providers:view',
       'inference:providers:manage',
       'inference:models:manage',

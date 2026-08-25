@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   Loader2,
   Network,
+  Pin,
   Play,
   RefreshCw,
   ScrollText,
@@ -56,6 +57,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatCard } from "@/components/ui/stat-card";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -71,6 +73,7 @@ import { getReturnNavigationTarget } from "@/lib/return-navigation";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import type {
   DockerComposeOperation,
   DockerComposeOperationAction,
@@ -301,6 +304,7 @@ export function DockerComposeProjectDetail() {
   const [adoptOpen, setAdoptOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityDetailsOpen, setActivityDetailsOpen] = useState(false);
+  const [pinOpen, setPinOpen] = useState(false);
   const [selectedOperation, setSelectedOperation] = useState<DockerComposeOperation | null>(null);
   const [latestOperation, setLatestOperation] = useState<DockerComposeOperation | null>(null);
   const [recentActivity, setRecentActivity] = useState<DockerComposeOperation[]>([]);
@@ -312,6 +316,8 @@ export function DockerComposeProjectDetail() {
   const [activityRefreshVersion, setActivityRefreshVersion] = useState(0);
   const activityScrollRef = useRef<HTMLDivElement>(null);
   const activitySentinelRef = useRef<HTMLDivElement>(null);
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
+    usePinnedContainersStore();
   const [serviceProcesses, setServiceProcesses] = useState<ServiceProcesses>({});
   const [activeTab, setActiveTab] = useUrlTab(
     [
@@ -577,10 +583,16 @@ export function DockerComposeProjectDetail() {
     (revision) => revision.id !== project.activeRevisionId
   );
   const projectCanBeDeleted = project.status === "stopped" || project.status === "missing";
+  const pinAction: ResponsiveHeaderAction = {
+    label: "Pin",
+    icon: <Pin className="h-4 w-4" />,
+    onClick: () => setPinOpen(true),
+  };
   const headerActions: ResponsiveHeaderAction[] =
     project.managementState === "external"
       ? canAdopt
         ? [
+            pinAction,
             {
               label: "Adopt into Gateway",
               icon: <UploadCloud className="h-4 w-4" />,
@@ -597,8 +609,9 @@ export function DockerComposeProjectDetail() {
               },
             },
           ]
-        : []
+        : [pinAction]
       : [
+          pinAction,
           { label: "Refresh", icon: <RefreshCw className="h-4 w-4" />, onClick: () => void load() },
           ...(canManage
             ? [
@@ -1034,12 +1047,13 @@ export function DockerComposeProjectDetail() {
               <Button
                 key={headerAction.label}
                 variant={headerAction.label === "Pull & Apply" ? "default" : "outline"}
+                size={headerAction.label === "Pin" ? "icon" : "default"}
                 disabled={headerAction.disabled}
                 title={headerAction.disabled ? headerAction.disabledReason : undefined}
                 onClick={headerAction.onClick}
               >
                 {headerAction.icon}
-                {headerAction.label}
+                {headerAction.label === "Pin" ? null : headerAction.label}
               </Button>
             ))}
           </ResponsiveHeaderActions>
@@ -1475,6 +1489,58 @@ export function DockerComposeProjectDetail() {
               <DetailRow label="Error" value={selectedOperation.error || "—"} />
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={pinOpen} onOpenChange={setPinOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Pin Compose project</DialogTitle>
+            <DialogDescription>Choose where {project.name} should stay visible.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Add to dashboard</p>
+                <p className="text-xs text-muted-foreground">Show compact lifecycle status</p>
+              </div>
+              <Switch
+                checked={isPinnedDashboard(project.id)}
+                onChange={() => {
+                  toggleDashboard(project.id, {
+                    nodeId: project.nodeId,
+                    nodeSlug: node?.slug ?? project.nodeId,
+                    name: project.name,
+                    state: project.status,
+                    kind: "compose",
+                    scopeBase: "docker:compose:view",
+                    scopeResourceId: project.id,
+                  });
+                  usePinnedContainersStore.getState().invalidate();
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Add to sidebar</p>
+                <p className="text-xs text-muted-foreground">Quick access from navigation</p>
+              </div>
+              <Switch
+                checked={isPinnedSidebar(project.id)}
+                onChange={() => {
+                  toggleSidebar(project.id, {
+                    nodeId: project.nodeId,
+                    nodeSlug: node?.slug ?? project.nodeId,
+                    name: project.name,
+                    state: project.status,
+                    kind: "compose",
+                    scopeBase: "docker:compose:view",
+                    scopeResourceId: project.id,
+                  });
+                  usePinnedContainersStore.getState().invalidate();
+                }}
+              />
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </PageTransition>
