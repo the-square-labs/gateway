@@ -775,7 +775,7 @@ export async function initializeContainer(): Promise<void> {
     ? new DockerBuildRunnerService(db, dockerBuildService, nodeDispatch, integrationsService, relayRegistryService)
     : null;
   if (dockerBuildRunnerService) container.registerInstance(DockerBuildRunnerService, dockerBuildRunnerService);
-  dockerBuildService.setLicenseGuard(() => licensePolicyService.requireMinimumPlan('business'));
+  dockerBuildService.setLicenseGuard(() => licensePolicyService.requireFeature('git-push-to-deploy'));
   dockerBuildService.setAdmissionGuard(async () => {
     await dockerInternalRegistryService.assertBuildAdmission();
     if (!dockerBuildRunnerService) {

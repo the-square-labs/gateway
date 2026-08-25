@@ -81,7 +81,7 @@ export class DockerSourceService {
     user: User,
     options: { allowMissingTarget?: boolean; initialConfig?: Record<string, unknown> | null } = {}
   ) {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     if (!options.allowMissingTarget) await this.assertTargetExists(input.target);
     const resolved = await this.integrations.resolveDockerBuildSource(user, {
       connectorId: input.connectorId,
@@ -207,7 +207,7 @@ export class DockerSourceService {
   }
 
   async resolveCurrent(target: DockerSourceTarget, user: User) {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     const existing = await this.findByTarget(target);
     if (!existing) throw new AppError(404, 'SOURCE_BINDING_NOT_FOUND', 'Git source is not configured');
     const resolved = await this.integrations.resolveDockerBuildSource(user, {
@@ -235,7 +235,7 @@ export class DockerSourceService {
   }
 
   async pollDue(now = new Date(), limit = 50): Promise<{ checked: number; changed: number; failed: number }> {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     const dueBefore = new Date(now.getTime() - 60_000);
     const rows = await this.db
       .select()
@@ -304,7 +304,7 @@ export class DockerSourceService {
   }
 
   async createBuild(target: DockerSourceTarget, input: DockerBuildCreateInput, user: User) {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     if (!this.buildService) throw new AppError(503, 'BUILD_SCHEDULER_UNAVAILABLE', 'Build scheduler is unavailable');
     const source = await this.resolveCurrent(target, user);
     if (input.commitSha && input.commitSha.toLowerCase() !== source.desiredCommitSha?.toLowerCase()) {
@@ -324,12 +324,12 @@ export class DockerSourceService {
   }
 
   async reconcileWebhooks(limit = 50): Promise<{ checked: number; configured: number; failed: number }> {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     return this.webhooks.reconcileWebhooks(limit);
   }
 
   async handleWebhook(sourceBindingId: string, headers: Headers, rawBody: Buffer): Promise<DockerSourceWebhookResult> {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     return this.webhooks.handleWebhook(sourceBindingId, headers, rawBody);
   }
 
@@ -360,7 +360,7 @@ export class DockerSourceService {
   }
 
   async upsertBuildSecret(target: DockerSourceTarget, name: string, value: string, userId: string) {
-    await this.requireBusiness();
+    await this.requireGitPushToDeploy();
     const source = await this.findByTarget(target);
     if (!source) throw new AppError(404, 'SOURCE_BINDING_NOT_FOUND', 'Git source is not configured');
     const encryptedValue = JSON.stringify(this.cryptoService.encryptString(value));
@@ -462,7 +462,7 @@ export class DockerSourceService {
     return connector.provider as SupportedSourceProvider;
   }
 
-  private requireBusiness(): Promise<void> {
-    return requireConfiguredLicensePolicy(this.licensePolicyService).requireMinimumPlan('business');
+  private requireGitPushToDeploy(): Promise<void> {
+    return requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('git-push-to-deploy');
   }
 }

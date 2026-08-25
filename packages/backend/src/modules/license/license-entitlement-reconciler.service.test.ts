@@ -64,7 +64,7 @@ describe('LicenseEntitlementReconcilerService', () => {
 
   it('never auto-enables switchable features when entitlements return', async () => {
     const { reconciler, settings, logging, pages, internalRegistry } = makeServices(
-      ['internal-pki', 'siem-export', 'structured-logging', 'pages'],
+      ['internal-pki', 'siem-export', 'structured-logging', 'pages', 'git-push-to-deploy'],
       'business'
     );
 

@@ -162,7 +162,7 @@ export class DockerInternalRegistryService {
 
   async updateSettings(input: DockerInternalRegistrySettingsInput, userId: string): Promise<RegistryState> {
     if (input.externalAccessEnabled) {
-      await requireConfiguredLicensePolicy(this.licensePolicyService).requireMinimumPlan('business');
+      await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('git-push-to-deploy');
     }
     const current = await this.getState();
     const previous: DockerRegistryExternalAccessConfig = {
@@ -237,7 +237,7 @@ export class DockerInternalRegistryService {
     if (!state.externalAccessEnabled) {
       throw new AppError(404, 'REGISTRY_EXTERNAL_ACCESS_DISABLED', 'Not found');
     }
-    await requireConfiguredLicensePolicy(this.licensePolicyService).requireMinimumPlan('business');
+    await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('git-push-to-deploy');
     return state;
   }
 

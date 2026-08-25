@@ -52,7 +52,7 @@ describe("DockerDeployDialog runtime section", () => {
       snapshot: {
         license: {
           plan: "enterprise",
-          entitlements: { features: ["secure-runtime", "blue-green"] },
+          entitlements: { features: ["secure-runtime", "blue-green", "git-push-to-deploy"] },
         },
       } as never,
     });

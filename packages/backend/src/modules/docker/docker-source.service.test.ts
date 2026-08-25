@@ -38,7 +38,7 @@ const binding = {
 };
 
 function allowBusiness(service: DockerSourceService) {
-  service.setLicensePolicyService({ requireMinimumPlan: vi.fn().mockResolvedValue(undefined) } as never);
+  service.setLicensePolicyService({ requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
   return service;
 }
 
@@ -335,7 +335,7 @@ describe('DockerSourceService webhooks', () => {
     const db = { select: vi.fn(), insert: vi.fn(), update: vi.fn(), transaction: vi.fn() };
     const service = new DockerSourceService(db as never, { log: vi.fn() } as never, integrations as never, {} as never);
     service.setLicensePolicyService({
-      requireMinimumPlan: vi
+      requireFeature: vi
         .fn()
         .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required')),
     } as never);

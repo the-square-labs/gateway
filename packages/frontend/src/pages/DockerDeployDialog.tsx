@@ -17,7 +17,6 @@ import { useDockerStore } from "@/stores/docker";
 import {
   handleLicenseApiError,
   requireLicenseFeature,
-  requireMinimumLicensePlan,
 } from "@/stores/license-paywall";
 import {
   type DockerRuntimeProfile,
@@ -237,7 +236,7 @@ export function DockerDeployDialog({
       return;
     }
     if (deployMode === "deployment" && !deployName.trim()) return;
-    if (sourceMode === "repository" && !requireMinimumLicensePlan("business", "Git push-to-deploy"))
+    if (sourceMode === "repository" && !requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy"))
       return;
     if (
       deployMode === "deployment" &&

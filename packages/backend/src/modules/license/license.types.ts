@@ -165,6 +165,7 @@ const BUSINESS_FEATURES_V3 = [
 
 const BUSINESS_FEATURES = [
   ...PERSONAL_FEATURES,
+  'git-push-to-deploy',
   'secure-runtime',
   'structured-logging',
   'audit-export',

@@ -135,13 +135,13 @@ function createService(
   store: FakeStore,
   executor: DockerRegistryMaintenanceExecutor,
   tokenService: { issueToken: ReturnType<typeof vi.fn> } = { issueToken: vi.fn().mockReturnValue({ token: 'token' }) },
-  requireMinimumPlan = vi.fn().mockResolvedValue(undefined)
+  requireFeature = vi.fn().mockResolvedValue(undefined)
 ) {
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const service = new DockerInternalRegistryService({} as never, tokenService as never, audit as never, store);
   service.setExecutor(executor);
-  service.setLicensePolicyService({ requireMinimumPlan } as never);
-  return { service, audit, requireMinimumPlan };
+  service.setLicensePolicyService({ requireFeature } as never);
+  return { service, audit, requireFeature };
 }
 
 describe('DockerInternalRegistryService', () => {
@@ -328,10 +328,10 @@ describe('DockerInternalRegistryService', () => {
 
   it('requires Business only when external access is enabled', async () => {
     const store = new FakeStore();
-    const requireMinimumPlan = vi
+    const requireFeature = vi
       .fn()
       .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required'));
-    const { service } = createService(store, createExecutor(store), undefined, requireMinimumPlan);
+    const { service } = createService(store, createExecutor(store), undefined, requireFeature);
     service.setExternalAccessReconciler(vi.fn());
 
     await expect(
@@ -348,18 +348,18 @@ describe('DockerInternalRegistryService', () => {
     await expect(service.updateSettings({ externalAccessEnabled: false }, 'user-1')).resolves.toMatchObject({
       externalAccessEnabled: false,
     });
-    expect(requireMinimumPlan).toHaveBeenCalledTimes(1);
-    expect(requireMinimumPlan).toHaveBeenCalledWith('business');
+    expect(requireFeature).toHaveBeenCalledTimes(1);
+    expect(requireFeature).toHaveBeenCalledWith('git-push-to-deploy');
   });
 
   it('blocks external token issuance when Business is unavailable without affecting internal pulls', async () => {
     const store = new FakeStore();
     store.state = { ...store.state, externalAccessEnabled: true };
     const tokenService = { issueToken: vi.fn().mockReturnValue({ token: 'token' }) };
-    const requireMinimumPlan = vi
+    const requireFeature = vi
       .fn()
       .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required'));
-    const { service } = createService(store, createExecutor(store), tokenService, requireMinimumPlan);
+    const { service } = createService(store, createExecutor(store), tokenService, requireFeature);
 
     await expect(
       service.issueToken({

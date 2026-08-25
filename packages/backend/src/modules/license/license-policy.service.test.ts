@@ -81,6 +81,22 @@ describe('LicensePolicyService', () => {
     expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('compose-applications');
   });
 
+  it('includes Git push-to-deploy in Business and Enterprise v4 entitlements only', async () => {
+    const business = baseStatus();
+    business.plan = 'business';
+    business.status = 'valid';
+    business.entitlements = LICENSE_PLAN_ENTITLEMENTS.business;
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => business) } as never);
+
+    await expect(policy.requireFeature('git-push-to-deploy')).resolves.toBeUndefined();
+    expect(LICENSE_PLAN_ENTITLEMENTS.community.features).not.toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS.personal.features).not.toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS.business.features).toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS_V3.business.features).not.toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS_V3.enterprise.features).not.toContain('git-push-to-deploy');
+  });
+
   it('keeps legacy paid features available from a canonical v3 cache while denying Compose', async () => {
     const status = baseStatus();
     status.plan = 'personal';

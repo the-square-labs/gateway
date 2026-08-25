@@ -80,7 +80,7 @@ describe("InternalRegistrySection", () => {
     useLicensePaywallStore.setState({ request: null });
     useUIBootstrapStore.setState({
       snapshot: {
-        license: { plan: "business", entitlements: { features: [] } },
+        license: { plan: "business", entitlements: { features: ["git-push-to-deploy"] } },
       } as never,
     });
     vi.spyOn(api, "getDockerInternalRegistryState").mockResolvedValue(state);

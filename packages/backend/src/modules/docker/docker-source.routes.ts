@@ -70,7 +70,7 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
       middleware: requireScopeForResource('docker:containers:create', 'nodeId'),
     },
     async (c) => {
-      await container.resolve(LicensePolicyService).requireMinimumPlan('business');
+      await container.resolve(LicensePolicyService).requireFeature('git-push-to-deploy');
       const nodeId = z.string().uuid().parse(c.req.param('nodeId'));
       const input = DockerSourceResourceCreateSchema.parse(await c.req.json());
       const actor = actorFor(c);

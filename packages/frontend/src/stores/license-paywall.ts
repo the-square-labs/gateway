@@ -14,6 +14,7 @@ export const LICENSE_FEATURE_PLANS = {
   "secure-runtime": "business",
   "structured-logging": "business",
   "audit-export": "business",
+  "git-push-to-deploy": "business",
   "compose-applications": "personal",
   "internal-pki": "enterprise",
   "siem-export": "enterprise",

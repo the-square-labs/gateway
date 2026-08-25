@@ -77,6 +77,22 @@ describe("license paywall store", () => {
     expect(useLicensePaywallStore.getState().request).toBeNull();
   });
 
+  it("gates Git push-to-deploy behind the signed Business feature", () => {
+    setLicense("personal", ["compose-applications"]);
+
+    expect(requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")).toBe(false);
+    expect(useLicensePaywallStore.getState().request).toEqual({
+      capability: "Git push-to-deploy",
+      requiredPlan: "business",
+      currentPlan: "personal",
+    });
+
+    setLicense("business", ["git-push-to-deploy"]);
+    useLicensePaywallStore.setState({ request: null });
+    expect(requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")).toBe(true);
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+  });
+
   it("enforces a minimum plan through the shared dialog without a feature entitlement", () => {
     setLicense("community", []);
     expect(requireMinimumLicensePlan("personal", "Disk image volumes")).toBe(false);

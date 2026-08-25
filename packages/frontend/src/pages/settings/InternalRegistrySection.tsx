@@ -17,7 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
-import { handleLicenseApiError, requireMinimumLicensePlan } from "@/stores/license-paywall";
+import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { DockerInternalRegistryState, Node, SSLCertificate } from "@/types";
 
 interface InternalRegistrySectionProps {
@@ -112,7 +112,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   );
 
   const setExternalAccess = (enabled: boolean) => {
-    if (enabled && !requireMinimumLicensePlan("business", "External internal registry access")) {
+    if (enabled && !requireLicenseFeature("git-push-to-deploy", "External internal registry access")) {
       return;
     }
     setExternalEnabled(enabled);

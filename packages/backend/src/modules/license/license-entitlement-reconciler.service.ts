@@ -102,7 +102,7 @@ export class LicenseEntitlementReconcilerService {
       }
     }
 
-    if (license.plan !== 'business' && license.plan !== 'enterprise' && this.internalRegistry) {
+    if (!features.has('git-push-to-deploy') && this.internalRegistry) {
       try {
         if (await this.internalRegistry.disableExternalAccessForEntitlementLoss()) {
           logger.warn('Disabled external internal-registry access after Business entitlement loss', {
