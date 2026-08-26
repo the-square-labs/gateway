@@ -1,6 +1,9 @@
 import {
   Archive,
+  ArrowRight,
+  Code2,
   Copy,
+  GitBranch,
   Pin,
   Play,
   RotateCcw,
@@ -52,7 +55,7 @@ import {
   isDockerMigrationOwnedByTab,
   resolveMigrationTarget,
 } from "@/lib/docker-migration-navigation";
-import { dockerContainerRoute } from "@/lib/resource-routes";
+import { dockerComposeProjectRoute, dockerContainerRoute } from "@/lib/resource-routes";
 import { getReturnNavigationTarget, preserveReturnNavigationState } from "@/lib/return-navigation";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -62,9 +65,10 @@ import { useDockerStore } from "@/stores/docker";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
-import type { DockerHealthCheck, DockerMigration } from "@/types";
+import type { DockerHealthCheck, DockerMigration, DockerSourceBinding } from "@/types";
 import { ConfigTab } from "./docker-detail/ConfigTab";
 import { ConsoleTab } from "./docker-detail/ConsoleTab";
+import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { EnvironmentTab } from "./docker-detail/EnvironmentTab";
 import { FilesTab } from "./docker-detail/FilesTab";
 import {
@@ -198,15 +202,20 @@ export function DockerContainerDetail({
     };
   }, [nodeId, setSelectedNode]);
   const [healthCheck, setHealthCheck] = useState<DockerHealthCheck | null>(null);
+  const [sourceIdentity, setSourceIdentity] = useState<Pick<
+    DockerSourceBinding,
+    "repositoryFullPath" | "deployedCommitSha"
+  > | null>(null);
 
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "logs", "console", "files", "stats", "environment", "settings", "config"],
+    ["overview", "source", "logs", "console", "files", "stats", "environment", "settings"],
     "overview",
     (tab) => dockerContainerRoute(nodeSlug, routeContainerName, tab)
   );
   const [isLoading, setIsLoading] = useState(!resolvedContainer);
   const [actionLoading, setActionLoading] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [migrationOpen, setMigrationOpen] = useState(false);
   const [restoredMigration, setRestoredMigration] = useState<DockerMigration | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -217,6 +226,7 @@ export function DockerContainerDetail({
   const [archiveIncludeSecrets, setArchiveIncludeSecrets] = useState(false);
   const [archiveExporting, setArchiveExporting] = useState(false);
   const [archiveDevPreview, setArchiveDevPreview] = useState(false);
+  const [composeOwnerProjectId, setComposeOwnerProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -245,6 +255,36 @@ export function DockerContainerDetail({
       setIsLoading(false);
     }
   }, [params.containerId, resolvedContainer, resolvedContainerId]);
+
+  useEffect(() => {
+    const runtimeContainerId = container?.Id ?? containerId;
+    if (!nodeId || !routeContainerName || !runtimeContainerId) {
+      setSourceIdentity(null);
+      return;
+    }
+
+    let cancelled = false;
+    void api
+      .getDockerSource({ kind: "container", nodeId, containerName: routeContainerName })
+      .then((source) => {
+        if (cancelled) return;
+        setSourceIdentity(
+          source
+            ? {
+                repositoryFullPath: source.repositoryFullPath,
+                deployedCommitSha: source.deployedCommitSha,
+              }
+            : null
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setSourceIdentity(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [container?.Id, containerId, nodeId, routeContainerName]);
 
   // Pin
   const [pinOpen, setPinOpen] = useState(false);
@@ -312,18 +352,30 @@ export function DockerContainerDetail({
       navigate(to, { ...options, state: location.state }),
     [location.state, navigate]
   );
+  const composeManagedForTabs = Boolean(
+    (container?.Config?.Labels ?? container?.Labels)?.["com.docker.compose.project"]
+  );
   const visibleTabs = useMemo(
     () => [
       "overview",
+      "source",
       ...(canViewContainer ? ["logs"] : []),
       ...(canUseConsole ? ["console"] : []),
       ...(canReadFiles ? ["files"] : []),
       ...(canViewContainer ? ["stats"] : []),
       ...(canUseEnvironment || canUseSecrets ? ["environment"] : []),
-      ...(canEdit ? ["settings"] : []),
+      ...(canEdit || (composeManagedForTabs && canViewContainer) ? ["settings"] : []),
       ...(canViewContainer ? ["config"] : []),
     ],
-    [canEdit, canReadFiles, canUseConsole, canUseEnvironment, canUseSecrets, canViewContainer]
+    [
+      canEdit,
+      canReadFiles,
+      canUseConsole,
+      canUseEnvironment,
+      canUseSecrets,
+      canViewContainer,
+      composeManagedForTabs,
+    ]
   );
   const backendTransition = container?._transition as string | undefined;
   const { effectiveTransition, beginMutationTransition, clearMutationTransition } =
@@ -706,9 +758,11 @@ export function DockerContainerDetail({
   const lifecycleActions = containerLifecycleActions(state);
   const image = container ? resolveContainerImageReference(container) : "";
   const unavailable = container?.availability === "unavailable";
-  const actionDisabled = actionLoading || !!effectiveTransition || unavailable;
   const labels = (container?.Config?.Labels ?? container?.Labels ?? {}) as Record<string, string>;
   const composeManaged = Boolean(labels["com.docker.compose.project"]);
+  const composeProjectName = labels["com.docker.compose.project"];
+  const composeProjectId = labels["wiolett.gateway.compose.project-id"];
+  const actionDisabled = actionLoading || !!effectiveTransition || unavailable || composeManaged;
   const deploymentManaged = labels["wiolett.gateway.deployment.managed"] === "true";
   const gpuMapped =
     container?.gpuAttachment?.mode === "managed" || container?.gpuAttachment?.mode === "external";
@@ -725,6 +779,28 @@ export function DockerContainerDetail({
           : undefined;
   const currentTransition = effectiveTransition;
   const currentBaseState = baseState;
+
+  useEffect(() => {
+    if (!composeManaged || composeProjectId || !composeProjectName || !nodeId) {
+      setComposeOwnerProjectId(composeProjectId || null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listDockerComposeProjects(nodeId)
+      .then(
+        (projects) => projects.find((project) => project.name === composeProjectName)?.id ?? null
+      )
+      .then((ownerId) => {
+        if (!cancelled) setComposeOwnerProjectId(ownerId);
+      })
+      .catch(() => {
+        if (!cancelled) setComposeOwnerProjectId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [composeManaged, composeProjectId, composeProjectName, nodeId]);
 
   // Auto-navigate to overview and close popouts when container stops or enters transition
   useEffect(() => {
@@ -771,13 +847,23 @@ export function DockerContainerDetail({
     );
 
   const headerActions = [
+    ...(canViewContainer
+      ? [
+          {
+            label: "View config",
+            icon: <Code2 className="h-4 w-4" />,
+            onClick: () => setConfigOpen(true),
+            alwaysOverflow: true,
+          },
+        ]
+      : []),
     {
       label: "Pin",
       icon: <Pin className="h-4 w-4" />,
       onClick: () => setPinOpen(true),
       disabled: actionDisabled,
     },
-    ...(canMigrate
+    ...(!composeManaged && canMigrate
       ? [
           {
             label: "Migrate",
@@ -791,7 +877,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(lifecycleActions.canStart && canManage
+    ...(!composeManaged && lifecycleActions.canStart && canManage
       ? [
           {
             label: "Start",
@@ -803,7 +889,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(lifecycleActions.canStop && canManage
+    ...(!composeManaged && lifecycleActions.canStop && canManage
       ? [
           {
             label: "Stop",
@@ -830,7 +916,7 @@ export function DockerContainerDetail({
             : []),
         ]
       : []),
-    ...(canEdit
+    ...(!composeManaged && canEdit
       ? [
           {
             label: "Rename",
@@ -841,7 +927,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(canCreate
+    ...(!composeManaged && canCreate
       ? [
           {
             label: "Duplicate",
@@ -851,7 +937,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(archiveCapabilities.canExport
+    ...(!composeManaged && archiveCapabilities.canExport
       ? [
           {
             label: "Export archive",
@@ -870,7 +956,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(canManage
+    ...(!composeManaged && canManage
       ? [
           {
             label: "Kill",
@@ -884,7 +970,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(canDelete
+    ...(!composeManaged && canDelete
       ? [
           {
             label: "Remove",
@@ -935,10 +1021,24 @@ export function DockerContainerDetail({
                   {unavailable ? "Unavailable" : state}
                 </Badge>
               </div>
-              <p className="break-all text-sm text-muted-foreground">
-                {formatDisplayImageRef(image)} &middot;{" "}
-                {(container.Id ?? containerId ?? "").slice(0, 12)}
-              </p>
+              {sourceIdentity ? (
+                <p className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                  <span className="truncate">{sourceIdentity.repositoryFullPath}</span>
+                  {sourceIdentity.deployedCommitSha ? (
+                    <>
+                      <span aria-hidden="true">&middot;</span>
+                      <span className="shrink-0 font-mono">
+                        {sourceIdentity.deployedCommitSha.slice(0, 10)}
+                      </span>
+                    </>
+                  ) : null}
+                </p>
+              ) : (
+                <p className="break-all text-sm text-muted-foreground">
+                  {formatDisplayImageRef(image)} &middot;{" "}
+                  {(container.Id ?? containerId ?? "").slice(0, 12)}
+                </p>
+              )}
             </div>
           </div>
 
@@ -959,6 +1059,30 @@ export function DockerContainerDetail({
           </ResponsiveHeaderActions>
         </div>
 
+        {composeManaged && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border border-primary/20 bg-primary/5 p-3 text-sm">
+            <div>
+              <p className="font-medium">Managed by Compose project {composeProjectName}</p>
+              <p className="text-muted-foreground">
+                Direct lifecycle and configuration changes are disabled. Runtime settings remain
+                available for inspection; use the Compose project to change them.
+              </p>
+            </div>
+            {(composeProjectId || composeOwnerProjectId) && (
+              <button
+                type="button"
+                className="flex shrink-0 items-center gap-1 text-sm font-medium text-foreground hover:underline"
+                onClick={() =>
+                  navigate(dockerComposeProjectRoute(composeProjectId || composeOwnerProjectId!))
+                }
+              >
+                Open Compose project
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+
         {healthCheck?.enabled && (
           <HealthBars
             history={healthCheck.healthHistory}
@@ -974,6 +1098,10 @@ export function DockerContainerDetail({
         >
           <TabsList className="shrink-0">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="source" className="gap-1.5">
+              <GitBranch className="h-3.5 w-3.5" />
+              Source
+            </TabsTrigger>
             {canViewContainer && (
               <TabsTrigger value="logs" disabled={isTabDisabled("logs")}>
                 Logs
@@ -994,20 +1122,31 @@ export function DockerContainerDetail({
                 Monitoring
               </TabsTrigger>
             )}
-            {(canUseEnvironment || canUseSecrets) && (
+            {(canUseEnvironment || canUseSecrets) && !composeManaged && (
               <TabsTrigger value="environment" disabled={isTabDisabled("environment")}>
                 Environment
               </TabsTrigger>
             )}
-            {canEdit && (
+            {(canEdit || (composeManaged && canViewContainer)) && (
               <TabsTrigger value="settings" disabled={isTabDisabled("settings")}>
                 Settings
               </TabsTrigger>
             )}
-            {canViewContainer && <TabsTrigger value="config">Config</TabsTrigger>}
           </TabsList>
           <TabsContent value="overview" className="pb-0">
-            <OverviewTab nodeId={nodeId!} containerId={containerId!} data={container} />
+            <OverviewTab
+              nodeId={nodeId!}
+              containerId={containerId!}
+              data={container}
+              sourceIdentity={sourceIdentity}
+            />
+          </TabsContent>
+          <TabsContent value="source" className="pb-6">
+            <DockerResourceGitTabs
+              target={{ kind: "container", nodeId: nodeId!, containerName: routeContainerName }}
+              view="source"
+              includeBuilds
+            />
           </TabsContent>
           {canViewContainer && !unavailable && (
             <TabsContent value="logs" className="flex flex-col flex-1 min-h-0 pb-0">
@@ -1048,7 +1187,7 @@ export function DockerContainerDetail({
               />
             </TabsContent>
           )}
-          {(canUseEnvironment || canUseSecrets) && !unavailable && (
+          {(canUseEnvironment || canUseSecrets) && !unavailable && !composeManaged && (
             <TabsContent value="environment" className="flex flex-col flex-1 min-h-0 pb-0">
               <EnvironmentTab
                 nodeId={nodeId!}
@@ -1063,7 +1202,7 @@ export function DockerContainerDetail({
               />
             </TabsContent>
           )}
-          {canEdit && !unavailable && (
+          {(canEdit || (composeManaged && canViewContainer)) && !unavailable && (
             <TabsContent value="settings" className="pb-0">
               <SettingsTab
                 nodeId={nodeId!}
@@ -1076,16 +1215,20 @@ export function DockerContainerDetail({
                 onRefresh={refreshAfterMutation}
                 onHealthCheckSaved={setHealthCheck}
                 transition={effectiveTransition}
+                readOnly={composeManaged}
               />
-            </TabsContent>
-          )}
-          {canViewContainer && (
-            <TabsContent value="config" className="flex flex-col flex-1 min-h-0 pb-0">
-              <ConfigTab data={container} />
             </TabsContent>
           )}
         </Tabs>
       </div>
+      <Dialog open={configOpen} onOpenChange={setConfigOpen}>
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Container configuration</DialogTitle>
+          </DialogHeader>
+          <ConfigTab data={container} editorHeight="min(60dvh, 640px)" />
+        </DialogContent>
+      </Dialog>
       {/* Pin Dialog */}
       <DockerMigrationDialog
         open={migrationOpen}

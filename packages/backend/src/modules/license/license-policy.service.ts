@@ -4,6 +4,7 @@ import type { LicenseService } from './license.service.js';
 import {
   isCanonicalEntitlements,
   LICENSE_ENTITLEMENTS_VERSION,
+  LICENSE_LEGACY_ENTITLEMENTS_VERSION,
   type LicenseEntitlements,
   type LicensePlan,
   type LicenseStatus,
@@ -23,6 +24,8 @@ export const LICENSE_FEATURE_PLANS = {
   'secure-runtime': 'business',
   'structured-logging': 'business',
   'audit-export': 'business',
+  'git-push-to-deploy': 'business',
+  'compose-applications': 'personal',
   'internal-pki': 'enterprise',
   'siem-export': 'enterprise',
 } as const satisfies Record<string, Exclude<LicensePlan, 'community'>>;
@@ -163,7 +166,12 @@ export class LicensePolicyService {
       'deactivated',
     ];
     if (!plans.includes(status.plan) || !statuses.includes(status.status)) return false;
-    if (status.entitlementsVersion !== LICENSE_ENTITLEMENTS_VERSION) return false;
+    if (
+      status.entitlementsVersion !== LICENSE_ENTITLEMENTS_VERSION &&
+      status.entitlementsVersion !== LICENSE_LEGACY_ENTITLEMENTS_VERSION
+    ) {
+      return false;
+    }
     if (!entitlements || typeof entitlements !== 'object' || !Array.isArray(entitlements.features)) return false;
     if (typeof entitlements.supportLevel !== 'string') return false;
     if (
@@ -174,7 +182,7 @@ export class LicensePolicyService {
     ) {
       return false;
     }
-    if (!isCanonicalEntitlements(status.plan, entitlements)) return false;
+    if (!isCanonicalEntitlements(status.plan, entitlements, status.entitlementsVersion)) return false;
 
     if (status.status === 'community') {
       return status.plan === 'community' && status.licensed;

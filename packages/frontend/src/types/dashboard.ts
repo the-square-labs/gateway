@@ -116,7 +116,7 @@ export interface DashboardRelayInstance {
 export interface DashboardPinnedDockerResourceRequest {
   id: string;
   nodeId: string;
-  kind: "container" | "deployment";
+  kind: "container" | "deployment" | "build" | "compose";
   scopeResourceId?: string;
 }
 
@@ -206,7 +206,8 @@ export interface DashboardBootstrapPinnedResources {
     nodeSlug: string;
     name: string;
     state?: string;
-    kind: "container" | "deployment";
+    kind: "container" | "deployment" | "build" | "compose";
+    scopeBase: "docker:containers:view" | "docker:compose:view";
     scopeResourceId?: string;
   }>;
 }

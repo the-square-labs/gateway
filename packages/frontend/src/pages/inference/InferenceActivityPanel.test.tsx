@@ -88,6 +88,7 @@ describe("InferenceActivityPanel", () => {
     expect(within(dialog).queryByText("Operation")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Activity user" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Activity model" })).toBeInTheDocument();
+    expect(dialog.querySelector('div[style*="height: 49px"]')).toBeInTheDocument();
 
     await waitFor(() => expect(intersectionCallback).toBeDefined());
     act(() => {

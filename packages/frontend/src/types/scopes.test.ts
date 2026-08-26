@@ -19,6 +19,8 @@ describe("scope constants", () => {
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("proxy:view");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("docker:containers:manage");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("docker:containers:export");
+    expect(RESOURCE_SCOPABLE_SCOPES).toContain("docker:compose:view");
+    expect(RESOURCE_SCOPABLE_SCOPES).toContain("docker:compose:manage");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("databases:query:admin");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("logs:read");
     expect(RESOURCE_SCOPABLE_SCOPES).not.toContain("admin:system");
@@ -49,6 +51,8 @@ describe("scope constants", () => {
     expect(tokenValues).toContain("admin:users:impersonate");
     expect(tokenValues).toContain("proxy:raw:write");
     expect(tokenValues).toContain("docker:containers:view");
+    expect(tokenValues).toContain("docker:compose:view");
+    expect(tokenValues).toContain("docker:compose:manage");
     expect(tokenValues).toContain("docker:registries:view");
     expect(tokenValues).not.toContain("integrations:gitlab:registry:view");
     expect(tokenValues).not.toContain("integrations:cloudflare:dns:view");
@@ -69,6 +73,7 @@ describe("scope constants", () => {
     expect(apiTokenValues).toContain("nodes:files:read");
     expect(apiTokenValues).toContain("nodes:files:write");
     expect(apiTokenValues).toContain("docker:containers:view");
+    expect(apiTokenValues).toContain("docker:compose:view");
     expect(apiTokenValues).toContain("databases:query:read");
     expect(apiTokenValues).not.toContain("integrations:gitlab:manage");
     expect(apiTokenValues).not.toContain("integrations:github:manage");

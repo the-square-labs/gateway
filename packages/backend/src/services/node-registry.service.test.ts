@@ -61,6 +61,20 @@ describe('NodeRegistryService', () => {
     expect(oldLogStream.destroy).toHaveBeenCalled();
   });
 
+  it('tracks capabilities from the current live registration', async () => {
+    const registry = new NodeRegistryService(makeDb() as never);
+    const firstStream = { end: vi.fn(), destroy: vi.fn() };
+    const secondStream = { end: vi.fn(), destroy: vi.fn() };
+
+    await registry.register('node-1', 'docker', 'worker-1', 'hash-1', firstStream as never, {
+      capabilities: ['docker_compose_v1'],
+    });
+    expect(registry.hasCapability('node-1', 'docker_compose_v1')).toBe(true);
+
+    await registry.register('node-1', 'docker', 'worker-1', 'hash-2', secondStream as never, { capabilities: [] });
+    expect(registry.hasCapability('node-1', 'docker_compose_v1')).toBe(false);
+  });
+
   it('does not register a node when the DB online update fails', async () => {
     const db = makeDb();
     db.update.mockReturnValueOnce({

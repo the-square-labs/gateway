@@ -1,10 +1,7 @@
-import { AnimatePresence, motion } from "framer-motion";
-import { Settings } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
-import { Badge } from "@/components/ui/badge";
+import type { ComboboxOption } from "@/components/common/Combobox";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,34 +11,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  DEFAULT_DOCKER_RUNTIME_DESCRIPTION,
-  getSecureDockerRuntimeDescription,
-} from "@/lib/docker-runtime-profile";
-import { dockerContainerRoute, dockerDeploymentRoute, nodeRoute } from "@/lib/resource-routes";
-import { api } from "@/services/api";
+import { nodeRoute } from "@/lib/resource-routes";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
-  type ContainerCreateConfig,
-  type DockerRegistry,
   type DockerRuntimeProfile,
   type DockerRuntimeStatus,
   isNodeIncompatible,
   type Node,
 } from "@/types";
+import { DockerDeployFormFields } from "./docker-deploy/DockerDeployFormFields";
+import { executeDockerDeploy } from "./docker-deploy/executeDockerDeploy";
+import { SecureRuntimeSetupDialog } from "./docker-deploy/SecureRuntimeSetupDialog";
+import type {
+  DockerDeployMode,
+  DockerDeploySourceMode,
+  DockerRestartPolicy,
+} from "./docker-deploy/types";
+import { useDockerDeployData } from "./docker-deploy/useDockerDeployData";
 
-const tabContentTransition = { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const };
 const EMPTY_DOCKER_NODES: Node[] = [];
 
 interface DockerDeployDialogProps {
@@ -68,13 +57,18 @@ export function DockerDeployDialog({
   const [deployNodeId, setDeployNodeId] = useState<string>("");
   const [deployImage, setDeployImage] = useState("");
   const [deployRegistryId, setDeployRegistryId] = useState("");
-  const [registries, setRegistries] = useState<DockerRegistry[]>([]);
-  const [deployLocalImages, setDeployLocalImages] = useState<string[]>([]);
-  const [deployPullableImages, setDeployPullableImages] = useState<string[]>([]);
   const [deployName, setDeployName] = useState("");
-  const [deployRestart, setDeployRestart] = useState("no");
+  const [deployRestart, setDeployRestart] = useState<DockerRestartPolicy>("no");
   const [deploying, setDeploying] = useState(false);
-  const [deployMode, setDeployMode] = useState<"container" | "deployment">("container");
+  const [deployMode, setDeployMode] = useState<DockerDeployMode>("container");
+  const [sourceMode, setSourceMode] = useState<DockerDeploySourceMode>("image");
+  const [sourceConnectorId, setSourceConnectorId] = useState("");
+  const [sourceProjectId, setSourceProjectId] = useState("");
+  const [sourceBranch, setSourceBranch] = useState("main");
+  const [sourceDockerfilePath, setSourceDockerfilePath] = useState("Dockerfile");
+  const [sourceContextPath, setSourceContextPath] = useState(".");
+  const [sourceAutoBuild, setSourceAutoBuild] = useState(true);
+  const [sourceAutoDeploy, setSourceAutoDeploy] = useState(true);
   const [routeHostPort, setRouteHostPort] = useState("8080");
   const [routeContainerPort, setRouteContainerPort] = useState("80");
   const [healthPath, setHealthPath] = useState("/");
@@ -94,6 +88,22 @@ export function DockerDeployDialog({
       ),
     [allNodes, hasScope]
   );
+  const {
+    checkingSourceAdmission,
+    deployLocalImages,
+    deployPullableImages,
+    registries,
+    sourceAdmission,
+    sourceConnectorOptions,
+    sourceRepositories,
+  } = useDockerDeployData({
+    allNodes,
+    deployNodeId,
+    hasScope,
+    open,
+    sourceConnectorId,
+    sourceMode,
+  });
   const selectedDeployNode = useMemo(
     () => allNodes.find((node) => node.id === deployNodeId),
     [allNodes, deployNodeId]
@@ -158,34 +168,41 @@ export function DockerDeployDialog({
     ],
     [deployLocalImages, deployPullableImages]
   );
+  const sourceRepositoryOptions = useMemo<ComboboxOption[]>(
+    () =>
+      sourceRepositories.map((repository) => ({
+        value: repository.projectId,
+        label: repository.fullPath,
+        keywords: [repository.name, repository.webUrl].filter(Boolean).join(" "),
+      })),
+    [sourceRepositories]
+  );
 
-  // Reset form state when dialog opens
-  useEffect(() => {
-    if (open) {
-      setDeployNodeId(initialNodeLocked ? "" : nodeId || "");
-      setDeployImage("");
-      setDeployRegistryId("");
-      setDeployName("");
-      setDeployRestart("no");
-      setDeployMode("container");
-      setRouteHostPort("8080");
-      setRouteContainerPort("80");
-      setHealthPath("/");
-      setDrainSeconds("30");
-      setDeployRuntimeProfile("default");
-    }
-  }, [initialNodeLocked, open, nodeId]);
+  const resetDeployForm = useCallback(() => {
+    setDeployNodeId(initialNodeLocked ? "" : nodeId || "");
+    setDeployImage("");
+    setDeployRegistryId("");
+    setDeployName("");
+    setDeployRestart("no");
+    setDeployMode("container");
+    setSourceMode("image");
+    setSourceConnectorId("");
+    setSourceProjectId("");
+    setSourceBranch("main");
+    setSourceDockerfilePath("Dockerfile");
+    setSourceContextPath(".");
+    setSourceAutoBuild(true);
+    setSourceAutoDeploy(true);
+    setRouteHostPort("8080");
+    setRouteContainerPort("80");
+    setHealthPath("/");
+    setDrainSeconds("30");
+    setDeployRuntimeProfile("default");
+  }, [initialNodeLocked, nodeId]);
 
   useEffect(() => {
-    if (!open || !hasScope("docker:registries:view")) {
-      setRegistries([]);
-      return;
-    }
-    api
-      .listDockerRegistries()
-      .then(setRegistries)
-      .catch(() => setRegistries([]));
-  }, [hasScope, open]);
+    if (open) resetDeployForm();
+  }, [open, resetDeployForm]);
 
   useEffect(() => {
     if (!open || !deployNodeId) return;
@@ -193,82 +210,34 @@ export function DockerDeployDialog({
     if (!selectedNode || selectedNode.serviceCreationLocked) setDeployNodeId("");
   }, [availableNodes, deployNodeId, open]);
 
-  // Fetch local images + pullable images from other nodes when deploy node changes
-  useEffect(() => {
-    if (!deployNodeId) {
-      setDeployLocalImages([]);
-      setDeployPullableImages([]);
-      return;
-    }
-
-    const extractTags = (data: unknown): string[] => {
-      const tags: string[] = [];
-      for (const img of Array.isArray(data) ? data : []) {
-        for (const t of (img as any).repoTags ?? (img as any).RepoTags ?? []) {
-          if (t && t !== "<none>:<none>") tags.push(t);
-        }
-      }
-      return tags;
-    };
-
-    // Fetch local images
-    api
-      .listDockerImages(deployNodeId)
-      .then((data) => setDeployLocalImages(extractTags(data).sort()))
-      .catch(() => setDeployLocalImages([]));
-
-    // Fetch images from other nodes (pullable) — only if user can pull
-    if (!hasScope("docker:images:pull") && !hasScope(`docker:images:pull:${deployNodeId}`)) {
-      setDeployPullableImages([]);
-      return;
-    }
-    const otherNodes = allNodes.filter((n) => n.id !== deployNodeId);
-    if (otherNodes.length > 0) {
-      Promise.all(
-        otherNodes.map((n) =>
-          api
-            .listDockerImages(n.id)
-            .then(extractTags)
-            .catch(() => [] as string[])
-        )
-      ).then((results) => {
-        const localSet = new Set<string>();
-        api
-          .listDockerImages(deployNodeId)
-          .then((d) => {
-            for (const t of extractTags(d)) localSet.add(t);
-            const pullable = new Set<string>();
-            for (const tags of results) {
-              for (const t of tags) {
-                if (!localSet.has(t)) pullable.add(t);
-              }
-            }
-            setDeployPullableImages(Array.from(pullable).sort());
-          })
-          .catch(() => {});
-      });
-    } else {
-      setDeployPullableImages([]);
-    }
-  }, [allNodes, deployNodeId, hasScope]);
-
   const closeDeploy = () => {
     onOpenChange(false);
     setSecureRuntimeSetupOpen(false);
-    setDeployImage("");
-    setDeployName("");
-    setDeployRestart("no");
-    setDeployMode("container");
-    setDeployRuntimeProfile("default");
   };
 
   const handleDeploy = async () => {
-    if (!deployNodeId || !deployImage.trim()) return;
+    if (!deployNodeId) return;
+    if (sourceMode === "image" && !deployImage.trim()) return;
+    if (
+      sourceMode === "repository" &&
+      (!sourceConnectorId ||
+        !sourceProjectId ||
+        !sourceBranch.trim() ||
+        !sourceDockerfilePath.trim() ||
+        !sourceContextPath.trim() ||
+        !deployName.trim())
+    )
+      return;
     if (allNodes.find((n) => n.id === deployNodeId)?.serviceCreationLocked) {
       toast.error("Node is locked for new service creation");
       return;
     }
     if (deployMode === "deployment" && !deployName.trim()) return;
+    if (
+      sourceMode === "repository" &&
+      !requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")
+    )
+      return;
     if (
       deployMode === "deployment" &&
       !requireLicenseFeature("blue-green", "Blue/green deployments")
@@ -281,81 +250,39 @@ export function DockerDeployDialog({
       return;
     setDeploying(true);
     try {
-      let imageRef = deployImage.trim();
-      // Auto-pull if image not available locally
-      const isLocal = deployLocalImages.includes(imageRef);
-      if (!isLocal) {
-        toast.info(`Pulling "${imageRef}"...`);
-        const pullResult = await api.pullImageSync(
-          deployNodeId,
-          imageRef,
-          deployRegistryId || undefined
-        );
-        imageRef = pullResult.imageRef;
-      }
-      if (deployMode === "deployment") {
-        const deployment = await api.createDockerDeployment(deployNodeId, {
-          name: deployName.trim(),
-          image: imageRef,
-          registryId: deployRegistryId || undefined,
-          restartPolicy: deployRestart === "no" ? "unless-stopped" : deployRestart,
-          routes: [
-            {
-              hostPort: Number(routeHostPort),
-              containerPort: Number(routeContainerPort),
-              isPrimary: true,
-            },
-          ],
-          health: {
-            path: healthPath || "/",
-            statusMin: 200,
-            statusMax: 399,
-            timeoutSeconds: 5,
-            intervalSeconds: 5,
-            successThreshold: 2,
-            startupGraceSeconds: 5,
-            deployTimeoutSeconds: 300,
-          },
-          drainSeconds: Number(drainSeconds) || 0,
-          runtimeProfile: deployRuntimeProfile,
-        });
-        toast.success("Deployment created");
-        closeDeploy();
-        onDeployed?.(deployment.id);
-        const nodeSlug =
-          useDockerStore.getState().dockerNodes.find((node) => node.id === deployNodeId)?.slug ||
-          availableNodes.find((node) => node.id === deployNodeId)?.slug;
-        if (nodeSlug) navigate(dockerDeploymentRoute(nodeSlug, deployment.name));
-      } else {
-        const config: ContainerCreateConfig = {
-          image: imageRef,
-          registryId: deployRegistryId || undefined,
-          restartPolicy: deployRestart,
-          runtimeProfile: deployRuntimeProfile,
-        };
-        if (deployName.trim()) config.name = deployName.trim();
-        const result = await api.createContainer(deployNodeId, config);
-        toast.success("Container deployed");
-        closeDeploy();
-        const newId = (result as any)?.id ?? (result as any)?.Id;
-        onDeployed?.(newId);
-        if (newId) {
-          const inspect = await api.inspectContainer(deployNodeId, newId).catch(() => null);
-          const canonicalName = String(
-            (inspect as any)?.Name ??
-              (inspect as any)?.name ??
-              (result as any)?.Name ??
-              (result as any)?.name ??
-              ""
-          ).replace(/^\/+/, "");
-          const nodeSlug =
-            useDockerStore.getState().dockerNodes.find((node) => node.id === deployNodeId)?.slug ||
-            availableNodes.find((node) => node.id === deployNodeId)?.slug;
-          if (canonicalName && nodeSlug) navigate(dockerContainerRoute(nodeSlug, canonicalName));
-        }
-      }
+      await executeDockerDeploy({
+        availableNodes,
+        closeDeploy,
+        deployImage,
+        deployLocalImages,
+        deployMode,
+        deployName,
+        deployNodeId,
+        deployRegistryId,
+        deployRestart,
+        deployRuntimeProfile,
+        drainSeconds,
+        healthPath,
+        navigate,
+        onDeployed,
+        routeContainerPort,
+        routeHostPort,
+        sourceAutoBuild,
+        sourceAutoDeploy,
+        sourceBranch,
+        sourceConnectorId,
+        sourceContextPath,
+        sourceDockerfilePath,
+        sourceMode,
+        sourceProjectId,
+      });
     } catch (err) {
-      if (!handleLicenseApiError(err, "Container deployment")) {
+      if (
+        !handleLicenseApiError(
+          err,
+          sourceMode === "repository" ? "Git push-to-deploy" : "Container deployment"
+        )
+      ) {
         toast.error(err instanceof Error ? err.message : "Failed to deploy");
       }
     } finally {
@@ -365,228 +292,83 @@ export function DockerDeployDialog({
 
   return (
     <Dialog open={open} onOpenChange={closeDeploy}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        onAnimationEnd={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            event.currentTarget.dataset.state === "closed"
+          ) {
+            resetDeployForm();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Deploy</DialogTitle>
           <DialogDescription>Create a container or a blue/green deployment.</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <Tabs
-            value={deployMode}
-            onValueChange={(value) => {
-              if (
-                value === "deployment" &&
-                !requireLicenseFeature("blue-green", "Blue/green deployments")
-              )
-                return;
-              setDeployMode(value as "container" | "deployment");
-            }}
-          >
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="container">Container</TabsTrigger>
-              <TabsTrigger value="deployment">Blue/green</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          {/* Node */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">
-              Node <span className="text-destructive">*</span>
-            </label>
-            <Combobox
-              value={deployNodeId}
-              options={nodeOptions}
-              onValueChange={(value) => {
-                setDeployNodeId(value);
-                setDeployImage("");
-                setDeployRegistryId("");
-                setDeployRuntimeProfile("default");
-              }}
-              placeholder="Select a node"
-              searchPlaceholder="Search nodes..."
-              emptyMessage="No nodes found."
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Runtime</label>
-            <Select
-              value={deployRuntimeProfile}
-              onValueChange={(value) => {
-                if (value === "secure") {
-                  if (!secureRuntimeAvailable) {
-                    if (secureRuntimeCanBeConfigured) setSecureRuntimeSetupOpen(true);
-                    return;
-                  }
-                  if (!requireLicenseFeature("secure-runtime", "Secure Runtime")) return;
-                }
-                setDeployRuntimeProfile(value as DockerRuntimeProfile);
-              }}
-              disabled={!deployNodeId}
-            >
-              <SelectTrigger aria-label="Runtime">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="default" description={DEFAULT_DOCKER_RUNTIME_DESCRIPTION}>
-                  Default
-                </SelectItem>
-                <SelectItem
-                  value="secure"
-                  disabled={!secureRuntimeAvailable && !secureRuntimeCanBeConfigured}
-                  description={getSecureDockerRuntimeDescription(secureRuntimeAvailable)}
-                >
-                  Secure
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Registry */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Registry</label>
-            <Combobox
-              value={deployRegistryId || "__default__"}
-              options={registryOptions}
-              onValueChange={(value) => setDeployRegistryId(value === "__default__" ? "" : value)}
-              placeholder={!deployNodeId ? "Select a node first" : "Docker Hub"}
-              searchPlaceholder="Search registries..."
-              emptyMessage="No registries found."
-              disabled={!deployNodeId}
-              renderOption={(option) => {
-                const registry = availableRegistries.find(
-                  (candidate) => candidate.id === option.value
-                );
-                if (!registry) return option.label;
-                return (
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 truncate">{registry.name}</span>
-                    <span className="text-muted-foreground">{registry.url}</span>
-                    {registry.scope === "node" && (
-                      <Badge variant="secondary" size="inline">
-                        This node
-                      </Badge>
-                    )}
-                  </span>
-                );
-              }}
-            />
-          </div>
-
-          {/* Image */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">
-              Image <span className="text-destructive">*</span>
-            </label>
-            <Combobox
-              freeText
-              value={deployImage}
-              options={imageOptions}
-              onValueChange={setDeployImage}
-              placeholder={!deployNodeId ? "Select a node first" : "Select or enter an image"}
-              searchPlaceholder="Search or enter an image..."
-              disabled={!deployNodeId}
-              renderOption={(option) => (
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 truncate">{option.label}</span>
-                  <Badge variant="secondary" size="inline">
-                    {deployLocalImages.includes(option.value) ? "On this node" : "Pull"}
-                  </Badge>
-                </span>
-              )}
-            />
-            {deployImage && !deployLocalImages.includes(deployImage) && deployNodeId && (
-              <p className="text-xs text-muted-foreground">Will be pulled to this node on deploy</p>
-            )}
-          </div>
-
-          {/* Container name */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">
-              {deployMode === "deployment" ? "Deployment Name" : "Container Name"}{" "}
-              {deployMode === "container" && (
-                <span className="text-muted-foreground font-normal">(optional)</span>
-              )}
-            </label>
-            <Input
-              value={deployName}
-              onChange={(e) => setDeployName(e.target.value)}
-              placeholder={deployMode === "deployment" ? "my-app" : "my-container"}
-            />
-          </div>
-
-          <AnimatePresence initial={false}>
-            {deployMode === "deployment" && (
-              <motion.div
-                key="blue-green-fields"
-                className="overflow-hidden"
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={tabContentTransition}
-              >
-                <motion.div
-                  className="space-y-4"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 8 }}
-                  transition={tabContentTransition}
-                >
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Host Port</label>
-                      <Input
-                        inputMode="numeric"
-                        value={routeHostPort}
-                        onChange={(e) => setRouteHostPort(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Container Port</label>
-                      <Input
-                        inputMode="numeric"
-                        value={routeContainerPort}
-                        onChange={(e) => setRouteContainerPort(e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Health Path</label>
-                      <Input value={healthPath} onChange={(e) => setHealthPath(e.target.value)} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Drain Seconds</label>
-                      <Input
-                        inputMode="numeric"
-                        value={drainSeconds}
-                        onChange={(e) => setDrainSeconds(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Restart policy */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Restart Policy</label>
-            <Select value={deployRestart} onValueChange={setDeployRestart}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="no">No</SelectItem>
-                <SelectItem value="always">Always</SelectItem>
-                <SelectItem value="unless-stopped">Unless Stopped</SelectItem>
-                <SelectItem value="on-failure">On Failure</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+        <DockerDeployFormFields
+          availableRegistries={availableRegistries}
+          checkingSourceAdmission={checkingSourceAdmission}
+          deployImage={deployImage}
+          deployLocalImages={deployLocalImages}
+          deployMode={deployMode}
+          deployName={deployName}
+          deployNodeId={deployNodeId}
+          deployRegistryId={deployRegistryId}
+          deployRestart={deployRestart}
+          deployRuntimeProfile={deployRuntimeProfile}
+          drainSeconds={drainSeconds}
+          healthPath={healthPath}
+          imageOptions={imageOptions}
+          nodeOptions={nodeOptions}
+          registryOptions={registryOptions}
+          routeContainerPort={routeContainerPort}
+          routeHostPort={routeHostPort}
+          secureRuntimeAvailable={secureRuntimeAvailable}
+          secureRuntimeCanBeConfigured={secureRuntimeCanBeConfigured}
+          sourceAdmission={sourceAdmission}
+          sourceAutoBuild={sourceAutoBuild}
+          sourceAutoDeploy={sourceAutoDeploy}
+          sourceBranch={sourceBranch}
+          sourceConnectorId={sourceConnectorId}
+          sourceConnectorOptions={sourceConnectorOptions}
+          sourceContextPath={sourceContextPath}
+          sourceDockerfilePath={sourceDockerfilePath}
+          sourceMode={sourceMode}
+          sourceProjectId={sourceProjectId}
+          sourceRepositories={sourceRepositories}
+          sourceRepositoryOptions={sourceRepositoryOptions}
+          onDeployImageChange={setDeployImage}
+          onDeployModeChange={setDeployMode}
+          onDeployNameChange={setDeployName}
+          onDeployNodeIdChange={(value) => {
+            setDeployNodeId(value);
+            setDeployImage("");
+            setDeployRegistryId("");
+            setDeployRuntimeProfile("default");
+          }}
+          onDeployRegistryIdChange={setDeployRegistryId}
+          onDeployRestartChange={setDeployRestart}
+          onDeployRuntimeProfileChange={setDeployRuntimeProfile}
+          onDrainSecondsChange={setDrainSeconds}
+          onHealthPathChange={setHealthPath}
+          onRouteContainerPortChange={setRouteContainerPort}
+          onRouteHostPortChange={setRouteHostPort}
+          onSecureRuntimeSetupOpen={() => setSecureRuntimeSetupOpen(true)}
+          onSourceAutoBuildChange={setSourceAutoBuild}
+          onSourceAutoDeployChange={setSourceAutoDeploy}
+          onSourceBranchChange={setSourceBranch}
+          onSourceConnectorIdChange={(value) => {
+            setSourceConnectorId(value);
+            setSourceProjectId("");
+          }}
+          onSourceContextPathChange={setSourceContextPath}
+          onSourceDockerfilePathChange={setSourceDockerfilePath}
+          onSourceModeChange={setSourceMode}
+          onSourceProjectIdChange={setSourceProjectId}
+        />
 
         <DialogFooter>
           <Button variant="outline" onClick={closeDeploy}>
@@ -596,44 +378,41 @@ export function DockerDeployDialog({
             onClick={handleDeploy}
             disabled={
               deploying ||
-              !deployImage.trim() ||
               !deployNodeId ||
+              (sourceMode === "repository" &&
+                (checkingSourceAdmission || sourceAdmission?.ready !== true)) ||
+              (sourceMode === "image"
+                ? !deployImage.trim()
+                : !sourceConnectorId ||
+                  !sourceProjectId ||
+                  !sourceBranch.trim() ||
+                  !sourceDockerfilePath.trim() ||
+                  !sourceContextPath.trim() ||
+                  !deployName.trim()) ||
               (deployMode === "deployment" &&
                 (!deployName.trim() || !Number(routeHostPort) || !Number(routeContainerPort)))
             }
           >
-            {deploying ? "Deploying..." : "Deploy"}
+            {deploying
+              ? sourceMode === "repository"
+                ? "Creating…"
+                : "Deploying..."
+              : sourceMode === "repository"
+                ? "Create and build"
+                : "Deploy"}
           </Button>
         </DialogFooter>
       </DialogContent>
-      <Dialog open={secureRuntimeSetupOpen} onOpenChange={setSecureRuntimeSetupOpen}>
-        <DialogContent aria-describedby={undefined} className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Secure Runtime setup required</DialogTitle>
-          </DialogHeader>
-          <div>
-            <p className="text-sm text-muted-foreground">
-              Set up Secure Runtime on this node before using it for a container or deployment.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSecureRuntimeSetupOpen(false)}>
-              Close
-            </Button>
-            <Button
-              onClick={() => {
-                const nodeSlug = selectedDeployNode?.slug;
-                if (!nodeSlug) return;
-                closeDeploy();
-                navigate(nodeRoute(nodeSlug, "details"));
-              }}
-            >
-              <Settings className="h-4 w-4" />
-              Open node settings
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <SecureRuntimeSetupDialog
+        open={secureRuntimeSetupOpen}
+        onOpenChange={setSecureRuntimeSetupOpen}
+        onOpenNodeSettings={() => {
+          const nodeSlug = selectedDeployNode?.slug;
+          if (!nodeSlug) return;
+          closeDeploy();
+          navigate(nodeRoute(nodeSlug, "details"));
+        }}
+      />
     </Dialog>
   );
 }

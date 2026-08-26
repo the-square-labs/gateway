@@ -91,10 +91,12 @@ export function StatsTab({
   nodeId,
   containerId,
   data,
+  showProcesses = true,
 }: {
   nodeId: string;
   containerId: string;
   data: InspectData;
+  showProcesses?: boolean;
 }) {
   const [current, setCurrent] = useState<ContainerStats | null>(null);
   const [gpuDevices, setGpuDevices] = useState<NodeGpuDevice[]>([]);
@@ -290,6 +292,11 @@ export function StatsTab({
 
   // Fetch process list (separate from SSE — needs direct call)
   useEffect(() => {
+    if (!showProcesses) {
+      setProcesses(null);
+      setProcessStatus("ready");
+      return;
+    }
     const identity = monitoringIdentity;
     let cancelled = false;
     const fetchTop = async () => {
@@ -309,7 +316,7 @@ export function StatsTab({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [nodeId, containerId, monitoringIdentity]);
+  }, [nodeId, containerId, monitoringIdentity, showProcesses]);
 
   // Uptime — ticks every second
   const state = data.State ?? {};
@@ -438,56 +445,58 @@ export function StatsTab({
           ))}
 
           {/* Process List */}
-          <PanelShell
-            title="Process List"
-            description={
-              processes?.truncated
-                ? `Showing first ${processes.limit ?? filteredProcesses.length} of ${
-                    processes.totalProcesses ?? "many"
-                  } processes.`
-                : undefined
-            }
-          >
-            {filteredProcesses.length > 0 ? (
-              <div className="overflow-x-auto">
-                <div className="max-h-[calc(2rem*9+2.25rem+4px)] overflow-auto">
-                  <table className="w-full">
-                    <thead className="sticky top-0 z-10 bg-muted">
-                      <tr className="text-left border-b border-border">
-                        {filteredTitles.map((title) => (
-                          <th
-                            key={title}
-                            className="p-2 px-4 text-xs font-medium text-muted-foreground uppercase"
-                          >
-                            {title}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {filteredProcesses.map((proc, i) => (
-                        <tr key={i} className="hover:bg-muted/50">
-                          {proc.map((val, j) => (
-                            <td key={j} className="p-2 px-4 text-xs font-mono">
-                              {val}
-                            </td>
+          {showProcesses && (
+            <PanelShell
+              title="Process List"
+              description={
+                processes?.truncated
+                  ? `Showing first ${processes.limit ?? filteredProcesses.length} of ${
+                      processes.totalProcesses ?? "many"
+                    } processes.`
+                  : undefined
+              }
+            >
+              {filteredProcesses.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <div className="max-h-[calc(2rem*9+2.25rem+4px)] overflow-auto">
+                    <table className="w-full">
+                      <thead className="sticky top-0 z-10 bg-muted">
+                        <tr className="text-left border-b border-border">
+                          {filteredTitles.map((title) => (
+                            <th
+                              key={title}
+                              className="p-2 px-4 text-xs font-medium text-muted-foreground uppercase"
+                            >
+                              {title}
+                            </th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {filteredProcesses.map((proc, i) => (
+                          <tr key={i} className="hover:bg-muted/50">
+                            {proc.map((val, j) => (
+                              <td key={j} className="p-2 px-4 text-xs font-mono">
+                                {val}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="px-4 py-6 text-sm text-muted-foreground">
-                {processStatus === "loading"
-                  ? "Loading processes..."
-                  : processStatus === "error"
-                    ? "Process list is temporarily unavailable. Retrying automatically."
-                    : "No running processes reported. Retrying automatically."}
-              </div>
-            )}
-          </PanelShell>
+              ) : (
+                <div className="px-4 py-6 text-sm text-muted-foreground">
+                  {processStatus === "loading"
+                    ? "Loading processes..."
+                    : processStatus === "error"
+                      ? "Process list is temporarily unavailable. Retrying automatically."
+                      : "No running processes reported. Retrying automatically."}
+                </div>
+              )}
+            </PanelShell>
+          )}
         </>
       )}
     </div>

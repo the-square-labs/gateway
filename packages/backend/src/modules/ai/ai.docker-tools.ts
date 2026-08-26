@@ -1,4 +1,5 @@
 import { container } from '@/container.js';
+import { hasScopeForResource } from '@/lib/permissions.js';
 import {
   ContainerCreateSchema,
   ContainerStopSchema,
@@ -12,6 +13,12 @@ import {
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerNodeScope } from '@/modules/docker/docker-access.middleware.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import {
+  DockerBuildCreateSchema,
+  DockerBuildListQuerySchema,
+  DockerSourceBindingConfigSchema,
+  type DockerSourceTarget,
+} from '@/modules/docker/docker-build.schemas.js';
 import {
   DockerDeploymentDeploySchema,
   DockerDeploymentSwitchSchema,
@@ -67,6 +74,8 @@ export const DOCKER_TOOL_NAMES = new Set([
   'manage_docker_registry',
   'manage_docker_volume',
   'manage_docker_network',
+  'list_docker_builds',
+  'manage_docker_source',
   'manage_docker_task',
 ]);
 
@@ -379,6 +388,10 @@ export async function executeDockerTool(
       return manageDockerVolume(context, user, args);
     case 'manage_docker_network':
       return manageDockerNetwork(context, user, args);
+    case 'list_docker_builds':
+      return listDockerBuilds(user, args);
+    case 'manage_docker_source':
+      return manageDockerSource(context, user, args);
     case 'manage_docker_task':
       return manageDockerTask(context, user, args);
     default:
@@ -571,6 +584,109 @@ async function manageDockerNetwork(context: DockerToolContext, user: User, args:
     return { success: true };
   }
   throw new Error(`Unsupported Docker network operation: ${operation}`);
+}
+
+async function listDockerBuilds(user: User, args: Record<string, unknown>) {
+  const a = args as any;
+  const query = DockerBuildListQuerySchema.parse({
+    sourceBindingId: optionalNonEmptyString(a.sourceBindingId),
+    status: optionalNonEmptyString(a.status),
+    limit: a.limit ?? 20,
+  });
+  const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
+  const builds = await container.resolve(DockerBuildService).list(query);
+  return builds.filter((build) => {
+    if (a.nodeId && build.target.nodeId !== a.nodeId) return false;
+    if (build.target.kind === 'pages_project') {
+      return hasScopeForResource(user.scopes, 'pages:view', build.target.pageProjectId);
+    }
+    const resourceId =
+      build.target.kind === 'container'
+        ? build.target.containerName
+        : build.target.kind === 'deployment'
+          ? build.target.deploymentId
+          : build.target.composeProjectId;
+    const scope = build.target.kind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view';
+    return hasDockerResourceScope(user.scopes, scope, build.target.nodeId, resourceId);
+  });
+}
+
+async function manageDockerSource(
+  context: DockerToolContext,
+  user: User,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const a = args as any;
+  const operation = String(a.operation);
+  const nodeId = String(a.nodeId || '');
+  if (operation === 'admission') {
+    context.ensureToolScopeForResource(user, 'docker:containers:create', nodeId);
+    const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
+    return container.resolve(DockerBuildService).admissionStatus();
+  }
+
+  const targetType = a.targetType === 'deployment' ? 'deployment' : 'container';
+  let target: DockerSourceTarget;
+  if (targetType === 'deployment') {
+    const deploymentId = String(a.deploymentId || '');
+    if (!deploymentId) throw new Error('deploymentId is required');
+    const requiredScope =
+      operation === 'get'
+        ? 'docker:containers:view'
+        : operation === 'build'
+          ? 'docker:containers:manage'
+          : 'docker:containers:edit';
+    ensureDockerDeploymentScope(context, user, requiredScope, nodeId, deploymentId);
+    target = { kind: 'deployment', deploymentId };
+  } else {
+    const containerName = String(a.containerName || '');
+    if (!containerName) throw new Error('containerName is required');
+    const requiredScope =
+      operation === 'get'
+        ? 'docker:containers:view'
+        : operation === 'build'
+          ? 'docker:containers:manage'
+          : 'docker:containers:edit';
+    await ensureDockerContainerScope(context, user, requiredScope, nodeId, containerName);
+    target = { kind: 'container', nodeId, containerName };
+  }
+
+  const { DockerSourceService } = await import('@/modules/docker/docker-source.service.js');
+  const sourceService = container.resolve(DockerSourceService);
+  switch (operation) {
+    case 'get':
+      return sourceService.get(target);
+    case 'upsert':
+      return sourceService.upsert(
+        {
+          ...DockerSourceBindingConfigSchema.parse({
+            connectorId: a.connectorId,
+            projectId: a.projectId,
+            branch: a.branch,
+            dockerfilePath: a.dockerfilePath ?? 'Dockerfile',
+            contextPath: a.contextPath ?? '.',
+            autoDeploy: a.autoDeploy ?? true,
+            buildArgs: a.buildArgs ?? {},
+            buildSecretNames: a.buildSecretNames ?? [],
+            policy: a.policy,
+          }),
+          target,
+        },
+        user
+      );
+    case 'remove':
+      return { success: true, removed: await sourceService.remove(target, user.id) };
+    case 'resolve':
+      return sourceService.resolveCurrent(target, user);
+    case 'build':
+      return sourceService.createBuild(
+        target,
+        DockerBuildCreateSchema.parse({ commitSha: optionalNonEmptyString(a.commitSha), force: a.force ?? false }),
+        user
+      );
+    default:
+      throw new Error(`Unsupported Docker source operation: ${operation}`);
+  }
 }
 
 async function manageDockerTask(context: DockerToolContext, user: User, args: Record<string, unknown>) {

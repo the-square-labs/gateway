@@ -9,6 +9,8 @@ export interface ProxyUpstreamLabelInput {
   dockerNodeId?: string | null;
   dockerNodeSlug?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerDeploymentName?: string | null;
   dockerNodeAppearanceColor?: NodeAppearanceColor | null;

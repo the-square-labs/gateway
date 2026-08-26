@@ -138,6 +138,37 @@ describe('RelayPolicyService snapshots', () => {
     expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
   });
 
+  it('checks Relay Pool support without treating the internal registry local service as a node', async () => {
+    const select = vi
+      .fn()
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([{ nodeId: 'gateway-internal-registry', subjectKind: 'local_service' }]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => Promise.resolve([{ sourceKind: 'daemon', sourceId: '11111111-1111-4111-8111-111111111111' }]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () =>
+            Promise.resolve([
+              {
+                id: '11111111-1111-4111-8111-111111111111',
+                capabilities: { capabilities: ['relay_pool_v1'] },
+              },
+            ]),
+        }),
+      });
+    const service = createService({ select } as never, { applySnapshot: vi.fn() });
+
+    await expect((service as any).grantIssuer.endpointPathSupportsPool('endpoint-1')).resolves.toBe(true);
+  });
+
   it('keeps a persisted owner revocation when the runtime snapshot must be deferred', async () => {
     const select = vi
       .fn()

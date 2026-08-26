@@ -38,6 +38,13 @@ export function EnvironmentTab({
   onRecreating,
   serviceEnv,
   onSaveServiceEnv,
+  canEditOverride,
+  canManageSecretsOverride,
+  secretApi,
+  environmentDescription,
+  secretsDescription,
+  serviceSaveLabel,
+  serviceSaveDescription,
 }: {
   nodeId: string;
   containerId: string;
@@ -50,6 +57,18 @@ export function EnvironmentTab({
   onRecreating?: () => void | Promise<void>;
   serviceEnv?: Record<string, string>;
   onSaveServiceEnv?: (env: Record<string, string>) => Promise<void>;
+  canEditOverride?: boolean;
+  canManageSecretsOverride?: boolean;
+  secretApi?: {
+    list: () => Promise<DockerSecret[]>;
+    create: (key: string, value: string) => Promise<DockerSecret>;
+    update: (id: string, value: string) => Promise<DockerSecret>;
+    delete: (id: string) => Promise<void>;
+  };
+  environmentDescription?: string;
+  secretsDescription?: string;
+  serviceSaveLabel?: string;
+  serviceSaveDescription?: string;
 }) {
   const { hasScope } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
@@ -74,8 +93,9 @@ export function EnvironmentTab({
   const envRequestGenerationRef = useRef(0);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
-  const canEdit = hasScope(`docker:containers:environment:${scopeSuffix}`);
-  const canManageSecrets = hasScope(`docker:containers:secrets:${scopeSuffix}`);
+  const canEdit = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
+  const canManageSecrets =
+    canManageSecretsOverride ?? hasScope(`docker:containers:secrets:${scopeSuffix}`);
   const recreatesRunningContainer = containerState === "running";
   const isServiceEnv = !!onSaveServiceEnv;
   const serviceEnvSignature = useMemo(() => JSON.stringify(serviceEnv ?? {}), [serviceEnv]);
@@ -111,7 +131,9 @@ export function EnvironmentTab({
     try {
       if (isServiceEnv) {
         const secretsData = canManageSecrets
-          ? await api.listDockerDeploymentSecrets(nodeId, targetContainerId)
+          ? secretApi
+            ? await secretApi.list()
+            : await api.listDockerDeploymentSecrets(nodeId, targetContainerId)
           : [];
         const serviceEnvRecord = JSON.parse(serviceEnvSignature) as Record<string, string>;
         const entries = Object.entries(serviceEnvRecord).map(([key, value]) => `${key}=${value}`);
@@ -124,12 +146,14 @@ export function EnvironmentTab({
         setOriginalEnv(entries);
         setRawText(entries.join("\n"));
         setSecretRows(
-          (secretsData ?? []).map((s: DockerSecret) => ({
-            id: s.id,
-            key: s.key,
-            value: s.value,
-            dirty: false,
-          }))
+          (secretsData ?? [])
+            .filter((s: DockerSecret) => !s.system)
+            .map((s: DockerSecret) => ({
+              id: s.id,
+              key: s.key,
+              value: s.value,
+              dirty: false,
+            }))
         );
         setDeletedSecrets(new Map());
         return;
@@ -158,12 +182,14 @@ export function EnvironmentTab({
       }
 
       if (canManageSecrets) {
-        const rows: SecretRow[] = (secretsData ?? []).map((s: DockerSecret) => ({
-          id: s.id,
-          key: s.key,
-          value: s.value,
-          dirty: false,
-        }));
+        const rows: SecretRow[] = (secretsData ?? [])
+          .filter((s: DockerSecret) => !s.system)
+          .map((s: DockerSecret) => ({
+            id: s.id,
+            key: s.key,
+            value: s.value,
+            dirty: false,
+          }));
         setSecretRows(rows);
         setDeletedSecrets(new Map());
       } else {
@@ -177,7 +203,7 @@ export function EnvironmentTab({
     } finally {
       if (isCurrentRequest()) setIsLoading(false);
     }
-  }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature]);
+  }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature, secretApi]);
 
   useEffect(() => {
     envContainerIdRef.current = containerId;
@@ -377,14 +403,15 @@ export function EnvironmentTab({
     const savingDatabaseLinks = databaseLinkDraft.hasChanges;
     const ok = await confirm({
       title: onSaveServiceEnv
-        ? "Save Environment"
+        ? (serviceSaveLabel ?? "Save Environment")
         : savingDatabaseLinks || recreatesRunningContainer
           ? "Save & Recreate"
           : canEdit
             ? "Save"
             : "Save Secrets",
       description: onSaveServiceEnv
-        ? "Environment changes will be saved to the deployment and apply on the next deploy."
+        ? (serviceSaveDescription ??
+          "Environment changes will be saved to the deployment and apply on the next deploy.")
         : savingDatabaseLinks
           ? "Managed database links and environment changes will be applied together. The container will be recreated and experience brief downtime. Continue?"
           : canEdit
@@ -393,7 +420,7 @@ export function EnvironmentTab({
               : "Updating environment variables will save the new container configuration. The container will remain stopped. Continue?"
             : "Secret changes will be stored, but without environment permission they will only apply after the container is recreated. Continue?",
       confirmLabel: onSaveServiceEnv
-        ? "Save"
+        ? (serviceSaveLabel ?? "Save")
         : savingDatabaseLinks || recreatesRunningContainer
           ? "Recreate"
           : "Save",
@@ -407,7 +434,9 @@ export function EnvironmentTab({
       if (hasSecretsChanges) {
         // Delete removed secrets
         for (const id of deletedSecrets.keys()) {
-          if (onSaveServiceEnv) {
+          if (secretApi) {
+            await secretApi.delete(id);
+          } else if (onSaveServiceEnv) {
             await api.deleteDockerDeploymentSecret(nodeId, containerId, id);
           } else {
             await api.deleteDockerSecret(nodeId, containerId, id);
@@ -424,14 +453,18 @@ export function EnvironmentTab({
           }
           if (row.id) {
             // Existing secret with new value
-            if (onSaveServiceEnv) {
+            if (secretApi) {
+              await secretApi.update(row.id, row.value);
+            } else if (onSaveServiceEnv) {
               await api.updateDockerDeploymentSecret(nodeId, containerId, row.id, row.value);
             } else {
               await api.updateDockerSecret(nodeId, containerId, row.id, row.value);
             }
           } else {
             // New secret
-            if (onSaveServiceEnv) {
+            if (secretApi) {
+              await secretApi.create(row.key.trim(), row.value);
+            } else if (onSaveServiceEnv) {
               await api.createDockerDeploymentSecret(
                 nodeId,
                 containerId,
@@ -443,18 +476,22 @@ export function EnvironmentTab({
             }
           }
         }
-        const refreshedSecrets = onSaveServiceEnv
-          ? await api.listDockerDeploymentSecrets(nodeId, containerId)
-          : canManageSecrets
-            ? await api.listDockerSecrets(nodeId, containerId)
-            : [];
+        const refreshedSecrets = secretApi
+          ? await secretApi.list()
+          : onSaveServiceEnv
+            ? await api.listDockerDeploymentSecrets(nodeId, containerId)
+            : canManageSecrets
+              ? await api.listDockerSecrets(nodeId, containerId)
+              : [];
         setSecretRows(
-          refreshedSecrets.map((s: DockerSecret) => ({
-            id: s.id,
-            key: s.key,
-            value: s.value,
-            dirty: false,
-          }))
+          refreshedSecrets
+            .filter((s: DockerSecret) => !s.system)
+            .map((s: DockerSecret) => ({
+              id: s.id,
+              key: s.key,
+              value: s.value,
+              dirty: false,
+            }))
         );
         setDeletedSecrets(new Map());
       }
@@ -673,9 +710,10 @@ export function EnvironmentTab({
           <PanelShell
             title="Environment Variables"
             description={
-              onSaveServiceEnv
+              environmentDescription ??
+              (onSaveServiceEnv
                 ? "Saved to deployment configuration"
-                : "Changes will recreate the container"
+                : "Changes will recreate the container")
             }
             className={rawMode ? "flex flex-1 flex-col min-h-0" : undefined}
             bodyClassName={rawMode ? "flex min-h-0 flex-1 flex-col" : undefined}
@@ -710,7 +748,7 @@ export function EnvironmentTab({
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
                     {onSaveServiceEnv
-                      ? "Save"
+                      ? (serviceSaveLabel ?? "Save")
                       : databaseLinkDraft.hasChanges || recreatesRunningContainer
                         ? "Save & Recreate"
                         : "Save"}
@@ -824,6 +862,7 @@ export function EnvironmentTab({
             }
             invalidKeyPattern={invalidKeyPattern}
             hiddenKeys={replacementDatabaseVariableNames}
+            description={secretsDescription}
           />
         )}
       </div>

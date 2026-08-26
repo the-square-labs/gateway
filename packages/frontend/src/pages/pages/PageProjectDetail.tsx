@@ -1,9 +1,15 @@
 import {
   ArrowRightLeft,
+  Code2,
   Copy,
   ExternalLink,
   FileCode2,
+  GitBranch,
+  Hammer,
+  KeyRound,
+  PackageOpen,
   Settings,
+  Tags,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -43,6 +49,7 @@ import { useUrlTab } from "@/hooks/use-url-tab";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageProject, PageProjectPlacementOption } from "@/types";
+import { DockerResourceGitTabs } from "../docker-detail/DockerResourceGitTabs";
 import { PageDeploymentsTab } from "./PageDeploymentsTab";
 import { PageManualDeployDialog } from "./PageManualDeployDialog";
 import { PageProjectSettingsDialog } from "./PageProjectSettingsTab";
@@ -50,7 +57,14 @@ import { PageRuntimeConfigTab } from "./PageRuntimeConfigTab";
 import { PageTagsTab } from "./PageTagsTab";
 import { PageTokensTab } from "./PageTokensTab";
 
-const PROJECT_TABS = ["deployments", "tags", "tokens", "configuration"] as const;
+const PROJECT_TABS = [
+  "deployments",
+  "source",
+  "builds",
+  "tags",
+  "tokens",
+  "configuration",
+] as const;
 
 function MigrateProjectDialog({
   open,
@@ -270,12 +284,29 @@ export function PageProjectDetail({
     }
   }, [projectId]);
 
+  const loadLatestPreview = useCallback(async () => {
+    try {
+      const response = await api.listPageDeployments(projectId, { page: 1, limit: 100 });
+      setLatestPreviewHostname(
+        response.data?.find((deployment) => deployment.status === "ready")?.previewHostname ?? null
+      );
+    } catch {
+      setLatestPreviewHostname(null);
+    }
+  }, [projectId]);
+
   useEffect(() => {
-    if (canView) void load();
-  }, [canView, load]);
+    if (!canView) return;
+    void load();
+    void loadLatestPreview();
+  }, [canView, load, loadLatestPreview]);
   useRealtime("pages.project.changed", (payload) => {
     const event = payload as { projectId?: string };
     if (!event.projectId || event.projectId === projectId) void load();
+  });
+  useRealtime("pages.deployment.changed", (payload) => {
+    const event = payload as { projectId?: string };
+    if (!event.projectId || event.projectId === projectId) void loadLatestPreview();
   });
 
   useEffect(() => {
@@ -335,7 +366,7 @@ export function PageProjectDetail({
   };
 
   if (!canView) return null;
-  if (loading && !project) return <DetailPageSkeleton label="Loading Page Project" tabs={4} />;
+  if (loading && !project) return <DetailPageSkeleton label="Loading Page Project" tabs={6} />;
   if (!project) return null;
 
   return (
@@ -482,7 +513,12 @@ export function PageProjectDetail({
             value={latestPreviewHostname ?? latestPreviewUrl}
             copyValue={latestPreviewUrl}
             actions={
-              <Button asChild variant="ghost" size="icon" className="rounded-none border-l">
+              <Button
+                asChild
+                variant="ghost"
+                size="icon"
+                className="rounded-none border-l bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
                 <a
                   href={latestPreviewUrl}
                   target="_blank"
@@ -502,15 +538,48 @@ export function PageProjectDetail({
           className="flex min-h-0 flex-1 flex-col"
         >
           <TabsList className="shrink-0">
-            <TabsTrigger value="deployments">Deployments</TabsTrigger>
-            <TabsTrigger value="tags">Tags</TabsTrigger>
-            <TabsTrigger value="tokens">Deploy tokens</TabsTrigger>
-            <TabsTrigger value="configuration">Configuration</TabsTrigger>
+            <TabsTrigger value="deployments" className="gap-1.5">
+              <PackageOpen className="h-3.5 w-3.5" /> Deployments
+            </TabsTrigger>
+            <TabsTrigger value="source" className="gap-1.5">
+              <GitBranch className="h-3.5 w-3.5" /> Source
+            </TabsTrigger>
+            <TabsTrigger value="builds" className="gap-1.5">
+              <Hammer className="h-3.5 w-3.5" /> Builds
+            </TabsTrigger>
+            <TabsTrigger value="tags" className="gap-1.5">
+              <Tags className="h-3.5 w-3.5" /> Tags
+            </TabsTrigger>
+            <TabsTrigger value="tokens" className="gap-1.5">
+              <KeyRound className="h-3.5 w-3.5" /> Deploy tokens
+            </TabsTrigger>
+            <TabsTrigger value="configuration" className="gap-1.5">
+              <Code2 className="h-3.5 w-3.5" /> Configuration
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="deployments" className="pb-0">
-            <PageDeploymentsTab
-              projectId={project.id}
-              onLatestPreviewChange={setLatestPreviewHostname}
+            <PageDeploymentsTab projectId={project.id} />
+          </TabsContent>
+          <TabsContent value="source" className="pb-6">
+            <DockerResourceGitTabs
+              target={{
+                kind: "pages_project",
+                nodeId: project.nodeId ?? undefined,
+                pageProjectId: project.id,
+              }}
+              view="source"
+              canEdit={canEdit}
+              canBuild={canDeploy}
+            />
+          </TabsContent>
+          <TabsContent value="builds" className="pb-0">
+            <DockerResourceGitTabs
+              target={{
+                kind: "pages_project",
+                nodeId: project.nodeId ?? undefined,
+                pageProjectId: project.id,
+              }}
+              view="builds"
             />
           </TabsContent>
           <TabsContent value="tags" className="pb-0">

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const DockerFolderResourceTypeSchema = z.enum(['container', 'image', 'network', 'volume']);
+export const DockerFolderResourceTypeSchema = z.enum(['container', 'image', 'network', 'volume', 'compose']);
 
 export const CreateDockerFolderSchema = z.object({
   name: z.string().min(1).max(255),

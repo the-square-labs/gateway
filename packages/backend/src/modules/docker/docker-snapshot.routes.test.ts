@@ -8,6 +8,7 @@ import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
+import { registerNetworkRoutes } from './docker-network.routes.js';
 import { registerDockerSnapshotRoutes } from './docker-snapshot.routes.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
@@ -33,13 +34,15 @@ class MemoryCache {
   }
   getClient() {
     return {
-      hget: async (key: string, field: string) => this.hashes.get(key)?.get(field) ?? null,
-      hset: async (key: string, field: string, value: string) => {
+      hget: vi.fn(async (key: string, field: string) => this.hashes.get(key)?.get(field) ?? null),
+      hset: vi.fn(async (key: string, field: string, value: string) => {
         const hash = this.hashes.get(key) ?? new Map<string, string>();
         hash.set(field, value);
         this.hashes.set(key, hash);
         return 1;
-      },
+      }),
+      hkeys: vi.fn(async (key: string) => [...(this.hashes.get(key)?.keys() ?? [])]),
+      hdel: vi.fn(async (key: string, field: string) => (this.hashes.get(key)?.delete(field) ? 1 : 0)),
       del: vi.fn(),
     };
   }
@@ -76,6 +79,7 @@ async function setup() {
   const docker = {
     decorateContainerSnapshot: vi.fn(async (_nodeId, data) => data),
     decoratePublicContainerSnapshot: vi.fn(async (_nodeId, data) => data),
+    decoratePublicVolumeSnapshot: vi.fn(async (_nodeId, data) => data),
     decorateContainerDetailSnapshot: vi.fn(async (_nodeId, data) => data),
     listContainers: vi.fn(),
     listGpuAttachmentUsers: vi.fn(),
@@ -123,6 +127,94 @@ describe('Docker snapshot routes', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as any;
     expect(body.data.map((network: any) => network.name)).toEqual(['application']);
+  });
+
+  it('hides Compose-owned children from aggregate standalone lists while retaining shared resources', async () => {
+    const { snapshots } = await setup();
+    await snapshots.replaceList(NODE_1, 'containers', [
+      { id: 'compose', name: 'demo-api-1', labels: { 'com.docker.compose.project': 'demo' } },
+      { id: 'standalone', name: 'standalone' },
+    ]);
+    await snapshots.replaceList(NODE_1, 'volumes', [
+      {
+        Name: 'demo-data',
+        Labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.volume': 'data' },
+      },
+      { Name: 'shared-data', Labels: { external: 'true' } },
+    ]);
+    await snapshots.replaceList(NODE_1, 'networks', [
+      {
+        Id: 'demo',
+        Name: 'demo_default',
+        Labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.network': 'default' },
+      },
+      { Id: 'shared', Name: 'shared', Labels: { external: 'true' } },
+    ]);
+    const app = appWithScopes([
+      `docker:containers:view:${NODE_1}`,
+      `docker:volumes:view:${NODE_1}`,
+      `docker:networks:view:${NODE_1}`,
+    ]);
+    registerDockerSnapshotRoutes(app);
+
+    const containerResponse = await app.request('/containers');
+    await expect(containerResponse.json()).resolves.toMatchObject({
+      data: [expect.objectContaining({ name: 'standalone' })],
+      total: 1,
+    });
+    const volumeResponse = await app.request('/volumes');
+    await expect(volumeResponse.json()).resolves.toMatchObject({
+      data: [expect.objectContaining({ name: 'shared-data' })],
+      total: 1,
+    });
+    const networkResponse = await app.request('/networks');
+    await expect(networkResponse.json()).resolves.toMatchObject({
+      data: [expect.objectContaining({ name: 'shared' })],
+      total: 1,
+    });
+  });
+
+  it('applies the Compose ownership filter to node-specific lists', async () => {
+    const { snapshots } = await setup();
+    await snapshots.replaceList(NODE_1, 'containers', [
+      { id: 'compose', name: 'demo-api-1', labels: { 'com.docker.compose.project': 'demo' } },
+      { id: 'standalone', name: 'standalone' },
+    ]);
+    await snapshots.replaceList(NODE_1, 'volumes', [
+      {
+        Name: 'demo-data',
+        Labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.volume': 'data' },
+      },
+      { Name: 'shared-data', Labels: { external: 'true' } },
+    ]);
+    await snapshots.replaceList(NODE_1, 'networks', [
+      {
+        Id: 'demo',
+        Name: 'demo_default',
+        Labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.network': 'default' },
+      },
+      { Id: 'shared', Name: 'shared', Labels: { external: 'true' } },
+    ]);
+    const app = appWithScopes([
+      `docker:containers:view:${NODE_1}`,
+      `docker:volumes:view:${NODE_1}`,
+      `docker:networks:view:${NODE_1}`,
+    ]);
+    registerContainerRoutes(app);
+    registerVolumeRoutes(app);
+    registerNetworkRoutes(app);
+
+    for (const [path, key] of [
+      [`/nodes/${NODE_1}/containers`, 'name'],
+      [`/nodes/${NODE_1}/volumes`, 'name'],
+      [`/nodes/${NODE_1}/networks`, 'name'],
+    ] as const) {
+      const response = await app.request(path);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { data: Array<Record<string, unknown>>; total: number };
+      expect(body.total).toBe(1);
+      expect(body.data[0]?.[key]).toMatch(/standalone|shared/);
+    }
   });
 
   it('aggregate GET filters unauthorized nodes and never dispatches a daemon command', async () => {

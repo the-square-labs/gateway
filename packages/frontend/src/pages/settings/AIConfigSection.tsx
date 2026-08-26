@@ -1,4 +1,4 @@
-import { Download, Eye, Trash2 } from "lucide-react";
+import { Bot, Cpu, Download, Eye, Gauge, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -906,6 +906,7 @@ export function AIConfigSection() {
   return (
     <>
       <PanelShell
+        icon={<Bot className="h-4 w-4" />}
         title="AI Workspace"
         description="Configure the Workspace model connection for intent-driven operations"
         actions={
@@ -1046,6 +1047,7 @@ export function AIConfigSection() {
 
       <div className="space-y-4">
         <PanelShell
+          icon={<Server className="h-4 w-4" />}
           title="Provider"
           description={
             aiConfig.providerType === "gateway_inference"
@@ -1255,6 +1257,7 @@ export function AIConfigSection() {
 
         {aiConfig.providerType === "openai_compatible" && (
           <PanelShell
+            icon={<Gauge className="h-4 w-4" />}
             title="Limits"
             description="Request budgets, context size, and provider token field mapping"
             actions={
@@ -1350,6 +1353,7 @@ export function AIConfigSection() {
       </div>
 
       <PanelShell
+        icon={<Cpu className="h-4 w-4" />}
         title="Sandbox Runner"
         description="Run bounded agent commands in Docker sandboxes"
         actions={

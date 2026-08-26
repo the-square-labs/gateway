@@ -416,6 +416,57 @@ func TestApplyManagedConfigClaimsRecoveryOwnershipBeforeNginxValidation(t *testi
 	}
 }
 
+func TestApplyConfigRollsBackWhenNginxReloadFails(t *testing.T) {
+	checker := filepath.Join(t.TempDir(), "nginx-check")
+	script := "#!/bin/sh\nif [ \"$1\" = \"-t\" ]; then exit 0; fi\nexit 1\n"
+	if err := os.WriteFile(checker, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name     string
+		original []byte
+	}{
+		{name: "removes newly-created config"},
+		{name: "restores existing config", original: []byte("server { listen 8080; }\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			manager := nginx.NewManager(checker, configDir, t.TempDir(), "")
+			path := manager.ConfigPath(testSecureLinkID)
+			if test.original != nil {
+				if err := os.WriteFile(path, test.original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			handler := &Handler{mgr: manager, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			result := &pb.CommandResult{Success: true}
+			handler.handleApplyConfig(&pb.ApplyConfigCommand{
+				HostId:        testSecureLinkID,
+				ConfigContent: "server { listen 9090; }\n",
+			}, result)
+
+			if result.Success || !strings.Contains(result.Error, "nginx reload failed") {
+				t.Fatalf("expected reload failure, got success=%v error=%q", result.Success, result.Error)
+			}
+			content, err := os.ReadFile(path)
+			if test.original == nil {
+				if !os.IsNotExist(err) {
+					t.Fatalf("new config was not removed: content=%q err=%v", content, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(content, test.original) {
+				t.Fatalf("existing config was not restored: %q", content)
+			}
+		})
+	}
+}
+
 func TestReconcileRestoredSecureLinkPortsRollsBackInvalidConfig(t *testing.T) {
 	falseBinary, err := exec.LookPath("false")
 	if err != nil {

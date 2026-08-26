@@ -50,7 +50,7 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - Resource-scoped write-capable scopes keep the same resource boundary. For example, `databases:query:read:<databaseId>` can make that database visible in a filtered database list, but it does not grant global `databases:view`.
 - Create-only and destructive-only scopes do not imply view/discovery access. For example, `proxy:create`, `proxy:delete`, `databases:create`, and `notifications:webhooks:create` do not grant browse permissions by themselves.
 - `logs:schemas:view:<schemaId>` does not imply global `logs:schemas:view`. Resource-scoped schema view/edit access can list only the matching schema rows.
-- `proxy:folders:manage` and `docker:containers:folders:manage` grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit scope.
+- `proxy:folders:manage` and `docker:containers:folders:manage` grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit or manage scope.
 - `pages:folders:manage` grants full Page Project folder-tree visibility and folder mutation rights, but moving or reordering Projects also requires `pages:edit:<projectId>` for every affected Project.
 - Every resource-qualified Pages scope uses the Page Project ID, including Deployment, Tag, and deploy-token operations.
 - Docker container scopes accept either `<nodeId>` for every container and deployment on a node or `<nodeId>/<stableResourceId>` for exactly one standalone container or blue/green deployment. Node grants cover their child resources; child grants do not cover siblings.
@@ -176,7 +176,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `license:view` |  |
 | `license:manage` |  |
 | `ai:workspace:use` | Use AI Workspace. Granted to the built-in viewer group and above. |
-| `feat:ai:use` | Use Gateway Inference, including personal inference usage. |
+| `feat:ai:use` | Use Gateway Inference, view personal usage, and create or revoke personal inference tokens. |
 | `feat:ai:configure` |  |
 | `ai:skills:manage` | Manage shared user-defined AI Workspace skills. |
 | `ai:sandbox:use` |  |
@@ -185,7 +185,6 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `ai:sandbox:manage` |  |
 | `mcp:use` |  |
 | `inference:setup` | OAuth-only companion setup token scope; not assignable to users or groups. |
-| `inference:tokens:manage` |  |
 | `inference:providers:view` |  |
 | `inference:providers:manage` |  |
 | `inference:models:manage` |  |
@@ -207,6 +206,10 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:mounts` | Yes |
 | `docker:containers:migrate` | Yes |
 | `docker:containers:folders:manage` |  |
+| `docker:compose:view` | Yes |
+| `docker:compose:create` | Yes |
+| `docker:compose:manage` | Yes |
+| `docker:compose:delete` | Yes |
 | `docker:images:view` | Yes |
 | `docker:images:pull` | Yes |
 | `docker:images:delete` | Yes |
@@ -224,6 +227,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:registries:create` |  |
 | `docker:registries:edit` |  |
 | `docker:registries:delete` |  |
+| `docker:registries:internal:pull` | Repository-scopable access to pull artifacts from the internal registry. |
+| `docker:registries:internal:push` | Repository-scopable access to push artifacts to the internal registry. |
 | `docker:tasks` |  |
 | `docker:tasks:manage` | Yes |
 | `databases:view` | Yes |
@@ -275,7 +280,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | Scope | Reason |
 |-------|--------|
 | `ai:workspace:use` | User/session-only AI Workspace access. |
-| `feat:ai:use` | User/session-only Gateway Inference access. |
+| `feat:ai:use` | User/session-only Gateway Inference access, usage visibility, and personal token management. |
 | `feat:ai:configure` | User/session-only AI configuration. |
 | `ai:skills:manage` | User/session-only shared AI skill management. |
 | `ai:sandbox:use` | User/session-only sandbox runner access. |
@@ -284,7 +289,6 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
 | `inference:setup` | OAuth-only companion CLI authorization resource; not assignable to users or groups. |
-| `inference:tokens:manage` | User/session-only inference token creation and revocation. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |
 | `admin:users:impersonate` | Browser-only protected user impersonation. |

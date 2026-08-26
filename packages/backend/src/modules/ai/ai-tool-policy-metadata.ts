@@ -70,6 +70,13 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     delete: ['delete', 'disconnect'],
     external: ['connect'],
   }),
+  manage_docker_source: operationPolicies({
+    read: ['get', 'admission'],
+    update: ['upsert'],
+    delete: ['remove'],
+    external: ['resolve'],
+    execute: ['build'],
+  }),
   manage_docker_task: operationPolicies({ read: ['list', 'get'] }),
   manage_docker_container_config: operationPolicies({
     read: ['get_env', 'list_files', 'read_file', 'list_secrets', 'get_webhook', 'get_health_check'],

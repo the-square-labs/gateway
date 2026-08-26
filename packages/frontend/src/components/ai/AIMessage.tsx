@@ -456,11 +456,9 @@ export function AIMessage({
           <div className="space-y-0.5">
             {toolCallItems.map((item) =>
               item.type === "single" ? (
-                <AIToolCallBlock
-                  key={item.toolCall.id}
-                  toolCall={item.toolCall}
-                  compactSummary={compactSummary}
-                />
+                <ToolCallEntrance key={item.toolCall.id}>
+                  <AIToolCallBlock toolCall={item.toolCall} compactSummary={compactSummary} />
+                </ToolCallEntrance>
               ) : (
                 <ToolCallsGroup key={item.key} toolCalls={item.toolCalls} />
               )
@@ -719,7 +717,9 @@ function formatBytes(bytes: number): string {
 }
 
 function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
+  const prefersReducedMotion = useReducedMotion();
   const [expanded, setExpanded] = useState(() => toolGroupExpansionPreference(toolCalls) === true);
+  const [renderContent, setRenderContent] = useState(expanded);
   const [showWaiting, setShowWaiting] = useState(false);
   const failedCount = toolCalls.filter((toolCall) => toolCall.status === "failed").length;
   const waitingCount = toolCalls.filter((toolCall) => toolCall.status === "running").length;
@@ -742,17 +742,28 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
     const preference = toolGroupExpansionPreference(toolCalls);
     if (preference === null) return;
     setExpanded(preference);
+    if (preference) setRenderContent(true);
     setToolGroupExpansionPreference(toolCalls, preference);
   }, [toolCalls]);
 
+  useEffect(() => {
+    if (expanded || !renderContent) return;
+    const timeout = window.setTimeout(() => setRenderContent(false), 160);
+    return () => window.clearTimeout(timeout);
+  }, [expanded, renderContent]);
+
   return (
     <div className="my-0.5 text-sm">
-      <button
+      <motion.button
         type="button"
         aria-expanded={expanded}
+        initial={prefersReducedMotion ? false : { opacity: 0.6, y: 2 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: prefersReducedMotion ? 0 : 0.12, ease: "easeOut" }}
         onClick={() => {
           setExpanded((value) => {
             const next = !value;
+            if (next) setRenderContent(true);
             setToolGroupExpansionPreference(toolCalls, next);
             return next;
           });
@@ -766,20 +777,39 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
         ) : (
           <ChevronRight className="-ml-1 h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-70 group-focus-visible:opacity-70" />
         )}
-      </button>
+      </motion.button>
       <div
         className="grid transition-[grid-template-rows] duration-150 ease-out"
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden">
-          <div className="py-1">
-            {toolCalls.map((toolCall) => (
-              <AIToolCallBlock key={toolCall.id} toolCall={toolCall} />
-            ))}
-          </div>
+          {renderContent ? (
+            <div className="py-1">
+              {toolCalls.map((toolCall) => (
+                <ToolCallEntrance key={toolCall.id}>
+                  <AIToolCallBlock toolCall={toolCall} />
+                </ToolCallEntrance>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
+  );
+}
+
+function ToolCallEntrance({ children }: { children: ReactNode }) {
+  const prefersReducedMotion = useReducedMotion();
+
+  return (
+    <motion.div
+      data-ai-tool-entry
+      initial={prefersReducedMotion ? false : { opacity: 0.6, y: 2 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0 : 0.12, ease: "easeOut" }}
+    >
+      {children}
+    </motion.div>
   );
 }
 

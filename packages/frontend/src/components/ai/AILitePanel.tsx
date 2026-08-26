@@ -787,6 +787,7 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
               onSendNow={steerQueuedMessage}
               onEdit={handleEditQueued}
               onRemove={cancelQueuedMessage}
+              className="border-b-0"
             />
             <AIComposer
               textareaRef={textareaRef}

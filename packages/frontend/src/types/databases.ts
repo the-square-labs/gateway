@@ -100,7 +100,7 @@ export interface ManagedDatabaseCreateInput {
   redisConfig?: ManagedRedisConfig;
 }
 
-export type ManagedDatabaseBindingTargetType = "container" | "deployment";
+export type ManagedDatabaseBindingTargetType = "container" | "deployment" | "compose_service";
 
 export interface ManagedDatabaseBindingEnvironment {
   connectionUri?: string;

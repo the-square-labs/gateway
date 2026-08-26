@@ -218,7 +218,7 @@ const bindingEnvironmentSchema = z
 
 export const CreateManagedDatabaseBindingSchema = z.object({
   targetNodeId: z.string().uuid(),
-  targetType: z.enum(['container', 'deployment']),
+  targetType: z.enum(['container', 'deployment', 'compose_service']),
   targetResourceId: z.string().trim().min(1).max(255),
   environment: bindingEnvironmentSchema,
   /**

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { AIMessage as AIMessageType, AIToolCall } from "@/types/ai";
@@ -41,6 +41,63 @@ function artifactToolCall(): AIToolCall {
 }
 
 describe("AIMessage tool call groups", () => {
+  it("gives tool results an internal scroll viewport and animates tool entries", () => {
+    const { container } = render(
+      <AIMessage
+        message={{
+          id: "assistant-scrollable-tool",
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "scrollable-tool",
+              name: "get_current_context",
+              arguments: {},
+              status: "completed",
+              result: { content: "line\n".repeat(100) },
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Get Current Context/i }));
+
+    expect(container.querySelector("[data-ai-tool-entry]")).not.toBeNull();
+    expect(container.querySelector("[data-ai-tool-result-scroll]")).toHaveClass(
+      "max-h-48",
+      "overflow-auto",
+      "overscroll-contain",
+      "dashboard-scrollbar"
+    );
+    expect(container.querySelector("[data-ai-tool-result-scroll]")).not.toHaveClass("border-t-0");
+  });
+
+  it("joins argument and result blocks without a double border", () => {
+    const { container } = render(
+      <AIMessage
+        message={{
+          id: "assistant-tool-with-arguments",
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "tool-with-arguments",
+              name: "find_resource",
+              arguments: { query: "node" },
+              status: "completed",
+              result: { total: 1 },
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Find Resource/i }));
+
+    expect(container.querySelector("[data-ai-tool-result-scroll]")).toHaveClass("border-t-0");
+  });
+
   it("prefers a canonical conversation resource label over a message hash fallback", () => {
     const refId = "gwr_0123456789abcdef01234567";
     render(
@@ -253,6 +310,24 @@ describe("AIMessage tool call groups", () => {
 
     expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
     expect(screen.getByRole("button", { name: /read process output/i })).toBeInTheDocument();
+  });
+
+  it("unmounts collapsed tool details only after the close animation", async () => {
+    render(
+      <AIMessage message={message([toolCall("animation-tool-1"), toolCall("animation-tool-2")])} />
+    );
+
+    const group = screen.getByRole("button", { name: /called 2 tools/i });
+    fireEvent.click(group);
+    expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
+
+    fireEvent.click(group);
+    expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
+    await waitFor(
+      () =>
+        expect(screen.queryByRole("button", { name: /find resource/i })).not.toBeInTheDocument(),
+      { timeout: 500 }
+    );
   });
 
   it("keeps a manual tool group preference across changing first tool calls", () => {

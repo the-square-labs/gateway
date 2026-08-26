@@ -50,6 +50,8 @@ const DAEMON_BINARY_MAP: Record<DaemonType, string> = {
 export const NODE_TYPE_MAP: Record<string, DaemonType> = {
   nginx: 'nginx',
   docker: 'docker',
+  // Builder nodes run the same docker-daemon binary in its builder-only profile.
+  builder: 'docker',
   // Database nodes run the same docker-daemon binary in its database-only profile.
   databases: 'docker',
   monitoring: 'monitoring',

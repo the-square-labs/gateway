@@ -80,6 +80,8 @@ describe("AIMessageList", () => {
 
     const groupButton = screen.getByRole("button", { name: "Called 2 tools, 1 failed" });
     expect(groupButton).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /list docker volumes/i })).not.toBeInTheDocument();
+    fireEvent.click(groupButton);
     expect(groupButton.parentElement).toContainElement(
       screen.getByRole("button", { name: /list docker volumes/i })
     );

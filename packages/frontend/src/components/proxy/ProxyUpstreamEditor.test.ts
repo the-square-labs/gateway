@@ -90,4 +90,25 @@ describe("proxy Docker upstream selection", () => {
       containerName: null,
     });
   });
+
+  it("stores a stable Compose service reference without a child container name", () => {
+    const selected = {
+      ...DEFAULT_PROXY_UPSTREAM,
+      kind: "docker_container" as const,
+      dockerNodeId: "node-1",
+      composeProjectId: "project-1",
+      composeServiceName: "api",
+      containerPort: 8080,
+    };
+
+    expect(isProxyUpstreamValid(selected)).toBe(true);
+    expect(proxyUpstreamRequest(selected)).toMatchObject({
+      upstreamKind: "docker_container",
+      dockerNodeId: "node-1",
+      dockerContainerName: null,
+      dockerComposeProjectId: "project-1",
+      dockerComposeServiceName: "api",
+      dockerContainerPort: 8080,
+    });
+  });
 });

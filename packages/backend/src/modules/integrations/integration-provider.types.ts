@@ -31,6 +31,7 @@ export interface VcsProjectAccess {
 export interface VcsBranchAccess {
   exists: boolean;
   canPush: boolean;
+  commitSha?: string | null;
 }
 
 export interface VcsProjectRef {

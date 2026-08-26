@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { pageProjects, pageTagActivations } from '@/db/schema/index.js';
+import { dockerSourceBindings, pageProjects, pageTagActivations } from '@/db/schema/index.js';
 import { pageProjectEvent } from './page-events.js';
 import {
   CreatePageProjectSchema,
@@ -237,9 +237,10 @@ describe('Pages Project platform contract', () => {
 
     expect(db.transaction).toHaveBeenCalledOnce();
     expect(tx.delete).toHaveBeenNthCalledWith(1, pageTagActivations);
-    expect(tx.delete).toHaveBeenNthCalledWith(2, pageProjects);
+    expect(tx.delete).toHaveBeenNthCalledWith(2, dockerSourceBindings);
+    expect(tx.delete).toHaveBeenNthCalledWith(3, pageProjects);
     expect(activationDelete).toHaveBeenCalledOnce();
-    expect(projectDelete).toHaveBeenCalledOnce();
+    expect(projectDelete).toHaveBeenCalledTimes(2);
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'page_project.delete', resourceId: 'project-1' })
     );

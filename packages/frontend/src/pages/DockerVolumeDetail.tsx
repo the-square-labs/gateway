@@ -36,7 +36,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
-import { dockerContainerRoute, dockerVolumeRoute } from "@/lib/resource-routes";
+import {
+  dockerComposeProjectRoute,
+  dockerContainerRoute,
+  dockerVolumeRoute,
+} from "@/lib/resource-routes";
 import { createReturnNavigationState, getReturnNavigationTarget } from "@/lib/return-navigation";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -108,6 +112,7 @@ export function DockerVolumeDetail({
   const [labelsSaving, setLabelsSaving] = useState(false);
   const [labels, setLabels] = useState<LabelEntry[]>([]);
   const [savedLabels, setSavedLabels] = useState<LabelEntry[]>([]);
+  const [composeOwnerProjectId, setComposeOwnerProjectId] = useState<string | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [usageContainers, setUsageContainers] = useState<VolumeUsageContainer[]>([]);
@@ -135,6 +140,8 @@ export function DockerVolumeDetail({
   const canRenameVolume = canCreateVolume && canDeleteVolume;
   const isAnonymousVolume = /^[a-f0-9]{64}$/i.test(decodedVolumeName);
   const isCleanupProtected = volume?.labels?.[VOLUME_CLEANUP_PROTECTED_LABEL] === "true";
+  const composeProjectName = volume?.labels?.["com.docker.compose.project"];
+  const composeManaged = !!composeProjectName;
   const canReadVolumeFiles =
     hasScope("docker:volumes:files:read") ||
     !!(nodeId && hasScope(`docker:volumes:files:read:${nodeId}`));
@@ -217,6 +224,28 @@ export function DockerVolumeDetail({
   useEffect(() => {
     void fetchVolume();
   }, [fetchVolume]);
+
+  useEffect(() => {
+    if (!composeProjectName || !nodeId) {
+      setComposeOwnerProjectId(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listDockerComposeProjects(nodeId)
+      .then(
+        (projects) => projects.find((project) => project.name === composeProjectName)?.id ?? null
+      )
+      .then((projectId) => {
+        if (!cancelled) setComposeOwnerProjectId(projectId);
+      })
+      .catch(() => {
+        if (!cancelled) setComposeOwnerProjectId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [composeProjectName, nodeId]);
 
   useEffect(() => {
     if (!nodeId || usedBy.length === 0) {
@@ -544,7 +573,7 @@ export function DockerVolumeDetail({
   ]);
 
   const headerActions = [
-    ...(canCreateVolume && isDiskImage && volume?.managementState === "managed"
+    ...(!composeManaged && canCreateVolume && isDiskImage && volume?.managementState === "managed"
       ? [
           {
             label: "Resize",
@@ -554,7 +583,7 @@ export function DockerVolumeDetail({
           },
         ]
       : []),
-    ...(canRenameVolume
+    ...(!composeManaged && canRenameVolume
       ? [
           {
             label: "Rename",
@@ -564,7 +593,7 @@ export function DockerVolumeDetail({
           },
         ]
       : []),
-    ...(canRenameVolume && isAnonymousVolume
+    ...(!composeManaged && canRenameVolume && isAnonymousVolume
       ? [
           {
             label: isCleanupProtected ? "Unprotect from cleanup" : "Protect from cleanup",
@@ -579,7 +608,7 @@ export function DockerVolumeDetail({
           },
         ]
       : []),
-    ...(canDeleteVolume
+    ...(!composeManaged && canDeleteVolume
       ? [
           {
             label: "Remove",
@@ -621,17 +650,20 @@ export function DockerVolumeDetail({
               </div>
             </div>
             <ResponsiveHeaderActions actions={headerActions}>
-              {canCreateVolume && isDiskImage && volume?.managementState === "managed" && (
-                <Button
-                  variant="outline"
-                  onClick={openResize}
-                  disabled={actionLoading || unavailable}
-                >
-                  <Scaling className="h-3.5 w-3.5" />
-                  Resize
-                </Button>
-              )}
-              {canRenameVolume && (
+              {!composeManaged &&
+                canCreateVolume &&
+                isDiskImage &&
+                volume?.managementState === "managed" && (
+                  <Button
+                    variant="outline"
+                    onClick={openResize}
+                    disabled={actionLoading || unavailable}
+                  >
+                    <Scaling className="h-3.5 w-3.5" />
+                    Resize
+                  </Button>
+                )}
+              {!composeManaged && canRenameVolume && (
                 <Button
                   variant="outline"
                   size="default"
@@ -642,7 +674,7 @@ export function DockerVolumeDetail({
                   Rename
                 </Button>
               )}
-              {canRenameVolume && canDeleteVolume && isAnonymousVolume && (
+              {!composeManaged && canRenameVolume && canDeleteVolume && isAnonymousVolume && (
                 <Button
                   variant="outline"
                   onClick={handleToggleCleanupProtection}
@@ -656,7 +688,7 @@ export function DockerVolumeDetail({
                   {isCleanupProtected ? "Unprotect from cleanup" : "Protect from cleanup"}
                 </Button>
               )}
-              {canDeleteVolume && (
+              {!composeManaged && canDeleteVolume && (
                 <Button
                   variant="destructive"
                   onClick={handleRemove}
@@ -668,6 +700,27 @@ export function DockerVolumeDetail({
               )}
             </ResponsiveHeaderActions>
           </div>
+
+          {composeManaged && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border border-primary/20 bg-primary/5 p-3 text-sm">
+              <div>
+                <p className="font-medium">Managed by Compose project {composeProjectName}</p>
+                <p className="text-muted-foreground">
+                  Direct resize, rename, labels, and delete actions are disabled. Manage this volume
+                  through Compose.
+                </p>
+              </div>
+              {composeOwnerProjectId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(dockerComposeProjectRoute(composeOwnerProjectId))}
+                >
+                  Open Compose project
+                </Button>
+              )}
+            </div>
+          )}
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col min-h-0">
             <TabsList className="shrink-0">
@@ -777,7 +830,7 @@ export function DockerVolumeDetail({
                 </PanelShell>
 
                 <LabelsSection
-                  canEdit={canRenameVolume && !isUsed && !unavailable}
+                  canEdit={canRenameVolume && !isUsed && !unavailable && !composeManaged}
                   labels={labels}
                   setLabels={setLabels}
                   labelsChanged={labelsChanged}

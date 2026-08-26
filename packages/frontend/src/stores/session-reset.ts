@@ -79,6 +79,7 @@ export function resetClientSessionState() {
     images: [],
     volumes: [],
     networks: [],
+    composeProjects: [],
     tasks: [],
     registries: [],
     selectedNodeId: null,
@@ -90,6 +91,7 @@ export function resetClientSessionState() {
       images: false,
       volumes: false,
       networks: false,
+      compose: false,
       tasks: false,
       registries: false,
     },
@@ -97,11 +99,11 @@ export function resetClientSessionState() {
   });
   useDockerFolderStore.setState({
     folders: [],
-    foldersByType: { container: [], image: [], network: [], volume: [] },
+    foldersByType: { container: [], image: [], network: [], volume: [], compose: [] },
     isLoading: true,
-    loadingByType: { container: true, image: true, network: true, volume: true },
+    loadingByType: { container: true, image: true, network: true, volume: true, compose: true },
     error: null,
-    errorByType: { container: null, image: null, network: null, volume: null },
+    errorByType: { container: null, image: null, network: null, volume: null, compose: null },
   });
   useNodesStore.setState((state) => ({
     nodes: [],

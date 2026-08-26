@@ -89,6 +89,28 @@ describe('DockerManagementService image operations', () => {
     });
   });
 
+  it('pulls an image synchronously for an internal rollout before container creation', async () => {
+    const dispatch = {
+      sendDockerImageCommand: vi
+        .fn()
+        .mockResolvedValue({ success: true, detail: JSON.stringify({ status: 'pulled' }) }),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(
+      service.pullImageImmediate('node-1', '127.0.0.1:5443/gateway/builds/source@sha256:digest')
+    ).resolves.toEqual({ status: 'pulled' });
+    expect(dispatch.sendDockerImageCommand).toHaveBeenCalledWith(
+      'node-1',
+      'pull',
+      {
+        imageRef: '127.0.0.1:5443/gateway/builds/source@sha256:digest',
+        registryAuthJson: undefined,
+      },
+      600000
+    );
+  });
+
   it('removes images with audit and image change events', async () => {
     const dispatch = {
       sendDockerImageCommand: vi.fn().mockResolvedValue({ success: true }),

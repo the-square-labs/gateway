@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
-import { LICENSE_PLAN_ENTITLEMENTS, type LicenseStatusView } from './license.types.js';
+import { LICENSE_PLAN_ENTITLEMENTS, LICENSE_PLAN_ENTITLEMENTS_V3, type LicenseStatusView } from './license.types.js';
 import { LicensePolicyService } from './license-policy.service.js';
 
 const baseStatus = (): LicenseStatusView => ({
@@ -16,7 +16,7 @@ const baseStatus = (): LicenseStatusView => ({
   installationId: 'installation-id',
   installationName: 'gateway.example.com',
   expiresAt: null,
-  entitlementsVersion: 3,
+  entitlementsVersion: 4,
   entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
   lastCheckedAt: null,
   lastValidAt: null,
@@ -65,6 +65,55 @@ describe('LicensePolicyService', () => {
     expect(LICENSE_PLAN_ENTITLEMENTS.personal.features).toContain('pages');
     expect(LICENSE_PLAN_ENTITLEMENTS.business.features).toContain('pages');
     expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('pages');
+  });
+
+  it('includes Compose management in Personal and higher entitlements', async () => {
+    const personal = baseStatus();
+    personal.plan = 'personal';
+    personal.status = 'valid';
+    personal.entitlements = LICENSE_PLAN_ENTITLEMENTS.personal;
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => personal) } as never);
+
+    await expect(policy.requireFeature('compose-applications')).resolves.toBeUndefined();
+    expect(LICENSE_PLAN_ENTITLEMENTS.community.features).not.toContain('compose-applications');
+    expect(LICENSE_PLAN_ENTITLEMENTS.personal.features).toContain('compose-applications');
+    expect(LICENSE_PLAN_ENTITLEMENTS.business.features).toContain('compose-applications');
+    expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('compose-applications');
+  });
+
+  it('includes Git push-to-deploy in Business and Enterprise v4 entitlements only', async () => {
+    const business = baseStatus();
+    business.plan = 'business';
+    business.status = 'valid';
+    business.entitlements = LICENSE_PLAN_ENTITLEMENTS.business;
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => business) } as never);
+
+    await expect(policy.requireFeature('git-push-to-deploy')).resolves.toBeUndefined();
+    expect(LICENSE_PLAN_ENTITLEMENTS.community.features).not.toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS.personal.features).not.toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS.business.features).toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS.enterprise.features).toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS_V3.business.features).not.toContain('git-push-to-deploy');
+    expect(LICENSE_PLAN_ENTITLEMENTS_V3.enterprise.features).not.toContain('git-push-to-deploy');
+  });
+
+  it('keeps legacy paid features available from a canonical v3 cache while denying Compose', async () => {
+    const status = baseStatus();
+    status.plan = 'personal';
+    status.status = 'valid_with_warning';
+    status.licensed = true;
+    status.entitlementsVersion = 3;
+    status.entitlements = LICENSE_PLAN_ENTITLEMENTS_V3.personal;
+    status.lastValidAt = '2026-08-24T12:00:00.000Z';
+    status.offlineGraceUntil = '2026-09-23T12:00:00.000Z';
+    status.errorMessage = 'License server is unavailable';
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+
+    await expect(policy.requireFeature('managed-databases')).resolves.toBeUndefined();
+    await expect(policy.requireFeature('compose-applications')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
   });
 
   it('requires Personal or higher without changing signed feature entitlements', async () => {
@@ -133,6 +182,6 @@ describe('LicensePolicyService', () => {
     expect(summary).not.toHaveProperty('licenseMetadata');
     expect(summary).not.toHaveProperty('keyLast4');
     expect(summary).not.toHaveProperty('installationId');
-    expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 3 });
+    expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 4 });
   });
 });

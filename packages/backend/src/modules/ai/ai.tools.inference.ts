@@ -240,7 +240,7 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Inference',
-    requiredScope: 'inference:tokens:manage',
+    requiredScope: 'feat:ai:use',
     invalidateStores: [],
     historyRetention: { mode: 'never_full' },
   },

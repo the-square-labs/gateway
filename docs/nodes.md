@@ -257,7 +257,9 @@ Daemons installed before signed-manifest support can perform one transition upda
 
 Release and update units are independent: nginx, Docker, monitoring, the Relay Pool supervisor, and the Relay Pool worker have their own signed artifact contracts. The local Gateway relay image, database connector image, and Secure Link connector image are also pinned and verified independently rather than inheriting the Gateway app version.
 
-Docker Compose projects discovered through canonical labels can be grouped and have aggregated logs, but Compose-managed resources cannot use Gateway cross-node migration. Gateway-managed Compose application deployment, multi-node application clusters, and same-node multi-instance workload scaling are in development for Business and Enterprise rather than current Docker-node capabilities.
+Docker nodes expose first-class Compose Projects. Community and paid plans discover existing projects from canonical labels and provide read-only inventory, status, monitoring, and logs. Personal and higher can create or adopt single-node image-only projects, validate complete single-file YAML, keep immutable revisions, run explicit lifecycle operations, stream aggregated logs, report drift, use ordinary non-Swarm CPU/memory/PID limits, attach managed databases, and target services from Routes or Secure Links without pinning an ephemeral container name. Gateway never reads host Compose source paths. Project-owned child containers, named volumes, and non-external networks are removed from standalone lists and protected from direct mutations; images and external/shared resources remain global.
+
+The Docker daemon runs Compose through Docker's official `docker/compose-bin` image, pinned by multi-architecture OCI digest. It pulls the pinned image when absent and advertises `docker_compose_v1` only after the image is available and the executor initializes. If registry access is unavailable, Compose inventory remains readable but managed mutations fail closed until the runtime becomes available. Multi-node application clusters and same-node multi-instance scaling remain in development.
 
 ## Manual Setup
 

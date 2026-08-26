@@ -119,6 +119,7 @@ export class LicenseService {
     const state = await this.post<LicenseServerState>('/api/v1/licenses/activate', {
       installationToken: credential.token,
       licenseKey: key,
+      entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
     });
     this.assertServerState(state);
     if (state.effectivePlan === 'community' || state.paidLicenseStatus !== 'valid') {
@@ -141,6 +142,7 @@ export class LicenseService {
     if (!credential) throw new Error('Installation registration is required');
     const state = await this.post<LicenseServerState>('/api/v1/licenses/deactivate', {
       installationToken: credential.token,
+      entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
     });
     this.assertServerState(state);
     await this.saveServerState(state);
@@ -176,6 +178,7 @@ export class LicenseService {
         const state = await this.post<LicenseServerState>('/api/v1/licenses/activate', {
           installationToken: credential.token,
           licenseKey: key,
+          entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
         });
         await this.saveServerState(state);
       } catch (error) {
@@ -195,6 +198,7 @@ export class LicenseService {
         installationToken: credential.token,
         installationName: this.getInstallationName(),
         gatewayVersion: this.env.APP_VERSION,
+        entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
       });
       await this.saveServerState(state);
     } catch (error) {
@@ -266,6 +270,7 @@ export class LicenseService {
       registrationNonce: nonce,
       installationName: this.getInstallationName(),
       gatewayVersion: this.env.APP_VERSION,
+      entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
     });
     if (!result || typeof result.installationToken !== 'string' || !result.installationToken.trim()) {
       throw new LicenseServerRequestError(502, 'INVALID_LICENSE_STATE', 'License server returned an invalid state');

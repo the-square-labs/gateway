@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import {
@@ -55,7 +56,9 @@ describe("InferenceUsage", () => {
     expect(usageCard?.querySelector(".bg-primary")).toHaveStyle({ width: "75%" });
     expect(screen.getByText("API usage")).toHaveClass("text-xs");
     expect(usageValue).toHaveClass("text-xl");
-    expect(screen.getByText("Recovers Aug 1, 2026")).toHaveClass("text-xs");
+    expect(screen.getByText(`Recovers ${formatDateTime("2026-08-01T00:00:00.000Z")}`)).toHaveClass(
+      "text-xs"
+    );
     expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
     expect(screen.getByText("90%")).not.toHaveClass("text-warning");
     expect(screen.getByText("96%")).not.toHaveClass("text-warning");

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
+import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -38,6 +40,57 @@ function createService(dockerService: Record<string, unknown>) {
 describe('AIService Docker tool routing', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    container.reset();
+  });
+
+  it('lists only Git-source builds visible through Docker resource scopes', async () => {
+    container.registerInstance(DockerBuildService, {
+      list: vi.fn().mockResolvedValue([
+        {
+          id: 'build-visible',
+          target: { kind: 'deployment', nodeId: 'node-1', deploymentId: 'deployment-1' },
+        },
+        {
+          id: 'build-hidden',
+          target: { kind: 'container', nodeId: 'node-2', containerName: 'private-api' },
+        },
+      ]),
+    } as never);
+    const service = createService({});
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['docker:containers:view:node-1'] }, 'list_docker_builds', {
+        limit: 20,
+      })
+    ).resolves.toMatchObject({ result: [{ id: 'build-visible' }] });
+  });
+
+  it('queues a manual source build only after resolving the container authorization identity', async () => {
+    const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1' }),
+    };
+    const createBuild = vi.fn().mockResolvedValue({ build: { id: 'build-1' }, created: true });
+    container.registerInstance(DockerSourceService, { createBuild } as never);
+    const service = createService(dockerService);
+    const user = {
+      ...BASE_USER,
+      scopes: ['docker:containers:view:node-1', 'docker:containers:manage:node-1/scope-1'],
+    };
+
+    await expect(
+      service.executeTool(user, 'manage_docker_source', {
+        operation: 'build',
+        targetType: 'container',
+        nodeId: 'node-1',
+        containerName: 'payments-api',
+      })
+    ).resolves.toMatchObject({ result: { build: { id: 'build-1' }, created: true } });
+    expect(dockerService.inspectContainer).toHaveBeenCalledWith('node-1', 'payments-api');
+    expect(createBuild).toHaveBeenCalledWith(
+      { kind: 'container', nodeId: 'node-1', containerName: 'payments-api' },
+      { force: false },
+      user
+    );
   });
 
   it('resolves a canonical container name for reference-only console results', async () => {

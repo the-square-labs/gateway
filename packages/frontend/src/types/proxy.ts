@@ -47,6 +47,8 @@ export interface ProxyHost {
   dockerNodeId?: string | null;
   dockerNodeSlug?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerDeploymentName?: string | null;
   dockerNodeAppearanceColor?: NodeAppearanceColor | null;
@@ -203,6 +205,8 @@ export interface ProxyAdditionalSecureLink {
   sourceNodeId: string;
   dockerNodeId: string;
   dockerContainerName: string | null;
+  dockerComposeProjectId: string | null;
+  dockerComposeServiceName: string | null;
   dockerDeploymentId: string | null;
   dockerContainerPort: number;
   dockerHostPort: number;
@@ -222,6 +226,8 @@ export interface CreateProxyAdditionalSecureLinkRequest {
   forwardScheme: ForwardScheme;
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerContainerPort: number;
 }
@@ -254,6 +260,8 @@ export interface ProxyAdditionalRoute {
   dockerNodeId: string | null;
   dockerNodeName?: string | null;
   dockerContainerName: string | null;
+  dockerComposeProjectId: string | null;
+  dockerComposeServiceName: string | null;
   dockerDeploymentId: string | null;
   dockerDeploymentName?: string | null;
   dockerContainerPort: number | null;
@@ -294,6 +302,8 @@ export interface CreateProxyAdditionalRouteRequest {
   forwardScheme?: ForwardScheme;
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerContainerPort?: number | null;
   pageProjectId?: string | null;
@@ -343,6 +353,8 @@ export interface CreateProxyHostRequest {
   forwardScheme?: ForwardScheme;
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;

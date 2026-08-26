@@ -49,7 +49,7 @@ describe('AI internal docs registry', () => {
     expect(DOC_TOPIC_SCOPES).toMatchObject({
       discovery: 'ai:workspace:use',
       permissions: 'ai:workspace:use',
-      docker: 'docker:containers:view',
+      docker: ['docker:containers:view', 'docker:compose:view'],
       logging: ['logs:environments:view', 'logs:schemas:view', 'logs:read', 'logs:manage'],
       folders: expect.arrayContaining(['nodes:folders:manage', 'domains:folders:manage']),
       'node-files': ['nodes:files:read', 'nodes:files:write'],
@@ -92,6 +92,7 @@ describe('AI internal docs registry', () => {
     expect(INTERNAL_DOCS.permissions).toContain('# Permissions');
     expect(INTERNAL_DOCS.permissions).toContain('Resource-Scoped Permissions');
     expect(INTERNAL_DOCS.permissions).toContain('docker:containers:view');
+    expect(INTERNAL_DOCS.permissions).toContain('docker:compose:view');
 
     expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('discover_tools');
     expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('get_current_context');
@@ -108,6 +109,10 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('pages', ['pages:view']).content).toContain('manage_pages');
     expect(getInternalDocumentation('users', ['admin:users']).content).toContain('additional per-user scopes');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Cross-Node Migrations');
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain('Compose Boundaries');
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain(
+      'Personal and higher can deploy and manage'
+    );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Isolation Profiles');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
@@ -168,6 +173,12 @@ describe('AI internal docs registry', () => {
       'target-node registry downloads'
     );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'require Business or Enterprise'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'private internal registry itself remains available'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
       'before stopping the existing container'
     );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
@@ -193,7 +204,7 @@ describe('AI internal docs registry', () => {
       'npx -y @wiolett/gateway-inference@latest setup codex'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
-      'Gateway Inference access and personal usage visibility'
+      'Gateway Inference access, personal usage visibility, and creation or revocation'
     );
     expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup claude-code'

@@ -50,6 +50,7 @@ import { DatabaseDetail } from "@/pages/DatabaseDetail";
 import { Databases } from "@/pages/Databases";
 import { Docker } from "@/pages/Docker";
 import { DockerComposeLogsPopout } from "@/pages/DockerComposeLogsPopout";
+import { DockerComposeProjectDetail } from "@/pages/DockerComposeProjectDetail";
 import { DockerConsolePopout } from "@/pages/DockerConsolePopout";
 import { DockerContainerDetail } from "@/pages/DockerContainerDetail";
 import { DockerDeploymentDetail } from "@/pages/DockerDeploymentDetail";
@@ -636,6 +637,7 @@ function DockerPageGuard() {
     hasScopedAccess("docker:images:view") ||
     hasScopedAccess("docker:volumes:view") ||
     hasScopedAccess("docker:networks:view") ||
+    hasScopedAccess("docker:compose:view") ||
     hasScopedAccess("docker:tasks") ||
     hasScope("docker:containers:folders:manage");
 
@@ -644,6 +646,11 @@ function DockerPageGuard() {
   }
 
   return <Docker />;
+}
+
+function DockerComposeDetailGuard() {
+  const canAccess = useAuthStore((state) => state.hasScopedAccess("docker:compose:view"));
+  return canAccess ? <DockerComposeProjectDetail /> : <Navigate to="/docker" replace />;
 }
 
 function DatabasesPageGuard() {
@@ -899,6 +906,21 @@ function RealtimeBridge() {
       [auth.hasScopedAccess("docker:networks:view"), "docker.network.changed"],
       [auth.hasScopedAccess("docker:tasks"), "docker.task.changed"],
       [auth.hasScopedAccess("docker:registries:view"), "docker.registry.changed"],
+      [
+        auth.hasScopedAccess("docker:containers:view") ||
+          auth.hasScopedAccess("docker:compose:view"),
+        "docker.build.changed",
+      ],
+      [
+        auth.hasScopedAccess("docker:containers:view") ||
+          auth.hasScopedAccess("docker:compose:view"),
+        "docker.build.artifact.changed",
+      ],
+      [
+        auth.hasScopedAccess("docker:containers:view") ||
+          auth.hasScopedAccess("docker:compose:view"),
+        "docker.build.log",
+      ],
       [auth.hasScope("housekeeping:view"), "logging.health.changed"],
       [auth.hasScope("housekeeping:view"), "system.relay.health.changed"],
       [auth.hasScope("status-page:view"), "status-page.changed"],
@@ -1183,7 +1205,7 @@ function RealtimeBridge() {
   return null;
 }
 
-export default function App() {
+function GatewayApp() {
   const [startupChecked, setStartupChecked] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
   const user = useAuthStore((s) => s.user);
@@ -1448,6 +1470,14 @@ export default function App() {
               />
               <Route path="/nodes" element={<NodesPageGuard />} />
               <Route path="/nodes/:nodeSlug/:tab?" element={<NodeDetailGuard />} />
+              <Route
+                path="/docker/compose/new"
+                element={<Navigate to="/docker/compose" replace />}
+              />
+              <Route
+                path="/docker/compose/:projectId/:tab?"
+                element={<DockerComposeDetailGuard />}
+              />
               <Route path="/docker/:tab?" element={<DockerPageGuard />} />
               <Route
                 path="/docker/containers/:nodeSlug/:containerName/:tab?"
@@ -1468,4 +1498,8 @@ export default function App() {
       </ThemeProvider>
     </ErrorBoundary>
   );
+}
+
+export default function App() {
+  return <GatewayApp />;
 }

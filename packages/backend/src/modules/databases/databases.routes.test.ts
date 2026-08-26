@@ -72,6 +72,24 @@ describe('managed database route scopes', () => {
 
     expect(inspectContainer).not.toHaveBeenCalled();
   });
+
+  it('authorizes a Compose service binding through the project scope', async () => {
+    const nodeId = 'node-1';
+    const projectId = '44444444-4444-4444-8444-444444444444';
+    const scopes = [
+      `docker:compose:manage:${nodeId}/${projectId}`,
+      'docker:networks:create',
+      'docker:networks:edit',
+      'docker:networks:delete',
+    ];
+
+    await expect(
+      assertManagedDatabaseBindingTargetAccess(
+        { get: vi.fn(() => scopes) },
+        { targetNodeId: nodeId, targetType: 'compose_service', targetResourceId: `${projectId}:api` }
+      )
+    ).resolves.toBeUndefined();
+  });
 });
 
 describe('SQL query principal selection', () => {

@@ -16,6 +16,7 @@ import { DockerRegistriesSection } from "./settings/DockerRegistriesSection";
 import { HousekeepingSection } from "./settings/HousekeepingSection";
 import { InferenceSettingsSection } from "./settings/InferenceSettingsSection";
 import { IntegrationsSection } from "./settings/IntegrationsSection";
+import { InternalRegistrySection } from "./settings/InternalRegistrySection";
 import { LicenseSection } from "./settings/LicenseSection";
 import { RelaySettingsSection } from "./settings/RelaySettingsSection";
 import { StatusPageSection } from "./settings/StatusPageSection";
@@ -227,6 +228,7 @@ export function Settings() {
                 {canViewGatewaySettings && (
                   <AuthProvisioningSection canEdit={canEditGatewaySettings} section="features" />
                 )}
+                {canManageRegistries && <InternalRegistrySection nodesList={nodesList} />}
                 {canViewPagesSettings && <PagesSettingsSection />}
                 {canViewStatusPage && <StatusPageSection nodesList={nodesList} />}
 

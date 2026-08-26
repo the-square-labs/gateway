@@ -4,6 +4,11 @@ import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
+import {
+  isComposeOwnedContainer,
+  isComposeOwnedNetwork,
+  isComposeOwnedVolume,
+} from './compose/compose-discovery.service.js';
 import { DockerManagementService } from './docker.service.js';
 import { filterDockerResourcesForScope } from './docker-access.middleware.js';
 import {
@@ -91,16 +96,27 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
   const results = await Promise.all(
     visibleNodes.map(async (node) => {
       const snapshot = await snapshots.getList<Record<string, any>[]>(node.id, kind);
+      const standaloneSnapshot = Array.isArray(snapshot.data)
+        ? snapshot.data.filter((item) =>
+            kind === 'containers'
+              ? !isComposeOwnedContainer(item)
+              : kind === 'volumes'
+                ? !isComposeOwnedVolume(item)
+                : kind === 'networks'
+                  ? !isComposeOwnedNetwork(item)
+                  : true
+          )
+        : snapshot.data;
       const source =
         kind === 'containers'
-          ? await docker.decoratePublicContainerSnapshot(node.id, snapshot.data)
+          ? await docker.decoratePublicContainerSnapshot(node.id, standaloneSnapshot)
           : kind === 'volumes'
             ? await docker.decoratePublicVolumeSnapshot(
                 node.id,
-                snapshot.data,
+                standaloneSnapshot,
                 (await snapshots.getList<Record<string, any>[]>(node.id, 'containers')).data
               )
-            : snapshot.data;
+            : standaloneSnapshot;
       const availability = snapshots.availability(node.id, snapshot);
       const normalized = normalizeRows(kind, Array.isArray(source) ? source : [], search);
       const scoped: Array<Record<string, unknown>> =

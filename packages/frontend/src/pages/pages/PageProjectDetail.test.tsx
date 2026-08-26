@@ -11,7 +11,8 @@ import { PageProjectDetail } from "./PageProjectDetail";
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   confirm: vi.fn(async () => true),
-  realtimeHandler: null as ((payload: unknown) => void) | null,
+  activeTab: "deployments",
+  realtimeHandlers: new Map<string, (payload: unknown) => void>(),
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => ({
@@ -25,11 +26,11 @@ vi.mock("@/components/common/ResponsiveHeaderActions", () => ({
   ResponsiveHeaderActions: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("@/hooks/use-realtime", () => ({
-  useRealtime: (_event: string, handler: (payload: unknown) => void) => {
-    mocks.realtimeHandler = handler;
+  useRealtime: (event: string, handler: (payload: unknown) => void) => {
+    mocks.realtimeHandlers.set(event, handler);
   },
 }));
-vi.mock("@/hooks/use-url-tab", () => ({ useUrlTab: () => ["deployments", vi.fn()] }));
+vi.mock("@/hooks/use-url-tab", () => ({ useUrlTab: () => [mocks.activeTab, vi.fn()] }));
 vi.mock("./PageDeploymentsTab", () => ({ PageDeploymentsTab: () => null }));
 vi.mock("./PageManualDeployDialog", () => ({ PageManualDeployDialog: () => null }));
 vi.mock("./PageProjectSettingsTab", () => ({ PageProjectSettingsDialog: () => null }));
@@ -69,7 +70,12 @@ describe("PageProjectDetail deletion", () => {
     vi.restoreAllMocks();
     mocks.navigate.mockReset();
     mocks.confirm.mockClear();
-    mocks.realtimeHandler = null;
+    mocks.activeTab = "deployments";
+    mocks.realtimeHandlers.clear();
+    vi.spyOn(api, "listPageDeployments").mockResolvedValue({
+      data: [],
+      pagination: { page: 1, limit: 100, total: 0, totalPages: 0 },
+    });
     useAuthStore.setState({
       user: {
         id: "user-1",
@@ -89,7 +95,7 @@ describe("PageProjectDetail deletion", () => {
       .mockRejectedValueOnce(new Error("Page Project not found"));
     vi.spyOn(api, "listPageProjectPlacementOptions").mockResolvedValue([]);
     vi.spyOn(api, "deletePageProject").mockImplementation(async () => {
-      mocks.realtimeHandler?.({ projectId: project.id });
+      mocks.realtimeHandlers.get("pages.project.changed")?.({ projectId: project.id });
     });
     const success = vi.spyOn(toast, "success").mockImplementation(() => "toast-id");
     const error = vi.spyOn(toast, "error").mockImplementation(() => "toast-id");
@@ -101,5 +107,43 @@ describe("PageProjectDetail deletion", () => {
     expect(error).not.toHaveBeenCalled();
     expect(getProject).toHaveBeenCalledOnce();
     expect(mocks.navigate).toHaveBeenCalledWith("/pages");
+  });
+
+  it("shows the latest immutable preview without mounting the deployments tab", async () => {
+    mocks.activeTab = "source";
+    vi.spyOn(api, "getPageProject").mockResolvedValue(project);
+    vi.mocked(api.listPageDeployments).mockResolvedValue({
+      data: [
+        {
+          id: "deployment-1",
+          projectId: project.id,
+          sequence: 1,
+          publicSlug: "preview-slug",
+          previewHostname: "preview-slug.pages.example.test",
+          status: "ready",
+          artifactSha256: "a".repeat(64),
+          compressedSizeBytes: 1,
+          expandedSizeBytes: 1,
+          fileCount: 1,
+          sourceMetadata: {},
+          requestedTag: null,
+          pinned: false,
+          failureCode: null,
+          failureMessage: null,
+          createdById: "user-1",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          readyAt: new Date(0).toISOString(),
+          deletedAt: null,
+          credentialType: "user",
+        },
+      ],
+      pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+    });
+
+    render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
+
+    expect(await screen.findByText("Latest immutable preview")).toBeInTheDocument();
+    expect(screen.getByText("preview-slug.pages.example.test")).toBeInTheDocument();
   });
 });

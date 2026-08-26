@@ -145,6 +145,7 @@ export function SettingsTab({
   onRefresh,
   onHealthCheckSaved,
   transition,
+  readOnly,
 }: {
   nodeId: string;
   containerId: string;
@@ -156,16 +157,17 @@ export function SettingsTab({
   onRefresh?: () => void | Promise<void>;
   onHealthCheckSaved?: (healthCheck: DockerHealthCheck) => void;
   transition?: string;
+  readOnly?: boolean;
 }) {
   const { hasScope } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
-  const canEdit = hasScope(`docker:containers:edit:${scopeSuffix}`);
-  const canEditMounts = hasScope(`docker:containers:mounts:${scopeSuffix}`);
+  const canEdit = !readOnly && hasScope(`docker:containers:edit:${scopeSuffix}`);
+  const canEditMounts = !readOnly && hasScope(`docker:containers:mounts:${scopeSuffix}`);
   const canManageNetworks =
-    hasScope("docker:networks:edit") || hasScope(`docker:networks:edit:${nodeId}`);
+    !readOnly && (hasScope("docker:networks:edit") || hasScope(`docker:networks:edit:${nodeId}`));
   const canListNetworks =
-    hasScope("docker:networks:view") || hasScope(`docker:networks:view:${nodeId}`);
+    !readOnly && (hasScope("docker:networks:view") || hasScope(`docker:networks:view:${nodeId}`));
   const recreatesRunningContainer =
     (data.State?.Status ?? (data.State?.Running ? "running" : "stopped")) === "running";
   const gpuAttachment = data.gpuAttachment ?? EMPTY_GPU_ATTACHMENT;
@@ -182,12 +184,15 @@ export function SettingsTab({
   const currentRestartPolicy = hostConfig.RestartPolicy?.Name ?? "no";
   const currentMaxRetries = hostConfig.RestartPolicy?.MaximumRetryCount ?? 0;
   const currentMemory = hostConfig.Memory ?? 0;
+  const currentMemoryReservation = hostConfig.MemoryReservation ?? 0;
   const currentMemSwap = hostConfig.MemorySwap ?? 0;
   const currentNanoCPUs = deriveCurrentNanoCPUs(hostConfig as Record<string, any>);
   const currentCpuShares = hostConfig.CpuShares ?? 0;
   const currentPidsLimit = hostConfig.PidsLimit ?? 0;
 
   const initMem = currentMemory > 0 ? String(Math.round(currentMemory / 1048576)) : "";
+  const initMemoryReservation =
+    currentMemoryReservation > 0 ? String(Math.round(currentMemoryReservation / 1048576)) : "";
   const currentSwap =
     currentMemSwap === -1
       ? -1
@@ -928,6 +933,7 @@ export function SettingsTab({
           setMaxRetries={setMaxRetries}
           memoryMB={memoryMB}
           setMemoryMB={setMemoryMB}
+          memoryReservationMB={readOnly ? initMemoryReservation : undefined}
           memSwapMB={memSwapMB}
           setMemSwapMB={setMemSwapMB}
           cpuCount={cpuCount}
@@ -1159,19 +1165,22 @@ export function SettingsTab({
         inputCell={inputCell}
       />
 
-      <DockerHealthCheckSection
-        nodeId={nodeId}
-        target="container"
-        containerName={containerName}
-        disabled={!canEdit}
-        onSaved={(healthCheck) => {
-          onHealthCheckSaved?.(healthCheck);
-          invalidate("containers");
-        }}
-      />
+      {!readOnly && (
+        <DockerHealthCheckSection
+          nodeId={nodeId}
+          target="container"
+          containerName={containerName}
+          disabled={!canEdit}
+          onSaved={(healthCheck) => {
+            onHealthCheckSaved?.(healthCheck);
+            invalidate("containers");
+          }}
+        />
+      )}
 
       {/* ─── Webhook / Image Cleanup ─────────────────────────────── */}
       {(() => {
+        if (readOnly) return null;
         const canManageWebhooks =
           hasScope("docker:containers:webhooks") ||
           hasScope(`docker:containers:webhooks:${scopeSuffix}`);

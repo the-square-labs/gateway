@@ -63,6 +63,12 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:containers:webhooks",
   "docker:containers:mounts",
   "docker:containers:migrate",
+  "docker:compose:view",
+  "docker:compose:create",
+  "docker:compose:manage",
+  "docker:compose:delete",
+  "docker:registries:internal:pull",
+  "docker:registries:internal:push",
   "docker:images:view",
   "docker:images:pull",
   "docker:images:delete",
@@ -142,6 +148,9 @@ export const FOLDER_SCOPABLE_SCOPES = [
   "docker:containers:webhooks",
   "docker:containers:mounts",
   "docker:containers:migrate",
+  "docker:compose:view",
+  "docker:compose:manage",
+  "docker:compose:delete",
   "databases:view",
   "databases:edit",
   "databases:delete",
@@ -983,12 +992,6 @@ const RAW_TOKEN_SCOPES = [
   // Inference administration. inference:setup is an OAuth-only protocol
   // scope rendered by OAuthConsent and must not be user-assignable.
   {
-    value: "inference:tokens:manage",
-    label: "Manage Inference Tokens",
-    desc: "Create and revoke personal Gateway Inference tokens",
-    group: "Inference",
-  },
-  {
     value: "inference:providers:view",
     label: "View Inference Providers",
     desc: "View inference providers, connections, discovery, and quota",
@@ -1111,9 +1114,34 @@ const RAW_TOKEN_SCOPES = [
   },
   {
     value: "docker:containers:folders:manage",
-    label: "Manage Container Folders",
-    desc: "Create, reorder, and remove Docker container folders",
+    label: "Manage Docker Folders",
+    desc: "Create, reorder, and remove Docker resource folders",
     group: "Docker: Containers",
+  },
+  // Docker: Compose Projects
+  {
+    value: "docker:compose:view",
+    label: "View Compose Projects",
+    desc: "Discover and inspect Compose projects, services, monitoring, logs, revisions, and activity",
+    group: "Docker: Compose",
+  },
+  {
+    value: "docker:compose:create",
+    label: "Create Compose Projects",
+    desc: "Validate and deploy managed Compose projects; adoption also requires Manage Compose Projects",
+    group: "Docker: Compose",
+  },
+  {
+    value: "docker:compose:manage",
+    label: "Manage Compose Projects",
+    desc: "Adopt projects and manage lifecycle, revisions, secrets, and bindings",
+    group: "Docker: Compose",
+  },
+  {
+    value: "docker:compose:delete",
+    label: "Delete Compose Projects",
+    desc: "Delete Compose projects or run destructive down/delete-volume actions",
+    group: "Docker: Compose",
   },
   // Docker: Images
   {
@@ -1219,6 +1247,18 @@ const RAW_TOKEN_SCOPES = [
     value: "docker:registries:delete",
     label: "Delete Registries",
     desc: "Remove Docker registries",
+    group: "Docker: Registries",
+  },
+  {
+    value: "docker:registries:internal:pull",
+    label: "Pull Internal Images",
+    desc: "Pull from all internal registry repositories or selected repository scopes",
+    group: "Docker: Registries",
+  },
+  {
+    value: "docker:registries:internal:push",
+    label: "Push Internal Images",
+    desc: "Push to all internal registry repositories or selected repository scopes",
     group: "Docker: Registries",
   },
   // Docker: Tasks
@@ -1394,7 +1434,6 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "ai:sandbox:manage",
   "mcp:use",
   "inference:setup",
-  "inference:tokens:manage",
   "inference:providers:view",
   "inference:providers:manage",
   "inference:models:manage",

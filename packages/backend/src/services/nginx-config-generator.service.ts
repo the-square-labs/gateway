@@ -25,6 +25,7 @@ export interface ProxyHostConfig {
   forwardScheme: 'http' | 'https';
   secureLinkUpstream?: boolean;
   secureLinkSocketPath?: string;
+  registryAuthRealm?: string;
   additionalSecureLinks?: Array<{
     id: string;
     name: string;

@@ -11,8 +11,10 @@ import { authMiddleware, requireScopeForResource } from '@/modules/auth/auth.mid
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
+import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import { DockerBuildQuery } from '@/modules/docker/docker-build-query.js';
 import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
@@ -173,7 +175,7 @@ const DashboardBootstrapRequestSchema = z.object({
               z.object({
                 id: z.string().min(1).max(256),
                 nodeId: z.string().uuid(),
-                kind: z.enum(['container', 'deployment']),
+                kind: z.enum(['container', 'deployment', 'build', 'compose']),
                 scopeResourceId: z.string().optional(),
               })
             )
@@ -193,7 +195,7 @@ const DashboardBootstrapRequestSchema = z.object({
               z.object({
                 id: z.string().min(1).max(256),
                 nodeId: z.string().uuid(),
-                kind: z.enum(['container', 'deployment']),
+                kind: z.enum(['container', 'deployment', 'build', 'compose']),
                 scopeResourceId: z.string().optional(),
               })
             )
@@ -213,7 +215,8 @@ type DashboardDockerResource = {
   nodeId: string;
   name: string;
   state?: string;
-  kind: 'container' | 'deployment';
+  kind: 'container' | 'deployment' | 'build' | 'compose';
+  scopeBase: 'docker:containers:view' | 'docker:compose:view';
   scopeResourceId?: string;
 };
 
@@ -485,16 +488,67 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     [...new Set(requestedDockerResources.map((resource) => resource.nodeId))].map(
       async (nodeId): Promise<DashboardDockerResource[]> => {
         const forNode = requestedDockerResources.filter((resource) => resource.nodeId === nodeId);
+        const runtimeResources = forNode.filter(
+          (resource) => resource.kind === 'container' || resource.kind === 'deployment'
+        );
         // Dashboard reads the already reconciled daemon inventory.  Decorating
         // the snapshot may read Gateway metadata, but must never issue a live
         // Docker command while a user is opening a page.
-        const snapshot = await container
-          .resolve(DockerSnapshotService)
-          .getList<Record<string, unknown>[]>(nodeId, 'containers');
-        const containers = await container
-          .resolve(DockerManagementService)
-          .decoratePublicContainerSnapshot(nodeId, Array.isArray(snapshot.data) ? snapshot.data : []);
-        return forNode.reduce<DashboardDockerResource[]>((resolved, resource) => {
+        const snapshot = runtimeResources.length
+          ? await container.resolve(DockerSnapshotService).getList<Record<string, unknown>[]>(nodeId, 'containers')
+          : { data: [] as Record<string, unknown>[] };
+        const containers = runtimeResources.length
+          ? await container
+              .resolve(DockerManagementService)
+              .decoratePublicContainerSnapshot(nodeId, Array.isArray(snapshot.data) ? snapshot.data : [])
+          : [];
+        const resolved: DashboardDockerResource[] = [];
+        for (const resource of forNode) {
+          if (resource.kind === 'build') {
+            const build = await container
+              .resolve(DockerBuildQuery)
+              .get(resource.id)
+              .catch(() => null);
+            if (build?.target.kind === 'pages_project') continue;
+            if (!build || build.target.nodeId !== nodeId) continue;
+            const scopeResourceId =
+              build.target.kind === 'container'
+                ? build.target.containerName
+                : build.target.kind === 'deployment'
+                  ? build.target.deploymentId
+                  : build.target.composeProjectId;
+            const baseScope =
+              build.target.kind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view';
+            if (!hasDockerResourceScope(scopes, baseScope, nodeId, scopeResourceId)) continue;
+            resolved.push({
+              id: resource.id,
+              nodeId,
+              name: `${build.target.name} · ${build.commitSha.slice(0, 8)}`,
+              state: build.status,
+              kind: 'build',
+              scopeBase: baseScope,
+              scopeResourceId,
+            });
+            continue;
+          }
+          if (resource.kind === 'compose') {
+            if (!hasDockerResourceScope(scopes, 'docker:compose:view', nodeId, resource.id)) continue;
+            const project = await container
+              .resolve(DockerComposeService)
+              .get(nodeId, resource.id)
+              .catch(() => null);
+            if (!project) continue;
+            resolved.push({
+              id: resource.id,
+              nodeId,
+              name: project.name,
+              state: project.status,
+              kind: 'compose',
+              scopeBase: 'docker:compose:view',
+              scopeResourceId: project.id,
+            });
+            continue;
+          }
           const containerData = containers.find(
             (item: any) =>
               (resource.kind === 'deployment'
@@ -513,11 +567,12 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
               name: String(containerData.name ?? containerData.Name ?? resource.id).replace(/^\//, ''),
               state: containerData._transition ?? containerData.state ?? containerData.State?.Status,
               kind: resource.kind,
+              scopeBase: 'docker:containers:view',
               scopeResourceId,
             });
           }
-          return resolved;
-        }, []);
+        }
+        return resolved;
       }
     )
   ).then((groups) => groups.flat());

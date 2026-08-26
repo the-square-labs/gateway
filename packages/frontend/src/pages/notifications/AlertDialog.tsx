@@ -260,6 +260,29 @@ export function AlertDialog({
         return;
       }
 
+      if (category === "build") {
+        const response = await api.listDockerBuildPage({ limit: 100 });
+        if (resourceLoadTokenRef.current !== loadToken) return;
+        const sources = new Map<string, string>();
+        for (const build of response.data) {
+          if (!sources.has(build.sourceBindingId)) {
+            sources.set(
+              build.sourceBindingId,
+              `${build.target.name} · ${build.repositoryFullPath}`
+            );
+          }
+        }
+        setAvailableResources([...sources].map(([id, label]) => ({ id, label })));
+        return;
+      }
+
+      if (category === "compose") {
+        const projects = await api.listDockerComposeProjects();
+        if (resourceLoadTokenRef.current !== loadToken) return;
+        setAvailableResources(projects.map((project) => ({ id: project.id, label: project.name })));
+        return;
+      }
+
       if (category === "logging") {
         const environments = await api.listLoggingEnvironments();
         if (resourceLoadTokenRef.current !== loadToken) return;

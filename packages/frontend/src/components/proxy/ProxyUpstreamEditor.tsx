@@ -23,6 +23,7 @@ import { api } from "@/services/api";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   CreateProxyHostRequest,
+  DockerComposeProject,
   DockerContainer,
   ForwardScheme,
   PageProject,
@@ -38,6 +39,8 @@ export interface ProxyUpstreamSelection {
   manualPort: number;
   dockerNodeId: string | null;
   containerName: string | null;
+  composeProjectId: string | null;
+  composeServiceName: string | null;
   deploymentId: string | null;
   containerPort: number | null;
   pageProjectId?: string;
@@ -57,6 +60,8 @@ export const DEFAULT_PROXY_UPSTREAM: ProxyUpstreamSelection = {
   manualPort: 80,
   dockerNodeId: null,
   containerName: null,
+  composeProjectId: null,
+  composeServiceName: null,
   deploymentId: null,
   containerPort: null,
   pageProjectId: "",
@@ -70,7 +75,9 @@ export function proxyUpstreamFromHost(host: ProxyHost): ProxyUpstreamSelection {
     manualHost: host.upstreamKind === "manual" ? host.forwardHost || "" : "",
     manualPort: host.upstreamKind === "manual" ? host.forwardPort || 80 : 80,
     dockerNodeId: host.dockerNodeId ?? null,
-    containerName: host.dockerContainerName ?? null,
+    containerName: host.dockerComposeProjectId ? null : (host.dockerContainerName ?? null),
+    composeProjectId: host.dockerComposeProjectId ?? null,
+    composeServiceName: host.dockerComposeServiceName ?? null,
     deploymentId: host.dockerDeploymentId ?? null,
     containerPort: host.dockerContainerPort ?? null,
     pageProjectId: host.pageTarget?.projectId ?? "",
@@ -99,6 +106,8 @@ export function proxyUpstreamRequest(
       forwardScheme: selection.scheme,
       dockerNodeId: selection.dockerNodeId,
       dockerContainerName: selection.containerName,
+      dockerComposeProjectId: selection.composeProjectId,
+      dockerComposeServiceName: selection.composeServiceName,
       dockerContainerPort: selection.containerPort,
       dockerProtocol: "tcp",
     };
@@ -125,7 +134,8 @@ export function isProxyUpstreamValid(selection: ProxyUpstreamSelection): boolean
   }
   if (
     selection.kind === "docker_container" &&
-    (!selection.dockerNodeId || !selection.containerName)
+    (!selection.dockerNodeId ||
+      (!selection.containerName && (!selection.composeProjectId || !selection.composeServiceName)))
   ) {
     return false;
   }
@@ -157,6 +167,14 @@ function selectedTargetKey(selection: ProxyUpstreamSelection): string {
   if (selection.kind === "docker_container" && selection.dockerNodeId && selection.containerName) {
     return `container:${selection.dockerNodeId}:${selection.containerName}`;
   }
+  if (
+    selection.kind === "docker_container" &&
+    selection.dockerNodeId &&
+    selection.composeProjectId &&
+    selection.composeServiceName
+  ) {
+    return `compose:${selection.dockerNodeId}:${selection.composeProjectId}:${encodeURIComponent(selection.composeServiceName)}`;
+  }
   return "__none__";
 }
 
@@ -173,6 +191,8 @@ export function proxyUpstreamForDockerTarget(
       kind: "docker_deployment",
       dockerNodeId: null,
       containerName: null,
+      composeProjectId: null,
+      composeServiceName: null,
       deploymentId: target.deploymentId ?? target.id,
       containerPort: onlyPort?.containerPort ?? null,
     };
@@ -182,6 +202,8 @@ export function proxyUpstreamForDockerTarget(
     kind: "docker_container",
     dockerNodeId: nodeId,
     containerName: target.name,
+    composeProjectId: null,
+    composeServiceName: null,
     deploymentId: null,
     containerPort: onlyPort?.containerPort ?? null,
   };
@@ -202,6 +224,7 @@ export function ProxyUpstreamFields({
   allowManual?: boolean;
   showTargetSelect?: boolean;
 }) {
+  const [composeProjects, setComposeProjects] = useState<DockerComposeProject[]>([]);
   const selectedContainer = useMemo(
     () => containers.find((container) => targetKey(container) === selectedTargetKey(value)) ?? null,
     [containers, value]
@@ -214,6 +237,29 @@ export function ProxyUpstreamFields({
   const pagesEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.pagesEnabled === true
   );
+
+  useEffect(() => {
+    if (value.kind !== "docker_container") return;
+    let cancelled = false;
+    void api
+      .listDockerComposeProjects()
+      .then((projects) =>
+        Promise.all(
+          projects.map((project) =>
+            api.getDockerComposeProject(project.nodeId, project.id).catch(() => null)
+          )
+        )
+      )
+      .then((projects) => {
+        if (!cancelled) setComposeProjects(projects.filter(Boolean) as DockerComposeProject[]);
+      })
+      .catch(() => {
+        if (!cancelled) setComposeProjects([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [value.kind]);
 
   useEffect(() => {
     if (value.kind !== "pages") return;
@@ -269,6 +315,32 @@ export function ProxyUpstreamFields({
     () => candidates.find((container) => targetKey(container) === selectedTargetKey(value)) ?? null,
     [candidates, value]
   );
+  const composeCandidates = useMemo(
+    () =>
+      composeProjects.flatMap((project) =>
+        Object.entries(project.activeRevision?.normalizedModel.services ?? {}).map(
+          ([serviceName, service]) => ({
+            key: `compose:${project.nodeId}:${project.id}:${encodeURIComponent(serviceName)}`,
+            projectId: project.id,
+            projectName: project.name,
+            serviceName,
+            nodeId: project.nodeId,
+            nodeName: project._nodeName,
+            nodeSlug: project._nodeSlug,
+            nodeColor: project._nodeColor,
+            unavailable: project.availability === "unavailable" || project.status === "missing",
+            ports: (service.ports ?? [])
+              .filter((port) => (port.protocol ?? "tcp") === "tcp")
+              .map((port) => ({ containerPort: port.target })),
+          })
+        )
+      ),
+    [composeProjects]
+  );
+  const selectedCompose = useMemo(
+    () => composeCandidates.find((candidate) => candidate.key === selectedTargetKey(value)) ?? null,
+    [composeCandidates, value]
+  );
   const resourceCandidates = useMemo(
     () =>
       candidates.filter((candidate) =>
@@ -279,18 +351,46 @@ export function ProxyUpstreamFields({
     [candidates, value.kind]
   );
   const resourceOptions = useMemo<ComboboxOption[]>(
-    () =>
-      resourceCandidates.map((candidate) => {
-        return {
-          value: targetKey(candidate),
-          label: candidate.name,
-          keywords: [candidate._nodeName, candidate._nodeSlug].filter(Boolean).join(" "),
-          disabled: candidate.availability === "unavailable",
-        };
-      }),
-    [resourceCandidates]
+    () => [
+      ...resourceCandidates.map((candidate) => ({
+        value: targetKey(candidate),
+        label: candidate.name,
+        keywords: [candidate._nodeName, candidate._nodeSlug].filter(Boolean).join(" "),
+        disabled: candidate.availability === "unavailable",
+      })),
+      ...(value.kind === "docker_container"
+        ? composeCandidates.map((candidate) => ({
+            value: candidate.key,
+            label: `${candidate.projectName} / ${candidate.serviceName}`,
+            keywords: [
+              candidate.projectName,
+              candidate.serviceName,
+              candidate.nodeName,
+              candidate.nodeSlug,
+            ]
+              .filter(Boolean)
+              .join(" "),
+            disabled: candidate.unavailable,
+          }))
+        : []),
+    ],
+    [composeCandidates, resourceCandidates, value.kind]
   );
   const chooseTarget = (key: string) => {
+    const compose = composeCandidates.find((candidate) => candidate.key === key);
+    if (compose) {
+      onChange({
+        ...value,
+        kind: "docker_container",
+        dockerNodeId: compose.nodeId,
+        containerName: null,
+        composeProjectId: compose.projectId,
+        composeServiceName: compose.serviceName,
+        deploymentId: null,
+        containerPort: compose.ports.length === 1 ? compose.ports[0]!.containerPort : null,
+      });
+      return;
+    }
     const target = candidates.find((candidate) => targetKey(candidate) === key);
     if (!target) return;
     onChange(proxyUpstreamForDockerTarget(value, target));
@@ -398,6 +498,35 @@ export function ProxyUpstreamFields({
               emptyMessage="No matching resources."
               disabled={disabled}
               renderOption={(option) => {
+                const compose = composeCandidates.find(
+                  (candidate) => candidate.key === option.value
+                );
+                if (compose) {
+                  return (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 truncate">
+                        {compose.projectName} / {compose.serviceName}
+                      </span>
+                      <Badge variant="secondary" size="inline">
+                        Compose
+                      </Badge>
+                      {(compose.nodeName || compose.nodeSlug) && (
+                        <Badge
+                          variant="secondary"
+                          size="inline"
+                          className={nodeBadgeClassName(compose.nodeColor)}
+                        >
+                          {compose.nodeName ?? compose.nodeSlug}
+                        </Badge>
+                      )}
+                      {compose.unavailable && (
+                        <Badge variant="secondary" size="inline">
+                          Unavailable
+                        </Badge>
+                      )}
+                    </span>
+                  );
+                }
                 const candidate = resourceCandidates.find(
                   (resource) => targetKey(resource) === option.value
                 );
@@ -449,7 +578,7 @@ export function ProxyUpstreamFields({
                 });
               }}
               placeholder="8080"
-              disabled={disabled || !effectiveSelectedContainer}
+              disabled={disabled || (!effectiveSelectedContainer && !selectedCompose)}
             />
           </SettingsControlRow>
           <SettingsControlRow

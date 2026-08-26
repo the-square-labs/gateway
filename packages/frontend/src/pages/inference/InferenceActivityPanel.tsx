@@ -1,3 +1,4 @@
+import { Activity } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
@@ -230,6 +231,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
     <TooltipProvider>
       {recentLoading && <Skeleton />}
       <PanelShell
+        icon={<Activity className="h-4 w-4" />}
         title="Recent activity"
         description="Request metadata and normalized usage; prompts and outputs are never stored"
         actions={
@@ -326,6 +328,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
                 horizontalScroll
                 minWidth="52rem"
                 className="h-full"
+                fixedRowHeight={49}
                 emptyMessage="No inference activity"
                 scrollRef={tableScrollRef}
                 loading={loading && rows.length === 0}

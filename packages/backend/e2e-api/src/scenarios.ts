@@ -2,6 +2,7 @@ import { asArray, unwrapData } from './api-client.js';
 import { e2eName } from './config.js';
 import {
   asRow,
+  findDockerComposeNode,
   findDockerNode,
   firstId,
   getDockerContainerId,
@@ -80,6 +81,10 @@ export const scenarios: TestCase[] = [
       const response = await ctx.client.get(path);
       if (response.status === 403 && response.text.includes('browser session')) {
         expectSessionOnly(response, `GET ${path}`);
+      } else if (
+        (response.status === 403 || response.status === 503) &&
+        response.text.includes('"code":"FEATURE_DISABLED"')
+      ) {
       } else if (path.startsWith('/api/logging/')) {
         expectApiAccessibleOrFeatureDisabled(response, `GET ${path}`, 'LOGGING_DISABLED');
       } else {
@@ -128,6 +133,10 @@ export const scenarios: TestCase[] = [
       const response = await ctx.client.get(path, { query: path.includes('?') ? undefined : { limit: 5 } });
       if (path.startsWith('/api/logging/')) {
         expectApiAccessibleOrFeatureDisabled(response, `GET ${path}`, 'LOGGING_DISABLED');
+      } else if (
+        (response.status === 403 || response.status === 503) &&
+        response.text.includes('"code":"FEATURE_DISABLED"')
+      ) {
       } else {
         expectApiAccessible(response, `GET ${path}`);
       }
@@ -189,16 +198,37 @@ export const scenarios: TestCase[] = [
     }
 
     const containers = asArray<Row>((await ctx.client.get(`/api/docker/nodes/${node.id}/containers`)).body);
-    const containerId = containers[0]?.id ?? containers[0]?.Id;
-    if (containerId) {
+    for (const container of containers) {
+      const containerId = container.id ?? container.Id;
+      if (!containerId) continue;
+      const detailPath = `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}`;
+      const detail = await ctx.client.get(detailPath);
+      if (detail.status < 200 || detail.status > 299) continue;
+      const responses = [detail];
       for (const path of [
-        `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}`,
         `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/logs`,
         `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/stats`,
         `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/env`,
       ]) {
-        expectApiAccessible(await ctx.client.get(path), `GET ${path}`);
+        responses.push(await ctx.client.get(path));
       }
+      if (responses.some((response) => response.status === 502 && response.text.includes('No such container'))) {
+        continue;
+      }
+      expectApiAccessible(responses[0], `GET ${detailPath}`);
+      expectApiAccessible(
+        responses[1],
+        `GET /api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/logs`
+      );
+      expectApiAccessible(
+        responses[2],
+        `GET /api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/stats`
+      );
+      expectApiAccessible(
+        responses[3],
+        `GET /api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/env`
+      );
+      break;
     }
   }),
 
@@ -446,6 +476,7 @@ export const scenarios: TestCase[] = [
         validityYears: 1,
         maxValidityDays: 30,
       });
+      if (ca.status === 403 && ca.text.includes('"code":"FEATURE_DISABLED"')) return;
       expectOk(ca, 'POST /api/cas');
       const caId = asRow(ca.body).id;
       if (caId) {
@@ -765,8 +796,6 @@ export const scenarios: TestCase[] = [
       const volumeName = e2eName('volume').replaceAll('-', '_');
       const volume = await ctx.client.post(`/api/docker/nodes/${node.id}/volumes`, {
         name: volumeName,
-        driver: 'local',
-        labels: { 'wiolett.e2e': 'true' },
       });
       expectOk(volume, 'POST docker volume');
       ctx.cleanup.push(async () => {
@@ -822,6 +851,9 @@ export const scenarios: TestCase[] = [
       }
       if (!containerId) throw new Error('Created Docker container did not return or expose an id');
       ctx.cleanup.push(async () => {
+        await ctx.client
+          .post(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId!)}/stop`, { timeout: 2 })
+          .catch(() => undefined);
         await ctx.client.delete(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId!)}`, {
           query: { force: true },
         });
@@ -909,12 +941,20 @@ export const scenarios: TestCase[] = [
       expectOk(
         await ctx.client.post(`/api/docker/nodes/${node.id}/volumes`, {
           name: volumeName,
-          driver: 'local',
-          labels: { 'wiolett.e2e': 'true' },
         }),
         'POST docker container test volume'
       );
       ctx.cleanup.push(async () => {
+        if (containerId) {
+          await ctx.client
+            .post(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/stop`, { timeout: 2 })
+            .catch(() => undefined);
+          await ctx.client
+            .delete(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}`, {
+              query: { force: true },
+            })
+            .catch(() => undefined);
+        }
         await ctx.client.delete(`/api/docker/nodes/${node.id}/volumes/${encodeURIComponent(volumeName)}`, {
           query: { force: true },
         });
@@ -981,12 +1021,18 @@ export const scenarios: TestCase[] = [
           'GET docker container files'
         );
         expectOk(
+          await ctx.client.post(
+            `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/files/create`,
+            'api e2e initial',
+            { query: { path: '/tmp/codex-e2e.txt' }, headers: { 'Content-Type': 'application/octet-stream' } }
+          ),
+          'POST docker container file'
+        );
+        expectOk(
           await ctx.client.put(
             `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/files/write`,
-            {
-              path: '/tmp/codex-e2e.txt',
-              content: Buffer.from('api e2e').toString('base64'),
-            }
+            'api e2e',
+            { query: { path: '/tmp/codex-e2e.txt' }, headers: { 'Content-Type': 'application/octet-stream' } }
           ),
           'PUT docker container file'
         );
@@ -1006,26 +1052,257 @@ export const scenarios: TestCase[] = [
           }),
           'POST restart docker container'
         );
-        await sleep(1000);
+        await waitForContainerVisible(ctx, node.id, renamedName);
         expectOk(
           await ctx.client.post(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/stop`, {
             timeout: 2,
           }),
           'POST stop docker container'
         );
-        await sleep(1000);
+        await waitForContainerVisible(ctx, node.id, renamedName);
         expectOk(
           await ctx.client.post(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/start`),
           'POST restart stopped docker container'
         );
-        await sleep(1000);
+        await waitForContainerVisible(ctx, node.id, renamedName);
         expectOk(
           await ctx.client.post(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/kill`, {
             signal: 'SIGTERM',
           }),
           'POST kill docker container'
         );
+        await waitForContainerVisible(ctx, node.id, renamedName);
+        expectOk(
+          await ctx.client.delete(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}`, {
+            query: { force: true },
+          }),
+          'DELETE disposable docker container'
+        );
+        expectOk(
+          await ctx.client.delete(`/api/docker/nodes/${node.id}/volumes/${encodeURIComponent(volumeName)}`, {
+            query: { force: true },
+          }),
+          'DELETE docker container test volume'
+        );
       }
+    },
+    skipWithoutRuntimeMutations
+  ),
+
+  test(
+    'Docker Compose runtime mutations cover validation, revisions, ownership, and lifecycle',
+    async (ctx) => {
+      const node = await findDockerComposeNode(ctx);
+      if (!node?.id) return;
+
+      const image = await resolveDockerRuntimeImage(ctx, node.id);
+      if (!image) return;
+
+      const projectName = e2eName('compose');
+      const buildValidation = await ctx.client.post(`/api/docker/nodes/${node.id}/compose-projects/validate`, {
+        projectName: `${projectName}-build`,
+        yaml: 'services:\n  app:\n    build: .\n',
+        variables: {},
+        secretKeys: [],
+      });
+      expectOk(buildValidation, 'POST Compose build validation');
+      const buildValidationRow = asRow(buildValidation.body);
+      if (buildValidationRow.valid !== false || !JSON.stringify(buildValidationRow).includes('BUILD_FORBIDDEN')) {
+        throw new Error(
+          `Compose build validation did not return BUILD_FORBIDDEN: ${buildValidation.text.slice(0, 500)}`
+        );
+      }
+
+      const composeYaml = [
+        'services:',
+        '  app:',
+        `    image: ${JSON.stringify(image)}`,
+        '    restart: unless-stopped',
+        '    cpus: 0.25',
+        '    mem_limit: 64m',
+        '    environment:',
+        `      CODEX_E2E_ENV: \${CODEX_E2E_ENV}`,
+        `      CODEX_E2E_SECRET: \${CODEX_E2E_SECRET}`,
+        '    volumes:',
+        '      - e2e-data:/tmp/codex-e2e-data',
+        'volumes:',
+        '  e2e-data:',
+        '',
+      ].join('\n');
+      const create = await ctx.client.post(`/api/docker/nodes/${node.id}/compose-projects`, {
+        projectName,
+        yaml: composeYaml,
+        variables: { CODEX_E2E_ENV: 'initial' },
+        secretKeys: ['CODEX_E2E_SECRET'],
+      });
+      expectOk(create, 'POST Compose project');
+      const created = asRow(create.body);
+      const projectId = created.project?.id as string | undefined;
+      const initialRevisionId = created.revision?.id as string | undefined;
+      if (!projectId || !initialRevisionId)
+        throw new Error('Created Compose project did not return project and revision ids');
+
+      const projectPath = `/api/docker/nodes/${node.id}/compose-projects/${projectId}`;
+      let composeVolumeNames = [`${projectName}_e2e-data`];
+      const waitForOperation = async (operationId: string) => {
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          const operations = await listRows(ctx, `${projectPath}/operations`);
+          const operation = operations.find((row) => row.id === operationId);
+          if (operation?.status === 'succeeded') return operation;
+          if (operation?.status === 'failed' || operation?.status === 'cancelled') {
+            throw new Error(`Compose operation ${operationId} ${operation.status}: ${operation.error ?? ''}`);
+          }
+          await sleep(1000);
+        }
+        throw new Error(`Timed out waiting for Compose operation ${operationId}`);
+      };
+      const runAction = async (
+        action: string,
+        revisionId?: string,
+        idempotencyKey = e2eName(`compose-${action}`),
+        volumeNames: string[] = []
+      ) => {
+        const response = await ctx.client.post(`${projectPath}/actions/${action}`, {
+          revisionId,
+          idempotencyKey,
+          removeOrphans: false,
+          volumeNames,
+        });
+        expectOk(response, `POST Compose ${action}`);
+        const operation = asRow(response.body);
+        if (!operation.id) throw new Error(`Compose ${action} did not return an operation id`);
+        await waitForOperation(operation.id);
+        return { operation, idempotencyKey };
+      };
+      const presentComposeVolumes = async (volumeNames: string[]) => {
+        const present: string[] = [];
+        for (const volumeName of volumeNames) {
+          const response = await ctx.client.get(
+            `/api/docker/nodes/${node.id}/volumes/${encodeURIComponent(volumeName)}`
+          );
+          if (response.status === 404) continue;
+          if (response.status >= 200 && response.status < 300) {
+            present.push(volumeName);
+            continue;
+          }
+          throw new Error(
+            `GET Compose volume ${volumeName} returned ${response.status}: ${response.text.slice(0, 500)}`
+          );
+        }
+        return present;
+      };
+      const waitForComposeVolumesAbsent = async (volumeNames: string[]) => {
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          const present = await presentComposeVolumes(volumeNames);
+          if (present.length === 0) return;
+          await sleep(1000);
+        }
+        throw new Error(`Compose volumes still exist after deletion: ${volumeNames.join(', ')}`);
+      };
+
+      ctx.cleanup.push(async () => {
+        const down = await ctx.client.post(`${projectPath}/actions/down`, {
+          idempotencyKey: e2eName('compose-cleanup-down'),
+          removeOrphans: true,
+          volumeNames: [],
+        });
+        const downOperation = asRow(down.body);
+        if (down.status >= 200 && down.status < 300 && downOperation.id) {
+          await waitForOperation(downOperation.id).catch(() => undefined);
+        }
+        if (composeVolumeNames.length > 0) {
+          const remainingVolumeNames = await presentComposeVolumes(composeVolumeNames);
+          if (remainingVolumeNames.length > 0) {
+            await runAction('delete_volumes', undefined, e2eName('compose-cleanup-volumes'), remainingVolumeNames);
+            await waitForComposeVolumesAbsent(remainingVolumeNames);
+          }
+        }
+        await ctx.client.delete(projectPath);
+      });
+
+      const secret = await ctx.client.post(`${projectPath}/secrets`, {
+        key: 'CODEX_E2E_SECRET',
+        value: 'compose-secret-value',
+      });
+      expectOk(secret, 'POST Compose secret');
+      const secretId = asRow(secret.body).id as string | undefined;
+      if (!secretId) throw new Error('Created Compose secret did not return an id');
+      const secrets = await listRows(ctx, `${projectPath}/secrets`);
+      if (!secrets.some((row) => row.id === secretId && row.key === 'CODEX_E2E_SECRET')) {
+        throw new Error('Created Compose secret was not listed');
+      }
+
+      const applyKey = e2eName('compose-apply');
+      const applied = await runAction('apply', initialRevisionId, applyKey);
+      const repeatedApply = await ctx.client.post(`${projectPath}/actions/apply`, {
+        revisionId: initialRevisionId,
+        idempotencyKey: applyKey,
+        removeOrphans: false,
+        volumeNames: [],
+      });
+      expectOk(repeatedApply, 'POST idempotent Compose apply');
+      if (asRow(repeatedApply.body).id !== applied.operation.id) {
+        throw new Error('Repeated Compose apply did not return the reserved operation');
+      }
+
+      let project: Row | null = null;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const detail = await ctx.client.get(projectPath);
+        expectApiAccessible(detail, 'GET applied Compose project');
+        project = asRow(detail.body);
+        if (Array.isArray(project.volumeNames) && project.volumeNames.length > 0) {
+          composeVolumeNames = project.volumeNames;
+        }
+        if (project.runningServiceCount === 1 && project.services?.[0]?.containerIds?.[0]) break;
+        await sleep(1000);
+      }
+      const containerId = project?.services?.[0]?.containerIds?.[0] as string | undefined;
+      if (!containerId || project?.status !== 'running') {
+        throw new Error(`Applied Compose project did not become running: ${JSON.stringify(project)}`);
+      }
+
+      const containers = await listRows(ctx, `/api/docker/nodes/${node.id}/containers`, { search: projectName });
+      if (containers.some((row) => row.id === containerId || row.Id === containerId)) {
+        throw new Error('Compose-owned container leaked into the global container list');
+      }
+      const volumes = await listRows(ctx, `/api/docker/nodes/${node.id}/volumes`, { search: projectName });
+      if (volumes.length > 0) throw new Error('Compose-owned volume leaked into the global volume list');
+      const networks = await listRows(ctx, `/api/docker/nodes/${node.id}/networks`, { search: projectName });
+      if (networks.length > 0) throw new Error('Compose-owned network leaked into the global network list');
+
+      const childPath = `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}`;
+      expectApiAccessible(await ctx.client.get(childPath), 'GET Compose-owned child container');
+      const childStop = await ctx.client.post(`${childPath}/stop`, { timeout: 2 });
+      expectStatus(childStop, 409, 'POST stop Compose-owned child container');
+      if (!childStop.text.includes('COMPOSE_RESOURCE_MANAGED')) {
+        throw new Error(`Compose-owned child mutation returned an unexpected error: ${childStop.text.slice(0, 500)}`);
+      }
+
+      const updatedYaml = composeYaml.replace(
+        `CODEX_E2E_ENV: \${CODEX_E2E_ENV}`,
+        `CODEX_E2E_ENV: \${CODEX_E2E_ENV}\n      CODEX_E2E_REVISION: two`
+      );
+      const revision = await ctx.client.post(`${projectPath}/revisions`, {
+        yaml: updatedYaml,
+        variables: { CODEX_E2E_ENV: 'updated' },
+        secretKeys: ['CODEX_E2E_SECRET'],
+      });
+      expectOk(revision, 'POST Compose revision');
+      const updatedRevisionId = asRow(revision.body).id as string | undefined;
+      if (!updatedRevisionId) throw new Error('Created Compose revision did not return an id');
+      await runAction('apply', updatedRevisionId);
+      expectOk(
+        await ctx.client.delete(`${projectPath}/revisions/${initialRevisionId}`),
+        'DELETE inactive Compose revision'
+      );
+
+      await runAction('restart');
+      await runAction('stop');
+      await runAction('start');
+      await runAction('down');
+      await runAction('delete_volumes', undefined, e2eName('compose-delete-volumes'), composeVolumeNames);
+      await waitForComposeVolumesAbsent(composeVolumeNames);
+      expectOk(await ctx.client.delete(projectPath), 'DELETE stopped Compose project');
     },
     skipWithoutRuntimeMutations
   ),

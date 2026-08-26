@@ -817,6 +817,8 @@ ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
 ensure_env SETUP_BOOTSTRAP "$([[ "$FRESH" == 1 ]] && printf true || printf false)"
 ensure_env WEB_TLS_BOOTSTRAP_MODE "${TRANSPORT:-http}"
 ensure_env SANDBOX_RUNNER_WORKSPACE_DIR "/var/lib/gateway/sandbox-workspaces"
+ensure_env GATEWAY_REGISTRY_IMAGE_REF "registry:3"
+ensure_env GATEWAY_REGISTRY_HTTP_SECRET "$(openssl rand -hex 32)"
 ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"
 if [[ "$FRESH" == 1 ]]; then
   ensure_env GATEWAY_RELAY_IMAGE_REF "$RELAY_IMAGE_REF"
@@ -863,6 +865,7 @@ services:
       GATEWAY_RELAY_SERVICE_NAME: relay
       GATEWAY_RELAY_BUILD_VERSION: ${GATEWAY_RELAY_BUILD_VERSION}
       GATEWAY_RELAY_PROTOCOL_MAJOR: ${GATEWAY_RELAY_PROTOCOL_MAJOR}
+      GATEWAY_REGISTRY_AUTH_DIR: /var/lib/gateway-registry-auth
       SANDBOX_RUNNER_WORKSPACE_DIR: ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
     ports:
       - "3000:3000"
@@ -871,6 +874,7 @@ services:
     volumes:
       - gateway_data:/var/lib/gateway
       - gateway_relay_identity:/var/lib/gateway-relay
+      - gateway_registry_auth:/var/lib/gateway-registry-auth
       - ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -909,6 +913,37 @@ services:
       retries: 2
       start_period: 20s
 
+  registry:
+    image: ${GATEWAY_REGISTRY_IMAGE_REF}
+    restart: unless-stopped
+    labels:
+      com.wiolett.gateway.managed-service: registry
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_HTTP_DEBUG_ADDR: 127.0.0.1:5001
+      REGISTRY_HTTP_SECRET: ${GATEWAY_REGISTRY_HTTP_SECRET}
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: ${GATEWAY_REGISTRY_TOKEN_REALM:-https://gateway.invalid/api/docker/registry/token}
+      REGISTRY_AUTH_TOKEN_SERVICE: gateway-internal-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: gateway-internal-registry
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /var/lib/gateway-registry-auth/token-cert.pem
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_HEALTH_STORAGEDRIVER_ENABLED: "true"
+      REGISTRY_HEALTH_STORAGEDRIVER_INTERVAL: 10s
+      REGISTRY_HEALTH_STORAGEDRIVER_THRESHOLD: "3"
+    expose:
+      - "5000"
+    volumes:
+      - gateway_registry_data:/var/lib/registry
+      - gateway_registry_auth:/var/lib/gateway-registry-auth:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5001/debug/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -940,6 +975,8 @@ volumes:
   gateway_data:
   gateway_relay_identity:
   gateway_relay_state:
+  gateway_registry_data:
+  gateway_registry_auth:
   postgres_data:
   redis_data:
 COMPOSE

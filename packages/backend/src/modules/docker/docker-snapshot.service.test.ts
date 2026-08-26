@@ -46,6 +46,14 @@ class MemoryCache {
         this.hashes.set(key, hash);
         return 1;
       },
+      hkeys: async (key: string) => [...(this.hashes.get(key)?.keys() ?? [])],
+      hdel: async (key: string, ...fields: string[]) => {
+        const hash = this.hashes.get(key);
+        fields.forEach((field) => {
+          hash?.delete(field);
+        });
+        return fields.length;
+      },
       del: async (...keys: string[]) => {
         keys.forEach((key) => {
           this.strings.delete(key);
@@ -180,6 +188,18 @@ describe('DockerSnapshotService', () => {
       scope: 'local',
       usedBy: ['web'],
     });
+  });
+
+  it('removes stale volume details when the refreshed physical inventory no longer contains them', async () => {
+    const { service } = createService();
+    await service.replaceDetail('node-1', 'volume-detail', 'deleted-data', {
+      Name: 'deleted-data',
+      Driver: 'local',
+    });
+
+    await service.replaceList('node-1', 'volumes', []);
+
+    await expect(service.getDetail('node-1', 'volume-detail', 'deleted-data')).resolves.toBeNull();
   });
 
   it('stores volume metrics as an independent sanitized detail snapshot', async () => {

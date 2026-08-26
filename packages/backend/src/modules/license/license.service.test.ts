@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LicenseServerRequestError, LicenseService } from './license.service.js';
-import { LICENSE_PLAN_ENTITLEMENTS, type LicenseServerState } from './license.types.js';
+import { LICENSE_PLAN_ENTITLEMENTS, LICENSE_PLAN_ENTITLEMENTS_V3, type LicenseServerState } from './license.types.js';
 
 function createDb() {
   const rows = new Map<string, unknown>();
@@ -62,7 +62,7 @@ const communityState = (): LicenseServerState => ({
   effectivePlan: 'community',
   paidLicenseStatus: 'none',
   graceUntil: null,
-  entitlementsVersion: 3,
+  entitlementsVersion: 4,
   entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
   serverTime: new Date().toISOString(),
 });
@@ -84,7 +84,7 @@ const paidState = (plan: 'personal' | 'business' | 'enterprise' = 'business'): L
       metadata: { order: 'A-1' },
     },
     graceUntil: new Date(expiresAt.getTime() + graceHours * 60 * 60 * 1000).toISOString(),
-    entitlementsVersion: 3,
+    entitlementsVersion: 4,
     entitlements: LICENSE_PLAN_ENTITLEMENTS[plan],
     activation: {
       installationId: '11111111-1111-4111-8111-111111111111',
@@ -157,6 +157,7 @@ describe('LicenseService', () => {
     expect(body).toMatchObject({
       installationName: 'gateway.example.com',
       gatewayVersion: 'v2.6.12',
+      entitlementsVersion: 4,
     });
     expect(body.installationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.registrationNonce.length).toBeGreaterThanOrEqual(32);
@@ -257,6 +258,7 @@ describe('LicenseService', () => {
     expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({
       installationToken: 'WLT-GWI-INSTALLATION-TOKEN',
       licenseKey: 'WLT-GW-AAAA-BBBB-CCCC-DDDD',
+      entitlementsVersion: 4,
     });
     expect(status).toMatchObject({
       status: 'valid',
@@ -313,6 +315,39 @@ describe('LicenseService', () => {
     expect(status.graceUntil).toBeNull();
   });
 
+  it('preserves a paid v3 cache and credentials during an offline upgrade', async () => {
+    const db = createDb();
+    const activateFetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState('personal')));
+    const service = new LicenseService(db as never, createCrypto() as never, env, activateFetcher as never);
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+    db.rows.set('license:cached_state', {
+      ...(db.rows.get('license:cached_state') as Record<string, unknown>),
+      entitlementsVersion: 3,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS_V3.personal,
+    });
+
+    const failed = new LicenseService(
+      db as never,
+      createCrypto() as never,
+      env,
+      vi.fn().mockRejectedValue(new Error('network down')) as never
+    );
+    const status = await failed.checkNow();
+
+    expect(status).toMatchObject({
+      status: 'valid_with_warning',
+      plan: 'personal',
+      licensed: true,
+      entitlementsVersion: 3,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS_V3.personal,
+    });
+    expect(db.rows.has('license:installation_token_encrypted')).toBe(true);
+    expect(db.rows.has('license:key_encrypted')).toBe(true);
+  });
+
   it.each([
     ['personal', 24],
     ['business', 72],
@@ -346,7 +381,7 @@ describe('LicenseService', () => {
         licenseMetadata: {},
         expiresAt: expiresAt.toISOString(),
         graceUntil: graceUntil.toISOString(),
-        entitlementsVersion: 3,
+        entitlementsVersion: 4,
         entitlements: state.entitlements,
         lastCheckedAt: new Date().toISOString(),
         lastValidAt: new Date().toISOString(),
@@ -395,7 +430,7 @@ describe('LicenseService', () => {
       licenseMetadata: {},
       expiresAt: expiresAt.toISOString(),
       graceUntil: graceUntil.toISOString(),
-      entitlementsVersion: 3,
+      entitlementsVersion: 4,
       entitlements: state.entitlements,
       lastCheckedAt: new Date().toISOString(),
       lastValidAt: new Date().toISOString(),
@@ -455,6 +490,10 @@ describe('LicenseService', () => {
     const status = await service.clearKey();
 
     expect(fetcher.mock.calls[2]![0]).toContain('/api/v1/licenses/deactivate');
+    expect(JSON.parse(fetcher.mock.calls[2]![1].body)).toEqual({
+      installationToken: 'WLT-GWI-INSTALLATION-TOKEN',
+      entitlementsVersion: 4,
+    });
     expect(db.rows.has('license:key_encrypted')).toBe(false);
     expect(status).toMatchObject({ status: 'community', plan: 'community', hasKey: false });
   });
@@ -490,6 +529,7 @@ describe('LicenseService', () => {
     vi.setSystemTime(new Date('2026-08-16T12:30:00.001Z'));
     await service.heartbeat();
     expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toMatchObject({ entitlementsVersion: 4 });
   });
 
   it('retries pending Community registration no more than every 30 minutes', async () => {
@@ -529,6 +569,7 @@ describe('LicenseService', () => {
     const status = await service.checkNow();
 
     expect(fetcher.mock.calls[1]![0]).toContain('/api/v1/licenses/activate');
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toMatchObject({ entitlementsVersion: 4 });
     expect(status).toMatchObject({ status: 'valid', plan: 'personal' });
   });
 
@@ -576,7 +617,7 @@ describe('LicenseService', () => {
       licenseMetadata: {},
       expiresAt: expiresAt.toISOString(),
       graceUntil: new Date('2026-08-24T12:00:00.000Z').toISOString(),
-      entitlementsVersion: 3,
+      entitlementsVersion: 4,
       entitlements: LICENSE_PLAN_ENTITLEMENTS.business,
       lastCheckedAt: expiresAt.toISOString(),
       lastValidAt: expiresAt.toISOString(),

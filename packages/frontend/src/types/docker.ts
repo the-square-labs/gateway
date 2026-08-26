@@ -1,4 +1,4 @@
-export type DockerFolderResourceType = "container" | "image" | "network" | "volume";
+export type DockerFolderResourceType = "container" | "image" | "network" | "volume" | "compose";
 
 export interface DockerContainerFolder {
   id: string;
@@ -233,6 +233,175 @@ export interface DockerDeployment {
   updatedAt: string;
 }
 
+export type DockerComposeManagementState = "external" | "managed";
+export type DockerComposeDesiredState = "running" | "stopped";
+export type DockerComposeProjectStatus =
+  | "discovered"
+  | "validating"
+  | "applying"
+  | "running"
+  | "stopped"
+  | "degraded"
+  | "failed"
+  | "missing";
+export type DockerComposeAvailability = "available" | "unavailable";
+export type DockerComposeOperationAction =
+  | "apply"
+  | "pull_apply"
+  | "start"
+  | "stop"
+  | "restart"
+  | "down"
+  | "delete_volumes"
+  | "cancel";
+export type DockerComposeOperationStatus =
+  | "pending"
+  | "running"
+  | "cancelling"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface DockerComposePort {
+  target: number;
+  published?: number;
+  protocol?: "tcp" | "udp";
+  hostIp?: string;
+}
+
+export interface DockerComposeServiceVolume {
+  source: string;
+  target: string;
+  readOnly?: boolean;
+  external?: boolean;
+}
+
+export interface DockerComposeServiceConfig {
+  image: string;
+  cpus?: number;
+  cpuShares?: number;
+  memoryLimit?: string;
+  memoryReservation?: string;
+  memorySwapLimit?: string;
+  pidsLimit?: number;
+  environment?: Record<string, string>;
+  command?: string | string[];
+  entrypoint?: string | string[];
+  workingDir?: string;
+  user?: string;
+  hostname?: string;
+  ports?: DockerComposePort[];
+  healthcheck?: Record<string, unknown>;
+  dependsOn?: Record<string, { condition?: string }>;
+  restart?: "no" | "always" | "on-failure" | "unless-stopped";
+  volumes?: DockerComposeServiceVolume[];
+  networks?: string[];
+  labels?: Record<string, string>;
+}
+
+export interface DockerComposeResourceConfig {
+  external?: boolean;
+  externalName?: string;
+  driver?: string;
+  labels?: Record<string, string>;
+}
+
+export interface DockerComposeNormalizedModel {
+  name: string;
+  services: Record<string, DockerComposeServiceConfig>;
+  volumes?: Record<string, DockerComposeResourceConfig>;
+  networks?: Record<string, DockerComposeResourceConfig>;
+}
+
+export interface DockerComposeProjectSummary {
+  id: string;
+  scopeResourceId?: string;
+  nodeId: string;
+  name: string;
+  managementState: DockerComposeManagementState;
+  desiredState: DockerComposeDesiredState;
+  status: DockerComposeProjectStatus;
+  availability: DockerComposeAvailability;
+  activeRevisionId: string | null;
+  observedFingerprint: string | null;
+  lastSeenAt: string | null;
+  serviceCount: number;
+  runningServiceCount: number;
+  healthyServiceCount: number;
+  drifted: boolean;
+  lastOperation?: DockerComposeOperation | null;
+  folderId?: string | null;
+  folderSortOrder?: number;
+  _nodeId?: string;
+  _nodeSlug?: string;
+  _nodeName?: string;
+  _nodeColor?: import("./nodes").NodeAppearanceColor | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DockerComposeRevision {
+  id: string;
+  projectId: string;
+  revisionNumber: number;
+  sourceYaml: string;
+  originalYaml: string;
+  normalizedModel: DockerComposeNormalizedModel;
+  configDigest: string;
+  variables: Record<string, string>;
+  secretKeys: string[];
+  createdById: string | null;
+  createdAt: string;
+}
+
+export interface DockerComposeOperation {
+  id: string;
+  projectId: string;
+  revisionId: string | null;
+  taskId: string | null;
+  idempotencyKey: string;
+  action: DockerComposeOperationAction;
+  status: DockerComposeOperationStatus;
+  progress: string | null;
+  error: string | null;
+  options: { removeOrphans?: boolean; volumeNames?: string[] };
+  createdById: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface DockerComposeProject extends DockerComposeProjectSummary {
+  activeRevision: DockerComposeRevision | null;
+  revisions?: DockerComposeRevision[];
+  operations?: DockerComposeOperation[];
+  services: Array<{
+    name: string;
+    image: string;
+    state: string;
+    health: string;
+    containerIds: string[];
+  }>;
+  volumeNames: string[];
+  networkNames: string[];
+}
+
+export interface DockerComposeValidationDiagnostic {
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+  path?: string;
+}
+
+export interface DockerComposeValidationResult {
+  valid: boolean;
+  projectName: string | null;
+  normalizedModel: DockerComposeNormalizedModel | null;
+  configDigest: string | null;
+  requiredVariables: string[];
+  diagnostics: DockerComposeValidationDiagnostic[];
+}
+
 export interface DockerImage {
   id: string;
   repoTags: string[];
@@ -371,6 +540,7 @@ export interface DockerSecret {
   value: string; // masked as "••••••••" unless user has docker:secrets scope
   createdAt: string;
   updatedAt: string;
+  system?: boolean;
 }
 
 export interface FileEntry {

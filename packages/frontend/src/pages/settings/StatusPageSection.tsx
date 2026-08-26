@@ -1,4 +1,4 @@
-import { Save } from "lucide-react";
+import { Activity, Save } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -222,6 +222,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
 
   return (
     <PanelShell
+      icon={<Activity className="h-4 w-4" />}
       title={
         <span className="inline-flex items-center gap-2">
           <span>Status Page</span>

@@ -11,6 +11,7 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
 import {
@@ -189,7 +190,7 @@ export function requireManagedDatabaseScopes(...scopeBases: string[]): Middlewar
 
 type ManagedDatabaseBindingTarget = {
   targetNodeId: string;
-  targetType: 'container' | 'deployment';
+  targetType: 'container' | 'deployment' | 'compose_service';
   targetResourceId: string;
 };
 
@@ -200,7 +201,10 @@ type ManagedDatabaseBindingTarget = {
  */
 export async function assertManagedDatabaseBindingTargetAccess(c: any, target: ManagedDatabaseBindingTarget) {
   const scopes = c.get('effectiveScopes') || [];
-  if (target.targetType === 'deployment') {
+  if (target.targetType === 'compose_service') {
+    const composeTarget = decodeComposeServiceTarget(target.targetResourceId);
+    assertDockerResourceScope(scopes, 'docker:compose:manage', target.targetNodeId, composeTarget.projectId);
+  } else if (target.targetType === 'deployment') {
     for (const scope of ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']) {
       assertDockerResourceScope(scopes, scope, target.targetNodeId, target.targetResourceId);
     }

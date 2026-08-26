@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, index, integer, pgTable, text, timestamp, unique, uuid, varchar } from 'drizzle-orm/pg-core';
+import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
 import { nodes } from './nodes.js';
 import { forwardSchemeEnum, proxyHosts, proxyUpstreamKindEnum } from './proxy-hosts.js';
@@ -31,6 +32,10 @@ export const proxyAdditionalSecureLinks = pgTable(
       .notNull()
       .references(() => nodes.id, { onDelete: 'restrict' }),
     dockerContainerName: varchar('docker_container_name', { length: 255 }),
+    dockerComposeProjectId: uuid('docker_compose_project_id').references(() => dockerComposeProjects.id, {
+      onDelete: 'restrict',
+    }),
+    dockerComposeServiceName: varchar('docker_compose_service_name', { length: 255 }),
     dockerDeploymentId: uuid('docker_deployment_id').references(() => dockerDeployments.id, {
       onDelete: 'restrict',
     }),
@@ -59,6 +64,9 @@ export const proxyAdditionalSecureLinks = pgTable(
     ),
     sourceNodeIdx: index('proxy_additional_secure_links_source_node_idx').on(table.sourceNodeId),
     targetNodeIdx: index('proxy_additional_secure_links_target_node_idx').on(table.dockerNodeId),
+    dockerComposeProjectIdx: index('proxy_additional_secure_links_docker_compose_project_idx').on(
+      table.dockerComposeProjectId
+    ),
     statusIdx: index('proxy_additional_secure_links_status_idx').on(table.status),
   })
 );

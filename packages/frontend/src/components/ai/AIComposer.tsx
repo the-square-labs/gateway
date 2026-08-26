@@ -757,7 +757,8 @@ export function AIComposer({
             }
             disabled={disabled}
             rows={1}
-            className="block min-h-[42px] resize-none border-0 bg-transparent px-3 pb-1.5 pt-3 pr-3 leading-5 focus-visible:ring-0"
+            autoFocus
+            className="block min-h-[42px] resize-none border-0 bg-transparent px-3 pb-1.5 pt-3 pr-3 text-base leading-5 focus-visible:ring-0 md:text-sm"
           />
           <div className="-mt-1 flex min-h-10 items-center gap-1 px-2 pb-2">
             <div className="min-w-0 shrink">

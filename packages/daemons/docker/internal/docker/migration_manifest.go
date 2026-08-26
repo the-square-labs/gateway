@@ -216,6 +216,9 @@ func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedCo
 	}
 	config := cloneContainerConfig(manifest.Config)
 	config.Env = append([]string(nil), req.Env...)
+	if err := applyMigrationCreateImage(config, manifest); err != nil {
+		return "", err
+	}
 	if config.Labels == nil {
 		config.Labels = map[string]string{}
 	}
@@ -227,6 +230,20 @@ func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedCo
 		return "", fmt.Errorf("create stopped migration container: %w", err)
 	}
 	return resp.ID, nil
+}
+
+func applyMigrationCreateImage(config *container.Config, manifest dockerMigrationManifest) error {
+	if config == nil || !dockerSHA256Digest.MatchString(manifest.ImageID) {
+		return fmt.Errorf("migration manifest has no verified image digest")
+	}
+	config.Image = manifest.ImageID
+	if original := strings.TrimSpace(manifest.ImageReference); original != "" && original != manifest.ImageID {
+		if config.Labels == nil {
+			config.Labels = map[string]string{}
+		}
+		config.Labels[archiveImageReferenceLabel] = original
+	}
+	return nil
 }
 
 func cloneContainerConfig(source *container.Config) *container.Config {

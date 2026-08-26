@@ -1,4 +1,4 @@
-import { ArrowRight, Download, ExternalLink, Loader2, RefreshCw, Wrench } from "lucide-react";
+import { ArrowRight, Cpu, Download, ExternalLink, Loader2, RefreshCw, Wrench } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -333,6 +333,7 @@ export function InferenceCoreLifecyclePanel({
   if (!status) {
     return (
       <PanelShell
+        icon={<Cpu className="h-4 w-4" />}
         title="Inference core"
         description="The inference core status could not be loaded."
         actions={
@@ -466,6 +467,7 @@ export function InferenceCoreLifecyclePanel({
   return (
     <>
       <PanelShell
+        icon={<Cpu className="h-4 w-4" />}
         aria-label="Inference core status"
         className={
           status.state === "updating"

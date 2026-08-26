@@ -6,7 +6,7 @@ Gateway is an AI-first but not AI-dependent self-hosted infrastructure control p
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
 
-For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, while Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
+For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, Git source automation stops while source history remains readable/removable, and Business-only external registry ingress is disabled. Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
 
 ## Ingress
 
@@ -87,12 +87,18 @@ Container workflows:
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. New and changed mounts accept only Gateway-managed local volumes; new host bind mounts are rejected. Existing legacy mounts are preserved during normal image, environment, and webhook updates.
 - Browse container logs with search and follow mode.
-- Recognize externally created Docker Compose projects from canonical Compose labels, keep their containers in protected project folders, and stream aggregated project logs. Compose-managed resources are not eligible for Gateway cross-node migration. This is read/organization support for existing Compose workloads, not Gateway-managed Compose application deployment.
+- On Community and every paid plan, discover externally created Docker Compose projects from canonical labels and inspect their inventory, status, monitoring, and logs as read-only Compose Projects. Gateway can adopt a project only after the user supplies its complete single-file YAML; Gateway never reads host Compose files from label paths.
+- On Personal and higher, deploy and manage single-node Compose Projects with immutable revisions, validation, explicit Pull & Apply, start/stop/restart/down, aggregated logs, operation history, folders, masked secrets, drift reporting, ordinary non-Swarm CPU/memory/PID limits, managed database links, and Route/Secure Link targeting by project/service identity. Manual YAML revisions remain image-only: `build`, host bind mounts, privileged/device access, and swarm-only fields are rejected before mutation.
+- Hide project-owned containers, named volumes, and non-external networks from standalone lists and block their direct mutations. Images and external/shared resources remain global. Compose resources are not eligible for cross-node migration.
 - Open an interactive container console.
 - Browse and edit container files when permitted.
 - Keep sanitized inventory snapshots so read views can show the last synchronized Docker state while a node is offline or refreshing; mutations remain unavailable until the node reconnects.
 - Manage Docker images and cleanup old images.
 - Manage private registry credentials and image registry mappings.
+- On Business and Enterprise, create a container, blue/green deployment, or Compose Project from an allowlisted GitLab, GitHub, or generic Git repository, or attach a repository directly to an existing Docker or Compose resource. Gateway resolves an exact branch commit, queues durable builds, stores approved artifacts by immutable digest, and uses safe container recreate, the existing health-checked blue/green path, or an immutable Compose revision. The UI permits configuring Repository mode before enforcing the plan when **Create and build** or **Connect** is pressed; the backend independently enforces Business at source mutation and build admission.
+- A repository Compose file may use the supported single-node `build` subset (`context`, `dockerfile`, and `args`). Gateway creates one child build per service, waits until every expected artifact is approved, then creates one digest-pinned immutable revision and applies it atomically. A failed, rejected, cancelled, or superseded child prevents the project rollout. Repository service networks and managed database overlays are added to the runtime revision without rewriting the authored source file.
+- Review global build history, Build Worker assignment, logs, vulnerability findings/policy results, desired and deployed commits, Compose service names, and per-resource source settings. Repository, integration, branch, Dockerfile/Compose-file path, build context, separate automatic-build and automatic-deploy controls, and source-scoped Build Secrets remain part of the Docker or Compose resource rather than a separate application entity.
+- Use the Gateway-managed internal Distribution registry on every plan without assigning a domain or publishing a host port. It keeps three successful artifacts plus active, rollback, in-progress, and manually pinned digests. Optional Business+ external Docker-client access is configured under **Settings > Features** and is exposed only through a selected nginx node, domain, TLS certificate, and repository/action-scoped token. Entitlement loss disables that ingress and every public token request rechecks the current plan.
 - Configure a trusted HTTPS token-service origin only for registries whose Bearer auth service is intentionally hosted on a separate origin.
 - Track long-running Docker operations in the Tasks view.
 
@@ -107,6 +113,8 @@ Deployment workflows:
 Safety controls:
 
 - Mount editing is separated from normal container editing and constrained to Gateway-managed local volumes. Legacy mounts remain visible only where needed for compatibility and cannot be reintroduced after removal.
+- Repository builds are admitted only while the internal registry is writable and an online Build Worker advertises BuildKit/containerd execution, dedicated-runtime, and enforced-resource-profile capabilities. A Build Worker is the existing `docker-daemon` in `builder` mode and has no Docker Engine socket.
+- The current builder profile accepts one build at a time, uses a dedicated containerd namespace and runc runtime, disables OCI-worker and insecure entitlements, applies fixed CPU/RAM/PID limits, accounts job/runtime disk use, and clears BuildKit cache between jobs. The separate worker host or outer unprivileged container is the security boundary and must not contain unrelated workloads or credentials. Builder egress is installer-selectable and defaults to public internet with metadata/private/control-plane denial. Source-scoped Build Secrets use BuildKit secret mounts and log redaction; scanner SBOM data is ephemeral, and provenance is not published.
 - Secrets are masked by default.
 - Dangerous operations are permission-scoped and audited.
 
@@ -277,15 +285,13 @@ Gateway includes connector and operational communication surfaces:
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.
 
-## Application Scaling And Compose
+## Application Scaling
 
-The following application-orchestration capabilities are **In development** for Business and Enterprise. They are included in those plan positions when released, but they are not generally available runtime features today:
+The following application-scaling capabilities are **In development** for Business and Enterprise. They are included in those plan positions when released, but they are not generally available runtime features today:
 
 - **Horizontal application scaling:** group multiple Docker nodes as one application cluster and deploy an application to that cluster.
 - **Vertical workload scaling:** run multiple managed instances of one workload on the same managed machine.
-- **Compose applications:** deploy and manage a multi-service application from a Compose definition.
-
-Existing multi-node resource management, cross-node migration, blue/green deployments, and Compose-label discovery/log aggregation do not constitute these scaling or Compose deployment capabilities.
+Existing single-node Compose Projects, multi-node resource management, cross-node migration, and blue/green deployments do not constitute horizontal clustering or same-node replica scaling.
 
 ## Vulnerability And Security Scanning
 

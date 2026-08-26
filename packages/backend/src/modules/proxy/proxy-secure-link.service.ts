@@ -12,6 +12,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
+import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service.js';
 
 type ProxyHostRow = typeof proxyHosts.$inferSelect;
 export type ProxyAdditionalSecureLinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
@@ -24,6 +25,8 @@ export interface CreateProxyAdditionalSecureLinkInput {
   forwardScheme: 'http' | 'https';
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
   dockerContainerPort: number;
 }
@@ -54,7 +57,8 @@ export class ProxySecureLinkService {
     private readonly db: DrizzleClient,
     private readonly dispatch: NodeDispatchService,
     private readonly relayPolicy: RelayPolicyService,
-    private connectorImage: string
+    private connectorImage: string,
+    private readonly dockerUpstreams?: ProxyDockerUpstreamService
   ) {}
 
   setEventBus(eventBus: EventBusService): void {
@@ -156,7 +160,8 @@ export class ProxySecureLinkService {
 
   async createAdditional(
     host: ProxyHostRow,
-    input: CreateProxyAdditionalSecureLinkInput
+    input: CreateProxyAdditionalSecureLinkInput,
+    actorScopes?: string[]
   ): Promise<ProxyAdditionalSecureLinkRow> {
     if (host.type !== 'proxy' || host.rawConfigEnabled || !host.nodeId) {
       throw new AppError(
@@ -176,7 +181,7 @@ export class ProxySecureLinkService {
       throw new AppError(400, 'INVALID_DOCKER_PORT', 'Container port must be between 1 and 65535');
     }
 
-    const target = await this.resolveAdditionalTarget(input);
+    const target = await this.resolveAdditionalTarget(input, actorScopes);
     if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId]))) {
       throw new AppError(
         409,
@@ -207,7 +212,9 @@ export class ProxySecureLinkService {
         forwardScheme: input.forwardScheme,
         sourceNodeId: host.nodeId,
         dockerNodeId: target.nodeId,
-        dockerContainerName: input.upstreamKind === 'docker_container' ? input.dockerContainerName : null,
+        dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
+        dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
+        dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
         dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
         dockerContainerPort: input.dockerContainerPort,
         dockerHostPort: target.targetPort,
@@ -256,13 +263,20 @@ export class ProxySecureLinkService {
         existing.upstreamKind === input.upstreamKind &&
         existing.forwardScheme === input.forwardScheme &&
         existing.dockerNodeId === target.nodeId &&
-        existing.dockerContainerName ===
-          (input.upstreamKind === 'docker_container' ? input.dockerContainerName : null) &&
+        existing.dockerContainerName === (input.upstreamKind === 'docker_container' ? target.container : null) &&
+        existing.dockerComposeProjectId ===
+          (input.upstreamKind === 'docker_container' ? (input.dockerComposeProjectId ?? null) : null) &&
+        existing.dockerComposeServiceName ===
+          (input.upstreamKind === 'docker_container' ? (input.dockerComposeServiceName ?? null) : null) &&
         existing.dockerDeploymentId ===
           (input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null) &&
         existing.dockerContainerPort === input.dockerContainerPort &&
         existing.dockerHostPort === target.targetPort &&
-        existing.targetNetwork === target.network &&
+        // Container targets deliberately resolve with an empty network here;
+        // the Docker daemon chooses and persists the reachable network while
+        // materializing the connector. Treat that empty value as a wildcard
+        // or every reconciliation would stage another active binding.
+        (target.network === '' || existing.targetNetwork === target.network) &&
         existing.targetContainer === target.container;
       if (existing.status === 'active' && targetUnchanged) return existing;
       if (existing.status === 'active') {
@@ -281,7 +295,9 @@ export class ProxySecureLinkService {
             forwardScheme: input.forwardScheme,
             sourceNodeId: host.nodeId,
             dockerNodeId: target.nodeId,
-            dockerContainerName: input.upstreamKind === 'docker_container' ? input.dockerContainerName : null,
+            dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
+            dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
+            dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
             dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
             dockerContainerPort: input.dockerContainerPort,
             dockerHostPort: target.targetPort,
@@ -317,7 +333,9 @@ export class ProxySecureLinkService {
           upstreamKind: input.upstreamKind,
           forwardScheme: input.forwardScheme,
           dockerNodeId: target.nodeId,
-          dockerContainerName: input.upstreamKind === 'docker_container' ? input.dockerContainerName : null,
+          dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
+          dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
+          dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
           dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
           dockerContainerPort: input.dockerContainerPort,
           dockerHostPort: target.targetPort,
@@ -340,7 +358,9 @@ export class ProxySecureLinkService {
         forwardScheme: input.forwardScheme,
         sourceNodeId: host.nodeId,
         dockerNodeId: target.nodeId,
-        dockerContainerName: input.upstreamKind === 'docker_container' ? input.dockerContainerName : null,
+        dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
+        dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
+        dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
         dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
         dockerContainerPort: input.dockerContainerPort,
         dockerHostPort: target.targetPort,
@@ -415,6 +435,8 @@ export class ProxySecureLinkService {
         sourceNodeId: targetNodeId,
         dockerNodeId: current.dockerNodeId,
         dockerContainerName: current.dockerContainerName,
+        dockerComposeProjectId: current.dockerComposeProjectId,
+        dockerComposeServiceName: current.dockerComposeServiceName,
         dockerDeploymentId: current.dockerDeploymentId,
         dockerContainerPort: current.dockerContainerPort,
         dockerHostPort: current.dockerHostPort,
@@ -454,8 +476,16 @@ export class ProxySecureLinkService {
     await this.finishAdditionalDeletion(host, binding);
   }
 
-  async retryAdditional(host: ProxyHostRow, bindingId: string): Promise<ProxyAdditionalSecureLinkRow> {
+  async retryAdditional(
+    host: ProxyHostRow,
+    bindingId: string,
+    actorScopes?: string[]
+  ): Promise<ProxyAdditionalSecureLinkRow> {
     const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
+    if (!isDockerUpstream(binding.upstreamKind)) {
+      throw new AppError(409, 'INVALID_DOCKER_TARGET', 'Secure Link target is not a Docker workload');
+    }
+    const target = await this.resolveAdditionalTarget({ ...binding, upstreamKind: binding.upstreamKind }, actorScopes);
     await this.db
       .update(proxyAdditionalSecureLinks)
       .set({ status: 'cleanup_pending', updatedAt: new Date() })
@@ -463,7 +493,17 @@ export class ProxySecureLinkService {
     await this.deprovisionAdditionalRuntime(binding);
     await this.db
       .update(proxyAdditionalSecureLinks)
-      .set({ generation: binding.generation + 1, status: 'provisioning', lastError: null, updatedAt: new Date() })
+      .set({
+        generation: binding.generation + 1,
+        status: 'provisioning',
+        dockerNodeId: target.nodeId,
+        dockerContainerName: binding.upstreamKind === 'docker_container' ? target.container : null,
+        dockerHostPort: target.targetPort,
+        targetNetwork: target.network,
+        targetContainer: target.container,
+        lastError: null,
+        updatedAt: new Date(),
+      })
       .where(eq(proxyAdditionalSecureLinks.id, binding.id));
     return this.createAdditionalFromExisting(host, binding.id);
   }
@@ -495,10 +535,55 @@ export class ProxySecureLinkService {
 
   async reconcileAdditionalLifecycle(): Promise<boolean> {
     const pending = await this.db.query.proxyAdditionalSecureLinks.findMany({
-      where: inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'cleanup_pending']),
+      where: inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'active', 'cleanup_pending']),
     });
     let retryNeeded = false;
-    for (const binding of pending) {
+    for (let binding of pending) {
+      if (binding.status === 'active') {
+        if (!binding.dockerComposeProjectId || !binding.dockerComposeServiceName) continue;
+        try {
+          if (!isDockerUpstream(binding.upstreamKind)) continue;
+          const target = await this.resolveAdditionalTarget({ ...binding, upstreamKind: binding.upstreamKind });
+          if (
+            binding.dockerNodeId === target.nodeId &&
+            binding.dockerContainerName === target.container &&
+            binding.targetContainer === target.container &&
+            binding.dockerHostPort === target.targetPort
+          ) {
+            continue;
+          }
+          const [updated] = await this.db
+            .update(proxyAdditionalSecureLinks)
+            .set({
+              status: 'provisioning',
+              generation: binding.generation + 1,
+              dockerNodeId: target.nodeId,
+              dockerContainerName: target.container,
+              dockerHostPort: target.targetPort,
+              targetNetwork: target.network,
+              targetContainer: target.container,
+              lastError: null,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(proxyAdditionalSecureLinks.id, binding.id),
+                eq(proxyAdditionalSecureLinks.generation, binding.generation),
+                eq(proxyAdditionalSecureLinks.status, 'active')
+              )
+            )
+            .returning();
+          if (!updated) continue;
+          binding = updated;
+        } catch (error) {
+          logger.debug('Compose Secure Link target is not ready for reconciliation', {
+            bindingId: binding.id,
+            error,
+          });
+          retryNeeded = true;
+          continue;
+        }
+      }
       const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, binding.proxyHostId) });
       if (!host) continue;
       try {
@@ -1112,14 +1197,43 @@ export class ProxySecureLinkService {
     };
   }
 
-  private async resolveAdditionalTarget(input: CreateProxyAdditionalSecureLinkInput): Promise<{
+  private async resolveAdditionalTarget(
+    input: CreateProxyAdditionalSecureLinkInput,
+    actorScopes?: string[]
+  ): Promise<{
     nodeId: string;
     network: string;
     container: string;
     targetPort: number;
   }> {
     if (input.upstreamKind === 'docker_container') {
-      if (!input.dockerNodeId || !input.dockerContainerName) {
+      if (!input.dockerNodeId) {
+        throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and container are required');
+      }
+      if (input.dockerComposeProjectId || input.dockerComposeServiceName) {
+        if (!this.dockerUpstreams) {
+          throw new AppError(503, 'DOCKER_UPSTREAMS_UNAVAILABLE', 'Docker upstream resolution is unavailable');
+        }
+        const resolved = await this.dockerUpstreams.resolve(
+          {
+            upstreamKind: 'docker_container',
+            dockerNodeId: input.dockerNodeId,
+            dockerContainerName: input.dockerContainerName,
+            dockerComposeProjectId: input.dockerComposeProjectId,
+            dockerComposeServiceName: input.dockerComposeServiceName,
+            dockerContainerPort: input.dockerContainerPort,
+            dockerProtocol: 'tcp',
+          },
+          { actorScopes, requireAvailable: true }
+        );
+        return {
+          nodeId: resolved.dockerNodeId!,
+          network: '',
+          container: resolved.dockerContainerName!,
+          targetPort: resolved.dockerContainerPort,
+        };
+      }
+      if (!input.dockerContainerName) {
         throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and container are required');
       }
       return {

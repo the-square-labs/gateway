@@ -66,7 +66,6 @@ inferenceManagementRoutes.openapi(listInferenceTokensRoute, async (c) => {
   return c.json(tokens);
 });
 
-inferenceManagementRoutes.use('/tokens', requireScope('inference:tokens:manage'));
 inferenceManagementRoutes.openapi(createInferenceTokenRoute, async (c) => {
   const user = c.get('user')!;
   const input = CreateInferenceTokenSchema.parse(await c.req.json());
@@ -74,7 +73,6 @@ inferenceManagementRoutes.openapi(createInferenceTokenRoute, async (c) => {
   return c.json(token, 201);
 });
 
-inferenceManagementRoutes.use('/tokens/:id', requireScope('inference:tokens:manage'));
 inferenceManagementRoutes.openapi(revokeInferenceTokenRoute, async (c) => {
   const user = c.get('user')!;
   await container.resolve(InferenceTokenService).revokeToken(user.id, c.req.param('id')!);

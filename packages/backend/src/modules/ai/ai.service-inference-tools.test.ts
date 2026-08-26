@@ -33,7 +33,7 @@ describe('internal AI inference tools', () => {
     const providerTools = getOpenAITools([], ['inference:providers:manage'], false, {
       discoveredToolsets: ['Inference'],
     });
-    const tokenTools = getOpenAITools([], ['inference:tokens:manage'], false, {
+    const tokenTools = getOpenAITools([], ['feat:ai:use'], false, {
       discoveredToolsets: ['Inference'],
     });
 
@@ -129,13 +129,13 @@ describe('internal AI inference tools', () => {
       policy,
     });
     await expect(
-      executeInferenceTool({ ...USER, scopes: ['inference:tokens:manage'] }, 'manage_inference_token', {
+      executeInferenceTool({ ...USER, scopes: ['feat:ai:use'] }, 'manage_inference_token', {
         operation: 'create',
         name: 'Laptop',
       })
     ).resolves.toEqual({ id: 'token-1', token: 'gwi_secret' });
     await expect(
-      executeInferenceTool({ ...USER, scopes: ['inference:tokens:manage'] }, 'manage_inference_token', {
+      executeInferenceTool({ ...USER, scopes: ['feat:ai:use'] }, 'manage_inference_token', {
         operation: 'list',
       })
     ).resolves.toEqual([{ id: 'token-1', status: 'active' }]);
@@ -150,7 +150,7 @@ describe('internal AI inference tools', () => {
     } as unknown as GeneralSettingsService);
 
     await expect(
-      executeInferenceTool({ ...USER, scopes: ['inference:tokens:manage'] }, 'manage_inference_token', {
+      executeInferenceTool({ ...USER, scopes: ['feat:ai:use'] }, 'manage_inference_token', {
         operation: 'create',
         name: 'Laptop',
       })

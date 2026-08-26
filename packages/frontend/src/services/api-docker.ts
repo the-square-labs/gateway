@@ -1,5 +1,18 @@
 import type {
   ContainerCreateConfig,
+  DockerBuild,
+  DockerBuildAdmissionStatus,
+  DockerBuildLogChunk,
+  DockerBuildSecret,
+  DockerBuildSourceRepository,
+  DockerBuildStatus,
+  DockerComposeOperation,
+  DockerComposeOperationAction,
+  DockerComposeProject,
+  DockerComposeProjectSummary,
+  DockerComposeRevision,
+  DockerComposeSourceProjectCreateResult,
+  DockerComposeValidationResult,
   DockerContainer,
   DockerContainerFolder,
   DockerDeployment,
@@ -7,14 +20,22 @@ import type {
   DockerFolderTreeNode,
   DockerHealthCheck,
   DockerImage,
+  DockerInternalRegistrySettings,
+  DockerInternalRegistryState,
   DockerNetwork,
   DockerRegistry,
   DockerRuntimeStatus,
   DockerSecret,
+  DockerSourceBinding,
+  DockerSourceBindingConfig,
+  DockerSourceResourceCreateRequest,
+  DockerSourceResourceCreateResult,
+  DockerSourceTarget,
   DockerTask,
   DockerVolume,
   FileEntry,
   Node,
+  PagesBuildDiscovery,
 } from "@/types";
 import { API_BASE } from "./api-base";
 import { withDockerMigrationApi } from "./api-docker-migrations";
@@ -34,6 +55,30 @@ type DockerListEnvelope<T> = {
     appearanceColor?: Node["appearanceColor"];
   }>;
 };
+
+interface DockerBuildListParams {
+  sourceBindingId?: string;
+  builderNodeId?: string;
+  status?: DockerBuildStatus;
+  provider?: "gitlab" | "github" | "git";
+  branch?: string;
+  search?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+function dockerSourcePath(target: DockerSourceTarget): string {
+  if (target.kind === "container") {
+    return `/docker/nodes/${target.nodeId}/containers/${encodeURIComponent(target.containerName)}/source`;
+  }
+  if (target.kind === "deployment") {
+    return `/docker/nodes/${target.nodeId ?? "_"}/deployments/${target.deploymentId}/source`;
+  }
+  if (target.kind === "pages_project") {
+    return `/pages/projects/${target.pageProjectId}/source`;
+  }
+  return `/docker/nodes/${target.nodeId}/compose-projects/${target.composeProjectId}/source`;
+}
 
 type DockerListQuery = {
   search?: string;
@@ -191,6 +236,206 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return this.request<void>("/docker/folders/reorder-resources", {
         method: "PUT",
         body: JSON.stringify({ resourceType, items }),
+      });
+    }
+
+    // ── Docker Compose Projects ───────────────────────────────────────
+
+    async listDockerComposeProjects(nodeId?: string): Promise<DockerComposeProjectSummary[]> {
+      const query = nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "";
+      return this.unwrapData(
+        this.request<{ data: DockerComposeProjectSummary[] }>(`/docker/compose-projects${query}`)
+      );
+    }
+
+    async getDockerComposeProject(
+      nodeId: string,
+      projectId: string
+    ): Promise<DockerComposeProject> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeProject }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}`
+        )
+      );
+    }
+
+    async validateDockerComposeProject(
+      nodeId: string,
+      input: {
+        projectName: string;
+        yaml: string;
+        variables?: Record<string, string>;
+        secretKeys?: string[];
+      }
+    ): Promise<DockerComposeValidationResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeValidationResult }>(
+          `/docker/nodes/${nodeId}/compose-projects/validate`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async createDockerComposeProject(
+      nodeId: string,
+      input: {
+        projectName: string;
+        yaml: string;
+        variables?: Record<string, string>;
+        secretKeys?: string[];
+      }
+    ): Promise<{ project: DockerComposeProjectSummary; revision: DockerComposeRevision }> {
+      return this.unwrapData(
+        this.request<{
+          data: { project: DockerComposeProjectSummary; revision: DockerComposeRevision };
+        }>(`/docker/nodes/${nodeId}/compose-projects`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async adoptDockerComposeProject(
+      nodeId: string,
+      projectId: string,
+      input: { yaml: string; variables?: Record<string, string>; secretKeys?: string[] }
+    ): Promise<{
+      project: DockerComposeProjectSummary;
+      revision: DockerComposeRevision;
+      validation: DockerComposeValidationResult;
+    }> {
+      return this.unwrapData(
+        this.request<{
+          data: {
+            project: DockerComposeProjectSummary;
+            revision: DockerComposeRevision;
+            validation: DockerComposeValidationResult;
+          };
+        }>(`/docker/nodes/${nodeId}/compose-projects/${projectId}/adopt`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async createDockerComposeRevision(
+      nodeId: string,
+      projectId: string,
+      input: { yaml: string; variables?: Record<string, string>; secretKeys?: string[] }
+    ): Promise<DockerComposeRevision> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeRevision }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/revisions`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async listDockerComposeRevisions(
+      nodeId: string,
+      projectId: string
+    ): Promise<DockerComposeRevision[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeRevision[] }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/revisions`
+        )
+      );
+    }
+
+    async deleteDockerComposeRevision(
+      nodeId: string,
+      projectId: string,
+      revisionId: string
+    ): Promise<void> {
+      await this.request(
+        `/docker/nodes/${nodeId}/compose-projects/${projectId}/revisions/${revisionId}`,
+        { method: "DELETE" }
+      );
+    }
+
+    async listDockerComposeOperations(
+      nodeId: string,
+      projectId: string,
+      input: { cursor?: string; limit?: number } = {}
+    ): Promise<{ data: DockerComposeOperation[]; nextCursor: string | null }> {
+      const query = new URLSearchParams();
+      if (input.cursor) query.set("cursor", input.cursor);
+      if (input.limit) query.set("limit", String(input.limit));
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      return this.request<{ data: DockerComposeOperation[]; nextCursor: string | null }>(
+        `/docker/nodes/${nodeId}/compose-projects/${projectId}/operations${suffix}`
+      );
+    }
+
+    async listDockerComposeSecrets(nodeId: string, projectId: string): Promise<DockerSecret[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerSecret[] }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets`
+        )
+      );
+    }
+
+    async createDockerComposeSecret(
+      nodeId: string,
+      projectId: string,
+      key: string,
+      value: string
+    ): Promise<DockerSecret> {
+      return this.unwrapData(
+        this.request<{ data: DockerSecret }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets`,
+          { method: "POST", body: JSON.stringify({ key, value }) }
+        )
+      );
+    }
+
+    async updateDockerComposeSecret(
+      nodeId: string,
+      projectId: string,
+      secretId: string,
+      value: string
+    ): Promise<DockerSecret> {
+      return this.unwrapData(
+        this.request<{ data: DockerSecret }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets/${secretId}`,
+          { method: "PUT", body: JSON.stringify({ value }) }
+        )
+      );
+    }
+
+    async deleteDockerComposeSecret(
+      nodeId: string,
+      projectId: string,
+      secretId: string
+    ): Promise<void> {
+      await this.request(
+        `/docker/nodes/${nodeId}/compose-projects/${projectId}/secrets/${secretId}`,
+        { method: "DELETE" }
+      );
+    }
+
+    async startDockerComposeOperation(
+      nodeId: string,
+      projectId: string,
+      action: DockerComposeOperationAction,
+      input: {
+        revisionId?: string;
+        idempotencyKey: string;
+        removeOrphans?: boolean;
+        volumeNames?: string[];
+      }
+    ): Promise<DockerComposeOperation> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeOperation }>(
+          `/docker/nodes/${nodeId}/compose-projects/${projectId}/actions/${action}`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async deleteDockerComposeProject(nodeId: string, projectId: string): Promise<void> {
+      await this.request(`/docker/nodes/${nodeId}/compose-projects/${projectId}`, {
+        method: "DELETE",
       });
     }
 
@@ -1576,6 +1821,202 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         this.request<{ data: DockerTask }>(`/docker/tasks/${id}/force-cancel`, {
           method: "POST",
         })
+      );
+    }
+
+    // ── Docker Git sources and builds ─────────────────────────────────
+
+    async listDockerBuildPage(
+      params?: DockerBuildListParams
+    ): Promise<{ data: DockerBuild[]; nextCursor: string | null }> {
+      const query = new URLSearchParams();
+      if (params?.sourceBindingId) query.set("sourceBindingId", params.sourceBindingId);
+      if (params?.builderNodeId) query.set("builderNodeId", params.builderNodeId);
+      if (params?.status) query.set("status", params.status);
+      if (params?.provider) query.set("provider", params.provider);
+      if (params?.branch) query.set("branch", params.branch);
+      if (params?.search) query.set("search", params.search);
+      if (params?.cursor) query.set("cursor", params.cursor);
+      query.set("limit", String(params?.limit ?? 100));
+      return this.request<{ data: DockerBuild[]; nextCursor: string | null }>(
+        `/docker/builds?${query.toString()}`
+      );
+    }
+
+    async listDockerBuilds(params?: DockerBuildListParams): Promise<DockerBuild[]> {
+      return (await this.listDockerBuildPage(params)).data;
+    }
+
+    async getDockerBuild(buildId: string): Promise<DockerBuild> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuild }>(`/docker/builds/${encodeURIComponent(buildId)}`)
+      );
+    }
+
+    async getDockerBuildLogs(buildId: string): Promise<DockerBuildLogChunk[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuildLogChunk[] }>(`/docker/builds/${buildId}/logs?limit=500`)
+      );
+    }
+
+    async cancelDockerBuild(buildId: string): Promise<DockerBuild> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuild }>(`/docker/builds/${buildId}/cancel`, { method: "POST" })
+      );
+    }
+
+    async retryDockerBuild(buildId: string): Promise<DockerBuild> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuild }>(`/docker/builds/${buildId}/retry`, { method: "POST" })
+      );
+    }
+
+    async listDockerBuildRepositories(
+      connectorId: string,
+      target?: DockerSourceTarget
+    ): Promise<DockerBuildSourceRepository[]> {
+      const path =
+        target?.kind === "pages_project"
+          ? `/pages/projects/${target.pageProjectId}/source/connectors/${connectorId}/repositories`
+          : `/docker/sources/connectors/${connectorId}/repositories`;
+      return this.unwrapData(this.request<{ data: DockerBuildSourceRepository[] }>(path));
+    }
+
+    async discoverPagesBuild(
+      pageProjectId: string,
+      input: { connectorId: string; projectId: string; branch: string; applicationRoot: string }
+    ): Promise<PagesBuildDiscovery> {
+      return this.unwrapData(
+        this.request<{ data: PagesBuildDiscovery }>(
+          `/pages/projects/${pageProjectId}/source/discovery`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async getDockerSource(target: DockerSourceTarget): Promise<DockerSourceBinding | null> {
+      return this.unwrapData(
+        this.request<{ data: DockerSourceBinding | null }>(dockerSourcePath(target))
+      );
+    }
+
+    async upsertDockerSource(
+      target: DockerSourceTarget,
+      config: DockerSourceBindingConfig
+    ): Promise<DockerSourceBinding> {
+      return this.unwrapData(
+        this.request<{ data: DockerSourceBinding }>(dockerSourcePath(target), {
+          method: "PUT",
+          body: JSON.stringify(config),
+        })
+      );
+    }
+
+    async removeDockerSource(target: DockerSourceTarget): Promise<void> {
+      await this.request<{ success: true; removed: boolean }>(dockerSourcePath(target), {
+        method: "DELETE",
+      });
+    }
+
+    async listDockerBuildSecrets(target: DockerSourceTarget): Promise<DockerBuildSecret[]> {
+      const path = `${dockerSourcePath(target)}/build-secrets`;
+      return this.unwrapData(this.request<{ data: DockerBuildSecret[] }>(path));
+    }
+
+    async upsertDockerBuildSecret(
+      target: DockerSourceTarget,
+      name: string,
+      value: string
+    ): Promise<DockerBuildSecret> {
+      const base = `${dockerSourcePath(target)}/build-secrets`;
+      return this.unwrapData(
+        this.request<{ data: DockerBuildSecret }>(`${base}/${encodeURIComponent(name)}`, {
+          method: "PUT",
+          body: JSON.stringify({ value }),
+        })
+      );
+    }
+
+    async deleteDockerBuildSecret(target: DockerSourceTarget, name: string): Promise<void> {
+      const base = `${dockerSourcePath(target)}/build-secrets`;
+      await this.request(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
+    }
+
+    async createDockerSourceBuild(
+      target: DockerSourceTarget,
+      input: { commitSha?: string; force?: boolean } = {}
+    ): Promise<DockerBuild> {
+      const path = `${dockerSourcePath(target)}/builds`;
+      const result = await this.unwrapData(
+        this.request<{ data: { build: DockerBuild; created: boolean } }>(path, {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+      return result.build;
+    }
+
+    async createDockerSourceResource(
+      nodeId: string,
+      input: DockerSourceResourceCreateRequest
+    ): Promise<DockerSourceResourceCreateResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerSourceResourceCreateResult }>(
+          `/docker/nodes/${nodeId}/source-resources`,
+          {
+            method: "POST",
+            body: JSON.stringify(input),
+          }
+        )
+      );
+    }
+
+    async createDockerComposeSourceProject(
+      nodeId: string,
+      input: { projectName: string; source: DockerSourceBindingConfig }
+    ): Promise<DockerComposeSourceProjectCreateResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerComposeSourceProjectCreateResult }>(
+          `/docker/nodes/${nodeId}/compose-projects/from-source`,
+          {
+            method: "POST",
+            body: JSON.stringify(input),
+          }
+        )
+      );
+    }
+
+    async getDockerBuildAdmission(nodeId: string): Promise<DockerBuildAdmissionStatus> {
+      return this.unwrapData(
+        this.request<{ data: DockerBuildAdmissionStatus }>(
+          `/docker/nodes/${nodeId}/source-resources/admission`
+        )
+      );
+    }
+
+    async getDockerInternalRegistryState(): Promise<DockerInternalRegistryState> {
+      return this.unwrapData(
+        this.request<{ data: DockerInternalRegistryState }>("/docker/registries/internal/state")
+      );
+    }
+
+    async listDockerInternalRegistryRepositories(): Promise<string[]> {
+      return this.unwrapData(
+        this.request<{ data: string[] }>("/docker/registries/internal/repositories")
+      );
+    }
+
+    async updateDockerInternalRegistrySettings(
+      settings: DockerInternalRegistrySettings
+    ): Promise<DockerInternalRegistryState> {
+      return this.unwrapData(
+        this.request<{ data: DockerInternalRegistryState }>(
+          "/docker/registries/internal/settings",
+          {
+            method: "PUT",
+            body: JSON.stringify(settings),
+          }
+        )
       );
     }
 

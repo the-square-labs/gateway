@@ -11,6 +11,18 @@ describe('auditLog schema', () => {
 });
 
 describe('AuditService MCP context', () => {
+  it('resolves the synthetic internal registry without querying the UUID registry table', async () => {
+    const db = { select: vi.fn() };
+    const service = new AuditService(db as any);
+
+    const names = await (service as any).resolveResourceNames([
+      { resourceType: 'docker-registry', resourceId: 'gateway-internal-registry' },
+    ]);
+
+    expect(names.get('docker-registry:gateway-internal-registry')).toBe('Internal Registry');
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
   it('publishes an audit change after a successful insert', async () => {
     const values = vi.fn().mockResolvedValue(undefined);
     const eventBus = { publish: vi.fn() };

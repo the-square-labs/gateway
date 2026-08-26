@@ -48,6 +48,8 @@ interface DataTableProps<T> {
   /** Keep column geometry visible while a permitted collection is loading. */
   loading?: boolean;
   loadingRows?: number;
+  /** Use deterministic virtual offsets for tables whose rows have a fixed visual height. */
+  fixedRowHeight?: number;
 }
 
 type FlatItem<T> =
@@ -74,6 +76,7 @@ export function DataTable<T>({
   embedded = false,
   className,
   loading = false,
+  fixedRowHeight,
 }: DataTableProps<T>) {
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = scrollRef ?? internalRef;
@@ -106,7 +109,8 @@ export function DataTable<T>({
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => containerRef.current,
-    estimateSize: (index) => (items[index]?.kind === "group" ? GROUP_HEIGHT : ROW_HEIGHT),
+    estimateSize: (index) =>
+      items[index]?.kind === "group" ? GROUP_HEIGHT : (fixedRowHeight ?? ROW_HEIGHT),
     overscan: 8,
     getItemKey: (index) => items[index]?.key ?? index,
   });
@@ -179,7 +183,7 @@ export function DataTable<T>({
                 return (
                   <div
                     key={item.key}
-                    ref={virtualizer.measureElement}
+                    ref={fixedRowHeight ? undefined : virtualizer.measureElement}
                     data-index={vi.index}
                     className={`absolute inset-x-0 grid bg-muted/50 border-b border-border ${
                       onGroupClick ? "cursor-pointer hover:bg-muted transition-colors" : ""
@@ -196,18 +200,22 @@ export function DataTable<T>({
               }
 
               const canClick = isRowClickable?.(item.row) ?? !!onRowClick;
+              const hasFollowingContent = vi.index < items.length - 1 || Boolean(footer);
 
               return (
                 <Fragment key={item.key}>
                   <div
                     ref={virtualizer.measureElement}
                     data-index={vi.index}
-                    className={`absolute inset-x-0 grid items-center border-b border-border transition-colors ${
-                      canClick ? "cursor-pointer hover:bg-accent" : ""
-                    }`}
+                    className={cn(
+                      "absolute inset-x-0 grid items-center transition-colors",
+                      (embedded || hasFollowingContent) && "border-b border-border",
+                      canClick && "cursor-pointer hover:bg-accent"
+                    )}
                     style={{
                       transform: `translateY(${top}px)`,
                       gridTemplateColumns,
+                      height: fixedRowHeight ? vi.size : undefined,
                     }}
                     onClick={canClick && onRowClick ? () => onRowClick(item.row) : undefined}
                   >

@@ -1,4 +1,4 @@
-import { ArrowRightLeft, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -179,6 +179,7 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
   return (
     <div className="flex flex-col gap-4">
       <PanelShell
+        icon={<Tags className="h-4 w-4" />}
         title="Tags"
         description="Mutable publication pointers used by Routes."
         actions={

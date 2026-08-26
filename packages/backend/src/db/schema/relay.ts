@@ -154,9 +154,9 @@ export const relayEndpoints = pgTable(
     generation: bigint('generation', { mode: 'number' }).notNull().default(1),
     activeAssignmentGeneration: bigint('active_assignment_generation', { mode: 'number' }).notNull().default(1),
     ownerKind: varchar('owner_kind', { length: 64 }).notNull(),
-    ownerId: uuid('owner_id').notNull(),
+    ownerId: text('owner_id').notNull(),
     subjectKind: varchar('subject_kind', { length: 32 }).notNull(),
-    subjectId: uuid('subject_id').notNull(),
+    subjectId: text('subject_id').notNull(),
     certificateSha256: varchar('certificate_sha256', { length: 71 }).notNull(),
     status: varchar('status', { length: 32 }).notNull().default('active'),
     maxConcurrentSessions: integer('max_concurrent_sessions').notNull().default(256),
@@ -175,9 +175,9 @@ export const relayRoutes = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     generation: bigint('generation', { mode: 'number' }).notNull().default(1),
     ownerKind: varchar('owner_kind', { length: 64 }).notNull(),
-    ownerId: uuid('owner_id').notNull(),
+    ownerId: text('owner_id').notNull(),
     sourceKind: varchar('source_kind', { length: 32 }).notNull(),
-    sourceId: uuid('source_id').notNull(),
+    sourceId: text('source_id').notNull(),
     sourceCertificateSha256: varchar('source_certificate_sha256', { length: 71 }).notNull(),
     targetEndpointId: uuid('target_endpoint_id')
       .notNull()
@@ -193,6 +193,39 @@ export const relayRoutes = pgTable(
     ownerUnique: unique('relay_routes_owner_unique').on(table.ownerKind, table.ownerId),
     sourceIdx: index('relay_routes_source_idx').on(table.sourceKind, table.sourceId),
     targetIdx: index('relay_routes_target_idx').on(table.targetEndpointId),
+  })
+);
+
+export const dockerRegistryNodeBindings = pgTable(
+  'docker_registry_node_bindings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => nodes.id, { onDelete: 'cascade' }),
+    role: varchar('role', { length: 16 }).$type<'builder' | 'runtime'>().notNull(),
+    repository: text('repository').notNull(),
+    actions: text('actions').array().notNull(),
+    contextKind: varchar('context_kind', { length: 32 })
+      .$type<'build' | 'container' | 'deployment' | 'compose_project'>()
+      .notNull(),
+    contextId: text('context_id').notNull(),
+    generation: bigint('generation', { mode: 'number' }).notNull().default(1),
+    status: varchar('status', { length: 32 }).notNull().default('active'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    contextUnique: unique('docker_registry_node_bindings_context_unique').on(
+      table.nodeId,
+      table.role,
+      table.contextKind,
+      table.contextId,
+      table.repository
+    ),
+    nodeStatusIdx: index('docker_registry_node_bindings_node_status_idx').on(table.nodeId, table.status),
   })
 );
 

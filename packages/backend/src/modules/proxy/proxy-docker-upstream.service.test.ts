@@ -215,6 +215,77 @@ describe('ProxyDockerUpstreamService', () => {
     });
   });
 
+  it('resolves a Compose service by stable project and service labels', async () => {
+    const service = new ProxyDockerUpstreamService(
+      queuedDb([
+        [{ id: 'node-1', type: 'docker', status: 'online', serviceAddress: null, lastHealthReport: null }],
+        [{ id: 'project-1', name: 'storefront' }],
+      ]) as never,
+      snapshots([
+        {
+          id: 'container-new',
+          name: 'storefront-api-2',
+          labels: {
+            'com.docker.compose.project': 'storefront',
+            'com.docker.compose.service': 'api',
+          },
+          ports: [],
+        },
+      ]) as never,
+      connectedRegistry as never
+    );
+
+    await expect(
+      service.resolve(
+        {
+          upstreamKind: 'docker_container',
+          dockerNodeId: 'node-1',
+          dockerContainerName: 'storefront-api-1',
+          dockerComposeProjectId: 'project-1',
+          dockerComposeServiceName: 'api',
+          dockerContainerPort: 8080,
+          dockerProtocol: 'tcp',
+        },
+        { actorScopes: ['docker:compose:view:node-1/project-1'], requireAvailable: true }
+      )
+    ).resolves.toMatchObject({
+      dockerContainerName: 'storefront-api-2',
+      dockerComposeProjectId: 'project-1',
+      dockerComposeServiceName: 'api',
+      dockerContainerPort: 8080,
+    });
+  });
+
+  it('rejects an ambiguous Compose service target', async () => {
+    const service = new ProxyDockerUpstreamService(
+      queuedDb([
+        [{ id: 'node-1', type: 'docker', status: 'online', serviceAddress: null, lastHealthReport: null }],
+        [{ id: 'project-1', name: 'storefront' }],
+      ]) as never,
+      snapshots(
+        ['storefront-api-1', 'storefront-api-2'].map((name) => ({
+          name,
+          labels: {
+            'com.docker.compose.project': 'storefront',
+            'com.docker.compose.service': 'api',
+          },
+        }))
+      ) as never,
+      connectedRegistry as never
+    );
+
+    await expect(
+      service.resolve({
+        upstreamKind: 'docker_container',
+        dockerNodeId: 'node-1',
+        dockerComposeProjectId: 'project-1',
+        dockerComposeServiceName: 'api',
+        dockerContainerPort: 8080,
+        dockerProtocol: 'tcp',
+      })
+    ).rejects.toMatchObject({ code: 'COMPOSE_SERVICE_AMBIGUOUS', statusCode: 409 });
+  });
+
   it('rejects selecting a Docker target without view permission', async () => {
     const service = new ProxyDockerUpstreamService(
       queuedDb([]) as never,

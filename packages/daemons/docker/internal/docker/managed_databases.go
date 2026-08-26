@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1387,6 +1388,15 @@ func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, er
 		return loopDevice, nil
 	}
 
+	// Restricted LXC guests can expose a bounded set of loop block devices
+	// while the shared kernel's /dev/loop-control still reports an earlier,
+	// guest-invisible device. In that topology --find fails even though one of
+	// the explicitly delegated loop devices is free. Fall back to the visible
+	// device nodes without weakening the ordinary host path above.
+	if loopDevice, visibleErr := attachVisibleDatabaseLoopDevice(ctx, imagePath); visibleErr == nil {
+		return loopDevice, nil
+	}
+
 	// Minimal BusyBox images do not implement GNU's --find/--show flags. The
 	// database installer supports regular Ubuntu hosts first, and falls back to
 	// the portable two-step form for these local/DIND environments.
@@ -1407,10 +1417,59 @@ func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, er
 	return loopDevice, nil
 }
 
+func attachVisibleDatabaseLoopDevice(ctx context.Context, imagePath string) (string, error) {
+	candidates, err := filepath.Glob("/dev/loop[0-9]*")
+	if err != nil {
+		return "", fmt.Errorf("list visible database loop devices: %w", err)
+	}
+	sort.Strings(candidates)
+	return attachDatabaseLoopDeviceFromCandidates(ctx, imagePath, candidates)
+}
+
+func attachDatabaseLoopDeviceFromCandidates(ctx context.Context, imagePath string, candidates []string) (string, error) {
+	visible := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		visible[candidate] = struct{}{}
+	}
+
+	if output, err := exec.CommandContext(ctx, "losetup", "-j", imagePath).CombinedOutput(); err == nil {
+		if existing := loopDeviceFromLosetupAssociation(output); existing != "" {
+			if _, ok := visible[existing]; ok {
+				return existing, nil
+			}
+		}
+	}
+
+	for _, candidate := range candidates {
+		if output, err := exec.CommandContext(ctx, "losetup", candidate).CombinedOutput(); err == nil {
+			continue
+		} else if !strings.Contains(strings.ToLower(string(output)), "no such file or directory") &&
+			!strings.Contains(strings.ToLower(string(output)), "no such device") {
+			continue
+		}
+		if output, err := exec.CommandContext(ctx, "losetup", candidate, imagePath).CombinedOutput(); err == nil {
+			return candidate, nil
+		} else if !strings.Contains(strings.ToLower(string(output)), "device or resource busy") {
+			continue
+		}
+	}
+	return "", errors.New("no visible free database loop device is available")
+}
+
 func loopDeviceFromLosetupOutput(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
 		candidate := strings.TrimSpace(line)
 		if strings.HasPrefix(candidate, "/dev/loop") && !strings.ContainsAny(candidate, " \t") {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func loopDeviceFromLosetupAssociation(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		candidate, _, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if ok && strings.HasPrefix(candidate, "/dev/loop") && !strings.ContainsAny(candidate, " \t") {
 			return candidate
 		}
 	}

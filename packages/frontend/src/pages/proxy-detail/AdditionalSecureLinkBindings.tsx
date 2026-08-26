@@ -110,6 +110,8 @@ export function AdditionalSecureLinkBindings({
         forwardScheme: selection.scheme,
         dockerNodeId: selection.dockerNodeId,
         dockerContainerName: selection.containerName,
+        dockerComposeProjectId: selection.composeProjectId,
+        dockerComposeServiceName: selection.composeServiceName,
         dockerDeploymentId: selection.deploymentId,
         dockerContainerPort: selection.containerPort!,
       });
@@ -234,9 +236,18 @@ export function AdditionalSecureLinkBindings({
                 </div>
                 <div
                   className="flex min-w-0 items-center border-l border-border px-3 py-2"
-                  title={binding.lastError ?? binding.targetContainer}
+                  title={
+                    binding.lastError ??
+                    (binding.dockerComposeServiceName
+                      ? `Compose / ${binding.dockerComposeServiceName}`
+                      : binding.targetContainer)
+                  }
                 >
-                  <p className="truncate text-sm">{binding.targetContainer}</p>
+                  <p className="truncate text-sm">
+                    {binding.dockerComposeServiceName
+                      ? `Compose / ${binding.dockerComposeServiceName}`
+                      : binding.targetContainer}
+                  </p>
                 </div>
                 <div className="flex min-w-0 items-center border-l border-border px-3 py-2 text-sm">
                   {binding.dockerContainerPort}

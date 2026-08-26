@@ -19,6 +19,8 @@ function draft(overrides: Partial<AdditionalRouteDraft> = {}): AdditionalRouteDr
       manualPort: 8080,
       dockerNodeId: null,
       containerName: null,
+      composeProjectId: null,
+      composeServiceName: null,
       deploymentId: null,
       containerPort: null,
     },
@@ -78,6 +80,31 @@ describe("Additional Routes request mapping", () => {
       websocketSupport: false,
       requestBuffering: false,
       responseBuffering: false,
+    });
+  });
+
+  it("maps a Compose service target without persisting a child container name", () => {
+    const request = routeRequestFromDraft(
+      draft({
+        targetKind: "docker_container",
+        upstream: {
+          ...draft().upstream,
+          kind: "docker_container",
+          dockerNodeId: "node-1",
+          composeProjectId: "project-1",
+          composeServiceName: "api",
+          containerPort: 8080,
+        },
+      })
+    );
+
+    expect(request).toMatchObject({
+      targetKind: "docker_container",
+      dockerNodeId: "node-1",
+      dockerContainerName: null,
+      dockerComposeProjectId: "project-1",
+      dockerComposeServiceName: "api",
+      dockerContainerPort: 8080,
     });
   });
 });

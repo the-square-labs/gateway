@@ -21,7 +21,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 - If the needed operation is not available, call discover_tools first.
 - Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
 - Use discover_tools({ categories: ["Logging"], includeTools: true }) before managing logging environments/schemas/logs.
-- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks.
+- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks or inspecting Compose projects.
 - Use discover_tools({ categories: ["Ingress"], includeTools: true }) before managing domains, routes, route folders, nginx templates, or access lists.
 - Use discover_tools({ categories: ["Inference"], includeTools: true }) before configuring inference providers, models, limits, or tokens.
 - Use discover_tools({ query: "certificate" }) when you know the task but not the category.
@@ -136,7 +136,7 @@ The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route,
 - nodeId: the nginx ingress node this route is deployed on (required when creating).
 - domainNames: array of domains this route serves. Registered domains must be assigned to the same nginx node.
 - forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
-- upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a stable container name or deployment ID plus a published TCP port; Pages stores a Page Project and mutable Tag target.
+- upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a standalone container name, a Compose project/service identity, or a deployment ID plus a TCP application port; Pages stores a Page Project and mutable Tag target.
 - sslEnabled: enable HTTPS. Requires sslCertificateId (SSL cert UUID, NOT PKI cert UUID).
 - sslForced: redirect HTTP to HTTPS.
 - http2Support: enable HTTP/2.
@@ -158,15 +158,15 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 - Use \`set_route_maintenance({ routeId, enabled })\`. Do not emulate maintenance by disabling the route or rewriting its config.
 
 ## Docker Upstreams
-- The UI, REST API, AI Workspace, and remote MCP Ingress toolset can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
-- For \`docker_container\`, pass \`dockerNodeId\`, \`dockerContainerName\`, and \`dockerContainerPort\`. For \`docker_deployment\`, pass \`dockerNodeId\`, \`dockerDeploymentId\`, and \`dockerContainerPort\`. The caller must hold the same delegated Docker scopes enforced by the REST API.
+- The UI, REST API, AI Workspace, and remote MCP Ingress toolset can bind a route to a standalone Docker container, a Compose service, or a blue/green deployment. Compose targets persist project/service identity and automatically re-resolve the current container after Compose recreates it.
+- For a standalone \`docker_container\`, pass \`dockerNodeId\`, \`dockerContainerName\`, and \`dockerContainerPort\`. For a Compose service, still use \`upstreamKind: "docker_container"\`, but pass \`dockerNodeId\`, \`dockerComposeProjectId\`, \`dockerComposeServiceName\`, and \`dockerContainerPort\` without \`dockerContainerName\`. For \`docker_deployment\`, pass \`dockerNodeId\`, \`dockerDeploymentId\`, and \`dockerContainerPort\`. The caller must hold the matching container, Compose-project, or deployment view scope enforced by the REST API.
 
 ## Pages Upstreams
 - Use \`upstreamKind: "pages"\` with \`pageProjectId\` and \`pageTagId\`. Routes target a mutable ready Tag, never an immutable Deployment.
 - Pages route creation and retargeting require the Pages feature and profile plus view access to the selected Project.
 
 ## Additional Routes And Secure Links
-- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, Docker container/deployment, or a ready Pages Tag. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
+- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, standalone Docker containers, Compose services, Docker deployments, or a ready Pages Tag. Compose targets use \`dockerComposeProjectId\` plus \`dockerComposeServiceName\` and are re-resolved after container recreation. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
 - Custom proxy templates support Additional Routes when the template includes \`{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}\` inside the intended \`server\` block.
 - Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config and pass the parent \`routeId\`. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
 
@@ -433,13 +433,14 @@ Nodes are remote servers running Gateway daemons. Each daemon type manages diffe
 ## Node Types
 - **nginx**: Ingress node — runs nginx and manages route configs, TLS replicas, access lists, public traffic, logs, and stats. Requires nginx installed on the server.
 - **monitoring**: Lightweight system monitoring agent — reports CPU, memory, disk, load, network. No nginx required. Useful for any server you want to monitor.
-- **docker**: Container management node — manages Docker containers, images, volumes, networks. Requires Docker installed. Provides container console (exec), file browser, log streaming, environment/secrets management.
+- **docker**: Container runtime node — manages Docker containers, deployments, images, volumes, and networks. Requires Docker Engine. Provides console, files, logs, environment, and secret management.
+- **builder**: Restricted Build Worker profile of the existing \`docker-daemon\`. It has no Docker Engine socket and accepts only Git build, cancellation, and registry-binding commands. It supervises dedicated BuildKit and containerd services on a separate worker host or outer unprivileged container and must advertise execution, dedicated-runtime, and enforced-resource-profile capabilities before Repository mode is admitted.
 - **databases**: Restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse only. It runs as root, validates ext4 image storage before enrollment, and rejects generic Docker workloads.
 
 ## How to Enroll a New Node (Step by Step)
 
 ### Step 1: Create the node in Gateway UI
-Go to **Nodes** page → click **Enroll Node** → select the node type (nginx, docker, databases, or monitoring) → optionally set a display name → click **Create**. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands.
+Go to **Nodes** page → click **Enroll Node** → select the node type (nginx, docker, builder, databases, or monitoring) → optionally set a display name → click **Create**. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands.
 
 ### Step 2: Run the setup script on the target server
 The UI shows ready-to-copy commands. Run one of these on the target server as root:
@@ -455,6 +456,8 @@ For **docker** nodes:
 curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-docker-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
+
+For **builder** nodes, use the same installer with \`--mode builder\`. The host must use systemd and already contain the Gateway builder runtime bundle (\`containerd\`, \`buildkitd\`, \`buildctl\`, \`runc\`, \`containerd-shim-runc-v2\`, \`git\`, \`syft\`, \`grype\`, and \`oras\`). The installer fails closed when the runtime is incomplete; do not add a Docker socket or convert it to a generic Docker profile as a workaround.
 
 For **database** nodes, run setup-database-node.sh with the generated Gateway address, enrollment token, and certificate fingerprint. The interactive installer selects an eligible local storage root before enrollment. For automation, pass --storage-root <path> and --yes; database nodes always run the restricted docker-daemon profile as root. Before enrollment, the installer verifies the local Docker Engine and the complete fixed-size ext4 image lifecycle, including loop attach, mount/write, growth, resize, unmount, and detach. An LXC host must receive loop-control, a loop-device pool, and mount permission from its outer host; there is no unbounded-volume fallback.
 
@@ -567,6 +570,18 @@ Automated cleanup tasks, configurable in Settings.
 ## Overview
 Gateway provides Portainer-like Docker container management through a daemon running on Docker hosts. Docker tools still require a nodeId, while container permissions can be granted for the whole node or narrowed to one standalone container or blue/green deployment.
 
+## Git Source Builds And Push-To-Deploy
+- Git push-to-deploy, source mutation and automation, new build admission, and optional external Docker-client access to the internal registry require Business or Enterprise. The private internal registry itself remains available and operational on every plan. Let operators configure Repository mode fully, but explain that **Create and build** is the enforcement point when the current plan is below Business. After downgrade, existing source and build history remains readable and source bindings or Build Secrets may be removed, but edits, polling, webhooks, and new builds remain blocked.
+- A Git source is attached directly to an existing container, blue/green deployment, or Compose Project; there is no separate application entity. Repository mode in the Docker or Compose create dialog can reserve the resource and queue its first build.
+- Use \`list_docker_builds\` to inspect visible build status, exact commit, Build Worker, immutable artifact digest, and policy result.
+- Use \`manage_docker_source\` with \`get\`, \`upsert\`, \`remove\`, \`resolve\`, or \`build\` for an existing Docker resource. Use \`admission\` before promising a new build; it reports whether the internal registry and a dedicated Build Worker runtime are ready.
+- Repository and integration IDs must come from an enabled allowlisted GitLab, GitHub, or generic Git connector. Gateway resolves the configured branch to an exact commit SHA and deduplicates ordinary builds by source binding plus commit.
+- Automatic deployment never runs a mutable Git-derived tag. An approved artifact is stored in the internal registry and addressed by digest; standalone containers recreate from that digest, deployments use the existing health-checked blue/green path, and Compose waits for every service build in the parent batch before creating one digest-pinned immutable revision. Manual Compose revisions remain image-only; repository Compose files support the bounded single-node build subset of context, dockerfile, and args.
+- Build admission fails closed when the registry is read-only or in maintenance, or when no online worker advertises the BuildKit execution, dedicated-runtime, and enforced-resource-profile capabilities. Image-based deployment remains available separately.
+- The current Build Worker profile accepts one runc job at a time, requires a separate worker host or outer unprivileged container as its security boundary, enforces the installed CPU/RAM/disk profile, and clears BuildKit/containerd state between jobs. Internet egress is the default installer profile while metadata, private/control-plane destinations, and the Gateway gRPC endpoint are blocked; an offline profile is also available.
+- Build Secrets are encrypted, source-scoped, write-only values exposed only through explicit BuildKit secret mounts. Never suggest passing secrets as build arguments or copying them into the build context.
+- Internal registry operation requires no public domain and is not itself a paid module. Optional Business+ external Docker-client access is configured under Settings > Features and uses an explicit nginx node, domain, TLS certificate, and repository/action-scoped token. Entitlement loss disables the external binding, and every public registry token request rechecks Business.
+
 ## Granular Access
 - Every standalone container has a Gateway-managed stable access identity; every blue/green deployment uses its stable deployment ID.
 - A node-level \`docker:containers:*\` grant covers every container and deployment on that node. A child-level grant covers only the selected container or deployment.
@@ -630,9 +645,12 @@ other stable hint to locate the recreated container and continue with its new ID
 - Networks: list, create, remove, connect/disconnect containers
 
 ## Compose Boundaries
-- Gateway recognizes existing Compose projects by canonical Docker labels, keeps their containers in protected project folders, and can stream aggregated project logs. Compose-managed resources cannot use Gateway cross-node migration.
-- Gateway-managed Compose application deployment is still in development for Business and Enterprise. Do not claim that Gateway can create or roll out an application from a Compose file today.
-- Multi-node application clusters and multiple managed instances of one workload on one machine are also in development for Business and Enterprise. Do not confuse them with current cross-node migration or blue/green deployment slots.
+- Community and paid plans discover existing Compose projects from canonical Docker labels and expose read-only inventory, status, monitoring, and logs. Adoption always requires a complete user-supplied single-file YAML document; Gateway never reads host Compose files or trusts label paths.
+- Personal and higher can deploy and manage single-node image-only Compose Projects with immutable revisions, explicit Pull & Apply, lifecycle operations, folders, logs, masked secrets, operation history, drift reporting, ordinary non-Swarm CPU/memory/PID limits, managed database links, and Route/Secure Link targeting by project/service identity.
+- The Assistant can inspect Compose resources and manage their folder placement when the user's scopes allow it. It does not currently expose direct Compose deployment or lifecycle tools; guide the user to the Compose UI or REST API instead of inventing a tool call.
+- Always reject \`build\` even when an image is also present. Also reject host bind mounts, privileged/device access, swarm/PaaS features, and direct mutations of project-owned child containers, named volumes, or non-external networks.
+- Images and external/shared volumes or networks remain global. Compose-managed resources cannot use Gateway cross-node migration.
+- Multi-node application clusters and multiple managed instances of one workload on one machine remain in development. Do not confuse them with current Compose Projects, cross-node migration, or blue/green deployment slots.
 
 ## Inventory Availability
 - Gateway keeps sanitized container, deployment, image, volume, and network inventory snapshots. Read views can show the last synchronized state while a Docker node is offline or refreshing.
@@ -852,7 +870,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - admin_users
 - permission_groups
 - routes
-- docker with dockerResourceType: container, image, network, or volume
+- docker with dockerResourceType: container, compose, image, network, or volume
 
 ## Operations
 - create: { name, parentId? }
@@ -872,7 +890,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.
 - permission_groups: list with admin:groups or admin:groups:folders:manage; mutate with admin:groups:folders:manage.
 - routes: list with proxy:view or proxy:folders:manage; mutate folders with proxy:folders:manage; moving routes also checks proxy:edit for each route.
-- docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
+- docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:compose:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; Compose, image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
 
   'node-files': `# Node File Management
 
@@ -1055,6 +1073,14 @@ Programmatic clients can use validated \`advancedConfig\`, but cannot set or rea
 
 ### Docker
 - \`GET /api/docker/nodes/:nodeId/containers\` — list containers
+- \`GET /api/docker/nodes/:nodeId/source-resources/admission\` — check internal-registry and Build Worker admission
+- \`POST /api/docker/nodes/:nodeId/source-resources\` — create a container/deployment source reservation and queue its first immutable build
+- \`POST /api/docker/nodes/:nodeId/compose-projects/from-source\` — create a Compose Project source reservation and queue one immutable child build per build-enabled service
+- \`GET /api/docker/builds\` — list visible Git-source builds
+- \`GET /api/docker/builds/:buildId\` — inspect one build and its artifact/policy result
+- \`GET /api/docker/builds/:buildId/logs\` — read persisted build logs
+- \`POST /api/docker/builds/:buildId/cancel\` — request build cancellation
+- \`POST /api/docker/builds/:buildId/retry\` — queue a new attempt
 - \`POST /api/docker/nodes/:nodeId/containers/:id/start\` — start container
 - \`POST /api/docker/nodes/:nodeId/containers/:id/stop\` — stop container
 - \`POST /api/docker/nodes/:nodeId/containers/:id/restart\` — restart container
@@ -1198,7 +1224,7 @@ Published model order is persisted separately and controls API catalog, companio
 
 ## User Tokens And Harness Setup
 
-Users need \`feat:ai:use\` for Gateway Inference access and personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`. AI Workspace access is controlled separately by \`ai:workspace:use\`.
+Users need \`feat:ai:use\` for Gateway Inference access, personal usage visibility, and creation or revocation of their own inference tokens. AI Workspace access is controlled separately by \`ai:workspace:use\`.
 
 Token options:
 
@@ -1462,12 +1488,12 @@ Gateway is a self-hosted infrastructure control plane. It combines secure access
 ## Main Capabilities
 - **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.
 - **Traffic, Pages, and certificates**: nginx ingress nodes, proxy/redirect/404 routes, Pages Projects/Deployments/Tags, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
-- **Compute**: Docker nodes, containers, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
+- **Compute**: Docker nodes, containers, Compose projects, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
 - **Databases and logging**: saved PostgreSQL, Redis, and ClickHouse connections; dedicated nodes for Gateway-managed database instances; optional structured logging in managed or external ClickHouse.
 - **Operations**: daemon and Relay Pool health, notifications, housekeeping, status pages, updates, licensing, GitLab/GitHub/generic Git/external SSH/Cloudflare integrations, and a separate Gateway Inference service.
 
 ## Availability Boundaries
-Horizontal application clusters, multiple instances of one workload on one machine, and Gateway-managed Compose application deployment are in development for Business and Enterprise. Existing cross-node migration, blue/green slots, and Compose-label discovery/log aggregation must not be described as those unreleased capabilities.
+Single-node first-class Compose Projects provide read-only discovery, monitoring, and logs on Community and every paid plan; deployment and lifecycle management require Personal or higher. Horizontal application clusters and multiple instances of one workload on one machine remain in development. Existing Compose Projects, cross-node migration, and blue/green slots must not be described as those unreleased scaling capabilities.
 
 ## How To Guide A User
 Start with the user goal, then read the focused topic before explaining a workflow or calling tools. Use installation for a new deployment, authentication for access/sign-in questions, gateway-settings for control-plane settings and MCP, and troubleshooting for failures. A feature being described here does not grant permission to view or change it; always respect the user's scopes and confirm destructive changes.
@@ -1535,6 +1561,8 @@ If no enabled connector has a matching zone, DNS-01 cannot be automated. If seve
   'docker-registries': `# Docker Registries
 
 Gateway stores private Docker registry credentials encrypted at rest. A registry may be global or restricted to a specific Docker node; use only a registry available to the selected node when pulling, recreating, or deploying an image.
+
+The Gateway-managed internal Distribution registry is separate from user-saved registry credentials. It has no host-published port by default, keeps three successful artifacts plus live pins, and is configured under Settings > Features. Do not ask for a domain unless the user explicitly wants external Docker-client access; internal builder/runtime traffic uses scoped daemon-managed Relay bindings.
 
 Public Docker Hub images such as \`nginx:alpine\` do not require a saved registry. Pull them directly with \`registryId\` omitted. Never create a manual Docker Hub registry merely to pull a public image, and never pass an empty string as \`registryId\`.
 
@@ -1614,7 +1642,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
     'docker:containers:folders:manage',
   ],
   'node-files': ['nodes:files:read', 'nodes:files:write'],
-  docker: 'docker:containers:view',
+  docker: ['docker:containers:view', 'docker:compose:view'],
   sandbox: 'ai:sandbox:use',
   conversations: 'ai:workspace:use',
   databases: 'databases:view',
@@ -1631,7 +1659,6 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   inference: [
     'ai:workspace:use',
     'feat:ai:use',
-    'inference:tokens:manage',
     'inference:providers:view',
     'inference:providers:manage',
     'inference:models:manage',

@@ -213,7 +213,7 @@ export function AILiteSidebar({
   const [dragOverlayConversationId, setDragOverlayConversationId] = useState<string | null>(null);
   const [stoppingImpersonation, setStoppingImpersonation] = useState(false);
   const canAccessAdministration = hasAnyScope("admin:audit", "admin:users", "admin:groups");
-  const navigateToGroups = visibleNavigationGroups({
+  const visibleGroups = visibleNavigationGroups({
     scopes: user?.scopes ?? [],
     pkiEnabled,
     siemEnabled,
@@ -232,7 +232,11 @@ export function AILiteSidebar({
         "docker:volumes:view",
         "docker:networks:view",
       ].some(hasScopedAccess),
-  })
+  });
+  const profileNavigationItem = visibleGroups
+    .flatMap((group) => group.items)
+    .find((item) => item.id === "profile");
+  const navigateToGroups = visibleGroups
     .map((group) => ({
       ...group,
       items: group.items.filter(
@@ -489,6 +493,29 @@ export function AILiteSidebar({
                 </TooltipTrigger>
                 <TooltipContent side="right">Dashboard</TooltipContent>
               </Tooltip>
+
+              {profileNavigationItem && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-8 w-8",
+                        isSidebarNavigationActive(location.pathname, profileNavigationItem.href) &&
+                          "bg-sidebar-accent"
+                      )}
+                      aria-label={profileNavigationItem.name}
+                    >
+                      <Link to={profileNavigationItem.href}>
+                        <profileNavigationItem.icon className="h-4 w-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">{profileNavigationItem.name}</TooltipContent>
+                </Tooltip>
+              )}
               <Separator className="my-1 w-6" />
 
               <nav className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden dashboard-scrollbar">
@@ -778,6 +805,20 @@ export function AILiteSidebar({
                   />
                 )}
               </Link>
+              {profileNavigationItem && (
+                <Link
+                  to={profileNavigationItem.href}
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2 text-sm transition-colors",
+                    isSidebarNavigationActive(location.pathname, profileNavigationItem.href)
+                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  )}
+                >
+                  <profileNavigationItem.icon className="h-4 w-4 shrink-0" />
+                  <span>{profileNavigationItem.name}</span>
+                </Link>
+              )}
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col">

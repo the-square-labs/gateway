@@ -528,6 +528,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       </div>
 
       <PanelShell
+        icon={<Server className="h-4 w-4" />}
         title="Relay instances"
         description="One logical Relay Pool; active assignments use separate physical hosts"
         actions={
@@ -703,6 +704,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       </div>
 
       <PanelShell
+        icon={<Gauge className="h-4 w-4" />}
         title="Relay runtime"
         description="Persisted Gateway settings distributed to the relay data plane"
         actions={

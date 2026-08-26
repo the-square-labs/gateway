@@ -1,4 +1,13 @@
-import { Loader2, Save } from "lucide-react";
+import {
+  Database,
+  KeyRound,
+  Loader2,
+  Mail,
+  Save,
+  ShieldCheck,
+  SlidersHorizontal,
+  UserCog,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -1016,6 +1025,7 @@ export function AuthProvisioningSection({
   return (
     <div className="space-y-4">
       <PanelShell
+        icon={<SlidersHorizontal className="h-4 w-4" />}
         hidden={section !== "all" && section !== "general"}
         title="General settings"
         description="Gateway-wide behavior and operational limits"
@@ -1245,6 +1255,7 @@ export function AuthProvisioningSection({
       />
 
       <PanelShell
+        icon={<ShieldCheck className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
         title="OIDC provider"
         description={
@@ -1342,6 +1353,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
+        icon={<Database className="h-4 w-4" />}
         hidden={section !== "all" && section !== "features"}
         title="Structured logging storage"
         description="Keep logging disabled, let Gateway manage a local ClickHouse, or use an external ClickHouse"
@@ -1488,6 +1500,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
+        icon={<UserCog className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
         title="Identity provisioning"
         description="OIDC sign-in behavior for Gateway users"
@@ -1550,6 +1563,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
         title="Sign-in methods"
         description="Enable the primary methods available to Gateway accounts"
@@ -1591,6 +1605,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
+        icon={<ShieldCheck className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
         title="Multi-factor authentication"
         description="Controls how Gateway enforces MFA for local browser sessions"
@@ -1636,6 +1651,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
+        icon={<Mail className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
         title="Authentication email (SMTP)"
         description={

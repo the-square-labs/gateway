@@ -1,4 +1,4 @@
-import { ExternalLink, Save } from "lucide-react";
+import { ExternalLink, Globe, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -188,6 +188,7 @@ export function PagesSettingsSection() {
     <div id="pages" className="space-y-4 scroll-mt-6">
       {loading && !profile ? (
         <PanelShell
+          icon={<Globe className="h-4 w-4" />}
           title={
             <span className="inline-flex items-center gap-2">
               <span>Pages</span>
@@ -202,6 +203,7 @@ export function PagesSettingsSection() {
       ) : (
         <>
           <PanelShell
+            icon={<Globe className="h-4 w-4" />}
             title={
               <span className="inline-flex items-center gap-2">
                 <span>Pages</span>

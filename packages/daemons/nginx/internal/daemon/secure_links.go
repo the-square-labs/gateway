@@ -30,6 +30,8 @@ const (
 	proxySecureLinkOwnerKind    = "proxy_host_secure_link"
 	proxySecureLinkSetupTimeout = 2 * time.Second
 	proxySecureLinkSocketDir    = "/run/gateway-secure-links"
+	registrySecureLinkOwnerKind = "registry_ingress"
+	registrySecureLinkSocketDir = "/run/gateway-registry-links"
 )
 
 var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -72,7 +74,11 @@ func proxySecureLinkSetupContext(parent context.Context, timeout time.Duration) 
 }
 
 func newSourceLinkManager(opener func(string, net.Conn)) *sourceLinkManager {
-	return &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}, opener: opener, socketDir: proxySecureLinkSocketDir}
+	return newSourceLinkManagerAt(opener, proxySecureLinkSocketDir)
+}
+
+func newSourceLinkManagerAt(opener func(string, net.Conn), socketDir string) *sourceLinkManager {
+	return &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}, opener: opener, socketDir: socketDir}
 }
 
 func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sourceLinkStatus, error) {
@@ -435,10 +441,18 @@ func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Clie
 }
 
 func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
+	p.openSecureLink(proxySecureLinkOwnerKind, "proxy secure-link", linkID, connection)
+}
+
+func (p *NginxPlugin) openRegistrySecureLink(linkID string, connection net.Conn) {
+	p.openSecureLink(registrySecureLinkOwnerKind, "registry ingress", linkID, connection)
+}
+
+func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connection net.Conn) {
 	defer connection.Close()
-	assignment := findRelayAssignment(p.relayGrants.get(), "connect", proxySecureLinkOwnerKind, linkID)
+	assignment := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, linkID)
 	if assignment == nil {
-		p.logger.Warn("proxy secure-link connection rejected", "link_id", linkID, "stage", "grant")
+		p.logger.Warn(logName+" connection rejected", "link_id", linkID, "stage", "grant")
 		return
 	}
 	candidates := relaybridge.PoolCandidates(assignment, false)
@@ -462,7 +476,7 @@ func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
 			time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 		}
 	}
-	p.logger.Warn("proxy secure-link connection failed on all relay candidates", "link_id", linkID)
+	p.logger.Warn(logName+" connection failed on all relay candidates", "link_id", linkID)
 }
 
 func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {

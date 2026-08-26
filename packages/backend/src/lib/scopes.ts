@@ -148,7 +148,6 @@ export const ALL_SCOPES = [
   'mcp:use',
   // ── Inference ────────────────────────────────────────────────────
   'inference:setup',
-  'inference:tokens:manage',
   'inference:providers:view',
   'inference:providers:manage',
   'inference:models:manage',
@@ -171,6 +170,11 @@ export const ALL_SCOPES = [
   'docker:containers:mounts',
   'docker:containers:migrate',
   'docker:containers:folders:manage',
+  // ── Docker: Compose Projects ─────────────────────────────────────
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
   // ── Docker: Images ───────────────────────────────────────────────
   'docker:images:view',
   'docker:images:pull',
@@ -192,6 +196,8 @@ export const ALL_SCOPES = [
   'docker:registries:create',
   'docker:registries:edit',
   'docker:registries:delete',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
   // ── Docker: Tasks ────────────────────────────────────────────────
   'docker:tasks',
   'docker:tasks:manage',
@@ -255,7 +261,6 @@ export const USER_ONLY_SCOPES = [
   'ai:sandbox:manage',
   'mcp:use',
   'inference:setup',
-  'inference:tokens:manage',
 ] as const;
 export const PROGRAMMATIC_DENIED_BASE_SCOPES = [
   ...USER_ONLY_SCOPES,
@@ -423,7 +428,6 @@ export const ADMIN_SCOPES: readonly string[] = [
   'ai:sandbox:tier:high',
   'ai:sandbox:manage',
   'mcp:use',
-  'inference:tokens:manage',
   'inference:providers:view',
   'inference:providers:manage',
   'inference:models:manage',
@@ -445,6 +449,10 @@ export const ADMIN_SCOPES: readonly string[] = [
   'docker:containers:mounts',
   'docker:containers:migrate',
   'docker:containers:folders:manage',
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
   'docker:images:view',
   'docker:images:pull',
   'docker:images:delete',
@@ -459,6 +467,8 @@ export const ADMIN_SCOPES: readonly string[] = [
   'docker:networks:edit',
   'docker:networks:delete',
   'docker:registries:view',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
   'docker:tasks',
   'docker:tasks:manage',
   'databases:view',
@@ -564,6 +574,8 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'docker:containers:environment',
   'docker:containers:webhooks',
   'docker:containers:folders:manage',
+  'docker:compose:view',
+  'docker:compose:manage',
   'docker:images:view',
   'docker:volumes:view',
   'docker:volumes:files:read',
@@ -614,6 +626,7 @@ export const VIEWER_SCOPES: readonly string[] = [
   'ssl:cert:view',
   'acl:view',
   'docker:containers:view',
+  'docker:compose:view',
   'docker:images:view',
   'docker:volumes:view',
   'docker:volumes:files:read',
@@ -731,6 +744,13 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  // Docker Compose Projects
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
   // Docker images
   'docker:images:view',
   'docker:images:pull',
@@ -826,6 +846,10 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  // Docker Compose Projects
+  'docker:compose:view',
+  'docker:compose:manage',
+  'docker:compose:delete',
   // Databases
   'databases:view',
   'databases:edit',

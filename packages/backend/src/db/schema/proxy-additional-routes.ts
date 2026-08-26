@@ -1,4 +1,5 @@
 import { boolean, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid, varchar } from 'drizzle-orm/pg-core';
+import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
 import { nodes } from './nodes.js';
 import { pageDeployments, pageProjects, pageTags } from './pages.js';
@@ -48,6 +49,10 @@ export const proxyAdditionalRoutes = pgTable(
     // exists, so the route can be retried without losing its target intent.
     dockerNodeId: uuid('docker_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     dockerContainerName: varchar('docker_container_name', { length: 255 }),
+    dockerComposeProjectId: uuid('docker_compose_project_id').references(() => dockerComposeProjects.id, {
+      onDelete: 'restrict',
+    }),
+    dockerComposeServiceName: varchar('docker_compose_service_name', { length: 255 }),
     dockerDeploymentId: uuid('docker_deployment_id').references(() => dockerDeployments.id, { onDelete: 'restrict' }),
     dockerContainerPort: integer('docker_container_port'),
     dockerHostPort: integer('docker_host_port'),
@@ -101,6 +106,9 @@ export const proxyAdditionalRoutes = pgTable(
     hostIdx: index('proxy_additional_routes_host_idx').on(table.proxyHostId),
     targetIdx: index('proxy_additional_routes_target_idx').on(table.targetKind),
     dockerNodeIdx: index('proxy_additional_routes_docker_node_idx').on(table.dockerNodeId),
+    dockerComposeProjectIdx: index('proxy_additional_routes_docker_compose_project_idx').on(
+      table.dockerComposeProjectId
+    ),
     dockerDeploymentIdx: index('proxy_additional_routes_docker_deployment_idx').on(table.dockerDeploymentId),
     pagesTagIdx: index('proxy_additional_routes_pages_tag_idx').on(table.pageTagId),
     pagesDeploymentIdx: index('proxy_additional_routes_pages_deployment_idx').on(table.activeDeploymentId),

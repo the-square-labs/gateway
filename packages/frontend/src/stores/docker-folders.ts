@@ -57,7 +57,13 @@ interface DockerFolderState {
   collapseAll: (resourceType?: DockerFolderResourceType) => void;
 }
 
-const RESOURCE_TYPES: DockerFolderResourceType[] = ["container", "image", "network", "volume"];
+const RESOURCE_TYPES: DockerFolderResourceType[] = [
+  "container",
+  "image",
+  "network",
+  "volume",
+  "compose",
+];
 const EXPANDED_DOCKER_FOLDERS_STORAGE_KEY = "docker-folder-expanded";
 
 function folderRequestCacheKey(resourceType: DockerFolderResourceType) {

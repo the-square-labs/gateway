@@ -1,0 +1,12 @@
+version = 3
+root = "/var/lib/gateway-builder/containerd"
+state = "/run/gateway-builder/containerd/state"
+disabled_plugins = ["io.containerd.cri.v1.runtime", "io.containerd.grpc.v1.cri"]
+
+[grpc]
+  address = "/run/gateway-builder/containerd/containerd.sock"
+  gid = 0
+
+[plugins."io.containerd.nri.v1.nri"]
+  disable = true
+  disable_connections = true

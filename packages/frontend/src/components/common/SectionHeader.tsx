@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 
 interface SectionHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
   title: React.ReactNode;
+  icon?: React.ReactNode;
   description?: React.ReactNode;
   actions?: React.ReactNode;
   children?: React.ReactNode;
@@ -16,6 +17,7 @@ interface SectionHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 
 
 export function SectionHeader({
   title,
+  icon,
   description,
   actions,
   children,
@@ -43,7 +45,10 @@ export function SectionHeader({
       {...props}
     >
       <div className={cn("min-w-0", contentClassName)}>
-        <h3 className={cn("text-sm font-semibold", titleClassName)}>{title}</h3>
+        <h3 className={cn("flex items-center gap-2 text-sm font-semibold", titleClassName)}>
+          {icon}
+          {title}
+        </h3>
         {description ? (
           <p className={cn("text-xs text-muted-foreground", descriptionClassName)}>{description}</p>
         ) : null}

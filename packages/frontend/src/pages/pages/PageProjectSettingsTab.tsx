@@ -1,3 +1,4 @@
+import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -91,6 +92,7 @@ export function PageProjectSettingsDialog({
           </DialogDescription>
         </DialogHeader>
         <PanelShell
+          icon={<Settings className="h-4 w-4" />}
           title="Project"
           description="Details, appearance, retention, and storage limits."
         >

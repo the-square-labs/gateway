@@ -28,6 +28,11 @@ const NODE_TYPES: Array<{ value: NodeType; label: string; description: string }>
     description: "Serve public domains and routes with the Nginx daemon.",
   },
   { value: "docker", label: "Docker", description: "Manage containers and compose applications." },
+  {
+    value: "builder",
+    label: "Build Worker",
+    description: "Build untrusted Git sources with the isolated BuildKit and runsc profile.",
+  },
   { value: "databases", label: "Databases", description: "Run managed database workloads." },
   {
     value: "monitoring",
@@ -39,6 +44,7 @@ const DAEMON_INSTALLER_URL = "https://gitlab.wiolett.net/wiolett/gateway/-/raw/m
 const DAEMON_INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   nginx: "setup-node.sh",
   docker: "setup-docker-node.sh",
+  builder: "setup-docker-node.sh",
   databases: "setup-database-node.sh",
   monitoring: "setup-monitoring-node.sh",
   relay: "setup-relay-node.sh",
@@ -167,10 +173,11 @@ export function NodeSetupWizard({
     if (!scriptName) return "";
     const scriptUrl = `${DAEMON_INSTALLER_URL}/${scriptName}`;
     const fetcher = transport === "curl" ? `curl -sSL ${scriptUrl}` : `wget -qO- ${scriptUrl}`;
+    const mode = enrollment.node.type === "builder" ? " \\\n  --mode builder" : "";
     return `${fetcher} | sudo bash -s -- \\
   --gateway ${gateway} \\
   --token ${enrollment.enrollmentToken} \\
-  --gateway-cert-sha256 ${enrollment.gatewayCertSha256}`;
+  --gateway-cert-sha256 ${enrollment.gatewayCertSha256}${mode}`;
   };
 
   const copyCommand = (value: string) => value.replace(/\s*\\\n\s*/g, " ");
@@ -189,9 +196,10 @@ export function NodeSetupWizard({
             while Gateway gives you one place to configure and observe it.
           </p>
           <p>
-            Choose Ingress to serve public domains and routes, Docker for containers and Compose
-            applications, Databases for managed database workloads, or Monitoring for health and
-            metrics. A host can run more than one node type when it has more than one job.
+            Choose Ingress to serve public domains and routes, Docker for runtime containers, Build
+            Worker for isolated Git builds, Databases for managed database workloads, or Monitoring
+            for health and metrics. A host can run more than one node type when it has more than one
+            job.
           </p>
           <p>
             This step creates a one-time enrollment command. Run it on the target host and keep this

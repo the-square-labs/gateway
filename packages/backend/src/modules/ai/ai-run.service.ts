@@ -820,6 +820,29 @@ export class AIRunService {
         .update(aiConversations)
         .set({ model, reasoningEffort, updatedAt: now })
         .where(and(eq(aiConversations.id, conversation.id), eq(aiConversations.userId, input.userId)));
+
+      // A published or paused plan belongs to the conversation, not to the
+      // browser that created it. Keep its execution provider aligned with an
+      // explicit conversation-level model change so another device cannot
+      // silently resume the plan on the previous model.
+      await tx
+        .update(aiPlans)
+        .set({ model, reasoningEffort, updatedAt: now })
+        .where(
+          and(
+            eq(aiPlans.conversationId, conversation.id),
+            eq(aiPlans.userId, input.userId),
+            inArray(aiPlans.status, [
+              'drafting',
+              'validating',
+              'awaiting_decision',
+              'pause_requested',
+              'paused',
+              'executing',
+              'verifying',
+            ])
+          )
+        );
     });
 
     this.publishConversationChanged(input.userId, input.conversationId);

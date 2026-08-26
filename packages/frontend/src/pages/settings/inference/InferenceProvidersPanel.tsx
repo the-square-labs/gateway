@@ -22,6 +22,7 @@ import {
   CornerDownRight,
   Folder,
   Loader2,
+  Network,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -445,6 +446,7 @@ export function InferenceProvidersPanel({
     <>
       {loading && <Skeleton />}
       <PanelShell
+        icon={<Network className="h-4 w-4" />}
         title="Providers"
         description="Connected accounts and API credentials. Sequential follows connection order; Balanced weights new threads by remaining quota."
         actions={

@@ -106,6 +106,30 @@ const NGINX_KEYWORDS = new Set([
   "gzip_types",
 ]);
 
+const yamlLang = StreamLanguage.define({
+  token(stream) {
+    if (stream.sol() && stream.eatSpace()) return null;
+    if (stream.peek() === "#") {
+      stream.skipToEnd();
+      return "comment";
+    }
+    if (stream.match(/^[-?](?=\s)/)) return "punctuation";
+    if (stream.match(/^[A-Za-z0-9_.-]+(?=\s*:)/)) return "propertyName";
+    if (stream.match(/^(true|false|null|yes|no|on|off)\b/i)) return "bool";
+    if (stream.match(/^-?(?:\d+\.?\d*|\.\d+)\b/)) return "number";
+    if (stream.match(/^['"]/)) {
+      const quote = stream.current();
+      while (!stream.eol()) {
+        const next = stream.next();
+        if (next === quote && stream.string.charAt(stream.pos - 2) !== "\\") break;
+      }
+      return "string";
+    }
+    stream.next();
+    return null;
+  },
+});
+
 const NGINX_VALUES = new Set([
   "on",
   "off",
@@ -535,7 +559,7 @@ interface CodeEditorProps {
   /** Character ranges to highlight inline with an error background */
   errorRanges?: Array<{ from: number; to: number }>;
   /** Syntax highlighting language (default: "nginx") */
-  language?: "nginx" | "env" | "json" | "plain" | "sql" | "xml";
+  language?: "nginx" | "env" | "json" | "plain" | "sql" | "xml" | "yaml";
   lineWrapping?: boolean;
   showLineNumbers?: boolean;
   showGutterBorder?: boolean;
@@ -588,9 +612,11 @@ export function CodeEditor({
                   ? envLang
                   : language === "sql"
                     ? sqlLang
-                    : language === "xml"
-                      ? html()
-                      : nginxHandlebarsLang,
+                    : language === "yaml"
+                      ? yamlLang
+                      : language === "xml"
+                        ? html()
+                        : nginxHandlebarsLang,
             ]),
         ...(language === "json" ? [foldGutter(), keymap.of(foldKeymap)] : []),
         editorTheme,
@@ -652,7 +678,7 @@ export function CodeEditor({
       className={`${bordered ? "border border-border" : ""} overflow-hidden flex-1 min-h-0 ${className}`}
       style={{
         minHeight: height ? undefined : minHeight,
-        ...(height && height !== "100%" ? { height } : {}),
+        ...(height ? { height } : {}),
       }}
     />
   );

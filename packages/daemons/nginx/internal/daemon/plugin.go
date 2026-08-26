@@ -37,6 +37,7 @@ type NginxPlugin struct {
 	logger                      *slog.Logger
 	relayGrants                 *relayGrantStore
 	secureLinks                 *sourceLinkManager
+	registryLinks               *sourceLinkManager
 	secureLinkState             *securelink.StateStore
 	pagesRuntime                *pages.Runtime
 	pagesV1Available            bool
@@ -131,6 +132,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
 	p.secureLinks = newSourceLinkManager(p.openProxySecureLink)
+	p.registryLinks = newSourceLinkManagerAt(p.openRegistrySecureLink, registrySecureLinkSocketDir)
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)
@@ -171,11 +173,26 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	nginx.CleanTmpFiles(p.cfg.Nginx.ConfigDir)
 	nginx.CleanTmpFiles(p.cfg.Nginx.CertsDir)
 
-	// Ensure gateway log format is present in nginx.conf
+	globalConfigModified := false
+
+	// Ensure gateway log format is present in nginx.conf.
 	if modified, err := nginx.EnsureLogFormat(p.cfg.Nginx.GlobalConfig); err != nil {
 		logger.Warn("failed to inject log format", "error", err)
 	} else if modified {
 		logger.Info("injected gateway_combined log format into nginx.conf")
+		globalConfigModified = true
+	}
+
+	// Pages preview hostnames can exceed nginx's platform-default server-name
+	// hash bucket. Keep the managed minimum in the global http block.
+	if modified, err := nginx.EnsureServerNamesHashBucketSize(p.cfg.Nginx.GlobalConfig); err != nil {
+		logger.Warn("failed to configure server names hash bucket size", "error", err)
+	} else if modified {
+		logger.Info("configured server names hash bucket size for Gateway Pages")
+		globalConfigModified = true
+	}
+
+	if globalConfigModified {
 		mgr.Reload()
 	}
 
@@ -281,6 +298,17 @@ func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 }
 
 func (p *NginxPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
+	if payload, ok := cmd.Payload.(*pb.GatewayCommand_SyncDockerRegistryBindings); ok {
+		result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+		detail, err := p.SyncDockerRegistryBindings(payload.SyncDockerRegistryBindings)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		} else {
+			result.Detail = detail
+		}
+		return result
+	}
 	return p.handler.HandleCommand(cmd)
 }
 
@@ -293,7 +321,7 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 }
 
 func (p *NginxPlugin) capabilities() []string {
-	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1"}
+	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_registry_ingress_v1"}
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
 	}

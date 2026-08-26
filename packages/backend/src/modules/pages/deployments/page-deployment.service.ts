@@ -377,6 +377,34 @@ export class PageDeploymentService {
     return { deployment: this.serialize(stored.deployment) };
   }
 
+  async abortUpload(
+    uploadId: string,
+    principal: PageDeployPrincipal,
+    failureCode = 'PAGES_BUILD_IMPORT_FAILED'
+  ): Promise<void> {
+    const row = await this.getUpload(uploadId);
+    this.assertPrincipal(row.deployment, principal);
+    if (row.session.status === 'complete' || row.deployment.status === 'ready') return;
+    const code = failureCode.slice(0, 128);
+    await Promise.allSettled([
+      this.db
+        .update(pageUploadSessions)
+        .set({ status: 'failed', failureCode: code, updatedAt: new Date() })
+        .where(eq(pageUploadSessions.id, uploadId)),
+      this.db
+        .update(pageDeployments)
+        .set({
+          status: 'failed',
+          failureCode: code,
+          failureMessage: 'Build artifact import failed',
+          updatedAt: new Date(),
+        })
+        .where(eq(pageDeployments.id, row.deployment.id)),
+      this.store.remove(row.session.tempKey),
+    ]);
+    this.emit({ ...row.deployment, status: 'failed', failureCode: code }, 'failed');
+  }
+
   async list(projectId: string, query: PageDeploymentListQuery) {
     const where = eq(pageDeployments.projectId, projectId);
     const [data, [{ total }]] = await Promise.all([

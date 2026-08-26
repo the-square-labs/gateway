@@ -813,16 +813,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         },
       });
     }
-    if (aiEnabled !== false && aiScopeOk) {
-      actions.push({
-        id: "action:open-ai",
-        label: "Open AI Workspace",
-        icon: Sparkles,
-        action: () => useUIStore.getState().setAIPanelOpen(true),
-      });
-    }
+    actions.push({
+      id: "action:open-ai",
+      label: "Open AI Workspace",
+      icon: Sparkles,
+      action: () => {
+        window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
+      },
+    });
     return actions;
-  }, [aiEnabled, aiScopeOk, hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
+  }, [hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
 
   const adaptiveQuickActions = useMemo(() => {
     const candidates = [...currentPageActions, ...contextActions, ...primaryActions].filter(

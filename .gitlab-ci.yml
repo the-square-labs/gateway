@@ -679,6 +679,13 @@ publish-gateway-inference:
           ;;
       esac
     - cd ../../..
+    - |
+      if [ "${DAEMON_NAME}" = "docker-daemon" ]; then
+        VERSION=$(echo "${CI_COMMIT_TAG}" | sed "s/-${DAEMON_SUFFIX}$//")
+        for GOARCH in amd64 arm64; do
+          ./scripts/build-builder-runtime-bundle.sh "${GOARCH}" "docker-builder-runtime-linux-${GOARCH}.tar.gz" "${VERSION}"
+        done
+      fi
     - test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || (echo "UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 CI variable is required to publish signed daemon updates" && exit 1)
     - |
       for GOARCH in amd64 arm64; do
@@ -686,6 +693,9 @@ publish-gateway-inference:
       done
       if [ "${DAEMON_NAME}" = "relay-supervisor" ]; then
         for GOARCH in amd64 arm64; do sha256sum "relay-worker-linux-${GOARCH}" >> checksums.txt; done
+      fi
+      if [ "${DAEMON_NAME}" = "docker-daemon" ]; then
+        for GOARCH in amd64 arm64; do sha256sum "docker-builder-runtime-linux-${GOARCH}.tar.gz" >> checksums.txt; done
       fi
       VERSION=$(echo "${CI_COMMIT_TAG}" | sed "s/-${DAEMON_SUFFIX}$//")
       ENCODED_PROJECT_PATH=$(printf '%s' "$CI_PROJECT_PATH" | sed 's#/#%2F#g')
@@ -741,6 +751,13 @@ publish-gateway-inference:
             "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${DAEMON_NAME}/${CI_COMMIT_TAG}/${ARTIFACT}.update.json"
         done
       fi
+      if [ "${DAEMON_NAME}" = "docker-daemon" ]; then
+        for GOARCH in amd64 arm64; do
+          ARTIFACT="docker-builder-runtime-linux-${GOARCH}.tar.gz"
+          curl --fail --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${ARTIFACT}" \
+            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${DAEMON_NAME}/${CI_COMMIT_TAG}/${ARTIFACT}"
+        done
+      fi
       curl --fail --show-error \
         --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
         --upload-file checksums.txt \
@@ -767,6 +784,7 @@ publish-gateway-inference:
       - "relay-supervisor-linux-*.update.json"
       - "relay-worker-linux-*"
       - "relay-worker-linux-*.update.json"
+      - "docker-builder-runtime-linux-*.tar.gz"
     expire_in: 1 hour
 
 .release-daemon:
@@ -852,6 +870,40 @@ release-docker-daemon:
   variables:
     DAEMON_NAME: docker-daemon
     DAEMON_LABEL: "Docker Daemon"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "${DAEMON_LABEL} ${CI_COMMIT_TAG}"
+    description: ./release-notes.md
+    assets:
+      links:
+        - name: "docker-daemon-linux-amd64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/docker-daemon-linux-amd64"
+          filepath: /docker-daemon-linux-amd64
+          link_type: package
+        - name: "docker-daemon-linux-arm64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/docker-daemon-linux-arm64"
+          filepath: /docker-daemon-linux-arm64
+          link_type: package
+        - name: checksums.txt
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/checksums.txt"
+          filepath: /checksums.txt
+          link_type: other
+        - name: "docker-daemon-linux-amd64.update.json"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/docker-daemon-linux-amd64.update.json"
+          filepath: /docker-daemon-linux-amd64.update.json
+          link_type: other
+        - name: "docker-daemon-linux-arm64.update.json"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/docker-daemon-linux-arm64.update.json"
+          filepath: /docker-daemon-linux-arm64.update.json
+          link_type: other
+        - name: "docker-builder-runtime-linux-amd64.tar.gz"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/docker-builder-runtime-linux-amd64.tar.gz"
+          filepath: /docker-builder-runtime-linux-amd64.tar.gz
+          link_type: package
+        - name: "docker-builder-runtime-linux-arm64.tar.gz"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/docker-daemon/${CI_COMMIT_TAG}/docker-builder-runtime-linux-arm64.tar.gz"
+          filepath: /docker-builder-runtime-linux-arm64.tar.gz
+          link_type: package
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker$/
 

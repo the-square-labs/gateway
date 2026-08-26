@@ -17,7 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { DASHBOARD_INFERENCE_USAGE_THRESHOLD } from "@/lib/inference-self-usage";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import type {
@@ -69,6 +69,7 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
 
   return (
     <PanelShell
+      icon={<Gauge className="h-4 w-4" />}
       title="Inference usage"
       description="Usage limits for the AI models available to you. Limits recover automatically."
     >
@@ -110,7 +111,7 @@ function UsageStatCard({
         percent: remaining,
         color: isLow ? "var(--color-warning)" : undefined,
       }}
-      subtitle={`Recovers ${formatDate(value.recoveryAt)}`}
+      subtitle={`Recovers ${formatDateTime(value.recoveryAt)}`}
       subtitleClassName="text-xs"
     />
   );
@@ -122,6 +123,7 @@ export function InferenceUsage() {
   if (loading) {
     return (
       <PanelShell
+        icon={<Gauge className="h-4 w-4" />}
         title="Inference usage"
         description="Usage limits for the AI models available to you. Limits recover automatically."
       >
@@ -141,6 +143,7 @@ export function InferenceUsage() {
   if (error || !usage) {
     return (
       <PanelShell
+        icon={<Gauge className="h-4 w-4" />}
         title="Inference usage"
         actions={
           <Button variant="outline" onClick={() => void load()}>
@@ -207,7 +210,7 @@ export function DashboardInferenceUsage({
                     {label} inference quota is running low
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Recovers {formatDate(value.recoveryAt)}.
+                    Recovers {formatDateTime(value.recoveryAt)}.
                   </p>
                 </div>
               </div>
@@ -369,6 +372,7 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
   if (error && !usage) {
     return (
       <PanelShell
+        icon={<Gauge className="h-4 w-4" />}
         title="Inference overview"
         actions={
           <Button variant="outline" onClick={() => void load()} disabled={loading}>

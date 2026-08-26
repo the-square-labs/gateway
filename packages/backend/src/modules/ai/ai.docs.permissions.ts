@@ -130,7 +130,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | Scope | Description |
 |-------|-------------|
 | ai:workspace:use | Access AI Workspace |
-| feat:ai:use | Access Gateway Inference, including personal inference usage |
+| feat:ai:use | Access Gateway Inference, personal usage, and personal inference token management |
 | feat:ai:configure | Configure AI Workspace settings |
 | ai:skills:manage | Create, edit, enable, disable, and delete shared AI Workspace skills |
 | ai:sandbox:use | Use AI sandbox runner tools |
@@ -143,7 +143,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | Scope | Description |
 |-------|-------------|
 | inference:setup | OAuth-only authorization for the Gateway companion CLI setup resource; do not assign it to users or groups |
-| inference:tokens:manage | Create and revoke dedicated gwi_ inference tokens for the current user |
+| feat:ai:use | Use Gateway Inference, view personal usage, and create or revoke dedicated gwi_ inference tokens for the current user |
 | inference:providers:view | View provider templates, connections, masked credentials, discovery, and quota |
 | inference:providers:manage | Connect, update, synchronize, route, and disconnect inference providers |
 | inference:models:manage | Atomically create, replace, publish, or delete logical inference models |
@@ -169,6 +169,14 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:containers:webhooks | Configure CI/CD webhook URLs |
 | docker:containers:mounts | Add, remove, or change container/deployment mounts using Gateway-managed volumes; new host bind mounts are prohibited (resource-scopable) |
 | docker:containers:folders:manage | Manage Docker resource folders and placement |
+
+### Docker: Compose Projects
+| Scope | Description |
+|-------|-------------|
+| docker:compose:view | Discover and inspect Compose projects, services, monitoring, logs, revisions, and activity (resource-scopable) |
+| docker:compose:create | Validate and deploy a managed Compose project on an allowed node |
+| docker:compose:manage | Adopt projects and manage lifecycle, revisions, secrets, and bindings (resource-scopable) |
+| docker:compose:delete | Delete projects or run destructive down/delete-volume actions (resource-scopable) |
 
 ### Docker: Images
 | Scope | Description |
@@ -201,6 +209,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:registries:create | Add registries |
 | docker:registries:edit | Edit/test registries |
 | docker:registries:delete | Remove registries |
+| docker:registries:internal:pull | Pull from repository-scoped internal-registry paths |
+| docker:registries:internal:push | Push to repository-scoped internal-registry paths |
 
 ### Docker: Tasks
 | Scope | Description |
@@ -269,7 +279,7 @@ Custom groups can be created with any combination of scopes.
 Groups can have a parent group. Inherited scopes from all ancestors are added to the effective scopes. Cycle detection prevents circular inheritance. Built-in groups cannot be modified.
 
 ## Resource-Scoped Permissions
-Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid" or "nodes:details:node-uuid"). Docker container scopes use "docker:containers:<action>:<node-id>" for a whole node or "docker:containers:<action>:<node-id>/<stable-resource-id>" for one container or deployment. Without a suffix, the scope applies to all resources.
+Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid" or "nodes:details:node-uuid"). Docker container scopes use "docker:containers:<action>:<node-id>" for a whole node or "docker:containers:<action>:<node-id>/<stable-resource-id>" for one container or deployment. Compose scopes use "docker:compose:<action>:<node-id>" for a whole node or "docker:compose:<action>:<node-id>/<project-id>" for one project. Without a suffix, the scope applies to all resources.
 
 ## Scope Containment Rule
 A user can only manage another user whose scopes are a subset of their own.`;

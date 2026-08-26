@@ -538,7 +538,7 @@ describe('AIService tool round comments', () => {
       outputOffloaded: true as const,
       artifactId: 'artifact-round',
       format: 'json' as const,
-      sizeBytes: 24_000,
+      sizeBytes: 18_000,
       estimatedTokens: 6_000,
       preview: '{"payload":"xxx',
       downloadUrl: '/api/ai/sandbox/artifacts/artifact-round/download',
@@ -550,7 +550,7 @@ describe('AIService tool round comments', () => {
     Object.assign(service, { artifactService: { saveToolOutput } });
     vi.spyOn(service, 'buildSystemPrompt').mockResolvedValue('System prompt');
     vi.spyOn(service, 'executeTool').mockResolvedValue({
-      result: { payload: 'x'.repeat(24_000) },
+      result: { payload: 'x'.repeat(18_000) },
       invalidateStores: [],
     });
 

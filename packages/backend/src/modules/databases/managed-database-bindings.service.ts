@@ -7,6 +7,7 @@ import { managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/s
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import type { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import type { DockerSecretService } from '@/modules/docker/docker-secret.service.js';
@@ -92,7 +93,11 @@ export class ManagedDatabaseBindingService {
     private readonly dockerSecrets: DockerSecretService,
     private connectorImage: string,
     private readonly allowDevelopmentConnectorImage = false,
-    private readonly relayPolicy?: Pick<RelayPolicyService, 'ensureBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner'>
+    private readonly relayPolicy?: Pick<
+      RelayPolicyService,
+      'ensureBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner'
+    >,
+    private readonly dockerCompose?: DockerComposeService
   ) {}
 
   updateConnectorImage(connectorImage: string) {
@@ -550,6 +555,17 @@ export class ManagedDatabaseBindingService {
     options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {}
   ) {
     const values = this.bindingEnvironmentValues(database, binding, credentials);
+    if (binding.targetType === 'compose_service') {
+      await this.requireComposeService().applyManagedDatabaseBinding(
+        binding.targetNodeId,
+        binding.targetResourceId,
+        binding.id,
+        binding.networkName,
+        values,
+        userId
+      );
+      return;
+    }
     if (binding.targetType === 'deployment') {
       const secretContainer = `deployment:${binding.targetResourceId}`;
       for (const [key, value] of Object.entries(values)) {
@@ -610,6 +626,17 @@ export class ManagedDatabaseBindingService {
   ) {
     const expected = this.bindingEnvironmentValues(database, binding, this.bindingCredentials(binding));
     const variableNames = Object.keys(expected);
+    if (binding.targetType === 'compose_service') {
+      await this.requireComposeService().removeManagedDatabaseBinding(
+        binding.targetNodeId,
+        binding.targetResourceId,
+        binding.id,
+        binding.networkName,
+        expected,
+        userId
+      );
+      return;
+    }
     if (binding.targetType === 'deployment') {
       const secretContainer = `deployment:${binding.targetResourceId}`;
       const values = await this.matchingDeploymentSecretValues(binding, expected);
@@ -863,6 +890,14 @@ export class ManagedDatabaseBindingService {
   }
 
   private async resolveBindingTarget(input: CreateManagedDatabaseBindingInput): Promise<string> {
+    if (input.targetType === 'compose_service') {
+      const target = await this.requireComposeService().resolveServiceTarget(
+        input.targetNodeId,
+        input.targetResourceId,
+        true
+      );
+      return target.targetResourceId;
+    }
     if (input.targetType === 'deployment') {
       await this.dockerDeployments.get(input.targetNodeId, input.targetResourceId);
       return input.targetResourceId;
@@ -933,6 +968,18 @@ export class ManagedDatabaseBindingService {
       return;
     }
 
+    if (targetType === 'compose_service') {
+      const existing = await this.requireComposeService().getServiceEnvironmentNames(targetNodeId, targetResourceId);
+      if ([...requested].some((name) => existing.has(name))) {
+        throw new AppError(
+          409,
+          'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
+          'The Compose service already uses an environment variable'
+        );
+      }
+      return;
+    }
+
     const inspect = await this.dockerManagement.inspectContainer(targetNodeId, targetResourceId);
     const name = typeof inspect?.Name === 'string' ? inspect.Name.replace(/^\/+/, '') : '';
     const envKeys = new Set(
@@ -998,6 +1045,13 @@ export class ManagedDatabaseBindingService {
     if (node.status !== 'online') throw new AppError(409, 'NODE_OFFLINE', 'Binding target node is offline');
   }
 
+  private requireComposeService() {
+    if (!this.dockerCompose) {
+      throw new AppError(503, 'COMPOSE_SERVICE_UNAVAILABLE', 'Compose service integration is unavailable');
+    }
+    return this.dockerCompose;
+  }
+
   private emitBinding(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
@@ -1037,6 +1091,7 @@ export class ManagedDatabaseBindingService {
       targetResourceId: binding.targetResourceId,
       ...(binding.targetType === 'deployment' ? { scopeResourceId: binding.targetResourceId } : {}),
       ...(binding.targetType === 'container' ? { containerName: binding.targetResourceId } : {}),
+      ...(binding.targetType === 'compose_service' ? { scopeResourceId: binding.targetResourceId } : {}),
     });
   }
 

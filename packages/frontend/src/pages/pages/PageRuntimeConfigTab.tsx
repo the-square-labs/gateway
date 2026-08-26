@@ -1,4 +1,4 @@
-import { AlertCircle, RotateCcw, Save } from "lucide-react";
+import { AlertCircle, Code2, RotateCcw, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -371,6 +371,7 @@ export function PageRuntimeConfigTab({ projectId }: { projectId: string }) {
 
   return (
     <PanelShell
+      icon={<Code2 className="h-4 w-4" />}
       title="Runtime configuration"
       description="Public JSON exposed as window.runtime.config. Do not store secrets."
       actions={actions}

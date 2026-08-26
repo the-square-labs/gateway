@@ -389,6 +389,46 @@ describe('mapGpuHealthDevices', () => {
 });
 
 describe('CommandStream daemon certificate identity', () => {
+  it('accepts only the isolated docker builder profile for builder nodes', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'builder-1',
+        daemonVersion: 'dev',
+        daemonType: 'docker',
+        capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+      },
+    });
+
+    await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+    expect(stream.end).not.toHaveBeenCalled();
+  });
+
+  it('rejects a general Docker daemon registering as a builder node', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'builder-1',
+        daemonVersion: 'dev',
+        daemonType: 'docker',
+        capabilities: ['docker_deployments_v1', 'docker_registry_proxy_v1'],
+      },
+    });
+
+    await vi.waitFor(() => expect(stream.end).toHaveBeenCalled());
+    expect(deps.registry.register).not.toHaveBeenCalled();
+  });
+
   it('publishes the online reconciliation event only after daemon capabilities are durable', async () => {
     let releaseMetadata!: () => void;
     const metadataCommitted = new Promise<void>((resolve) => {
@@ -450,7 +490,7 @@ describe('CommandStream daemon certificate identity', () => {
         architecture: 'x64',
         kernelVersion: '6.0',
         daemonType: 'docker',
-        capabilities: ['docker_deployments_v1', 'docker_gpu_v1'],
+        capabilities: ['docker_deployments_v1', 'docker_compose_v1', 'docker_gpu_v1'],
       },
     });
 
@@ -461,6 +501,7 @@ describe('CommandStream daemon certificate identity', () => {
       daemonType: 'docker',
       dockerVersion: '27.5.1',
       dockerDeploymentsV1: true,
+      dockerComposeV1: true,
       dockerGpuV1: true,
     });
     expect(metadata.capabilities).not.toHaveProperty('nginxVersion');
@@ -480,7 +521,7 @@ describe('CommandStream daemon certificate identity', () => {
       'node-1',
       'hash-daemon',
       expect.anything(),
-      expect.objectContaining({ isCurrentRegistration: expect.any(Function) })
+      expect.objectContaining({ isCurrentRegistration: expect.any(Function), capabilities: [] })
     );
   });
 
@@ -614,9 +655,7 @@ describe('CommandStream daemon certificate identity', () => {
             limit: vi.fn(() => {
               selectCount += 1;
               if (selectCount === 1) return nodeRows;
-              return Promise.resolve([
-                { id: '22222222-2222-4222-8222-222222222222', faultDomainId: 'host-relay-1' },
-              ]);
+              return Promise.resolve([{ id: '22222222-2222-4222-8222-222222222222', faultDomainId: 'host-relay-1' }]);
             }),
           })),
         })),

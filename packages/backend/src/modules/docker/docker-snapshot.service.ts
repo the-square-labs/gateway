@@ -201,8 +201,9 @@ export class DockerSnapshotService {
     const current = await this.getList(nodeId, kind);
     if (this.isNodeDeleted(nodeId)) return current;
     const now = new Date().toISOString();
+    const sanitizedData = kind === 'volumes' ? data.map(sanitizeVolumeSnapshot) : data;
     const next: DockerSnapshotEnvelope = {
-      data: kind === 'volumes' ? data.map(sanitizeVolumeSnapshot) : data,
+      data: sanitizedData,
       revision: current.revision + 1,
       observedAt: now,
       lastAttemptAt: now,
@@ -213,8 +214,39 @@ export class DockerSnapshotService {
     if (this.isNodeDeleted(nodeId)) return current;
     await this.cache.set(this.listKey(nodeId, kind), next);
     if (this.isNodeDeleted(nodeId)) return current;
+    if (kind === 'volumes') {
+      const liveNames = new Set(
+        sanitizedData
+          .map((item) => String((item as Record<string, unknown>).name ?? ''))
+          .filter((name) => name.length > 0)
+      );
+      const detailKey = this.detailKey(nodeId, 'volume-detail');
+      const staleNames = (await this.cache.getClient().hkeys(detailKey)).filter((name) => !liveNames.has(name));
+      if (staleNames.length > 0) await this.cache.getClient().hdel(detailKey, ...staleNames);
+    }
+    if (this.isNodeDeleted(nodeId)) return current;
     this.eventBus.publish('docker.snapshot.changed', { nodeId, kind, revision: next.revision });
     return next;
+  }
+
+  async reconcileComposeProjects(nodeId: string): Promise<void> {
+    const { reconcileExternalComposeProjects } = await import('./compose/compose-discovery.service.js');
+    const [containers, volumes, networks] = await Promise.all([
+      this.getList<Record<string, unknown>[]>(nodeId, 'containers'),
+      this.getList<Record<string, unknown>[]>(nodeId, 'volumes'),
+      this.getList<Record<string, unknown>[]>(nodeId, 'networks'),
+    ]);
+    await reconcileExternalComposeProjects(
+      this.db,
+      nodeId,
+      {
+        containers: Array.isArray(containers.data) ? containers.data : [],
+        volumes: Array.isArray(volumes.data) ? volumes.data : [],
+        networks: Array.isArray(networks.data) ? networks.data : [],
+      },
+      new Date(),
+      (change) => this.eventBus.publish('docker.compose.changed', { nodeId, ...change })
+    );
   }
 
   async markListError(nodeId: string, kind: DockerSnapshotKind, error: unknown): Promise<void> {

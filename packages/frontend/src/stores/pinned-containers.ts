@@ -9,7 +9,8 @@ type PinnedContainerMeta = {
   name: string;
   scopeResourceId?: string;
   state?: string;
-  kind?: "container" | "deployment";
+  kind?: "container" | "deployment" | "build" | "compose";
+  scopeBase?: "docker:containers:view" | "docker:compose:view";
 };
 
 interface PinnedContainersState {

@@ -165,6 +165,51 @@ function createAbandonPlanningDb(input: {
   };
 }
 
+describe('AIRunService conversation provider changes', () => {
+  it('keeps resumable plans aligned with an explicit conversation model change', async () => {
+    const selectRows = [
+      [
+        {
+          id: 'conversation-1',
+          userId: 'user-1',
+          model: null,
+          reasoningEffort: null,
+        },
+      ],
+      [],
+    ];
+    const limit = vi.fn(async () => selectRows.shift() ?? []);
+    const orderBy = vi.fn(() => ({ limit }));
+    const where = vi.fn(() => ({ limit, orderBy }));
+    const from = vi.fn(() => ({ where }));
+    const select = vi.fn(() => ({ from }));
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn((_value: unknown) => ({ where: updateWhere }));
+    const update = vi.fn(() => ({ set }));
+    const tx = { select, update };
+    const transaction = vi.fn((callback: (value: typeof tx) => unknown) => callback(tx));
+    const service = new AIRunService({ select, update, transaction } as never);
+
+    await service.updateConversationProvider({
+      userId: 'user-1',
+      conversationId: 'conversation-1',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      modelDisplayName: 'Sol',
+    });
+
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set.mock.calls[0]?.[0]).toMatchObject({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+    });
+    expect(set.mock.calls[1]?.[0]).toMatchObject({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+    });
+  });
+});
+
 describe('AIRunService plan completion', () => {
   it('does not count a non-terminal step update as execution progress', async () => {
     const where = vi.fn().mockResolvedValue([{ status: 'completed', result: { progressMade: false } }]);

@@ -71,6 +71,18 @@ describe('foundation migrator patches', () => {
     expect(patched).toContain('com.wiolett.gateway.managed-service: app');
     expect(patched).toContain('gateway_relay_identity:/var/lib/gateway-relay');
     expect(patched).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
+    expect(patched).toContain('# gateway-managed:start registry-service');
+    expect(patched).toContain(`  registry:\n    image: \${GATEWAY_REGISTRY_IMAGE_REF}`);
+    expect(patched).toContain('com.wiolett.gateway.managed-service: registry');
+    expect(patched).toContain('REGISTRY_STORAGE_DELETE_ENABLED: "true"');
+    expect(patched).not.toContain('REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_');
+    expect(patched).toContain('REGISTRY_AUTH_TOKEN_SERVICE: gateway-internal-registry');
+    expect(patched).toContain('      - "5000"');
+    expect(patched).toContain('gateway_registry_data:/var/lib/registry');
+    expect(patched).toContain('gateway_registry_auth:/var/lib/gateway-registry-auth');
+    expect(patched).toContain('gateway_registry_auth:/var/lib/gateway-registry-auth:ro');
+    expect(patched).toContain('http://127.0.0.1:5001/debug/health');
+    expect(patched).not.toMatch(/(?:127\.0\.0\.1:)?5000:5000/);
     expect(patched).toContain('      relay:\n        condition: service_started');
     expect(patched).not.toContain('RELAY_DATABASE_URL');
     expect(patched).not.toContain('GATEWAY_RELAY_DB_PASSWORD');
@@ -204,6 +216,14 @@ ${OLD_COMPOSE}`;
     expect(() => patchCompose(compose)).toThrow('malformed sandbox workspace managed block');
   });
 
+  it('refuses to replace an existing registry service that is not installer-managed', () => {
+    const compose = OLD_COMPOSE.replace(
+      '\n  redis:',
+      '\n  registry:\n    image: example/custom-registry:latest\n\n  redis:'
+    );
+    expect(() => patchCompose(compose)).toThrow('existing registry service is not installer-managed');
+  });
+
   it('upserts env keys without leaving duplicates', () => {
     const patched = patchEnv('GATEWAY_VERSION=v2.4.2\nGATEWAY_VERSION=old\nOTHER=value\n', {
       GATEWAY_VERSION: 'v2.4.3',
@@ -269,12 +289,26 @@ describe('runFoundationMigrations', () => {
       `GATEWAY_RELAY_IMAGE_REF=registry/gateway/relay@sha256:${'a'.repeat(64)}`
     );
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_RELAY_TARGET=relay:9443');
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_REGISTRY_IMAGE_REF=registry:3');
+    const firstRegistrySecret = /^GATEWAY_REGISTRY_HTTP_SECRET=(.+)$/m.exec(
+      await readFile(path.join(tempDir, '.env'), 'utf8')
+    )?.[1];
+    expect(firstRegistrySecret).toMatch(/^[0-9a-f]{64}$/);
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('172.18.0.4:9443');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('GATEWAY_RELAY_DB_PASSWORD');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('GATEWAY_RELAY_VERSION');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('RELAY_DATABASE_URL');
     expect(await readFile(path.join(tempDir, 'docker-compose.yml'), 'utf8')).toContain(
       '# gateway-managed:start sandbox-workspace'
+    );
+    expect(await readFile(path.join(tempDir, 'docker-compose.yml'), 'utf8')).toContain(
+      '# gateway-managed:start registry-service'
+    );
+    expect(await readFile(path.join(tempDir, 'docker-compose.yml'), 'utf8')).toContain(
+      'gateway_registry_data:/var/lib/registry'
+    );
+    expect(/^GATEWAY_REGISTRY_HTTP_SECRET=(.+)$/m.exec(await readFile(path.join(tempDir, '.env'), 'utf8'))?.[1]).toBe(
+      firstRegistrySecret
     );
   });
 

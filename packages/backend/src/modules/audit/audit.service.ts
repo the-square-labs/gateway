@@ -29,11 +29,13 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { INTERNAL_DOCKER_REGISTRY_ID } from '@/modules/docker/docker-registry-internal.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import { getAuditRequestContext, markAuditEmitted } from './audit-request-context.js';
 import type { SiemAuditOutboxService } from './siem-outbox.service.js';
 
 const logger = createChildLogger('AuditService');
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface AuditEntry {
   userId: string | null;
@@ -431,11 +433,15 @@ export class AuditService {
     }
 
     const registryIds = ids('docker-registry');
-    if (registryIds.length) {
+    if (registryIds.includes(INTERNAL_DOCKER_REGISTRY_ID)) {
+      add('docker-registry', INTERNAL_DOCKER_REGISTRY_ID, 'Internal Registry');
+    }
+    const persistedRegistryIds = registryIds.filter((id) => UUID_RE.test(id));
+    if (persistedRegistryIds.length) {
       const rows = await this.db
         .select({ id: dockerRegistries.id, name: dockerRegistries.name })
         .from(dockerRegistries)
-        .where(inArray(dockerRegistries.id, registryIds));
+        .where(inArray(dockerRegistries.id, persistedRegistryIds));
       for (const row of rows) add('docker-registry', row.id, row.name);
     }
 

@@ -3,6 +3,11 @@ import { container } from '@/container.js';
 import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
+  assertComposeChildMutationAllowed,
+  assertComposeNetworkMutationAllowed,
+} from './compose/compose-child.guard.js';
+import { isComposeOwnedNetwork } from './compose/compose-discovery.service.js';
+import {
   connectNetworkRoute,
   createNetworkRoute,
   disconnectNetworkRoute,
@@ -83,6 +88,7 @@ export function registerNetworkRoutes(router: OpenAPIHono<AppEnv>) {
       const search = c.req.query('search')?.trim().toLowerCase();
       const compacted = data
         .filter((item) => !isGatewayManagedDockerNetwork(String(item.name ?? item.Name ?? '')))
+        .filter((item) => !isComposeOwnedNetwork(item))
         .map((item) => ({
           ...compactNetworkListItem(item),
           nodeId,
@@ -121,6 +127,7 @@ export function registerNetworkRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const networkId = c.req.param('networkId')!;
       const user = c.get('user')!;
+      await assertComposeNetworkMutationAllowed(nodeId, networkId);
       await service.removeNetwork(nodeId, networkId, user.id);
       return c.json({ success: true });
     }
@@ -136,6 +143,10 @@ export function registerNetworkRoutes(router: OpenAPIHono<AppEnv>) {
       const user = c.get('user')!;
       const body = await c.req.json();
       const { containerId } = NetworkConnectSchema.parse(body);
+      await Promise.all([
+        assertComposeNetworkMutationAllowed(nodeId, networkId),
+        assertComposeChildMutationAllowed(nodeId, containerId),
+      ]);
       await service.connectContainerToNetwork(nodeId, networkId, containerId, user.id);
       return c.json({ success: true });
     }
@@ -151,6 +162,10 @@ export function registerNetworkRoutes(router: OpenAPIHono<AppEnv>) {
       const user = c.get('user')!;
       const body = await c.req.json();
       const { containerId } = NetworkConnectSchema.parse(body);
+      await Promise.all([
+        assertComposeNetworkMutationAllowed(nodeId, networkId),
+        assertComposeChildMutationAllowed(nodeId, containerId),
+      ]);
       await service.disconnectContainerFromNetwork(nodeId, networkId, containerId, user.id);
       return c.json({ success: true });
     }

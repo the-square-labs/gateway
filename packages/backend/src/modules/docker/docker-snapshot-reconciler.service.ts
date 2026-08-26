@@ -522,6 +522,7 @@ export class DockerSnapshotReconciler {
     const data = resultData(result);
     if (!Array.isArray(data)) throw new Error(`Docker ${kind} list returned an invalid payload`);
     await this.snapshots.replaceList(nodeId, kind, data);
+    await this.snapshots.reconcileComposeProjects(nodeId);
   }
 
   private async refreshDetail(nodeId: string, kind: DockerDetailKind, key: string) {

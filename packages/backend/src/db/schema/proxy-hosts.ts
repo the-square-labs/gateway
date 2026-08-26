@@ -15,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { accessLists } from './access-lists.js';
 import { certificates } from './certificates.js';
+import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
 import { nginxTemplates } from './nginx-templates.js';
 import { nodes } from './nodes.js';
@@ -80,6 +81,10 @@ export const proxyHosts = pgTable(
     forwardScheme: forwardSchemeEnum('forward_scheme').default('http'),
     dockerNodeId: uuid('docker_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     dockerContainerName: varchar('docker_container_name', { length: 255 }),
+    dockerComposeProjectId: uuid('docker_compose_project_id').references(() => dockerComposeProjects.id, {
+      onDelete: 'restrict',
+    }),
+    dockerComposeServiceName: varchar('docker_compose_service_name', { length: 255 }),
     dockerDeploymentId: uuid('docker_deployment_id').references(() => dockerDeployments.id, {
       onDelete: 'restrict',
     }),
@@ -182,6 +187,7 @@ export const proxyHosts = pgTable(
     createdByIdx: index('proxy_host_created_by_idx').on(table.createdById),
     nodeIdx: index('proxy_host_node_idx').on(table.nodeId),
     dockerNodeIdx: index('proxy_host_docker_node_idx').on(table.dockerNodeId),
+    dockerComposeProjectIdx: index('proxy_host_docker_compose_project_idx').on(table.dockerComposeProjectId),
     dockerDeploymentIdx: index('proxy_host_docker_deployment_idx').on(table.dockerDeploymentId),
     systemKindIdx: index('proxy_host_system_kind_idx').on(table.systemKind),
     relaySpreadModeValid: check(

@@ -76,6 +76,8 @@ export const CreateAdditionalRouteSchema = z
     forwardScheme: z.enum(['http', 'https']).optional().default('http'),
     dockerNodeId: z.string().uuid().optional(),
     dockerContainerName: z.string().min(1).max(255).optional(),
+    dockerComposeProjectId: z.string().uuid().optional(),
+    dockerComposeServiceName: z.string().min(1).max(255).optional(),
     dockerDeploymentId: z.string().uuid().optional(),
     dockerContainerPort: z.number().int().min(1).max(65535).optional(),
     dockerHostPort: z.number().int().min(1).max(65535).optional(),
@@ -112,10 +114,18 @@ export const CreateAdditionalRouteSchema = z
     if (kind === 'docker_container') {
       for (const [key, message] of [
         ['dockerNodeId', 'Docker node is required'],
-        ['dockerContainerName', 'Container is required'],
         ['dockerContainerPort', 'Container port is required'],
       ] as const) {
         if (!read(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message });
+      }
+      const hasContainer = Boolean(read('dockerContainerName'));
+      const hasCompose = Boolean(read('dockerComposeProjectId') && read('dockerComposeServiceName'));
+      if (hasContainer === hasCompose) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['dockerContainerName'],
+          message: 'Select either a container or a Compose service',
+        });
       }
     }
     if (kind === 'docker_deployment') {
@@ -159,6 +169,8 @@ export const UpdateAdditionalRouteSchema = z.object({
   forwardScheme: z.enum(['http', 'https']).optional(),
   dockerNodeId: z.string().uuid().optional().nullable(),
   dockerContainerName: z.string().min(1).max(255).optional().nullable(),
+  dockerComposeProjectId: z.string().uuid().optional().nullable(),
+  dockerComposeServiceName: z.string().min(1).max(255).optional().nullable(),
   dockerDeploymentId: z.string().uuid().optional().nullable(),
   dockerContainerPort: z.number().int().min(1).max(65535).optional().nullable(),
   dockerHostPort: z.number().int().min(1).max(65535).optional().nullable(),

@@ -17,6 +17,7 @@ const managedDatabaseCommandTimeoutMs = 15 * 60 * 1000;
 // SelfUpdate can spend up to five minutes downloading the binary before it
 // acknowledges the command. Leave a small margin for verification and replace.
 const daemonUpdateCommandTimeoutMs = 5 * 60 * 1000 + 30_000;
+const dockerComposeCommandTimeoutMs = 30 * 60 * 1000;
 
 export class NodeDispatchService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -55,6 +56,49 @@ export class NodeDispatchService {
     if (node.type !== 'databases') {
       throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed database operations require a databases node');
     }
+  }
+
+  private async assertBuilderNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    const hasDedicatedRuntime =
+      Array.isArray(reported) &&
+      (reported.includes('docker_builder_dedicated_runtime_v1') ||
+        // Rolling compatibility with the previous gVisor-backed worker profile.
+        reported.includes('docker_builder_isolation_v1'));
+    if (
+      node.type !== 'builder' ||
+      node.status !== 'online' ||
+      !Array.isArray(reported) ||
+      !reported.includes('docker_builder_execution_v1') ||
+      !hasDedicatedRuntime
+    ) {
+      throw new AppError(
+        409,
+        'BUILDER_NODE_NOT_READY',
+        'Builder node must be online with the dedicated BuildKit/containerd runtime ready'
+      );
+    }
+  }
+
+  async sendDockerBuildCommand(
+    nodeId: string,
+    command: NonNullable<GatewayCommand['dockerBuild']>
+  ): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    await this.assertBuilderNode(nodeId);
+    return this.registry.sendCommand(nodeId, { dockerBuild: command }, 30_000);
+  }
+
+  async cancelDockerBuild(nodeId: string, buildId: string, reason: string): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    await this.assertBuilderNode(nodeId);
+    return this.registry.sendCommand(nodeId, { dockerBuildCancel: { buildId, reason } }, 30_000);
   }
 
   async applyConfig(
@@ -474,6 +518,74 @@ export class NodeDispatchService {
     );
   }
 
+  async sendDockerRegistryBindings(
+    nodeId: string,
+    bindings: Array<{
+      bindingId: string;
+      role: 'builder' | 'runtime';
+      generation: number;
+      repository: string;
+      actions: Array<'pull' | 'push'>;
+      localAddress: '127.0.0.1';
+      localPort: number;
+      relayOwnerKind: 'registry_secure_link';
+      relayOwnerId: string;
+      authorization: string;
+      authorizationExpiresAtUnix: number;
+    }>,
+    timeoutMs = 30_000
+  ): Promise<CommandResult> {
+    await this.assertDockerRegistryProxyNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        syncDockerRegistryBindings: {
+          bindings: bindings.map((binding) => ({
+            ...binding,
+            generation: String(binding.generation),
+            authorizationExpiresAtUnix: String(binding.authorizationExpiresAtUnix),
+          })),
+        },
+      },
+      timeoutMs
+    );
+  }
+
+  async sendNginxRegistryBindings(
+    nodeId: string,
+    bindings: Array<{
+      bindingId: string;
+      role: 'ingress';
+      generation: number;
+      repository: '*';
+      actions: ['pull', 'push'];
+      localAddress: '127.0.0.1';
+      localPort: number;
+      relayOwnerKind: 'registry_ingress';
+      relayOwnerId: string;
+      authorization: '';
+      authorizationExpiresAtUnix: 0;
+    }>,
+    timeoutMs = 30_000
+  ): Promise<CommandResult> {
+    await this.assertNginxRegistryIngressNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        syncDockerRegistryBindings: {
+          bindings: bindings.map((binding) => ({
+            ...binding,
+            generation: String(binding.generation),
+            authorizationExpiresAtUnix: '0',
+          })),
+        },
+      },
+      timeoutMs
+    );
+  }
+
   async probeProxySecureLink(
     nodeId: string,
     input: {
@@ -523,6 +635,40 @@ export class NodeDispatchService {
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
         'Update both Nginx and Docker daemons before creating this Docker proxy link'
+      );
+    }
+  }
+
+  private async assertDockerRegistryProxyNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (!Array.isArray(reported) || !reported.includes('docker_registry_proxy_v1')) {
+      throw new AppError(
+        409,
+        'DOCKER_REGISTRY_PROXY_UPDATE_REQUIRED',
+        'Update the Docker daemon before enabling internal registry access on this node'
+      );
+    }
+  }
+
+  private async assertNginxRegistryIngressNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (node.type !== 'nginx' || !Array.isArray(reported) || !reported.includes('nginx_registry_ingress_v1')) {
+      throw new AppError(
+        409,
+        'NGINX_REGISTRY_INGRESS_UPDATE_REQUIRED',
+        'Update the selected Nginx daemon before enabling external registry access'
       );
     }
   }
@@ -750,6 +896,55 @@ export class NodeDispatchService {
       nodeId,
       {
         dockerDeployment: { action, ...options } as any,
+      },
+      timeoutMs
+    );
+  }
+
+  async sendDockerComposeCommand(
+    nodeId: string,
+    action: string,
+    options: {
+      operationId: string;
+      projectId: string;
+      projectName: string;
+      revisionId?: string;
+      configDigest?: string;
+      composeYaml?: Buffer;
+      normalizedModelJson?: string;
+      variables?: Record<string, string>;
+      secrets?: Record<string, string>;
+      removeOrphans?: boolean;
+      volumeNames?: string[];
+    },
+    timeoutMs = dockerComposeCommandTimeoutMs
+  ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    if (!this.registry.hasCapability(nodeId, 'docker_compose_v1')) {
+      throw new AppError(
+        409,
+        'COMPOSE_CAPABILITY_UNAVAILABLE',
+        'The connected Docker daemon does not support first-class Compose operations'
+      );
+    }
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        dockerCompose: {
+          action,
+          operationId: options.operationId,
+          projectId: options.projectId,
+          projectName: options.projectName,
+          revisionId: options.revisionId ?? '',
+          configDigest: options.configDigest ?? '',
+          composeYaml: options.composeYaml ?? Buffer.alloc(0),
+          normalizedModelJson: options.normalizedModelJson ?? '',
+          variables: options.variables ?? {},
+          secrets: options.secrets ?? {},
+          removeOrphans: options.removeOrphans ?? false,
+          volumeNames: options.volumeNames ?? [],
+        },
       },
       timeoutMs
     );

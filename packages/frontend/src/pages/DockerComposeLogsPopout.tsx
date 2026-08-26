@@ -13,10 +13,17 @@ const SERVICE_COLORS = [
   "\x1b[93m",
 ] as const;
 
-export function DockerComposeLogsPopout() {
-  const { nodeId, project } = useParams<{ nodeId: string; project: string }>();
+export function ComposeLogsView({
+  nodeId,
+  project,
+  className = "h-full min-h-80 bg-card",
+}: {
+  nodeId?: string;
+  project?: string;
+  className?: string;
+}) {
   const { hasScopedAccess } = useAuthStore();
-  const canViewLogs = !!nodeId && !!project && hasScopedAccess("docker:containers:view");
+  const canViewLogs = !!nodeId && !!project && hasScopedAccess("docker:compose:view");
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -49,10 +56,6 @@ export function DockerComposeLogsPopout() {
     }
     return serviceColorMap.current.get(service)!;
   }, []);
-
-  useEffect(() => {
-    if (project) document.title = `Compose Logs — ${project}`;
-  }, [project]);
 
   const connect = useCallback(async () => {
     if (!canViewLogs || !nodeId || !project) return;
@@ -202,10 +205,18 @@ export function DockerComposeLogsPopout() {
   if (!canViewLogs) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-background px-4 text-sm text-muted-foreground">
-        You don't have permission to access container logs.
+        You don't have permission to access Compose logs.
       </div>
     );
   }
 
-  return <div ref={termRef} className="fixed inset-0 bg-card" style={{ padding: 4 }} />;
+  return <div ref={termRef} className={className} style={{ padding: 4 }} />;
+}
+
+export function DockerComposeLogsPopout() {
+  const { nodeId, project } = useParams<{ nodeId: string; project: string }>();
+  useEffect(() => {
+    if (project) document.title = `Compose Logs — ${project}`;
+  }, [project]);
+  return <ComposeLogsView nodeId={nodeId} project={project} className="fixed inset-0 bg-card" />;
 }

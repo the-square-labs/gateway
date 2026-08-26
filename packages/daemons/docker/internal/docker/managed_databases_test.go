@@ -465,6 +465,70 @@ func TestAttachDatabaseLoopDeviceIgnoresSuccessfulLosetupWarnings(t *testing.T) 
 	}
 }
 
+func TestAttachDatabaseLoopDeviceUsesVisibleDelegatedDeviceWhenLoopControlFindIsNotUsable(t *testing.T) {
+	binDir := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "losetup-args")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$LOSETUP_ARGS"
+case "$1" in
+  -j) exit 0 ;;
+  /dev/loop20)
+    if [ "$#" -eq 1 ]; then
+      printf 'losetup: /dev/loop20: No such file or directory\n' >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(binDir, "losetup"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	t.Setenv("LOSETUP_ARGS", argsPath)
+
+	loopDevice, err := attachDatabaseLoopDeviceFromCandidates(
+		t.Context(),
+		"/var/lib/gateway/database.img",
+		[]string{"/dev/loop20"},
+	)
+	if err != nil {
+		t.Fatalf("attach delegated loop device: %v", err)
+	}
+	if loopDevice != "/dev/loop20" {
+		t.Fatalf("expected delegated loop device, got %q", loopDevice)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "/dev/loop20 /var/lib/gateway/database.img") {
+		t.Fatalf("expected explicit delegated loop attach, got %q", args)
+	}
+}
+
+func TestAttachDatabaseLoopDeviceReusesVisibleExistingAssociation(t *testing.T) {
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = \"-j\" ]; then printf '/dev/loop21: [0000]:1 ($2)\\n'; exit 0; fi\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "losetup"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	loopDevice, err := attachDatabaseLoopDeviceFromCandidates(
+		t.Context(),
+		"/var/lib/gateway/database.img",
+		[]string{"/dev/loop20", "/dev/loop21"},
+	)
+	if err != nil {
+		t.Fatalf("reuse delegated loop device: %v", err)
+	}
+	if loopDevice != "/dev/loop21" {
+		t.Fatalf("expected existing delegated association, got %q", loopDevice)
+	}
+}
+
 func TestValidateManagedDatabaseBindingInputRejectsUnsafeValues(t *testing.T) {
 	input := managedDatabaseBindingCommand{
 		BindingID:     "binding_123",

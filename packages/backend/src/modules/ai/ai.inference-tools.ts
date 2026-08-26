@@ -162,15 +162,15 @@ async function manageToken(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation, 'operation');
   const service = container.resolve(InferenceTokenService);
   if (operation === 'list') {
-    requireScope(user, 'inference:tokens:manage');
+    requireScope(user, 'feat:ai:use');
     return (await service.listTokens(user.id)).filter((token) => token.status === 'active');
   }
   if (operation === 'create') {
-    requireScope(user, 'inference:tokens:manage');
+    requireScope(user, 'feat:ai:use');
     return service.createToken(user.id, CreateInferenceTokenSchema.parse({ name: args.name }));
   }
   if (operation === 'revoke') {
-    requireScope(user, 'inference:tokens:manage');
+    requireScope(user, 'feat:ai:use');
     await service.revokeToken(user.id, requiredString(args.tokenId, 'tokenId'));
     return { success: true };
   }

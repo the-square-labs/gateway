@@ -27,6 +27,7 @@ interface RuntimeSectionProps {
   setMaxRetries: (v: string) => void;
   memoryMB: string;
   setMemoryMB: (v: string) => void;
+  memoryReservationMB?: string;
   memSwapMB: string;
   setMemSwapMB: (v: string) => void;
   cpuCount: string;
@@ -57,6 +58,7 @@ export function RuntimeSection({
   setMaxRetries,
   memoryMB,
   setMemoryMB,
+  memoryReservationMB,
   memSwapMB,
   setMemSwapMB,
   cpuCount,
@@ -150,6 +152,16 @@ export function RuntimeSection({
           />
         </SettingsInlineControl>
       </SettingsControlRow>
+      {memoryReservationMB !== undefined ? (
+        <SettingsControlRow
+          title="Memory Reservation"
+          description="Soft memory reservation from the Compose service configuration"
+        >
+          <SettingsInlineControl label="Reservation (MB)">
+            <Input value={memoryReservationMB} placeholder="Not set" disabled />
+          </SettingsInlineControl>
+        </SettingsControlRow>
+      ) : null}
       <SettingsControlRow
         title="Swap Limit"
         description={`Max: ${maxSwapBytes !== null && maxSwapBytes >= 0 ? formatBytes(maxSwapBytes) : "detecting"}`}

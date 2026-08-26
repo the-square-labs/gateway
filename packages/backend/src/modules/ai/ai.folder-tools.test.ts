@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
 import { executeFolderTool } from './ai.folder-tools.js';
@@ -143,6 +144,28 @@ describe('AI folder tools', () => {
         { id: proxyOneId, sortOrder: 0 },
         { id: proxyTwoId, sortOrder: 1 },
       ],
+    });
+  });
+
+  it('limits Compose folder listings to project-scoped assignments', async () => {
+    const dockerFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([{ id: 'compose-folder-1', name: 'Stacks', children: [] }]),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === DockerFolderService) return dockerFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:compose:view:node-1/project-1'] }, 'list_resource_folders', {
+        resourceType: 'docker',
+        dockerResourceType: 'compose',
+      })
+    ).resolves.toEqual([{ id: 'compose-folder-1', name: 'Stacks', children: [] }]);
+    expect(dockerFolderService.getFolderTree).toHaveBeenCalledWith({
+      resourceType: 'compose',
+      allowedNodeIds: [],
+      allowedResourceRefs: [{ nodeId: 'node-1', resourceKey: 'project-1' }],
     });
   });
 });

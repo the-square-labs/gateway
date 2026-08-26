@@ -216,6 +216,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   if (loading) {
     return (
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
         id="gateway-license"
         title="License"
         description="Loading license status"
@@ -231,6 +232,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   return (
     <>
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
         id="gateway-license"
         title="License"
         description="Current Gateway license and activation state"

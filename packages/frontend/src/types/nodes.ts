@@ -1,4 +1,11 @@
-export type NodeType = "nginx" | "bastion" | "monitoring" | "docker" | "databases" | "relay";
+export type NodeType =
+  | "nginx"
+  | "bastion"
+  | "monitoring"
+  | "docker"
+  | "builder"
+  | "databases"
+  | "relay";
 export type NodeStatus = "pending" | "online" | "offline" | "error";
 export type NodeAppearanceColor =
   | "blue"

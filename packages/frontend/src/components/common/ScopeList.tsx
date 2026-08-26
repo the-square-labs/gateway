@@ -207,7 +207,8 @@ function getResourceOptions(
   domains?: Domain[],
   loggingEnvironments?: LoggingEnvironment[],
   loggingSchemas?: LoggingSchema[],
-  dockerResources?: DockerResourceOption[]
+  dockerResources?: DockerResourceOption[],
+  dockerRegistryRepositories?: string[]
 ): ResourceOption[] {
   if (scope.startsWith("logs:schemas:")) {
     return (loggingSchemas ?? []).map((schema) => ({
@@ -254,6 +255,12 @@ function getResourceOptions(
           })),
       ]);
   }
+  if (scope.startsWith("docker:registries:internal:")) {
+    return (dockerRegistryRepositories ?? []).map((repository) => ({
+      id: repository,
+      label: repository,
+    }));
+  }
   if (scope.startsWith("docker:")) {
     return (nodes ?? [])
       .filter((n) => n.type === "docker")
@@ -290,6 +297,9 @@ function getResourceLabel(scope: string): string {
   }
   if (scope.startsWith("databases:")) {
     return "Restrict to database folders or individual databases (leave unchecked for all):";
+  }
+  if (scope.startsWith("docker:registries:internal:")) {
+    return "Restrict to specific internal registry repositories (leave unchecked for all):";
   }
   if (scope.startsWith("docker:")) {
     return scope.startsWith("docker:containers:") && scope !== "docker:containers:create"
@@ -329,6 +339,7 @@ export function ScopeList({
   selectionFilter = "all",
 }: ScopeListProps) {
   const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
+  const [dockerRegistryRepositories, setDockerRegistryRepositories] = useState<string[]>([]);
   const [folderOptions, setFolderOptions] = useState<FolderOption[]>([]);
   const [domainResources, setDomainResources] = useState<Domain[]>([]);
   const [loggingEnvironments, setLoggingEnvironments] = useState<LoggingEnvironment[]>([]);
@@ -443,6 +454,30 @@ export function ScopeList({
     };
   }, [nodes, restrictableScopes, scopes]);
 
+  useEffect(() => {
+    const needsRepositories = scopes.some(
+      (scope) =>
+        scope.value.startsWith("docker:registries:internal:") &&
+        restrictableScopes?.includes(scope.value)
+    );
+    if (!needsRepositories) {
+      setDockerRegistryRepositories([]);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .listDockerInternalRegistryRepositories()
+      .then((repositories) => {
+        if (!cancelled) setDockerRegistryRepositories(repositories);
+      })
+      .catch(() => {
+        if (!cancelled) setDockerRegistryRepositories([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [restrictableScopes, scopes]);
+
   return (
     <div className={cn("max-sm:max-h-[40vh] max-sm:overflow-y-auto", viewportClassName)}>
       {categories.map((cat) => {
@@ -478,6 +513,7 @@ export function ScopeList({
                 loggingEnvironments={loggingEnvironments}
                 loggingSchemas={loggingSchemas}
                 dockerResources={dockerResources}
+                dockerRegistryRepositories={dockerRegistryRepositories}
                 folderOptions={folderOptions}
                 restrictableScopes={restrictableScopes}
                 allowedResourceIds={allowedResourceIds}
@@ -510,6 +546,7 @@ function ScopeRow({
   loggingEnvironments,
   loggingSchemas,
   dockerResources,
+  dockerRegistryRepositories,
   folderOptions,
   restrictableScopes,
   allowedResourceIds,
@@ -533,6 +570,7 @@ function ScopeRow({
   loggingEnvironments?: LoggingEnvironment[];
   loggingSchemas?: LoggingSchema[];
   dockerResources?: DockerResourceOption[];
+  dockerRegistryRepositories?: string[];
   folderOptions?: FolderOption[];
   restrictableScopes?: readonly string[];
   allowedResourceIds?: Record<string, string[]>;
@@ -555,7 +593,8 @@ function ScopeRow({
         domains,
         loggingEnvironments,
         loggingSchemas,
-        dockerResources
+        dockerResources,
+        dockerRegistryRepositories
       )
     : [];
   const allowedIds = allowedResourceIds?.[scope.value];

@@ -97,6 +97,9 @@ interface GitLabCommit {
 
 interface GitLabBranch {
   can_push?: boolean;
+  commit?: {
+    id?: string;
+  } | null;
 }
 
 interface GitLabCiLintResponse {
@@ -350,7 +353,13 @@ export class GitLabProvider implements VcsConnectorProvider {
       this.projectPath(project, `/repository/branches/${encodeURIComponent(branch)}`),
       { allowNotFound: true }
     );
-    return result ? { exists: true, canPush: result.can_push === true } : { exists: false, canPush: false };
+    return result
+      ? {
+          exists: true,
+          canPush: result.can_push === true,
+          ...(result.commit?.id ? { commitSha: result.commit.id } : {}),
+        }
+      : { exists: false, canPush: false };
   }
 
   async createBranch(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string, ref: string): Promise<void> {

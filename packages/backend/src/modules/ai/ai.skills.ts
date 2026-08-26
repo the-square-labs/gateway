@@ -251,7 +251,7 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 - Gateway Inference is separate from AI Workspace provider configuration and Gateway MCP. It is a standalone external model gateway with dedicated provider connections, models, accounting, limits, continuation state, and gwi_ runtime tokens; never reuse Workspace, MCP, gw_, or gwo_ credentials on its data plane.
 - Before configuring providers, models, limits, tokens, or client harnesses, activate the Inference tool category and read internal_documentation({ topic: "inference" }) for the current schemas and lifecycle.
 - Read Gateway settings before client setup. Confirm generalSettings.features.inferenceEnabled; without read permission, tell the user an administrator must confirm it rather than guessing.
-- Users need feat:ai:use for inference and personal usage. Creating/revoking their runtime tokens also requires inference:tokens:manage. Never attempt to issue a token for another user.
+- Users need feat:ai:use for inference, personal usage, and creating or revoking their own runtime tokens. Never attempt to issue a token for another user.
 
 ### Administrator workflow
 - Configure in this order: enable the feature, connect and synchronize a provider, publish a logical model with access/capabilities/limits, configure default or per-user limits, then test with an intended user.

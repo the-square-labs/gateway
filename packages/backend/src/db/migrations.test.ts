@@ -167,6 +167,25 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain("COALESCE(\"scopes\", '[]'::jsonb) - 'inference:use' - 'inference:usage:view:self'");
   });
 
+  it('merges inference token management into AI use and backfills Workspace access', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0161_merge_inference_tokens_into_ai_use.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain("WHEN entry.value = 'inference:tokens:manage' THEN 'feat:ai:use'");
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain('UPDATE "api_tokens"');
+    expect(migration).toContain('UPDATE "oauth_authorization_codes"');
+    expect(migration).toContain('UPDATE "oauth_refresh_tokens"');
+    expect(migration).toContain('UPDATE "oauth_access_tokens"');
+    expect(migration).toContain('UPDATE "ai_run_tool_calls"');
+    expect(migration).toContain('UPDATE "sandbox_jobs"');
+    expect(migration).toContain("WHERE \"name\" IN ('viewer', 'operator', 'admin', 'system-admin')");
+    expect(migration).toContain("'ai:workspace:use'");
+  });
+
   it('collapses GitLab registry-view grants into the canonical Docker registry permission', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0126_collapse_gitlab_registry_view.sql'),
@@ -196,6 +215,61 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain("scope_value <> 'inference:setup'");
     expect(migration).not.toContain('UPDATE "oauth_access_tokens"');
     expect(migration).not.toContain('UPDATE "oauth_refresh_tokens"');
+  });
+
+  it('preserves the published 0155 migration before creating Compose tables and proxy bindings', () => {
+    const entries = readMigrationJournal();
+    const publishedScopeMigration = entries.findIndex((entry) => entry.tag === '0155_split_ai_workspace_access');
+    const composeTables = entries.findIndex((entry) => entry.tag === '0156_organic_microbe');
+    const composeProxyBindings = entries.findIndex((entry) => entry.tag === '0157_blue_network');
+
+    expect(publishedScopeMigration).toBeGreaterThanOrEqual(0);
+    expect(composeTables).toBe(publishedScopeMigration + 1);
+    expect(composeProxyBindings).toBe(composeTables + 1);
+
+    const composeMigration = readFileSync(join(process.cwd(), 'src/db/migrations/0156_organic_microbe.sql'), 'utf8');
+    const proxyMigration = readFileSync(join(process.cwd(), 'src/db/migrations/0157_blue_network.sql'), 'utf8');
+    expect(composeMigration).toContain('CREATE TABLE "docker_compose_projects"');
+    expect(proxyMigration).toContain('REFERENCES "public"."docker_compose_projects"');
+  });
+
+  it('adds the Docker build platform after the Compose migration tail', () => {
+    const entries = readMigrationJournal();
+    const composeCleanup = entries.findIndex((entry) => entry.tag === '0158_clear_darkstar');
+    const buildPlatform = entries.findIndex((entry) => entry.tag === '0159_rich_warbird');
+
+    expect(composeCleanup).toBeGreaterThanOrEqual(0);
+    expect(buildPlatform).toBe(composeCleanup + 1);
+
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0159_rich_warbird.sql'), 'utf8');
+    expect(migration).toContain('ALTER TYPE "public"."node_type" ADD VALUE \'builder\'');
+    expect(migration).toContain('CREATE TABLE "docker_builds"');
+    expect(migration).toContain('CREATE TABLE "docker_build_artifacts"');
+    expect(migration).toContain('CREATE TABLE "docker_build_secrets"');
+    expect(migration).toContain('CREATE TABLE "docker_source_bindings"');
+    expect(migration).toContain('CREATE TABLE "docker_source_webhook_deliveries"');
+    expect(migration).toContain('CREATE TABLE "docker_registry_node_bindings"');
+    expect(migration).toContain('CREATE TABLE "docker_internal_registry_state"');
+    expect(migration).toContain('ALTER TABLE "relay_endpoints" ALTER COLUMN "owner_id" SET DATA TYPE text');
+    expect(migration).toContain('"docker_builds_superseded_by_build_id_docker_builds_id_fk"');
+    expect(migration).toContain('"docker_build_artifacts_repository_digest_platform_idx"');
+    expect(migration).not.toContain('"docker_build_artifacts_repository_digest_platform_unique"');
+  });
+
+  it('adds project-level Compose build batches after the base build platform', () => {
+    const entries = readMigrationJournal();
+    const buildPlatform = entries.findIndex((entry) => entry.tag === '0159_rich_warbird');
+    const composeBuilds = entries.findIndex((entry) => entry.tag === '0160_lame_prodigy');
+
+    expect(composeBuilds).toBe(buildPlatform + 1);
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0160_lame_prodigy.sql'), 'utf8');
+    expect(migration).toContain('CREATE TABLE "docker_build_batches"');
+    expect(migration).toContain('ADD COLUMN "compose_project_id" uuid');
+    expect(migration).toContain('ADD COLUMN "batch_id" uuid');
+    expect(migration).toContain('ADD COLUMN "compose_revision_id" uuid');
+    expect(migration).toContain('docker_builds_batch_service_unique');
+    expect(migration).toContain('docker_source_bindings_compose_project_unique');
+    expect(migration).toContain("NOT LIKE '%/../%'");
   });
 
   it('preserves existing AI Workspace grants when splitting inference access', () => {

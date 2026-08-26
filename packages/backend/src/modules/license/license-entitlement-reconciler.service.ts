@@ -1,4 +1,5 @@
 import { createChildLogger } from '@/lib/logger.js';
+import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import type { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -10,6 +11,7 @@ const logger = createChildLogger('LicenseEntitlementReconciler');
 export class LicenseEntitlementReconcilerService {
   private unsubscribe: (() => void) | null = null;
   private pages?: PageProfileService;
+  private internalRegistry?: DockerInternalRegistryService;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -21,6 +23,10 @@ export class LicenseEntitlementReconcilerService {
 
   setPageProfileService(pages: PageProfileService): void {
     this.pages = pages;
+  }
+
+  setDockerInternalRegistryService(registry: DockerInternalRegistryService): void {
+    this.internalRegistry = registry;
   }
 
   async start(): Promise<void> {
@@ -89,6 +95,23 @@ export class LicenseEntitlementReconcilerService {
         });
       } catch (error) {
         logger.warn('Failed to disable Pages immutable previews after license entitlement loss', {
+          plan: license.plan,
+          status: license.status,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!features.has('git-push-to-deploy') && this.internalRegistry) {
+      try {
+        if (await this.internalRegistry.disableExternalAccessForEntitlementLoss()) {
+          logger.warn('Disabled external internal-registry access after Business entitlement loss', {
+            plan: license.plan,
+            status: license.status,
+          });
+        }
+      } catch (error) {
+        logger.warn('Failed to disable external internal-registry access after Business entitlement loss', {
           plan: license.plan,
           status: license.status,
           error: error instanceof Error ? error.message : String(error),

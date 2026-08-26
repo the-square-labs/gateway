@@ -74,6 +74,7 @@ interface DomainAutocompleteInputProps {
   registeredOnly?: boolean;
   nginxNodeId?: string;
   onDomainSelect?: (domain: DomainSearchResult | null) => void;
+  staticSuggestions?: DomainSearchResult[];
 }
 
 export function DomainAutocompleteInput({
@@ -84,10 +85,17 @@ export function DomainAutocompleteInput({
   registeredOnly = false,
   nginxNodeId,
   onDomainSelect,
+  staticSuggestions,
 }: DomainAutocompleteInputProps) {
-  const [domains, setDomains] = useState<DomainSearchResult[]>(getCachedDomainSuggestions);
+  const [domains, setDomains] = useState<DomainSearchResult[]>(
+    staticSuggestions ?? getCachedDomainSuggestions()
+  );
 
   useEffect(() => {
+    if (staticSuggestions) {
+      setDomains(staticSuggestions);
+      return;
+    }
     let cancelled = false;
     void loadDomainSuggestions(registeredOnly).then((loadedDomains) => {
       if (!cancelled) setDomains(loadedDomains);
@@ -95,7 +103,7 @@ export function DomainAutocompleteInput({
     return () => {
       cancelled = true;
     };
-  }, [registeredOnly]);
+  }, [registeredOnly, staticSuggestions]);
 
   useEffect(() => {
     if (!nginxNodeId || !value.trim()) return;

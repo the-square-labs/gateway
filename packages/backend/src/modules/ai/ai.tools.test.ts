@@ -827,6 +827,8 @@ describe('AI tool scope filtering', () => {
       'manage_docker_registry',
       'manage_docker_volume',
       'manage_docker_network',
+      'list_docker_builds',
+      'manage_docker_source',
       'manage_docker_task',
       'manage_docker_container_config',
     ]);
@@ -837,6 +839,8 @@ describe('AI tool scope filtering', () => {
       'get_docker_deployment',
       'get_docker_container_stats',
       'get_docker_container_logs',
+      'list_docker_builds',
+      'manage_docker_source',
       'manage_docker_container_config',
     ]);
     expect(dockerToolNamesForScopes(['docker:containers:manage'])).toEqual([
@@ -858,6 +862,8 @@ describe('AI tool scope filtering', () => {
       'update_docker_container_image',
       'get_docker_container_stats',
       'get_docker_container_logs',
+      'list_docker_builds',
+      'manage_docker_source',
       'manage_docker_container_config',
     ]);
     expect(dockerToolNamesForScopes(['docker:images:view'])).toEqual(['list_docker_images']);
@@ -874,6 +880,8 @@ describe('AI tool scope filtering', () => {
     expect(isDestructiveTool('list_docker_containers')).toBe(false);
     expect(isDestructiveTool('create_docker_container')).toBe(true);
     expect(isDestructiveTool('execute_docker_container_console_command')).toBe(true);
+    expect(isDestructiveTool('list_docker_builds')).toBe(false);
+    expect(isDestructiveTool('manage_docker_source')).toBe(true);
     expect(isDestructiveTool('manage_docker_task')).toBe(false);
   });
 
