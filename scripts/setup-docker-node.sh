@@ -327,7 +327,7 @@ preflight_builder_runtime() {
         command_exists "$binary" || missing+=("$binary")
     done
     if [[ "${#missing[@]}" -gt 0 ]]; then
-        die "Builder runtime bundle is incomplete. Missing: ${missing[*]}. Re-run the Gateway builder installer before enrollment."
+        die "Builder runtime is incomplete. Missing: ${missing[*]}. Re-run the Gateway builder installer before enrollment."
     fi
     if [[ "$BUILDER_EGRESS_PROFILE" == "internet" ]]; then
         local plugin
@@ -1156,8 +1156,8 @@ dry_run_preview() {
     ok "Checksum verified (dry run)"
     ok "docker-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
     if [[ "$DOCKER_MODE" == "builder" ]]; then
-        log "Downloading Gateway builder runtime bundle..."
-        log "Verifying builder runtime checksum..."
+        log "Downloading pinned Build Worker runtime components..."
+        log "Verifying upstream runtime checksums..."
         ok "Builder runtime installed (dry run)"
     fi
     log "Writing config and enrolling with Gateway..."
@@ -1271,15 +1271,47 @@ install_daemon() {
     fi
 }
 
-install_builder_runtime_bundle() {
+install_builder_runtime() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
-    local bundle_name="docker-builder-runtime-linux-${ARCH}.tar.gz"
-    local bundle_file="/tmp/${bundle_name}"
-    local checksums_file="/tmp/gateway_builder_runtime_checksums.txt"
-    local staging_dir
+    local containerd_version="2.3.4"
+    local buildkit_version="0.32.2"
+    local runc_version="1.5.1"
+    local cni_version="1.9.1"
+    local syft_version="1.51.0"
+    local grype_version="0.117.0"
+    local containerd_sha256 buildkit_sha256 runc_sha256 cni_sha256 syft_sha256 grype_sha256
+    case "$ARCH" in
+        amd64)
+            containerd_sha256="9d68969855fbf676cdb8ed758e420fb048d61f984f61de3e53eddfebe484d168"
+            buildkit_sha256="2975d0f651ad96ba8b80b9992ae1f9a964f4408569af5b6dc36544165c3926af"
+            cni_sha256="b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303"
+            syft_sha256="2a2e837a2c8d59ec9af5472ee22d3b04ee463c4e44476ecf993fd1e5ab6ebc7f"
+            grype_sha256="38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26"
+            runc_sha256="177df879d50c913eb205e898d5c1c05a18f574053c0ce5524c471208eaf06f6f"
+            ;;
+        arm64)
+            containerd_sha256="a985fbb7e18fc0362d31a055338f5d7b0e087a3e27f14c70d1c5965399a29f95"
+            buildkit_sha256="9e8f46bf309ec0ab262967be5538a4dbe06be756a82621f98253933bac5dcf92"
+            cni_sha256="56171987d3947707c3563db2f4001bccaf50fd63468611b9f3cbecb1375ee7ec"
+            syft_sha256="6c0466811541ea03add5213a60a1562f0851e4c0b0ecfdee1a694a9455285900"
+            grype_sha256="935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b"
+            runc_sha256="ca70e7dbd6616ca782a59b5d3ac86909123fdaa9fa3f89dcf29051c70eee7ce9"
+            ;;
+        *) die "Builder runtime is supported only on amd64 and arm64 hosts." ;;
+    esac
+
+    local staging_dir download_dir
     local installed_manifest="/opt/gateway-builder/runtime-manifest"
 
-    if [[ -f "$installed_manifest" ]] && grep -Fqx "gateway_release=${RESOLVED_DAEMON_VERSION}" "$installed_manifest"; then
+    if [[ -f "$installed_manifest" ]] \
+        && grep -Fqx "format=2" "$installed_manifest" \
+        && grep -Fqx "architecture=${ARCH}" "$installed_manifest" \
+        && grep -Fqx "containerd=${containerd_version}" "$installed_manifest" \
+        && grep -Fqx "buildkit=${buildkit_version}" "$installed_manifest" \
+        && grep -Fqx "runc=${runc_version}" "$installed_manifest" \
+        && grep -Fqx "cni_plugins=${cni_version}" "$installed_manifest" \
+        && grep -Fqx "syft=${syft_version}" "$installed_manifest" \
+        && grep -Fqx "grype=${grype_version}" "$installed_manifest"; then
         local complete=1 binary plugin
         for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
             command_exists "$binary" || complete=0
@@ -1293,37 +1325,79 @@ install_builder_runtime_bundle() {
         fi
     fi
 
-    log "Downloading Gateway builder runtime bundle..."
-    if ! download_with_progress "${RELEASE_BASE}/${bundle_name}" "$bundle_file"; then
-        rm -f "$bundle_file"
-        die "Builder runtime bundle is unavailable for docker-daemon ${RESOLVED_DAEMON_VERSION}."
-    fi
-    if ! curl -fsSL "${RELEASE_BASE}/checksums.txt" -o "$checksums_file" >> "$LOG_FILE" 2>&1; then
-        rm -f "$bundle_file" "$checksums_file"
-        die "Could not download checksums.txt for builder runtime verification."
-    fi
-    local expected actual
-    expected=$(awk -v name="$bundle_name" '$2 == name {print $1; exit}' "$checksums_file")
-    actual=$(sha256sum "$bundle_file" | awk '{print $1}')
-    rm -f "$checksums_file"
-    [[ -n "$expected" ]] || die "No checksum found for ${bundle_name} in checksums.txt."
-    [[ "$expected" == "$actual" ]] || die "Builder runtime checksum verification failed."
-
     staging_dir=$(mktemp -d /tmp/gateway-builder-runtime.XXXXXX)
-    trap 'rm -rf "$staging_dir" "$bundle_file"' RETURN
-    tar -xzf "$bundle_file" -C "$staging_dir"
+    download_dir=$(mktemp -d /tmp/gateway-builder-downloads.XXXXXX)
+    trap 'rm -rf "$staging_dir" "$download_dir"' RETURN
+    install -d -m 0755 "$staging_dir/bin" "$staging_dir/cni/bin" \
+        "$download_dir/containerd" "$download_dir/buildkit" "$download_dir/cni" \
+        "$download_dir/syft" "$download_dir/grype"
+
+    download_builder_component() {
+        local label="$1" url="$2" expected="$3" target="$4"
+        log "Downloading ${label}..."
+        download_with_progress "$url" "$target" || die "Failed to download ${label} from its official release."
+        printf '%s  %s\n' "$expected" "$target" | sha256sum --check --status || \
+            die "Checksum verification failed for ${label}."
+    }
+
+    download_builder_component "containerd ${containerd_version}" \
+        "https://github.com/containerd/containerd/releases/download/v${containerd_version}/containerd-${containerd_version}-linux-${ARCH}.tar.gz" \
+        "$containerd_sha256" "$download_dir/containerd.tar.gz"
+    download_builder_component "BuildKit ${buildkit_version}" \
+        "https://github.com/moby/buildkit/releases/download/v${buildkit_version}/buildkit-v${buildkit_version}.linux-${ARCH}.tar.gz" \
+        "$buildkit_sha256" "$download_dir/buildkit.tar.gz"
+    download_builder_component "CNI plugins ${cni_version}" \
+        "https://github.com/containernetworking/plugins/releases/download/v${cni_version}/cni-plugins-linux-${ARCH}-v${cni_version}.tgz" \
+        "$cni_sha256" "$download_dir/cni.tar.gz"
+    download_builder_component "Syft ${syft_version}" \
+        "https://github.com/anchore/syft/releases/download/v${syft_version}/syft_${syft_version}_linux_${ARCH}.tar.gz" \
+        "$syft_sha256" "$download_dir/syft.tar.gz"
+    download_builder_component "Grype ${grype_version}" \
+        "https://github.com/anchore/grype/releases/download/v${grype_version}/grype_${grype_version}_linux_${ARCH}.tar.gz" \
+        "$grype_sha256" "$download_dir/grype.tar.gz"
+    download_builder_component "runc ${runc_version}" \
+        "https://github.com/opencontainers/runc/releases/download/v${runc_version}/runc.${ARCH}" \
+        "$runc_sha256" "$staging_dir/bin/runc"
+
+    tar -xzf "$download_dir/containerd.tar.gz" -C "$download_dir/containerd"
+    tar -xzf "$download_dir/buildkit.tar.gz" -C "$download_dir/buildkit"
+    tar -xzf "$download_dir/cni.tar.gz" -C "$download_dir/cni"
+    tar -xzf "$download_dir/syft.tar.gz" -C "$download_dir/syft"
+    tar -xzf "$download_dir/grype.tar.gz" -C "$download_dir/grype"
+
     local binary plugin
+    for binary in containerd ctr containerd-shim-runc-v2; do
+        install -m 0755 "$download_dir/containerd/bin/${binary}" "$staging_dir/bin/${binary}"
+    done
+    for binary in buildkitd buildctl; do
+        install -m 0755 "$download_dir/buildkit/bin/${binary}" "$staging_dir/bin/${binary}"
+    done
+    install -m 0755 "$download_dir/syft/syft" "$staging_dir/bin/syft"
+    install -m 0755 "$download_dir/grype/grype" "$staging_dir/bin/grype"
+    for plugin in bridge host-local firewall loopback; do
+        install -m 0755 "$download_dir/cni/${plugin}" "$staging_dir/cni/bin/${plugin}"
+    done
+
+    printf '%s\n' \
+        "format=2" \
+        "architecture=${ARCH}" \
+        "containerd=${containerd_version}" \
+        "buildkit=${buildkit_version}" \
+        "runc=${runc_version}" \
+        "cni_plugins=${cni_version}" \
+        "syft=${syft_version}" \
+        "grype=${grype_version}" \
+        > "$staging_dir/runtime-manifest"
+
     for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
         [[ -f "${staging_dir}/bin/${binary}" && ! -L "${staging_dir}/bin/${binary}" && -x "${staging_dir}/bin/${binary}" ]] || \
-            die "Builder runtime bundle is missing regular executable bin/${binary}."
+            die "Builder runtime staging is missing regular executable bin/${binary}."
     done
     for plugin in bridge host-local firewall loopback; do
         [[ -f "${staging_dir}/cni/bin/${plugin}" && ! -L "${staging_dir}/cni/bin/${plugin}" && -x "${staging_dir}/cni/bin/${plugin}" ]] || \
-            die "Builder runtime bundle is missing regular CNI plugin ${plugin}."
+            die "Builder runtime staging is missing regular CNI plugin ${plugin}."
     done
-    [[ -f "${staging_dir}/runtime-manifest" && ! -L "${staging_dir}/runtime-manifest" ]] || die "Builder runtime bundle has no regular manifest."
-    grep -Fqx "gateway_release=${RESOLVED_DAEMON_VERSION}" "${staging_dir}/runtime-manifest" || \
-        die "Builder runtime bundle release does not match ${RESOLVED_DAEMON_VERSION}."
+    [[ -f "${staging_dir}/runtime-manifest" && ! -L "${staging_dir}/runtime-manifest" ]] || die "Builder runtime staging has no regular manifest."
 
     install -d -m 0755 /usr/local/bin /opt/gateway-builder/cni/bin
     for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
@@ -1333,7 +1407,7 @@ install_builder_runtime_bundle() {
         install -m 0755 "${staging_dir}/cni/bin/${plugin}" "/opt/gateway-builder/cni/bin/${plugin}"
     done
     install -m 0644 "${staging_dir}/runtime-manifest" "$installed_manifest"
-    rm -rf "$staging_dir" "$bundle_file"
+    rm -rf "$staging_dir" "$download_dir"
     trap - RETURN
     ok "Builder runtime installed for ${RESOLVED_DAEMON_VERSION}"
 }
@@ -1553,7 +1627,7 @@ UNIT
 # ── Run ──────────────────────────────────────────────────────────────
 create_directories
 install_daemon
-install_builder_runtime_bundle
+install_builder_runtime
 preflight_builder_runtime
 setup_secure_runtime
 enroll_daemon
