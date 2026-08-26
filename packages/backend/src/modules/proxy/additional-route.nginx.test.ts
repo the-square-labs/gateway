@@ -143,6 +143,8 @@ describe('managed Additional Route rendering', () => {
     expect(rendered).not.toContain('alias $gateway_pages_runtime_config_path;');
     expect(rendered).toContain('location /docs/ {');
     expect(rendered).not.toContain('location ^~ /docs/ {');
+    expect(rendered).toContain('try_files $uri/index.html $uri =404;');
+    expect(rendered).not.toContain('try_files $uri $uri/ =404;');
     expect(rendered).toContain('location ~ ^/docs/\\. { deny all; }');
     expect(rendered).toContain(
       "sub_filter '</head>' '<script src=\"/docs/_gateway/pages/config.js\"></script></head>';"
