@@ -41,6 +41,36 @@ function artifactToolCall(): AIToolCall {
 }
 
 describe("AIMessage tool call groups", () => {
+  it("gives tool results an internal scroll viewport and animates tool entries", () => {
+    const { container } = render(
+      <AIMessage
+        message={{
+          id: "assistant-scrollable-tool",
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "scrollable-tool",
+              name: "get_current_context",
+              arguments: {},
+              status: "completed",
+              result: { content: "line\n".repeat(100) },
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Get Current Context/i }));
+
+    expect(container.querySelector("[data-ai-tool-entry]")).not.toBeNull();
+    expect(container.querySelector("[data-ai-tool-result-scroll]")).toHaveClass(
+      "max-h-48",
+      "overflow-auto",
+      "overscroll-contain"
+    );
+  });
+
   it("prefers a canonical conversation resource label over a message hash fallback", () => {
     const refId = "gwr_0123456789abcdef01234567";
     render(

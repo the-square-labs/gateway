@@ -454,17 +454,18 @@ export function AIMessage({
         {/* Tool calls rendered first */}
         {hasToolCalls && (
           <div className="space-y-0.5">
-            {toolCallItems.map((item) =>
-              item.type === "single" ? (
-                <AIToolCallBlock
-                  key={item.toolCall.id}
-                  toolCall={item.toolCall}
-                  compactSummary={compactSummary}
-                />
-              ) : (
-                <ToolCallsGroup key={item.key} toolCalls={item.toolCalls} />
-              )
-            )}
+            {toolCallItems.map((item) => (
+              <ToolCallEntrance key={item.type === "single" ? item.toolCall.id : item.key}>
+                {item.type === "single" ? (
+                  <AIToolCallBlock
+                    toolCall={item.toolCall}
+                    compactSummary={compactSummary}
+                  />
+                ) : (
+                  <ToolCallsGroup toolCalls={item.toolCalls} />
+                )}
+              </ToolCallEntrance>
+            ))}
           </div>
         )}
 
@@ -784,13 +785,30 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
           {renderContent ? (
             <div className="py-1">
               {toolCalls.map((toolCall) => (
-                <AIToolCallBlock key={toolCall.id} toolCall={toolCall} />
+                <ToolCallEntrance key={toolCall.id}>
+                  <AIToolCallBlock toolCall={toolCall} />
+                </ToolCallEntrance>
               ))}
             </div>
           ) : null}
         </div>
       </div>
     </div>
+  );
+}
+
+function ToolCallEntrance({ children }: { children: ReactNode }) {
+  const prefersReducedMotion = useReducedMotion();
+
+  return (
+    <motion.div
+      data-ai-tool-entry
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0 : 0.15, ease: "easeOut" }}
+    >
+      {children}
+    </motion.div>
   );
 }
 
