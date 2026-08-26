@@ -13,7 +13,7 @@ function serviceWithBuilders(builders: Array<{ capabilities: unknown }>) {
 }
 
 describe('DockerBuildRunnerService admission', () => {
-  it('rejects new builds when no online worker advertises the complete isolated worker profile', async () => {
+  it('rejects new builds when no online worker advertises the complete dedicated worker profile', async () => {
     const service = serviceWithBuilders([
       {
         capabilities: {
@@ -29,7 +29,7 @@ describe('DockerBuildRunnerService admission', () => {
     });
   });
 
-  it('accepts an amd64 or arm64 worker only when the isolated builder capabilities are complete', async () => {
+  it('accepts an amd64 or arm64 worker only when the dedicated builder capabilities are complete', async () => {
     const service = serviceWithBuilders([
       {
         capabilities: {
@@ -37,6 +37,23 @@ describe('DockerBuildRunnerService admission', () => {
           capabilities: [
             'docker_builder_execution_v1',
             'docker_builder_dedicated_runtime_v1',
+            'docker_builder_resource_limits_v1',
+          ],
+        },
+      },
+    ]);
+
+    await expect(service.assertBuildAdmission()).resolves.toBeUndefined();
+  });
+
+  it('keeps rolling compatibility with existing gVisor workers', async () => {
+    const service = serviceWithBuilders([
+      {
+        capabilities: {
+          architecture: 'amd64',
+          capabilities: [
+            'docker_builder_execution_v1',
+            'docker_builder_isolation_v1',
             'docker_builder_resource_limits_v1',
           ],
         },

@@ -66,12 +66,17 @@ export class NodeDispatchService {
       .limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
     const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    const hasDedicatedRuntime =
+      Array.isArray(reported) &&
+      (reported.includes('docker_builder_dedicated_runtime_v1') ||
+        // Rolling compatibility with the previous gVisor-backed worker profile.
+        reported.includes('docker_builder_isolation_v1'));
     if (
       node.type !== 'builder' ||
       node.status !== 'online' ||
       !Array.isArray(reported) ||
       !reported.includes('docker_builder_execution_v1') ||
-      !reported.includes('docker_builder_dedicated_runtime_v1')
+      !hasDedicatedRuntime
     ) {
       throw new AppError(
         409,

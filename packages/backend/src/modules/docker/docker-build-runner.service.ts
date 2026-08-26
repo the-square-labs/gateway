@@ -28,10 +28,15 @@ function builderReady(capabilities: unknown): boolean {
     capabilities && typeof capabilities === 'object'
       ? (capabilities as Record<string, unknown>).capabilities
       : undefined;
+  const hasDedicatedRuntime =
+    Array.isArray(reported) &&
+    (reported.includes('docker_builder_dedicated_runtime_v1') ||
+      // Rolling compatibility with the previous gVisor-backed worker profile.
+      reported.includes('docker_builder_isolation_v1'));
   return (
     Array.isArray(reported) &&
     reported.includes('docker_builder_execution_v1') &&
-    reported.includes('docker_builder_dedicated_runtime_v1') &&
+    hasDedicatedRuntime &&
     reported.includes('docker_builder_resource_limits_v1')
   );
 }
