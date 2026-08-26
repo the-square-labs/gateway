@@ -63,7 +63,11 @@ export function RepositorySourceFields({
           emptyMessage="No enabled Git integrations."
         />
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">
+      <div
+        className={
+          pages ? "space-y-4" : "grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]"
+        }
+      >
         <div className="space-y-1.5">
           <label className="text-sm font-medium">
             Repository <span className="text-destructive">*</span>

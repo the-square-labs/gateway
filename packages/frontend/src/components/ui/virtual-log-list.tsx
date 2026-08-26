@@ -17,6 +17,8 @@ interface VirtualLogListProps<T> {
   loadingMore?: boolean;
   /** Forced empty state shown when lines.length === 0. */
   emptyState?: ReactNode;
+  /** Scroll to the newest line when this viewport first receives content. */
+  initialScrollToEnd?: boolean;
   className?: string;
 }
 
@@ -33,11 +35,13 @@ export function VirtualLogList<T>({
   hasMore = false,
   loadingMore = false,
   emptyState,
+  initialScrollToEnd = false,
   className,
 }: VirtualLogListProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
   /**
    * Snapshot taken before lines change so we can preserve the user's
    * apparent scroll position when older history is prepended.
@@ -94,6 +98,19 @@ export function VirtualLogList<T>({
     const didPrepend = prependVersion !== prevPrependVersionRef.current;
     prevPrependVersionRef.current = prependVersion;
 
+    if (initialScrollToEnd && !initialScrollDoneRef.current && cur > 0) {
+      initialScrollDoneRef.current = true;
+      isAtBottomRef.current = true;
+      virtualizer.scrollToIndex(cur - 1, { align: "end" });
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      });
+      return;
+    }
+
     if (didPrepend && prependFix.current) {
       // History was prepended — keep the viewport visually pinned where it was
       const fix = prependFix.current;
@@ -129,7 +146,7 @@ export function VirtualLogList<T>({
     if (cur === 0) {
       isAtBottomRef.current = true;
     }
-  }, [getRowsHeight, lines.length, prependVersion, virtualizer]);
+  }, [getRowsHeight, initialScrollToEnd, lines.length, prependVersion, virtualizer]);
 
   if (lines.length === 0 && emptyState) {
     return (

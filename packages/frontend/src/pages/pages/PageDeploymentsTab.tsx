@@ -1,4 +1,4 @@
-import { Pin, PinOff, Trash2 } from "lucide-react";
+import { PackageOpen, Pin, PinOff, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -27,13 +27,7 @@ import {
   pageStatusVariant,
 } from "./page-format";
 
-export function PageDeploymentsTab({
-  projectId,
-  onLatestPreviewChange,
-}: {
-  projectId: string;
-  onLatestPreviewChange?: (hostname: string | null) => void;
-}) {
+export function PageDeploymentsTab({ projectId }: { projectId: string }) {
   const canManage = useAuthStore((state) =>
     state.hasScopedAccess(`pages:deployments:manage:${projectId}`)
   );
@@ -53,15 +47,12 @@ export function PageDeploymentsTab({
       const response = await api.listPageDeployments(projectId, { page: 1, limit: 100 });
       const next = response.data ?? [];
       setDeployments(next);
-      onLatestPreviewChange?.(
-        next.find((deployment) => deployment.status === "ready")?.previewHostname ?? null
-      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load Deployments");
     } finally {
       setLoading(false);
     }
-  }, [deployments.length, onLatestPreviewChange, projectId]);
+  }, [deployments.length, projectId]);
 
   useEffect(() => {
     void load();
@@ -197,6 +188,7 @@ export function PageDeploymentsTab({
   return (
     <>
       <PanelShell
+        icon={<PackageOpen className="h-4 w-4" />}
         title="Deployments"
         description="Immutable static artifacts and their preview publication status."
       >
@@ -229,7 +221,7 @@ export function PageDeploymentsTab({
             <DialogDescription>{selectedDeployment?.publicSlug}</DialogDescription>
           </DialogHeader>
           {selectedDeployment && (
-            <PanelShell title="Deployment">
+            <PanelShell icon={<PackageOpen className="h-4 w-4" />} title="Deployment">
               <SettingsControlRow title="Status" controlsClassName="sm:min-w-0">
                 <Badge variant={pageStatusVariant(selectedDeployment.status)}>
                   {pageStatusLabel(selectedDeployment.status)}
@@ -266,7 +258,12 @@ export function PageDeploymentsTab({
                     >
                       {selectedDeployment.previewHostname}
                     </a>
-                    <CopyButton value={selectedPreviewUrl} label="immutable preview URL" />
+                    <CopyButton
+                      value={selectedPreviewUrl}
+                      label="immutable preview URL"
+                      className="h-auto w-auto bg-transparent p-0 text-muted-foreground hover:bg-transparent hover:text-primary"
+                      iconClassName="h-3 w-3"
+                    />
                   </div>
                 ) : (
                   <Badge variant="secondary">Unavailable</Badge>

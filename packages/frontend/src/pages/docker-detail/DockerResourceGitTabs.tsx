@@ -139,6 +139,7 @@ export function DockerResourceGitTabs({
         error={error}
         onRetry={() => void load()}
         onBuildQueued={includeBuilds ? () => void refreshBuilds() : undefined}
+        onSourceChange={setSource}
         composeVariables={composeVariables}
         composeSecretKeys={composeSecretKeys}
         canEdit={canEdit}

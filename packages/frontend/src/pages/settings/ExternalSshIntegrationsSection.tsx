@@ -130,6 +130,7 @@ export function ExternalSshIntegrationsSection() {
   return (
     <>
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
         title="External SSH Integrations"
         description="Encrypted credentials for external servers only. Gateway and managed nodes use their dedicated tools."
         actions={

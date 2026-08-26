@@ -19,6 +19,7 @@ const (
 	DefaultBuildkitUnitPath     = "/etc/systemd/system/gateway-builder-buildkit.service"
 	legacyCNIConfigPath         = "/etc/gateway-builder/cni.json"
 	legacyRunscConfigPath       = "/etc/gateway-builder/runsc.toml"
+	legacyRunscWrapperPath      = "/usr/local/lib/gateway-builder/runsc-oci"
 	DefaultGitAskpassDirectory  = "/usr/local/lib/gateway-builder"
 	DefaultEgressScriptPath     = "/usr/local/lib/gateway-builder/apply-egress-policy"
 	DefaultEgressUnitPath       = "/etc/systemd/system/gateway-builder-egress.service"
@@ -55,7 +56,7 @@ func (s *RuntimeSupervisor) InstallConfiguration() error {
 	if err := s.Config.Validate(); err != nil {
 		return err
 	}
-	for _, binary := range []string{"containerd", "buildkitd", "buildctl", "runsc", "containerd-shim-runc-v2", "git", "syft", "grype", "iptables", "getent"} {
+	for _, binary := range []string{"containerd", "buildkitd", "buildctl", "runc", "containerd-shim-runc-v2", "git", "syft", "grype", "iptables", "getent"} {
 		if _, err := s.lookPath(binary); err != nil {
 			return fmt.Errorf("required builder runtime binary %s is unavailable", binary)
 		}
@@ -75,17 +76,12 @@ func (s *RuntimeSupervisor) InstallConfiguration() error {
 	if err != nil {
 		return err
 	}
-	runscWrapper, err := s.Config.RenderRunscWrapper()
-	if err != nil {
-		return err
-	}
 	files := map[string]struct {
 		content string
 		mode    os.FileMode
 	}{
 		DefaultContainerdConfigPath: {content: containerdConfig, mode: 0o600},
 		DefaultBuildkitConfigPath:   {content: buildkitConfig, mode: 0o600},
-		s.Config.RunscWrapperPath:   {content: runscWrapper, mode: 0o755},
 		s.Config.CNIConfigPath:      {content: renderCNIConfig(s.Config), mode: 0o600},
 		DefaultGitAskpassPath:       {content: renderGitAskpass(), mode: 0o755},
 		DefaultEgressScriptPath:     {content: renderEgressScript(s.Config), mode: 0o700},
@@ -98,7 +94,7 @@ func (s *RuntimeSupervisor) InstallConfiguration() error {
 			return err
 		}
 	}
-	for _, legacyPath := range []string{legacyCNIConfigPath, legacyRunscConfigPath} {
+	for _, legacyPath := range []string{legacyCNIConfigPath, legacyRunscConfigPath, legacyRunscWrapperPath} {
 		if err := os.Remove(legacyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove legacy builder runtime file %s: %w", legacyPath, err)
 		}

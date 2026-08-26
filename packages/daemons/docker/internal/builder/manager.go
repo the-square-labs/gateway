@@ -525,7 +525,6 @@ func renderPagesDockerfile(command *pb.DockerBuildCommand) (string, error) {
 	}
 	sort.Strings(secretNames)
 	lines := []string{
-		"# syntax=docker/dockerfile:1.7",
 		"FROM docker.io/library/node:" + command.GetNodeVersion() + "-bookworm-slim AS build",
 		"WORKDIR /workspace",
 		"COPY . .",

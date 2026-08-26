@@ -173,11 +173,26 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	nginx.CleanTmpFiles(p.cfg.Nginx.ConfigDir)
 	nginx.CleanTmpFiles(p.cfg.Nginx.CertsDir)
 
-	// Ensure gateway log format is present in nginx.conf
+	globalConfigModified := false
+
+	// Ensure gateway log format is present in nginx.conf.
 	if modified, err := nginx.EnsureLogFormat(p.cfg.Nginx.GlobalConfig); err != nil {
 		logger.Warn("failed to inject log format", "error", err)
 	} else if modified {
 		logger.Info("injected gateway_combined log format into nginx.conf")
+		globalConfigModified = true
+	}
+
+	// Pages preview hostnames can exceed nginx's platform-default server-name
+	// hash bucket. Keep the managed minimum in the global http block.
+	if modified, err := nginx.EnsureServerNamesHashBucketSize(p.cfg.Nginx.GlobalConfig); err != nil {
+		logger.Warn("failed to configure server names hash bucket size", "error", err)
+	} else if modified {
+		logger.Info("configured server names hash bucket size for Gateway Pages")
+		globalConfigModified = true
+	}
+
+	if globalConfigModified {
 		mgr.Reload()
 	}
 

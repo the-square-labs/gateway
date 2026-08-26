@@ -115,6 +115,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
   return (
     <div className="flex flex-col gap-4">
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
         title="Deploy tokens"
         description="Use a token with the resumable webhook API. The raw secret is shown exactly once."
         actions={
@@ -187,6 +188,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
             <DialogDescription>The token will be shown once after creation.</DialogDescription>
           </DialogHeader>
           <PanelShell
+            icon={<KeyRound className="h-4 w-4" />}
             title="Token"
             description="Authentication and Tag publication limits for this deploy token."
           >

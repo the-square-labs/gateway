@@ -91,6 +91,7 @@ describe("Docker Git delivery UI structure", () => {
     expect(resourceTabs).toContain('kind: "compose_project"');
     expect(sourcePanel).toContain('from "../docker-deploy/RepositorySourceFields"');
     expect(sourcePanel).toContain('from "../docker-deploy/useDockerSourceRepositories"');
+    expect(resourceTabs).toContain("onSourceChange={setSource}");
     expect(sourcePanel).toContain('title="Compose file"');
     expect(sourcePanel).toContain('requireLicenseFeature("git-push-to-deploy"');
   });
@@ -104,12 +105,91 @@ describe("Docker Git delivery UI structure", () => {
     expect(pageDetail).toContain('<TabsTrigger value="source"');
     expect(pageDetail).toContain('<TabsTrigger value="builds"');
     expect(pageDetail).toContain('kind: "pages_project"');
+    const pagesSourceTab = pageDetail.slice(
+      pageDetail.indexOf('<TabsContent value="source"'),
+      pageDetail.indexOf('<TabsContent value="builds"')
+    );
+    expect(pagesSourceTab).not.toContain("includeBuilds");
     expect(resourceTabs).toContain('kind: "pages_project"');
     expect(sourcePanel).toContain('title="Application root"');
     expect(sourcePanel).toContain('title="Build Variables"');
     expect(sourcePanel).toContain('title="Build Secrets"');
+    expect(sourcePanel).toContain("onSourceChange?.(connected)");
     expect(sourcePanel).toContain("VITE_* values are public build variables");
     expect(pageDetail).not.toMatch(/from ["'].+Page(?:Git|Build)Source/);
+  });
+
+  it("uses the shared inline copy action in Pages Deployment details", () => {
+    const deployments = source("./pages/PageDeploymentsTab.tsx");
+    const pageDetail = source("./pages/PageProjectDetail.tsx");
+
+    expect(deployments).toContain('from "@/components/common/CopyButton"');
+    expect(deployments).toContain('label="immutable preview URL"');
+    expect(deployments).toContain("h-auto w-auto bg-transparent p-0");
+    expect(deployments).toContain('iconClassName="h-3 w-3"');
+    expect(pageDetail).toContain(
+      "rounded-none border-l bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+    );
+  });
+
+  it("uses the established icon pattern for Pages tabs and section headers", () => {
+    const pageDetail = source("./pages/PageProjectDetail.tsx");
+    const deployments = source("./pages/PageDeploymentsTab.tsx");
+    const tags = source("./pages/PageTagsTab.tsx");
+    const tokens = source("./pages/PageTokensTab.tsx");
+    const configuration = source("./pages/PageRuntimeConfigTab.tsx");
+    const sourcePanel = source("./docker-detail/DockerGitSourcePanel.tsx");
+    const builds = source("./docker-detail/DockerBuildHistoryPanel.tsx");
+
+    expect(pageDetail).toContain('<TabsTrigger value="deployments" className="gap-1.5">');
+    expect(pageDetail).toContain('<PackageOpen className="h-3.5 w-3.5" /> Deployments');
+    expect(pageDetail).toContain('<GitBranch className="h-3.5 w-3.5" /> Source');
+    expect(pageDetail).toContain('<Hammer className="h-3.5 w-3.5" /> Builds');
+    expect(pageDetail).toContain('<Tags className="h-3.5 w-3.5" /> Tags');
+    expect(pageDetail).toContain('<KeyRound className="h-3.5 w-3.5" /> Deploy tokens');
+    expect(pageDetail).toContain('<Code2 className="h-3.5 w-3.5" /> Configuration');
+    expect(deployments).toContain('icon={<PackageOpen className="h-4 w-4" />}');
+    expect(tags).toContain('icon={<Tags className="h-4 w-4" />}');
+    expect(tokens).toContain('icon={<KeyRound className="h-4 w-4" />}');
+    expect(configuration).toContain('icon={<Code2 className="h-4 w-4" />}');
+    expect(sourcePanel).toContain('icon={<GitBranch className="h-4 w-4" />}');
+    expect(sourcePanel).toContain('icon={<Braces className="h-4 w-4" />}');
+    expect(sourcePanel).toContain('icon={<KeyRound className="h-4 w-4" />}');
+    expect(sourcePanel).toContain('icon={<History className="h-4 w-4" />}');
+    expect(builds).toContain('icon={<Hammer className="h-4 w-4" />}');
+  });
+
+  it("uses Lucide icons for every top-level Integration section", () => {
+    const gitLab = source("./settings/IntegrationsSection.tsx");
+    const git = source("./settings/GitIntegrationsSection.tsx");
+    const cloudflare = source("./settings/CloudflareIntegrationsSection.tsx");
+    const ssh = source("./settings/ExternalSshIntegrationsSection.tsx");
+
+    expect(gitLab).toContain('icon={<Gitlab className="h-4 w-4" />}');
+    expect(git).toContain('icon={<Icon className="h-4 w-4" />}');
+    expect(cloudflare).toContain('icon={<Cloud className="h-4 w-4" />}');
+    expect(ssh).toContain('icon={<KeyRound className="h-4 w-4" />}');
+  });
+
+  it("uses the shared animated two-step flow for connecting a Pages repository", () => {
+    const sourcePanel = source("./docker-detail/DockerGitSourcePanel.tsx");
+    const repository = source("./docker-deploy/RepositorySourceFields.tsx");
+    const buildFields = sourcePanel.slice(
+      sourcePanel.indexOf("const pagesBuildFields"),
+      sourcePanel.indexOf("return (", sourcePanel.indexOf("const pagesBuildFields"))
+    );
+
+    expect(sourcePanel).toContain('from "@/components/common/AnimatedHeight"');
+    expect(sourcePanel).toContain("const [connectStep, setConnectStep] = useState<1 | 2>(1)");
+    expect(sourcePanel).toContain('className={pagesTarget ? "sm:max-w-lg" : "sm:max-w-2xl"}');
+    expect(sourcePanel).toContain("<AnimatedHeight>");
+    expect(sourcePanel).toContain('<AnimatePresence initial={false} mode="popLayout">');
+    expect(sourcePanel).toContain("if (await discoverPagesBuild()) setConnectStep(2)");
+    expect(sourcePanel).toContain("Loading package.json…");
+    expect(sourcePanel).toContain("<ArrowLeft");
+    expect(sourcePanel).toContain("<ArrowRight");
+    expect(repository).toContain('? "space-y-4"');
+    expect(buildFields).not.toContain("grid-cols");
   });
 
   it("shares the container log viewport with build dialogs", () => {

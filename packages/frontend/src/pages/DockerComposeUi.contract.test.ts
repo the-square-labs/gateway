@@ -155,6 +155,8 @@ describe("Compose UI contract", () => {
     expect(detail).toContain("scrollRef={activityScrollRef}");
     expect(detail).toContain("ref={activitySentinelRef}");
     expect(detail).toContain("activityNextCursor");
+    expect(detail).toContain("sm:max-h-[92dvh] sm:max-w-5xl");
+    expect(detail).toContain("max-h-[min(70dvh,44rem)] overflow-hidden");
     expect(
       detail.match(/h-fit w-full max-h-full \[&_\[data-route-scroll-container\]\]:flex-1/g)
     ).toHaveLength(1);

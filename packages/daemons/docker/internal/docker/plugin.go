@@ -325,7 +325,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				values = append(
 					values,
 					"docker_builder_execution_v1",
-					"docker_builder_runsc_v1",
+					"docker_builder_dedicated_runtime_v1",
 					"docker_builder_resource_limits_v1",
 				)
 			}

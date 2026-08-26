@@ -31,7 +31,7 @@ function builderReady(capabilities: unknown): boolean {
   return (
     Array.isArray(reported) &&
     reported.includes('docker_builder_execution_v1') &&
-    reported.includes('docker_builder_runsc_v1') &&
+    reported.includes('docker_builder_dedicated_runtime_v1') &&
     reported.includes('docker_builder_resource_limits_v1')
   );
 }
@@ -66,7 +66,7 @@ export class DockerBuildRunnerService {
       throw new AppError(
         503,
         'NO_BUILD_WORKER_AVAILABLE',
-        'No online Build Worker supports the required isolated build runtime'
+        'No online Build Worker supports the required dedicated build runtime'
       );
     }
   }
@@ -161,14 +161,21 @@ export class DockerBuildRunnerService {
       });
       if (!result.success) throw new Error(result.error || 'Builder daemon rejected the build');
     } catch (error) {
+      const errorMessage = (error as Error).message.slice(0, 4096);
       logger.warn('Failed to dispatch Docker build', {
         buildId: build.id,
         builderNodeId,
-        error: (error as Error).message,
+        error: errorMessage,
       });
+      await this.builds.appendLog(build.id, 0, `[system] Build dispatch failed: ${errorMessage}\n`).catch((logError) =>
+        logger.warn('Failed to persist Docker build dispatch error log', {
+          buildId: build.id,
+          error: (logError as Error).message,
+        })
+      );
       await this.builds.transition(build.id, leaseOwner, 'failed', {
         errorCode: 'BUILD_DISPATCH_FAILED',
-        errorMessage: (error as Error).message.slice(0, 4096),
+        errorMessage,
       });
     }
   }

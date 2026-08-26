@@ -65,6 +65,26 @@ describe("AIButton", () => {
       </TooltipProvider>
     );
 
+    const button = screen.getByRole("button", { name: "AI Workspace" });
+    expect(button).toHaveClass("bg-sidebar-accent");
+    fireEvent.click(button);
+
+    expect(onOpenAIWorkspace).toHaveBeenCalledOnce();
+    expect(useUIStore.getState().aiPanelOpen).toBe(false);
+    window.removeEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
+  });
+
+  it("opens the full Workspace from the expanded sidebar CTA when access is available", () => {
+    useAuthStore.setState({ user: makeUser({ scopes: [AI_SCOPE] }) });
+    const onOpenAIWorkspace = vi.fn();
+    window.addEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
+
+    render(
+      <TooltipProvider>
+        <AIButton showLabel />
+      </TooltipProvider>
+    );
+
     fireEvent.click(screen.getByRole("button", { name: "AI Workspace" }));
 
     expect(onOpenAIWorkspace).toHaveBeenCalledOnce();

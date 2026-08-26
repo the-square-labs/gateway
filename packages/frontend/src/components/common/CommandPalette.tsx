@@ -818,15 +818,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       label: "Open AI Workspace",
       icon: Sparkles,
       action: () => {
-        if (aiEnabled === false || !aiScopeOk) {
-          window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
-          return;
-        }
-        useUIStore.getState().setAIPanelOpen(true);
+        window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
       },
     });
     return actions;
-  }, [aiEnabled, aiScopeOk, hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
+  }, [hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
 
   const adaptiveQuickActions = useMemo(() => {
     const candidates = [...currentPageActions, ...contextActions, ...primaryActions].filter(

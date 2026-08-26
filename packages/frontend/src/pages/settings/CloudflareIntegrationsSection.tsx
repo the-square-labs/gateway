@@ -284,6 +284,7 @@ export function CloudflareIntegrationsSection() {
   return (
     <>
       <PanelShell
+        icon={<Cloud className="h-4 w-4" />}
         title="Cloudflare Integrations"
         description="System connectors for Cloudflare DNS-backed domains."
         actions={

@@ -55,6 +55,7 @@ import { DockerImages } from "./DockerImages";
 import { DockerNetworks } from "./DockerNetworks";
 import { DockerVolumes } from "./DockerVolumes";
 import { type FileManagerOperations, FilesTab } from "./docker-detail/FilesTab";
+import { BuilderJobsTab } from "./node-detail/BuilderJobsTab";
 import { NodeConfigTab } from "./node-detail/NodeConfigTab";
 import { NodeConsoleTab } from "./node-detail/NodeConsoleTab";
 import { NodeDetailsTab } from "./node-detail/NodeDetailsTab";
@@ -134,6 +135,7 @@ export function AdminNodeDetail({
       "volumes",
       "networks",
       "compose",
+      "jobs",
       "daemon-logs",
     ],
     "details",
@@ -224,7 +226,7 @@ export function AdminNodeDetail({
     (address) => !isValidServiceAddress(address)
   );
   const nonInteractiveWhileUpdating =
-    nodeUpdating && activeTab !== "details" && activeTab !== "daemon-logs";
+    nodeUpdating && activeTab !== "details" && activeTab !== "jobs" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
   const canViewNodeLogs = !!(id && hasScope(`nodes:logs:${id}`)) || hasScope("nodes:logs");
   const canViewNodeConfig =
@@ -277,6 +279,7 @@ export function AdminNodeDetail({
       ...(isCompatibleNode && node.type === "docker"
         ? ["containers", "images", "volumes", "networks"]
         : []),
+      ...(node?.type === "builder" ? ["jobs"] : []),
       ...(canShowNodeConsole ? ["console"] : []),
       ...(canViewNodeLogs ? ["daemon-logs"] : []),
     ],
@@ -413,7 +416,12 @@ export function AdminNodeDetail({
   });
 
   useEffect(() => {
-    if (nodeUpdating && activeTab !== "details" && activeTab !== "daemon-logs") {
+    if (
+      nodeUpdating &&
+      activeTab !== "details" &&
+      activeTab !== "jobs" &&
+      activeTab !== "daemon-logs"
+    ) {
       setActiveTab("details");
     }
   }, [activeTab, nodeUpdating, setActiveTab]);
@@ -562,6 +570,7 @@ export function AdminNodeDetail({
     activeTab === "configuration" ||
     activeTab === "daemon-logs" ||
     activeTab === "nginx-logs" ||
+    activeTab === "jobs" ||
     activeTab === "console";
 
   return (
@@ -755,6 +764,7 @@ export function AdminNodeDetail({
                 </TabsTrigger>
               </>
             )}
+            {node.type === "builder" && <TabsTrigger value="jobs">Jobs</TabsTrigger>}
             {canShowNodeConsole && (
               <TabsTrigger value="console" disabled={nodeOffline}>
                 Console
@@ -869,6 +879,11 @@ export function AdminNodeDetail({
                   )}
                 </TabsContent>
               </>
+            )}
+            {node.type === "builder" && (
+              <TabsContent value="jobs" className="flex min-h-0 flex-1 flex-col pb-0">
+                {activeTab === "jobs" && <BuilderJobsTab nodeId={node.id} />}
+              </TabsContent>
             )}
             {canShowNodeConsole && !nodeOffline && (
               <TabsContent value="console" className="flex flex-col flex-1 min-h-0">

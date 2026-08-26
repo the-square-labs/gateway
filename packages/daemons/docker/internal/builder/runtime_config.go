@@ -16,8 +16,6 @@ const (
 	DefaultContainerdRootDir   = "/var/lib/docker-daemon/builder/containerd"
 	DefaultCNIConfigPath       = "/etc/gateway-builder/cni.conflist"
 	DefaultCNIBinaryDir        = "/opt/gateway-builder/cni/bin"
-	DefaultRunscBinaryPath     = "/usr/local/bin/runsc"
-	DefaultRunscWrapperPath    = "/usr/local/lib/gateway-builder/runsc-oci"
 	DefaultRegistryCAPath      = "/var/lib/docker-daemon/registry-proxy/ca.pem"
 	DefaultContainerdNamespace = "gateway-builds"
 	DefaultBuildParallelism    = 1
@@ -27,7 +25,6 @@ const (
 	DefaultTasksLimit          = int64(2048)
 	DefaultEgressProfile       = "internet"
 	BuilderNetworkSubnet       = "10.203.0.0/24"
-	RunscRuntimeName           = "io.containerd.runc.v2"
 	buildkitSocketDirectory    = "/run/gateway-builder/buildkit"
 	containerdSocketDirectory  = "/run/gateway-builder/containerd"
 )
@@ -40,8 +37,6 @@ type RuntimeConfig struct {
 	ContainerdRootDir   string
 	CNIConfigPath       string
 	CNIBinaryDir        string
-	RunscBinaryPath     string
-	RunscWrapperPath    string
 	RegistryCAPath      string
 	ContainerdNamespace string
 	SocketGID           int
@@ -63,8 +58,6 @@ func DefaultRuntimeConfig(socketGID int) RuntimeConfig {
 		ContainerdRootDir:   DefaultContainerdRootDir,
 		CNIConfigPath:       DefaultCNIConfigPath,
 		CNIBinaryDir:        DefaultCNIBinaryDir,
-		RunscBinaryPath:     DefaultRunscBinaryPath,
-		RunscWrapperPath:    DefaultRunscWrapperPath,
 		RegistryCAPath:      DefaultRegistryCAPath,
 		ContainerdNamespace: DefaultContainerdNamespace,
 		SocketGID:           socketGID,
@@ -90,8 +83,6 @@ func (c RuntimeConfig) Validate() error {
 		"containerd root directory":  c.ContainerdRootDir,
 		"CNI config path":            c.CNIConfigPath,
 		"CNI binary directory":       c.CNIBinaryDir,
-		"runsc binary path":          c.RunscBinaryPath,
-		"runsc wrapper path":         c.RunscWrapperPath,
 		"registry CA path":           c.RegistryCAPath,
 	} {
 		if !filepath.IsAbs(value) || filepath.Clean(value) != value {
@@ -188,10 +179,6 @@ func (c RuntimeConfig) RenderBuildkitConfig() (string, error) {
 		"  minFreeSpace = \"10GB\"",
 		"  defaultCgroupParent = \"gateway-builds\"",
 		"",
-		"[worker.containerd.runtime]",
-		"  name = " + quote(RunscRuntimeName),
-		"  options = { BinaryName = " + quote(c.RunscWrapperPath) + " }",
-		"",
 		"[registry.\"127.0.0.1:5443\"]",
 		"  http = false",
 		"  ca = [" + quote(c.RegistryCAPath) + "]",
@@ -200,82 +187,6 @@ func (c RuntimeConfig) RenderBuildkitConfig() (string, error) {
 		"  enabled = false",
 		"",
 	}, "\n"), nil
-}
-
-func (c RuntimeConfig) RenderRunscWrapper() (string, error) {
-	if err := c.Validate(); err != nil {
-		return "", err
-	}
-	runsc := shellSingleQuote(c.RunscBinaryPath)
-	containerdState := shellSingleQuote(c.ContainerdStateDir)
-	namespace := shellSingleQuote(c.ContainerdNamespace)
-	networkMode := "host"
-	if c.EgressProfile == "offline" {
-		networkMode = "none"
-	}
-	return `#!/bin/sh
-set -u
-RUNSC=` + runsc + `
-CONTAINERD_STATE=` + containerdState + `
-CONTAINERD_NAMESPACE=` + namespace + `
-is_kill=0
-is_delete=0
-container_id=""
-for arg in "$@"; do
-  [ "$arg" = "kill" ] && is_kill=1
-  [ "$arg" = "delete" ] && is_delete=1
-  container_id="$arg"
-done
-runsc() {
-  "$RUNSC" \
-    --network=` + networkMode + ` \
-    --overlay2=none \
-    --host-uds=none \
-    --allow-packet-socket-write=false \
-    --net-raw=false \
-    --profile=false \
-    --strace=false \
-    "$@"
-}
-if [ "$is_kill" -eq 0 ] && [ "$is_delete" -eq 0 ]; then
-  exec "$RUNSC" \
-    --network=` + networkMode + ` \
-    --overlay2=none \
-    --host-uds=none \
-    --allow-packet-socket-write=false \
-    --net-raw=false \
-    --profile=false \
-    --strace=false \
-    "$@"
-fi
-umask 077
-error_file="$(mktemp /run/gateway-builder/runsc-kill.XXXXXX)" || exit 1
-trap 'rm -f "$error_file"' EXIT HUP INT TERM
-runsc "$@" 2>"$error_file"
-status=$?
-if [ "$status" -eq 0 ] && [ "$is_delete" -eq 1 ]; then
-  case "$container_id" in
-    ""|*[!A-Za-z0-9_.-]*)
-      printf '%s\n' "invalid container ID for builder rootfs cleanup" >&2
-      exit 1
-      ;;
-  esac
-  rootfs="$CONTAINERD_STATE/io.containerd.runtime.v2.task/$CONTAINERD_NAMESPACE/$container_id/rootfs"
-  if ! rm -f "$rootfs/dev/otel-grpc.sock"; then
-    printf '%s\n' "failed to remove BuildKit OTEL mountpoint from builder rootfs" >&2
-    exit 1
-  fi
-fi
-if [ "$status" -ne 0 ] && grep -Fqx "sandbox is not running" "$error_file"; then
-  exit 0
-fi
-cat "$error_file" >&2
-exit "$status"
-`, nil
-}
-
-func shellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 func RenderLoopbackOnlyCNIConfig() string {

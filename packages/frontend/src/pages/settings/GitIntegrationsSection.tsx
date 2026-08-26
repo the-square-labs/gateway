@@ -388,6 +388,7 @@ function GitConnectorPanel({
   return (
     <>
       <PanelShell
+        icon={<Icon className="h-4 w-4" />}
         title={title}
         description={description}
         actions={

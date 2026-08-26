@@ -26,7 +26,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
-import type { DockerBuild, DockerBuildLogChunk, DockerBuildStatus } from "@/types";
+import type { DockerBuild, DockerBuildStatus } from "@/types";
 import { DockerBuildDetailsDialog } from "./docker-detail/DockerBuildDetailsDialog";
 
 const STATUS_VARIANT: Record<
@@ -92,7 +92,6 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pinBuild, setPinBuild] = useState<DockerBuild | null>(null);
   const [pinOpen, setPinOpen] = useState(false);
-  const [logs, setLogs] = useState<DockerBuildLogChunk[]>([]);
   const requestId = useRef(0);
   const pollRequestId = useRef(0);
   const loadingMore = useRef(false);
@@ -232,27 +231,9 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
 
   useEffect(() => {
     if (!selected) return;
-    void api
-      .getDockerBuildLogs(selected.id)
-      .then(setLogs)
-      .catch(() => setLogs([]));
-  }, [selected]);
-
-  useEffect(() => {
-    if (!selected) return;
     const refreshed = rows.find((build) => build.id === selected.id);
     if (refreshed && refreshed !== selected) setSelected(refreshed);
   }, [rows, selected]);
-
-  const selectedBuildId = selected?.id ?? null;
-  useRealtime(detailsOpen && selectedBuildId ? "docker.build.log" : null, (payload) => {
-    const event = payload as { buildId?: string } | undefined;
-    if (event?.buildId !== selectedBuildId) return;
-    void api
-      .getDockerBuildLogs(selectedBuildId)
-      .then(setLogs)
-      .catch(() => undefined);
-  });
 
   const optionBuilds = rows;
   const resourceOptions = useMemo(
@@ -598,7 +579,6 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
       <DockerBuildDetailsDialog
         open={detailsOpen}
         build={selected}
-        logs={logs}
         onOpenChange={(open) => {
           setDetailsOpen(open);
           if (!open && searchParams.has("build")) {

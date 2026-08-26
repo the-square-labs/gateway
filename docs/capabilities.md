@@ -113,8 +113,8 @@ Deployment workflows:
 Safety controls:
 
 - Mount editing is separated from normal container editing and constrained to Gateway-managed local volumes. Legacy mounts remain visible only where needed for compatibility and cannot be reintroduced after removal.
-- Repository builds are admitted only while the internal registry is writable and an online Build Worker advertises the isolated BuildKit, containerd, runsc, and enforced-resource-profile capabilities. A Build Worker is the existing `docker-daemon` in `builder` mode and has no Docker Engine socket.
-- The current hardened builder profile accepts one build at a time, uses a dedicated containerd namespace and runsc runtime, disables OCI-worker and insecure entitlements, applies fixed CPU/RAM/PID limits, accounts job/runtime disk use, and clears BuildKit cache between jobs. Builder egress is installer-selectable and defaults to public internet with metadata/private/control-plane denial. Source-scoped Build Secrets use BuildKit secret mounts and log redaction; scanner SBOM data is ephemeral, and provenance is not published.
+- Repository builds are admitted only while the internal registry is writable and an online Build Worker advertises BuildKit/containerd execution, dedicated-runtime, and enforced-resource-profile capabilities. A Build Worker is the existing `docker-daemon` in `builder` mode and has no Docker Engine socket.
+- The current builder profile accepts one build at a time, uses a dedicated containerd namespace and runc runtime, disables OCI-worker and insecure entitlements, applies fixed CPU/RAM/PID limits, accounts job/runtime disk use, and clears BuildKit cache between jobs. The separate worker host or outer unprivileged container is the security boundary and must not contain unrelated workloads or credentials. Builder egress is installer-selectable and defaults to public internet with metadata/private/control-plane denial. Source-scoped Build Secrets use BuildKit secret mounts and log redaction; scanner SBOM data is ephemeral, and provenance is not published.
 - Secrets are masked by default.
 - Dangerous operations are permission-scoped and audited.
 

@@ -457,10 +457,7 @@ export function AIMessage({
             {toolCallItems.map((item) =>
               item.type === "single" ? (
                 <ToolCallEntrance key={item.toolCall.id}>
-                  <AIToolCallBlock
-                    toolCall={item.toolCall}
-                    compactSummary={compactSummary}
-                  />
+                  <AIToolCallBlock toolCall={item.toolCall} compactSummary={compactSummary} />
                 </ToolCallEntrance>
               ) : (
                 <ToolCallsGroup key={item.key} toolCalls={item.toolCalls} />

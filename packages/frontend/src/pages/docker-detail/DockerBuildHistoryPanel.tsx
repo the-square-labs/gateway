@@ -1,3 +1,4 @@
+import { Hammer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -14,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
-import type { DockerBuild, DockerBuildLogChunk } from "@/types";
+import type { DockerBuild } from "@/types";
 import { DockerBuildDetailsDialog } from "./DockerBuildDetailsDialog";
 
 interface DockerBuildHistoryPanelProps {
@@ -30,7 +31,6 @@ export function DockerBuildHistoryPanel({
 }: DockerBuildHistoryPanelProps) {
   const [selected, setSelected] = useState<DockerBuild | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [detailsLogs, setDetailsLogs] = useState<DockerBuildLogChunk[]>([]);
   const [allOpen, setAllOpen] = useState(false);
   const [allBuilds, setAllBuilds] = useState<DockerBuild[]>([]);
   const [allLoading, setAllLoading] = useState(false);
@@ -88,27 +88,10 @@ export function DockerBuildHistoryPanel({
 
   useEffect(() => {
     if (!selected) return;
-    void api
-      .getDockerBuildLogs(selected.id)
-      .then(setDetailsLogs)
-      .catch(() => setDetailsLogs([]));
-  }, [selected]);
-
-  useEffect(() => {
-    if (!selected) return;
     const refreshed = builds.find((build) => build.id === selected.id);
     if (refreshed && refreshed !== selected) setSelected(refreshed);
   }, [builds, selected]);
 
-  const selectedBuildId = selected?.id ?? null;
-  useRealtime(detailsOpen && selectedBuildId ? "docker.build.log" : null, (payload) => {
-    const event = payload as { buildId?: string } | undefined;
-    if (event?.buildId !== selectedBuildId) return;
-    void api
-      .getDockerBuildLogs(selectedBuildId)
-      .then(setDetailsLogs)
-      .catch(() => undefined);
-  });
   useRealtime(allOpen && sourceBindingId ? "docker.build.changed" : null, (payload) => {
     const event = payload as { sourceBindingId?: string } | undefined;
     if (event?.sourceBindingId === sourceBindingId) void loadPage(undefined, true);
@@ -287,6 +270,7 @@ export function DockerBuildHistoryPanel({
   return (
     <>
       <PanelShell
+        icon={<Hammer className="h-4 w-4" />}
         title="Builds"
         description="The 5 most recent builds, security decisions, and deployment results."
         actions={
@@ -339,7 +323,6 @@ export function DockerBuildHistoryPanel({
       <DockerBuildDetailsDialog
         open={detailsOpen}
         build={selected}
-        logs={detailsLogs}
         onOpenChange={setDetailsOpen}
         onExited={() => setSelected(null)}
       />

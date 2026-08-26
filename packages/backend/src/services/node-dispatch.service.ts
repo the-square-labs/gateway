@@ -71,12 +71,12 @@ export class NodeDispatchService {
       node.status !== 'online' ||
       !Array.isArray(reported) ||
       !reported.includes('docker_builder_execution_v1') ||
-      !reported.includes('docker_builder_runsc_v1')
+      !reported.includes('docker_builder_dedicated_runtime_v1')
     ) {
       throw new AppError(
         409,
         'BUILDER_NODE_NOT_READY',
-        'Builder node must be online with the isolated BuildKit/containerd/runsc runtime ready'
+        'Builder node must be online with the dedicated BuildKit/containerd runtime ready'
       );
     }
   }

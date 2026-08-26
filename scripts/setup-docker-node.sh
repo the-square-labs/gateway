@@ -321,7 +321,7 @@ preflight_database_docker() {
 preflight_builder_runtime() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
     has_systemd || die "Builder nodes require systemd to supervise the isolated containerd and BuildKit services."
-    local required=(containerd buildkitd buildctl runsc containerd-shim-runc-v2 git syft grype iptables getent)
+    local required=(containerd buildkitd buildctl runc containerd-shim-runc-v2 git syft grype iptables getent)
     local missing=() binary
     for binary in "${required[@]}"; do
         command_exists "$binary" || missing+=("$binary")
@@ -335,7 +335,7 @@ preflight_builder_runtime() {
             [[ -x "/opt/gateway-builder/cni/bin/${plugin}" ]] || die "Builder internet egress requires CNI plugin ${plugin} in /opt/gateway-builder/cni/bin."
         done
     fi
-    ok "Builder runtime preflight passed (BuildKit + dedicated containerd + runsc)"
+    ok "Builder runtime preflight passed (BuildKit + dedicated containerd + runc)"
 }
 
 ensure_builder_system_packages() {
@@ -1088,7 +1088,7 @@ else
 fi
 
 if [[ "$DOCKER_MODE" == "builder" && "$RUN_USER" != "root" ]]; then
-    die "Builder docker-daemon profile must run as root to manage its isolated BuildKit/containerd runtime."
+    die "Builder docker-daemon profile must run as root to manage its dedicated BuildKit/containerd runtime."
 fi
 
 # ── Resolve run user/group ───────────────────────────────────────────
@@ -1281,7 +1281,7 @@ install_builder_runtime_bundle() {
 
     if [[ -f "$installed_manifest" ]] && grep -Fqx "gateway_release=${RESOLVED_DAEMON_VERSION}" "$installed_manifest"; then
         local complete=1 binary plugin
-        for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runsc syft grype; do
+        for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
             command_exists "$binary" || complete=0
         done
         for plugin in bridge host-local firewall loopback; do
@@ -1313,7 +1313,7 @@ install_builder_runtime_bundle() {
     trap 'rm -rf "$staging_dir" "$bundle_file"' RETURN
     tar -xzf "$bundle_file" -C "$staging_dir"
     local binary plugin
-    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runsc syft grype; do
+    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
         [[ -f "${staging_dir}/bin/${binary}" && ! -L "${staging_dir}/bin/${binary}" && -x "${staging_dir}/bin/${binary}" ]] || \
             die "Builder runtime bundle is missing regular executable bin/${binary}."
     done
@@ -1326,7 +1326,7 @@ install_builder_runtime_bundle() {
         die "Builder runtime bundle release does not match ${RESOLVED_DAEMON_VERSION}."
 
     install -d -m 0755 /usr/local/bin /opt/gateway-builder/cni/bin
-    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runsc syft grype; do
+    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
         install -m 0755 "${staging_dir}/bin/${binary}" "/usr/local/bin/${binary}"
     done
     for plugin in bridge host-local firewall loopback; do

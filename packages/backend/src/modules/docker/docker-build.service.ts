@@ -43,6 +43,25 @@ export interface DockerBuildEnqueueInput {
   force?: boolean;
 }
 
+const TERMINAL_BUILD_LOG_GRACE_MS = 5 * 60 * 1000;
+
+export function canAcceptDockerBuildLogEvent(
+  build: {
+    builderNodeId: string | null;
+    leaseOwner: string | null;
+    status: DockerBuildStatus;
+    completedAt: Date | null;
+  },
+  builderNodeId: string,
+  now = new Date()
+): boolean {
+  if (build.builderNodeId !== builderNodeId) return false;
+  if (build.leaseOwner) return true;
+  if (!TERMINAL_BUILD_STATUSES.includes(build.status) || !build.completedAt) return false;
+  const completedAge = now.getTime() - build.completedAt.getTime();
+  return completedAge >= 0 && completedAge <= TERMINAL_BUILD_LOG_GRACE_MS;
+}
+
 export class DockerBuildService {
   private eventBus?: EventBusService;
   private admissionGuard?: () => Promise<void>;
@@ -495,19 +514,22 @@ export class DockerBuildService {
 
   async handleDaemonEvent(builderNodeId: string, event: DockerBuildEvent) {
     const current = await this.get(event.buildId);
+    if (event.status === 'log') {
+      if (!canAcceptDockerBuildLogEvent(current, builderNodeId)) {
+        throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build log does not belong to this builder');
+      }
+      const sequence = Number(event.sequence);
+      if (!Number.isSafeInteger(sequence)) {
+        throw new AppError(400, 'BUILD_LOG_SEQUENCE_INVALID', 'Build log sequence is invalid');
+      }
+      return this.appendLog(event.buildId, sequence, event.logChunk.toString('utf8'));
+    }
     if (current.builderNodeId !== builderNodeId || !current.leaseOwner) {
       throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build event does not belong to this builder lease');
     }
     const leaseOwner = current.leaseOwner;
     if (event.status === 'heartbeat') {
       return this.heartbeat(event.buildId, leaseOwner);
-    }
-    if (event.status === 'log') {
-      const sequence = Number(event.sequence);
-      if (!Number.isSafeInteger(sequence)) {
-        throw new AppError(400, 'BUILD_LOG_SEQUENCE_INVALID', 'Build log sequence is invalid');
-      }
-      return this.appendLog(event.buildId, sequence, event.logChunk.toString('utf8'));
     }
 
     const status = event.status as DockerBuildStatus;
@@ -527,9 +549,23 @@ export class DockerBuildService {
     }
 
     let readyStatus: DockerBuildStatus = current.status;
+    if (readyStatus === 'building' && current.target.kind === 'pages_project') {
+      try {
+        await this.transition(event.buildId, leaseOwner, 'scanning');
+        readyStatus = 'scanning';
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== 'BUILD_STATE_CONFLICT') throw error;
+        readyStatus = (await this.get(event.buildId)).status;
+      }
+    }
     if (readyStatus === 'scanning') {
-      await this.transition(event.buildId, leaseOwner, 'pushing');
-      readyStatus = 'pushing';
+      try {
+        await this.transition(event.buildId, leaseOwner, 'pushing');
+        readyStatus = 'pushing';
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== 'BUILD_STATE_CONFLICT') throw error;
+        readyStatus = (await this.get(event.buildId)).status;
+      }
     }
     if (readyStatus !== 'pushing') {
       throw new AppError(409, 'BUILD_EVENT_STATE_INVALID', 'Successful artifact arrived before the pushing state');

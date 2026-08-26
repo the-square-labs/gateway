@@ -17,7 +17,7 @@ export function AIButton({ iconOnly = false, showLabel = false }: AIButtonProps)
   const canUseAIWorkspace = useAuthStore((state) => state.hasScope(AI_SCOPE));
 
   const handleClick = () => {
-    if (isEnabled === false || !canUseAIWorkspace || aiLiteMode) {
+    if (showLabel || isEnabled === false || !canUseAIWorkspace || aiLiteMode) {
       window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
       return;
     }
@@ -46,8 +46,8 @@ export function AIButton({ iconOnly = false, showLabel = false }: AIButtonProps)
     return (
       <Button
         variant="ghost"
-        className={`h-auto w-full justify-start gap-2 px-3 py-2 ${
-          aiPanelOpen ? "bg-sidebar-accent text-primary" : ""
+        className={`h-auto w-full justify-start gap-2 bg-sidebar-accent px-3 py-2 text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground ${
+          aiPanelOpen ? "text-primary" : ""
         }`}
         onClick={handleClick}
       >

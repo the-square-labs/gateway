@@ -42,6 +42,10 @@ vi.mock("./node-detail/NodeConfigTab", () => ({
   NodeConfigTab: () => <div>Node config content</div>,
 }));
 
+vi.mock("./node-detail/BuilderJobsTab", () => ({
+  BuilderJobsTab: () => <div>Builder jobs content</div>,
+}));
+
 vi.mock("./node-detail/NodeConsoleTab", () => ({
   NodeConsoleTab: () => <div>Node console content</div>,
 }));
@@ -186,6 +190,38 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByText("Managed databases content")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Files" })).toBeEnabled();
     expect(screen.getByRole("tab", { name: "Console" })).toBeEnabled();
+  });
+
+  it("adds the Jobs tab to Build Worker nodes", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["nodes:details"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({
+        id: "builder-node",
+        slug: "builder-node",
+        type: "builder",
+        hostname: "builder-1",
+      }),
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/builder-node/jobs"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Builder jobs content")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Jobs" })).toBeEnabled();
   });
 
   it("saves node appearance name and predefined color", async () => {

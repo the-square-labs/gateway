@@ -13,6 +13,7 @@ interface DockerLogViewportProps<T> {
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
+  initialScrollToEnd?: boolean;
 }
 
 export function DockerLogViewport<T>({
@@ -26,6 +27,7 @@ export function DockerLogViewport<T>({
   onLoadMore,
   hasMore,
   loadingMore,
+  initialScrollToEnd,
 }: DockerLogViewportProps<T>) {
   return (
     <VirtualLogList
@@ -35,6 +37,7 @@ export function DockerLogViewport<T>({
       onLoadMore={onLoadMore}
       hasMore={hasMore}
       loadingMore={loadingMore}
+      initialScrollToEnd={initialScrollToEnd}
       renderLine={(line, index) => (
         <div className="whitespace-pre-wrap break-all px-4 font-mono text-xs leading-5 text-foreground/80">
           {renderContent(line, index)}

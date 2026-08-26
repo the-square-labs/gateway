@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { VirtualLogList } from "./virtual-log-list";
 
 let renderedCount = 0;
+let scrollToIndex = vi.fn();
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({
@@ -22,13 +23,67 @@ vi.mock("@tanstack/react-virtual", () => ({
         })),
       getTotalSize: () => count * 10,
       measureElement: vi.fn(),
-      scrollToIndex: vi.fn(),
+      scrollToIndex,
     };
   },
 }));
 
 beforeEach(() => {
   renderedCount = 0;
+  scrollToIndex = vi.fn();
+});
+
+it("opens a populated log viewport at the newest line", () => {
+  render(
+    <VirtualLogList
+      lines={["first", "second", "latest"]}
+      keyFn={(_, index) => index}
+      renderLine={(line) => <div>{line}</div>}
+      initialScrollToEnd
+    />
+  );
+
+  expect(scrollToIndex).toHaveBeenCalledWith(2, { align: "end" });
+});
+
+it("follows appended lines only while the user remains at the bottom", () => {
+  const lines = Array.from({ length: 100 }, (_, index) => `line-${index}`);
+  const { container, rerender } = render(
+    <VirtualLogList
+      lines={lines}
+      keyFn={(_, index) => index}
+      renderLine={(line) => <div>{line}</div>}
+    />
+  );
+  const scroller = container.firstElementChild as HTMLDivElement;
+  Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 100 });
+  Object.defineProperty(scroller, "scrollHeight", {
+    configurable: true,
+    get: () => renderedCount * 10,
+  });
+
+  scroller.scrollTop = 900;
+  fireEvent.scroll(scroller);
+  rerender(
+    <VirtualLogList
+      lines={[...lines, "live-append"]}
+      keyFn={(_, index) => index}
+      renderLine={(line) => <div>{line}</div>}
+    />
+  );
+  expect(scrollToIndex).toHaveBeenCalledWith(100, { align: "end" });
+
+  scrollToIndex.mockClear();
+  scroller.scrollTop = 400;
+  fireEvent.scroll(scroller);
+  rerender(
+    <VirtualLogList
+      lines={[...lines, "live-append", "another-append"]}
+      keyFn={(_, index) => index}
+      renderLine={(line) => <div>{line}</div>}
+    />
+  );
+  expect(scrollToIndex).not.toHaveBeenCalled();
 });
 
 it("keeps the same visible log line when older history is prepended", () => {

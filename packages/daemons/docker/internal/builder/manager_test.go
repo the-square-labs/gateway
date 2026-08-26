@@ -93,6 +93,9 @@ func TestRenderPagesDockerfileUsesGeneratedBuildRecipe(t *testing.T) {
 	if strings.Contains(dockerfile, "super-secret") {
 		t.Fatal("generated Pages Dockerfile contains a Build Secret value")
 	}
+	if strings.Contains(dockerfile, "# syntax=") {
+		t.Fatal("generated Pages Dockerfile must use the configured builtin dockerfile frontend")
+	}
 }
 
 func TestPagesBuildControlFilesStayOutsideRepositoryCheckout(t *testing.T) {

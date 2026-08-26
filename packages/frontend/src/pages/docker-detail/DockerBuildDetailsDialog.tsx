@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -8,6 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useRealtime } from "@/hooks/use-realtime";
+import { api } from "@/services/api";
 import type { DockerBuild, DockerBuildLogChunk, DockerBuildStatus } from "@/types";
 import { DockerLogViewport } from "./DockerLogViewport";
 
@@ -37,6 +39,16 @@ const VULNERABILITY_VARIANT: Record<string, "secondary" | "destructive" | "warni
   unknown: "secondary",
 };
 
+export const ACTIVE_DOCKER_BUILD_STATUSES = new Set<DockerBuildStatus>([
+  "queued",
+  "claimed",
+  "checking_out",
+  "building",
+  "scanning",
+  "pushing",
+  "deploying",
+]);
+
 function MetaRow({
   label,
   children,
@@ -48,7 +60,7 @@ function MetaRow({
 }) {
   return (
     <div
-      className={`flex min-w-0 items-start justify-between gap-4 px-4 py-3 ${
+      className={`flex min-w-0 items-center justify-between gap-4 px-4 py-3 ${
         header ? "bg-muted/40" : ""
       }`}
     >
@@ -67,7 +79,6 @@ function MetaRow({
 interface DockerBuildDetailsDialogProps {
   open: boolean;
   build: DockerBuild | null;
-  logs: DockerBuildLogChunk[];
   onOpenChange: (open: boolean) => void;
   onExited: () => void;
 }
@@ -75,10 +86,37 @@ interface DockerBuildDetailsDialogProps {
 export function DockerBuildDetailsDialog({
   open,
   build,
-  logs,
   onOpenChange,
   onExited,
 }: DockerBuildDetailsDialogProps) {
+  const [logs, setLogs] = useState<DockerBuildLogChunk[]>([]);
+  const logRequestId = useRef(0);
+  const buildId = build?.id ?? null;
+  const refreshLogs = useCallback(async () => {
+    if (!buildId) return;
+    const requestId = ++logRequestId.current;
+    try {
+      const next = await api.getDockerBuildLogs(buildId);
+      if (requestId === logRequestId.current) setLogs(next);
+    } catch {
+      // Keep the current log output until a realtime refresh succeeds.
+    }
+  }, [buildId]);
+
+  useEffect(() => {
+    if (!open || !buildId) return;
+    setLogs([]);
+    void refreshLogs();
+    return () => {
+      logRequestId.current += 1;
+    };
+  }, [buildId, open, refreshLogs]);
+
+  useRealtime(open && buildId ? "docker.build.log" : null, (payload) => {
+    const event = payload as { buildId?: string } | undefined;
+    if (event?.buildId === buildId) void refreshLogs();
+  });
+
   const scanSummary = build?.artifact?.scanSummary ?? null;
   const vulnerabilities = scanSummary?.vulnerabilities ?? [];
   const vulnerabilityCounts = scanSummary
@@ -128,6 +166,13 @@ export function DockerBuildDetailsDialog({
                 {build.builderName ?? build.builderNodeId ?? "Waiting"}
               </Badge>
             </MetaRow>
+            {build.errorMessage && (
+              <MetaRow label="Error">
+                <span className="break-words text-red-600 dark:text-red-400">
+                  {build.errorMessage}
+                </span>
+              </MetaRow>
+            )}
           </div>
         )}
         {scanSummary && vulnerabilityTotal > 0 && (
@@ -189,6 +234,7 @@ export function DockerBuildDetailsDialog({
         )}
         {build && (
           <DockerLogViewport
+            key={build.id}
             lines={logs}
             keyFn={(line) => line.sequence}
             renderContent={(line) => line.content}
@@ -197,6 +243,7 @@ export function DockerBuildDetailsDialog({
             }
             bordered
             className="h-72"
+            initialScrollToEnd
           />
         )}
       </DialogContent>

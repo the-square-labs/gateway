@@ -1704,6 +1704,7 @@ describe("AISidePanel autoscroll", () => {
     );
 
     expect(screen.getByRole("link", { name: /dashboard/i })).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByRole("link", { name: /profile/i })).toHaveAttribute("href", "/profile");
     expect(screen.getByRole("link", { name: /edge node/i })).toHaveAttribute(
       "href",
       "/nodes/edge-1"

@@ -1,6 +1,21 @@
-import { GitBranch, Pencil, Play, Plus, Save, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Braces,
+  GitBranch,
+  History,
+  KeyRound,
+  Loader2,
+  Pencil,
+  Play,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -37,6 +52,7 @@ interface DockerGitSourcePanelProps {
   error?: string | null;
   onRetry?: () => void;
   onBuildQueued?: () => void;
+  onSourceChange?: (source: DockerSourceBinding | null) => void;
   composeVariables?: Record<string, string>;
   composeSecretKeys?: string[];
   canEdit?: boolean;
@@ -44,6 +60,13 @@ interface DockerGitSourcePanelProps {
 }
 
 type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none";
+
+const CONNECT_STEP_ANIMATION = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -4 },
+  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
+};
 
 function commitBadge(sha: string | null, empty: string) {
   return sha ? (
@@ -62,6 +85,7 @@ export function DockerGitSourcePanel({
   error,
   onRetry,
   onBuildQueued,
+  onSourceChange,
   composeVariables = {},
   composeSecretKeys = [],
   canEdit = true,
@@ -119,6 +143,7 @@ export function DockerGitSourcePanel({
   const [secretValue, setSecretValue] = useState("");
   const [secretSaving, setSecretSaving] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [connectStep, setConnectStep] = useState<1 | 2>(1);
   const [connecting, setConnecting] = useState(false);
   const [connectorId, setConnectorId] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -272,34 +297,34 @@ export function DockerGitSourcePanel({
     setSaving(true);
     try {
       if (!target) return;
-      setSource(
-        await api.upsertDockerSource(target, {
-          connectorId: source.connectorId,
-          projectId: source.projectId,
-          branch: branch.trim(),
-          dockerfilePath: dockerfilePath.trim(),
-          contextPath: contextPath.trim(),
-          composeFilePath: composeTarget ? composeFilePath.trim() : undefined,
-          composeVariables: source.composeVariables,
-          composeSecretKeys: source.composeSecretKeys,
-          autoBuild,
-          autoDeploy,
-          buildArgs: pagesTarget ? buildVariables : source.buildArgs,
-          buildSecretNames: source.buildSecretNames,
-          applicationRoot: pagesTarget ? applicationRoot.trim() : undefined,
-          packageManager: pagesTarget ? packageManager : undefined,
-          packageManagerVersion:
-            pagesTarget && packageManagerVersion.trim() ? packageManagerVersion.trim() : undefined,
-          nodeVersion: pagesTarget ? nodeVersion : undefined,
-          buildScript: pagesTarget ? buildScript.trim() : undefined,
-          artifactDirectory: pagesTarget ? artifactDirectory.trim() : undefined,
-          publishTag: pagesTarget ? publishTag.trim() : undefined,
-          policy: {
-            ...source.policy,
-            vulnerabilityThreshold: pagesTarget ? "none" : vulnerabilityThreshold,
-          },
-        })
-      );
+      const updated = await api.upsertDockerSource(target, {
+        connectorId: source.connectorId,
+        projectId: source.projectId,
+        branch: branch.trim(),
+        dockerfilePath: dockerfilePath.trim(),
+        contextPath: contextPath.trim(),
+        composeFilePath: composeTarget ? composeFilePath.trim() : undefined,
+        composeVariables: source.composeVariables,
+        composeSecretKeys: source.composeSecretKeys,
+        autoBuild,
+        autoDeploy,
+        buildArgs: pagesTarget ? buildVariables : source.buildArgs,
+        buildSecretNames: source.buildSecretNames,
+        applicationRoot: pagesTarget ? applicationRoot.trim() : undefined,
+        packageManager: pagesTarget ? packageManager : undefined,
+        packageManagerVersion:
+          pagesTarget && packageManagerVersion.trim() ? packageManagerVersion.trim() : undefined,
+        nodeVersion: pagesTarget ? nodeVersion : undefined,
+        buildScript: pagesTarget ? buildScript.trim() : undefined,
+        artifactDirectory: pagesTarget ? artifactDirectory.trim() : undefined,
+        publishTag: pagesTarget ? publishTag.trim() : undefined,
+        policy: {
+          ...source.policy,
+          vulnerabilityThreshold: pagesTarget ? "none" : vulnerabilityThreshold,
+        },
+      });
+      setSource(updated);
+      onSourceChange?.(updated);
       toast.success("Repository settings updated");
     } catch (error) {
       if (!handleLicenseApiError(error, "Git push-to-deploy")) {
@@ -315,6 +340,7 @@ export function DockerGitSourcePanel({
   const openConnect = () => {
     if (!canEdit) return;
     if (!requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")) return;
+    setConnectStep(1);
     setConnectOpen(true);
   };
 
@@ -358,6 +384,7 @@ export function DockerGitSourcePanel({
         policy: { vulnerabilityThreshold: pagesTarget ? "none" : "critical" },
       });
       setSource(connected);
+      onSourceChange?.(connected);
       setConnectOpen(false);
       toast.success("Repository connected");
     } catch (error) {
@@ -369,8 +396,17 @@ export function DockerGitSourcePanel({
     }
   };
 
-  const discoverPagesBuild = async () => {
-    if (!pagesTarget || !target || !connectorId || !projectId || !connectBranch.trim()) return;
+  const clearPagesBuildDiscovery = () => {
+    setDiscoveryScripts({});
+    setDiscoveryManagers([]);
+    setConnectBuildScript("");
+    setConnectPackageManagerVersion("");
+  };
+
+  const discoverPagesBuild = async (): Promise<boolean> => {
+    if (!pagesTarget || !target || !connectorId || !projectId || !connectBranch.trim()) {
+      return false;
+    }
     setDiscovering(true);
     try {
       const discovery = await api.discoverPagesBuild(target.pageProjectId, {
@@ -385,17 +421,23 @@ export function DockerGitSourcePanel({
         setConnectPackageManager(discovery.preferredPackageManager);
       }
       setConnectPackageManagerVersion(discovery.packageManagerVersion ?? "");
-      if (discovery.scripts.build) setConnectBuildScript("build");
-      else if (Object.keys(discovery.scripts).length === 1) {
-        setConnectBuildScript(Object.keys(discovery.scripts)[0]!);
-      }
+      const scriptNames = Object.keys(discovery.scripts);
+      setConnectBuildScript(
+        discovery.scripts.build ? "build" : scriptNames.length === 1 ? scriptNames[0]! : ""
+      );
       toast.success("package.json loaded");
+      return true;
     } catch (error) {
-      setDiscoveryScripts({});
+      clearPagesBuildDiscovery();
       toast.error(error instanceof Error ? error.message : "Failed to inspect package.json");
+      return false;
     } finally {
       setDiscovering(false);
     }
+  };
+
+  const continuePagesConnect = async () => {
+    if (await discoverPagesBuild()) setConnectStep(2);
   };
 
   const saveBuildVariable = () => {
@@ -524,6 +566,7 @@ export function DockerGitSourcePanel({
     try {
       await api.removeDockerSource(target);
       setSource(null);
+      onSourceChange?.(null);
       setBuildSecrets([]);
       toast.success("Repository disconnected");
     } catch (error) {
@@ -537,7 +580,11 @@ export function DockerGitSourcePanel({
 
   if (suppliedLoading ?? loading) {
     return (
-      <PanelShell title="Repository" description="Loading repository delivery settings…">
+      <PanelShell
+        icon={<GitBranch className="h-4 w-4" />}
+        title="Repository"
+        description="Loading repository delivery settings…"
+      >
         <div className="h-28 animate-pulse bg-muted/30" />
       </PanelShell>
     );
@@ -546,6 +593,7 @@ export function DockerGitSourcePanel({
   if (error && !source) {
     return (
       <PanelShell
+        icon={<GitBranch className="h-4 w-4" />}
         title="Repository"
         description="Repository delivery settings could not be loaded."
       >
@@ -555,9 +603,128 @@ export function DockerGitSourcePanel({
   }
 
   if (!source) {
+    const repositorySourceFields = (
+      <RepositorySourceFields
+        connectorId={connectorId}
+        connectorOptions={connectorOptions}
+        repositories={repositories}
+        repositoryOptions={repositories.map((repository) => ({
+          value: repository.projectId,
+          label: repository.fullPath,
+          keywords: `${repository.name} ${repository.fullPath}`,
+        }))}
+        projectId={projectId}
+        branch={connectBranch}
+        dockerfilePath={connectDockerfilePath}
+        contextPath={connectContextPath}
+        composeFilePath={composeTarget ? connectComposeFilePath : undefined}
+        pages={pagesTarget}
+        autoBuild={connectAutoBuild}
+        autoDeploy={connectAutoDeploy}
+        onConnectorChange={(value) => {
+          setConnectorId(value);
+          setProjectId("");
+          if (pagesTarget) clearPagesBuildDiscovery();
+        }}
+        onProjectChange={(value) => {
+          setProjectId(value);
+          if (pagesTarget) clearPagesBuildDiscovery();
+        }}
+        onBranchChange={(value) => {
+          setConnectBranch(value);
+          if (pagesTarget) clearPagesBuildDiscovery();
+        }}
+        onDockerfilePathChange={setConnectDockerfilePath}
+        onContextPathChange={setConnectContextPath}
+        onComposeFilePathChange={composeTarget ? setConnectComposeFilePath : undefined}
+        onAutoBuildChange={setConnectAutoBuild}
+        onAutoDeployChange={setConnectAutoDeploy}
+      />
+    );
+
+    const pagesBuildFields = (
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Package manager</label>
+          <Select
+            value={connectPackageManager}
+            onValueChange={(value) => setConnectPackageManager(value as "npm" | "pnpm" | "yarn")}
+          >
+            <SelectTrigger aria-label="Package manager">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(discoveryManagers.length > 0
+                ? discoveryManagers
+                : (["npm", "pnpm", "yarn"] as const)
+              ).map((manager) => (
+                <SelectItem key={manager} value={manager}>
+                  {manager}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Node.js</label>
+          <Select
+            value={connectNodeVersion}
+            onValueChange={(value) => setConnectNodeVersion(value as "20" | "22" | "24")}
+          >
+            <SelectTrigger aria-label="Node.js version">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="20">Node.js 20</SelectItem>
+              <SelectItem value="22">Node.js 22</SelectItem>
+              <SelectItem value="24">Node.js 24</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Build script</label>
+          <Select value={connectBuildScript} onValueChange={setConnectBuildScript}>
+            <SelectTrigger aria-label="Build script">
+              <SelectValue placeholder="Select build script" />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(discoveryScripts).map(([name, command]) => (
+                <SelectItem key={name} value={name} description={command}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="pages-artifact-directory">
+            Artifact directory
+          </label>
+          <Input
+            id="pages-artifact-directory"
+            value={connectArtifactDirectory}
+            onChange={(event) => setConnectArtifactDirectory(event.target.value)}
+            placeholder="dist"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="pages-publish-tag">
+            Publish Tag
+          </label>
+          <Input
+            id="pages-publish-tag"
+            value={connectPublishTag}
+            onChange={(event) => setConnectPublishTag(event.target.value)}
+            placeholder="production"
+          />
+        </div>
+      </div>
+    );
+
     return (
       <>
         <PanelShell
+          icon={<GitBranch className="h-4 w-4" />}
           title="Repository"
           description="Build and deploy this resource directly from a Git repository."
         >
@@ -572,173 +739,132 @@ export function DockerGitSourcePanel({
             embedded
           />
         </PanelShell>
-        <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
-          <DialogContent className="sm:max-w-2xl">
+        <Dialog
+          open={connectOpen}
+          onOpenChange={(open) => {
+            setConnectOpen(open);
+            if (!open) setConnectStep(1);
+          }}
+        >
+          <DialogContent className={pagesTarget ? "sm:max-w-lg" : "sm:max-w-2xl"}>
             <DialogHeader>
               <DialogTitle>Connect repository</DialogTitle>
               <DialogDescription>
                 {pagesTarget
-                  ? "Build a static artifact from a package.json script and publish it as an immutable Pages Deployment."
+                  ? connectStep === 1
+                    ? "Choose the repository and application root for this Pages Project."
+                    : "Configure how Gateway builds and publishes the Pages artifact."
                   : composeTarget
                     ? "Build every Compose service that declares build and apply the project only after all artifacts pass policy."
                     : "Build and deploy this Docker resource from an allowlisted repository."}
               </DialogDescription>
             </DialogHeader>
-            <RepositorySourceFields
-              connectorId={connectorId}
-              connectorOptions={connectorOptions}
-              repositories={repositories}
-              repositoryOptions={repositories.map((repository) => ({
-                value: repository.projectId,
-                label: repository.fullPath,
-                keywords: `${repository.name} ${repository.fullPath}`,
-              }))}
-              projectId={projectId}
-              branch={connectBranch}
-              dockerfilePath={connectDockerfilePath}
-              contextPath={connectContextPath}
-              composeFilePath={composeTarget ? connectComposeFilePath : undefined}
-              pages={pagesTarget}
-              autoBuild={connectAutoBuild}
-              autoDeploy={connectAutoDeploy}
-              onConnectorChange={(value) => {
-                setConnectorId(value);
-                setProjectId("");
-              }}
-              onProjectChange={setProjectId}
-              onBranchChange={setConnectBranch}
-              onDockerfilePathChange={setConnectDockerfilePath}
-              onContextPathChange={setConnectContextPath}
-              onComposeFilePathChange={composeTarget ? setConnectComposeFilePath : undefined}
-              onAutoBuildChange={setConnectAutoBuild}
-              onAutoDeployChange={setConnectAutoDeploy}
-            />
-            {pagesTarget && (
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="pages-application-root">
-                    Application root
-                  </label>
-                  <Input
-                    id="pages-application-root"
-                    value={connectApplicationRoot}
-                    onChange={(event) => {
-                      setConnectApplicationRoot(event.target.value);
-                      setDiscoveryScripts({});
-                    }}
-                    placeholder="."
-                  />
-                </div>
-                <Button
-                  variant="outline"
-                  onClick={() => void discoverPagesBuild()}
-                  disabled={discovering || !connectorId || !projectId || !connectBranch.trim()}
-                >
-                  {discovering ? "Loading…" : "Load package.json"}
-                </Button>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Package manager</label>
-                    <Select
-                      value={connectPackageManager}
-                      onValueChange={(value) =>
-                        setConnectPackageManager(value as "npm" | "pnpm" | "yarn")
-                      }
+            {pagesTarget ? (
+              <AnimatedHeight>
+                <AnimatePresence initial={false} mode="popLayout">
+                  {connectStep === 1 ? (
+                    <motion.div
+                      key="pages-source-step"
+                      {...CONNECT_STEP_ANIMATION}
+                      className="space-y-4"
                     >
-                      <SelectTrigger aria-label="Package manager">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(discoveryManagers.length > 0
-                          ? discoveryManagers
-                          : (["npm", "pnpm", "yarn"] as const)
-                        ).map((manager) => (
-                          <SelectItem key={manager} value={manager}>
-                            {manager}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Node.js</label>
-                    <Select
-                      value={connectNodeVersion}
-                      onValueChange={(value) => setConnectNodeVersion(value as "20" | "22" | "24")}
-                    >
-                      <SelectTrigger aria-label="Node.js version">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="20">Node.js 20</SelectItem>
-                        <SelectItem value="22">Node.js 22</SelectItem>
-                        <SelectItem value="24">Node.js 24</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Build script</label>
-                  <Select value={connectBuildScript} onValueChange={setConnectBuildScript}>
-                    <SelectTrigger aria-label="Build script">
-                      <SelectValue placeholder="Load package.json first" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(discoveryScripts).map(([name, command]) => (
-                        <SelectItem key={name} value={name} description={command}>
-                          {name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium" htmlFor="pages-artifact-directory">
-                      Artifact directory
-                    </label>
-                    <Input
-                      id="pages-artifact-directory"
-                      value={connectArtifactDirectory}
-                      onChange={(event) => setConnectArtifactDirectory(event.target.value)}
-                      placeholder="dist"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium" htmlFor="pages-publish-tag">
-                      Publish Tag
-                    </label>
-                    <Input
-                      id="pages-publish-tag"
-                      value={connectPublishTag}
-                      onChange={(event) => setConnectPublishTag(event.target.value)}
-                      placeholder="production"
-                    />
-                  </div>
-                </div>
-              </div>
+                      {repositorySourceFields}
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium" htmlFor="pages-application-root">
+                          Application root
+                        </label>
+                        <Input
+                          id="pages-application-root"
+                          value={connectApplicationRoot}
+                          onChange={(event) => {
+                            setConnectApplicationRoot(event.target.value);
+                            clearPagesBuildDiscovery();
+                          }}
+                          placeholder="."
+                        />
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <motion.div key="pages-build-step" {...CONNECT_STEP_ANIMATION}>
+                      {pagesBuildFields}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </AnimatedHeight>
+            ) : (
+              repositorySourceFields
             )}
             <DialogFooter>
-              <Button variant="outline" onClick={() => setConnectOpen(false)} disabled={connecting}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => void connectSource()}
-                disabled={
-                  connecting ||
-                  !connectorId ||
-                  !projectId ||
-                  !connectBranch.trim() ||
-                  (composeTarget && !connectComposeFilePath.trim()) ||
-                  (pagesTarget &&
-                    (!connectBuildScript ||
-                      !connectApplicationRoot.trim() ||
-                      !connectArtifactDirectory.trim() ||
-                      !connectPublishTag.trim()))
-                }
-              >
-                {connecting ? "Connecting…" : "Connect"}
-              </Button>
+              {pagesTarget && connectStep === 1 ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => setConnectOpen(false)}
+                    disabled={discovering}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => void continuePagesConnect()}
+                    disabled={
+                      discovering ||
+                      !connectorId ||
+                      !projectId ||
+                      !connectBranch.trim() ||
+                      !connectApplicationRoot.trim()
+                    }
+                  >
+                    {discovering ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading package.json…
+                      </>
+                    ) : (
+                      <>
+                        Continue
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (pagesTarget) setConnectStep(1);
+                      else setConnectOpen(false);
+                    }}
+                    disabled={connecting}
+                  >
+                    {pagesTarget ? (
+                      <>
+                        <ArrowLeft className="h-4 w-4" />
+                        Back
+                      </>
+                    ) : (
+                      "Cancel"
+                    )}
+                  </Button>
+                  <Button
+                    onClick={() => void connectSource()}
+                    disabled={
+                      connecting ||
+                      !connectorId ||
+                      !projectId ||
+                      !connectBranch.trim() ||
+                      (composeTarget && !connectComposeFilePath.trim()) ||
+                      (pagesTarget &&
+                        (!connectBuildScript ||
+                          !connectApplicationRoot.trim() ||
+                          !connectArtifactDirectory.trim() ||
+                          !connectPublishTag.trim()))
+                    }
+                  >
+                    {connecting ? "Connecting…" : "Connect"}
+                  </Button>
+                </>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -751,6 +877,7 @@ export function DockerGitSourcePanel({
   return (
     <div className="flex flex-col gap-4">
       <PanelShell
+        icon={<GitBranch className="h-4 w-4" />}
         title="Repository"
         description={
           pagesTarget
@@ -1020,6 +1147,7 @@ export function DockerGitSourcePanel({
 
       {pagesTarget && (
         <PanelShell
+          icon={<Braces className="h-4 w-4" />}
           title="Build Variables"
           description="Build-time environment values. VITE_* values are embedded in the published client bundle."
           dirty={JSON.stringify(buildVariables) !== JSON.stringify(source.buildArgs)}
@@ -1097,6 +1225,7 @@ export function DockerGitSourcePanel({
       )}
 
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
         title="Build Secrets"
         description={
           pagesTarget
@@ -1155,6 +1284,7 @@ export function DockerGitSourcePanel({
       </PanelShell>
 
       <PanelShell
+        icon={<History className="h-4 w-4" />}
         title="Delivery status"
         description="Resolved and currently deployed repository revisions."
       >

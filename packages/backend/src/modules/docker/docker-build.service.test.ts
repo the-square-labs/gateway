@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DockerBuildStatus } from '@/db/schema/index.js';
 import {
   assertSupportedDockerBuildResourcePolicy,
+  canAcceptDockerBuildLogEvent,
   canTransitionDockerBuild,
   DockerBuildService,
   dockerBuildLimits,
@@ -105,6 +106,22 @@ function claimDatabase(rows: ReturnType<typeof queuedBuild>[]) {
 }
 
 describe('DockerBuildService', () => {
+  it('accepts trailing logs from the assigned builder for a short terminal grace period', () => {
+    const completedAt = new Date('2026-08-26T01:00:00.000Z');
+    const build = {
+      builderNodeId: 'builder-1',
+      leaseOwner: null,
+      status: 'failed' as DockerBuildStatus,
+      completedAt,
+    };
+
+    expect(canAcceptDockerBuildLogEvent(build, 'builder-1', new Date(completedAt.getTime() + 1_000))).toBe(true);
+    expect(canAcceptDockerBuildLogEvent(build, 'builder-1', new Date(completedAt.getTime() + 5 * 60 * 1000 + 1))).toBe(
+      false
+    );
+    expect(canAcceptDockerBuildLogEvent(build, 'builder-2', new Date(completedAt.getTime() + 1_000))).toBe(false);
+  });
+
   it('enforces the forward-only build state machine', () => {
     expect(canTransitionDockerBuild('queued', 'claimed')).toBe(true);
     expect(canTransitionDockerBuild('claimed', 'checking_out')).toBe(true);
@@ -354,6 +371,55 @@ describe('DockerBuildService', () => {
         }),
       })
     );
+  });
+
+  it('reconciles a Pages success event that races ahead of the scanning status event', async () => {
+    const service = new DockerBuildService({} as never);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      ...queuedBuild('pages-build-success'),
+      status: 'building',
+      builderNodeId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      leaseOwner: 'worker-a',
+      artifact: null,
+      sourceAutoDeploy: true,
+      target: { kind: 'pages_project', pageProjectId: 'page-1' },
+    } as never);
+    const transition = vi.spyOn(service, 'transition').mockImplementation(
+      async (_id, _lease, status) =>
+        ({
+          ...queuedBuild('pages-build-success'),
+          status,
+        }) as never
+    );
+    vi.spyOn(service, 'recordArtifact').mockResolvedValue({
+      artifact: { policyDecision: 'approved' },
+      created: true,
+    } as never);
+    service.setArtifactRollout(async () => 'deployed');
+
+    await service.handleDaemonEvent('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
+      buildId: 'pages-build-success',
+      status: 'succeeded',
+      sequence: '0',
+      logChunk: Buffer.alloc(0),
+      progressJson: '',
+      artifactRepository: 'gateway/builds/pages-source',
+      artifactDigest: `sha256:${'b'.repeat(64)}`,
+      artifactSizeBytes: '1234',
+      platform: 'linux/amd64',
+      sbomDigest: '',
+      provenanceDigest: '',
+      scanSummaryJson: '',
+      policyDecision: 'pending',
+      errorCode: '',
+      errorMessage: '',
+      occurredAtUnixMs: '0',
+    });
+
+    expect(transition).toHaveBeenNthCalledWith(1, 'pages-build-success', 'worker-a', 'scanning');
+    expect(transition).toHaveBeenNthCalledWith(2, 'pages-build-success', 'worker-a', 'pushing');
+    expect(transition).toHaveBeenNthCalledWith(3, 'pages-build-success', 'worker-a', 'deploying');
+    expect(transition).toHaveBeenNthCalledWith(4, 'pages-build-success', 'worker-a', 'succeeded');
   });
 
   it('prepares a Compose revision even when automatic deployment is disabled', async () => {

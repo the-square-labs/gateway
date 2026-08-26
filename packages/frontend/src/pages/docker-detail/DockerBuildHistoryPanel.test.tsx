@@ -34,6 +34,32 @@ describe("DockerBuildHistoryPanel", () => {
     });
     expect(screen.queryByText("End of build history")).not.toBeInTheDocument();
   });
+
+  it("shows a failed build reason in details and keeps metadata rows vertically centered", async () => {
+    const failedBuild: DockerBuild = {
+      ...build(0),
+      status: "failed",
+      errorCode: "BUILD_DISPATCH_FAILED",
+      errorMessage: "relay grant revision 3 is older than 177",
+    };
+    vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
+    renderWithRouter(
+      <DockerBuildHistoryPanel
+        builds={[failedBuild]}
+        sourceBindingId="11111111-1111-4111-8111-111111111111"
+      />
+    );
+
+    fireEvent.click(screen.getByText(failedBuild.commitSha.slice(0, 10)));
+
+    expect(await screen.findByText(failedBuild.errorMessage!)).toBeInTheDocument();
+    const buildWorkerLabel = screen
+      .getAllByText("Build Worker")
+      .find((element) => element.tagName === "SPAN");
+    const statusLabel = screen.getAllByText("Status").find((element) => element.tagName === "SPAN");
+    expect(buildWorkerLabel?.parentElement).toHaveClass("items-center");
+    expect(statusLabel?.parentElement).toHaveClass("items-center");
+  });
 });
 
 function build(index: number): DockerBuild {

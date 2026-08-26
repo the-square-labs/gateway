@@ -1401,7 +1401,7 @@ export function DockerComposeProjectDetail() {
         </DialogContent>
       </Dialog>
       <Dialog open={activityOpen} onOpenChange={setActivityOpen}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[85dvh] sm:max-w-5xl">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[92dvh] sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Compose activity</DialogTitle>
             <DialogDescription>
@@ -1409,7 +1409,7 @@ export function DockerComposeProjectDetail() {
             </DialogDescription>
           </DialogHeader>
           <div
-            className="max-h-[min(56dvh,36rem)] overflow-hidden"
+            className="max-h-[min(70dvh,44rem)] overflow-hidden"
             style={activityTableHeight ? { height: activityTableHeight } : undefined}
           >
             <DataTable
