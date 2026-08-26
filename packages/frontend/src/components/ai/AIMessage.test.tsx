@@ -67,8 +67,35 @@ describe("AIMessage tool call groups", () => {
     expect(container.querySelector("[data-ai-tool-result-scroll]")).toHaveClass(
       "max-h-48",
       "overflow-auto",
-      "overscroll-contain"
+      "overscroll-contain",
+      "dashboard-scrollbar"
     );
+    expect(container.querySelector("[data-ai-tool-result-scroll]")).not.toHaveClass("border-t-0");
+  });
+
+  it("joins argument and result blocks without a double border", () => {
+    const { container } = render(
+      <AIMessage
+        message={{
+          id: "assistant-tool-with-arguments",
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "tool-with-arguments",
+              name: "find_resource",
+              arguments: { query: "node" },
+              status: "completed",
+              result: { total: 1 },
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Find Resource/i }));
+
+    expect(container.querySelector("[data-ai-tool-result-scroll]")).toHaveClass("border-t-0");
   });
 
   it("prefers a canonical conversation resource label over a message hash fallback", () => {

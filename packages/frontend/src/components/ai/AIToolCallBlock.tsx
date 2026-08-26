@@ -238,7 +238,7 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
           {hasResult && (
             <pre
               data-ai-tool-result-scroll
-              className="max-h-48 overflow-auto overscroll-contain whitespace-pre-wrap border border-t-0 border-border bg-muted/50 px-2.5 py-1.5 text-[11px]"
+              className={`dashboard-scrollbar max-h-48 overflow-auto overscroll-contain whitespace-pre-wrap border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] ${hasArgs || hasCompactSummary ? "border-t-0" : ""}`}
             >
               {typeof safeToolCall.result === "string"
                 ? safeToolCall.result
