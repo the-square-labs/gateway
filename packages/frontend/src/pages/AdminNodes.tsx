@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
-import { nodeIconClassNames, nodeTypeLabel } from "@/lib/node-appearance";
+import { daemonTypeForNode, nodeIconClassNames, nodeTypeLabel } from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -68,6 +68,12 @@ const NODE_TYPES = [
     disabled: false,
   },
   {
+    value: "builder",
+    label: "Build Worker",
+    description: "Dedicated isolated worker for Git builds and artifact scanning",
+    disabled: false,
+  },
+  {
     value: "databases",
     label: "Databases",
     description: "Dedicated managed PostgreSQL, Redis, and ClickHouse node",
@@ -91,6 +97,7 @@ const DAEMON_INSTALLER_URL = "https://gitlab.wiolett.net/wiolett/gateway/-/raw/m
 const DAEMON_INSTALLER_BY_TYPE: Partial<Record<(typeof NODE_TYPES)[number]["value"], string>> = {
   nginx: "setup-node.sh",
   docker: "setup-docker-node.sh",
+  builder: "setup-docker-node.sh",
   databases: "setup-database-node.sh",
   monitoring: "setup-monitoring-node.sh",
 };
@@ -282,10 +289,11 @@ export function AdminNodes() {
     if (!scriptName) return "";
     const scriptUrl = `${DAEMON_INSTALLER_URL}/${scriptName}`;
     const fetcher = transport === "curl" ? `curl -sSL ${scriptUrl}` : `wget -qO- ${scriptUrl}`;
+    const profileArgument = enrollResult.type === "builder" ? " \\\n  --mode builder" : "";
     return `${fetcher} | sudo bash -s -- \\
   --gateway ${gateway} \\
   --token ${enrollResult.token} \\
-  --gateway-cert-sha256 ${enrollResult.gatewayCertSha256}`;
+  --gateway-cert-sha256 ${enrollResult.gatewayCertSha256}${profileArgument}`;
   };
 
   const copyCommandValue = (command: string) => command.replace(/\s*\\\n\s*/g, " ");
@@ -353,7 +361,7 @@ export function AdminNodes() {
           if (isNodeUpdating(node)) return <Badge variant="warning">UPDATING</Badge>;
           if (isNodeIncompatible(node)) return <Badge variant="destructive">INCOMPATIBLE</Badge>;
           const eStatus = effectiveNodeStatus(node);
-          const daemonType = node.type === "databases" ? "docker" : node.type;
+          const daemonType = daemonTypeForNode(node.type);
           const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
           const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
           if (eStatus === "online" && nodeStatus?.updateAvailable && typeStatus?.latestVersion) {

@@ -28,6 +28,7 @@ import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { getForcedDaemonUpdateForNode } from "@/lib/dev-force-updates";
 import {
+  daemonTypeForNode,
   getNodeAppearanceColor,
   NODE_APPEARANCE_COLOR_OPTIONS,
   nodeTypeLabel,
@@ -259,7 +260,7 @@ export function AdminNodeDetail({
     if (!id || !node) return { available: false, latestVersion: null };
     const forced = getForcedDaemonUpdateForNode(node);
     if (forced) return forced;
-    const daemonType = node.type === "databases" ? "docker" : node.type;
+    const daemonType = daemonTypeForNode(node.type);
     const typeStatus = daemonUpdates.find((status) => status.daemonType === daemonType);
     const nodeStatus = typeStatus?.nodes.find((status) => status.nodeId === id);
     return {
@@ -518,7 +519,7 @@ export function AdminNodeDetail({
     try {
       const statuses = await api.checkDaemonUpdates();
       setDaemonUpdates(statuses);
-      const daemonType = node.type === "databases" ? "docker" : node.type;
+      const daemonType = daemonTypeForNode(node.type);
       const typeStatus = statuses.find((status) => status.daemonType === daemonType);
       const nodeStatus = typeStatus?.nodes.find((status) => status.nodeId === node.id);
 
