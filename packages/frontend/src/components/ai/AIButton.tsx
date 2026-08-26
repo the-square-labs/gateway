@@ -8,9 +8,10 @@ import { AI_SCOPE } from "@/types";
 
 interface AIButtonProps {
   iconOnly?: boolean;
+  showLabel?: boolean;
 }
 
-export function AIButton({ iconOnly = false }: AIButtonProps) {
+export function AIButton({ iconOnly = false, showLabel = false }: AIButtonProps) {
   const { toggleAIPanel, aiPanelOpen, aiLiteMode } = useUIStore();
   const isEnabled = useAIStore((state) => state.isEnabled);
   const canUseAIWorkspace = useAuthStore((state) => state.hasScope(AI_SCOPE));
@@ -38,6 +39,21 @@ export function AIButton({ iconOnly = false }: AIButtonProps) {
         </TooltipTrigger>
         <TooltipContent side="right">AI Workspace (⌘I)</TooltipContent>
       </Tooltip>
+    );
+  }
+
+  if (showLabel) {
+    return (
+      <Button
+        variant="ghost"
+        className={`h-auto w-full justify-start gap-2 px-3 py-2 ${
+          aiPanelOpen ? "bg-sidebar-accent text-primary" : ""
+        }`}
+        onClick={handleClick}
+      >
+        <Sparkles className="h-4 w-4 shrink-0" />
+        <span className="truncate">AI Workspace</span>
+      </Button>
     );
   }
 

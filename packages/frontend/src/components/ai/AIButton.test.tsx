@@ -54,4 +54,21 @@ describe("AIButton", () => {
     expect(useUIStore.getState().aiPanelOpen).toBe(false);
     window.removeEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
   });
+
+  it("renders the expanded sidebar CTA and keeps it actionable without Workspace access", () => {
+    const onOpenAIWorkspace = vi.fn();
+    window.addEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
+
+    render(
+      <TooltipProvider>
+        <AIButton showLabel />
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "AI Workspace" }));
+
+    expect(onOpenAIWorkspace).toHaveBeenCalledOnce();
+    expect(useUIStore.getState().aiPanelOpen).toBe(false);
+    window.removeEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
+  });
 });

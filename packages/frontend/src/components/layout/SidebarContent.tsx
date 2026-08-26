@@ -421,7 +421,6 @@ export function SidebarContent({
               </span>
 
               <div className="flex items-center gap-0.5">
-                <AIButton />
                 {alwaysExpanded ? (
                   <Button variant="ghost" size="icon" className="h-10 w-10" onClick={onNavigate}>
                     <X className="h-4 w-4" />
@@ -554,6 +553,12 @@ export function SidebarContent({
                 <Separator />
               </>
             )}
+
+            <div className="px-2 py-2">
+              <AIButton showLabel />
+            </div>
+
+            <Separator />
 
             {/* Account at bottom */}
             <div className="p-2">
