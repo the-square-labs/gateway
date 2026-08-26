@@ -144,7 +144,9 @@ function renderAdditionalRouteLocation(
       `        rewrite ^${escaped}(?:/(.*))?$ /$1 break;`,
       `        include ${routeNginxValue(route.pagesRouteIncludePath ?? '')};`,
       ...advanced,
-      '        try_files $uri $uri/ =404;',
+      // Resolve directory indexes explicitly so nginx does not internally redirect
+      // a stripped Pages subpath (/) into the host's generic location /.
+      '        try_files $uri/index.html $uri =404;',
       '        sub_filter_once on;',
       `        sub_filter '</head>' '<script src="${scopedConfigPath}"></script></head>';`,
     ];
