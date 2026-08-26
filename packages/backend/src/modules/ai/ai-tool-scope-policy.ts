@@ -1,3 +1,4 @@
+import { MCP_TOKEN_SCOPES } from '@/lib/scopes.js';
 import { FOLDER_TOOL_REQUIREMENT_SCOPES } from './ai.folder-tool-scopes.js';
 
 export const AI_BROAD_ONLY_TOOL_SCOPES = new Set<string>();
@@ -15,6 +16,34 @@ export const AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS = new Set([
 ]);
 
 export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
+  read_gateway_documentation: MCP_TOKEN_SCOPES,
+  manage_docker_compose: [
+    'docker:compose:view',
+    'docker:compose:create',
+    'docker:compose:manage',
+    'docker:compose:delete',
+  ],
+  manage_docker_source: [
+    'docker:containers:view',
+    'docker:containers:create',
+    'docker:containers:edit',
+    'docker:containers:manage',
+    'docker:compose:view',
+    'docker:compose:create',
+    'docker:compose:manage',
+    'pages:view',
+    'pages:edit',
+    'pages:deploy',
+  ],
+  manage_docker_build: [
+    'docker:containers:view',
+    'docker:containers:manage',
+    'docker:compose:view',
+    'docker:compose:manage',
+    'pages:view',
+    'pages:deploy',
+  ],
+  list_docker_builds: ['docker:containers:view', 'docker:compose:view', 'pages:view'],
   find_resource: [
     'ai:workspace:use',
     'nodes:details',

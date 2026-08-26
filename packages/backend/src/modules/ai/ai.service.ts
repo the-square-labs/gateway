@@ -2314,6 +2314,8 @@ export class AIService {
       // ── Documentation ──
       case 'internal_documentation':
         return getInternalDocumentation(a.topic, user.scopes);
+      case 'read_gateway_documentation':
+        return getInternalDocumentation(a.topic, [...user.scopes, 'mcp:use']);
 
       // ── Web Search ──
       case 'web_search':

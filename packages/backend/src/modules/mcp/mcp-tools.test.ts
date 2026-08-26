@@ -47,11 +47,27 @@ describe('MCP tool scope filtering', () => {
     expect(toolNames(['docker:volumes:delete:node-1'])).toContain('manage_docker_volume');
     expect(toolNames(['docker:networks:edit:node-1'])).toContain('manage_docker_network');
     expect(toolNames(['docker:containers:files:read:node-1'])).toContain('manage_docker_container_config');
+    expect(toolNames(['docker:compose:view:node-1/project-1'])).toEqual(
+      expect.arrayContaining([
+        'manage_docker_compose',
+        'list_docker_builds',
+        'manage_docker_build',
+        'manage_docker_source',
+      ])
+    );
     expect(toolNames(['databases:credentials:reveal:db-1'])).toContain('manage_database_connection');
     expect(toolNames(['logs:read:env-1'])).toContain('manage_logging');
     expect(toolNames(['status-page:incidents:resolve'])).toContain('manage_status_page');
     expect(toolNames(['pages:tokens:manage:project-1'])).toContain('manage_pages');
     expect(toolNames(['pages:deploy:project-1'])).toContain('upload_pages_artifact');
+  });
+
+  it('exposes scoped internal documentation through the MCP-only documentation tool', () => {
+    const tool = toolByName(['nodes:details'], 'read_gateway_documentation');
+
+    expect(tool?.mcpOnly).toBe(true);
+    expect(tool?.parameters.properties).toHaveProperty('topic');
+    expect(toolNames(['nodes:details'])).not.toContain('internal_documentation');
   });
 
   it('advertises Pages upload as an MCP-only resumable binary contract', () => {

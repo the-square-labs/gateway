@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { findResource } from './ai.resource-search.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -66,6 +67,40 @@ function createService({
 }
 
 describe('AIService resource search tool', () => {
+  it('discovers Compose projects and build jobs through their first-class tools', async () => {
+    const executeToolInternal = vi.fn(async (_user, toolName: string) => {
+      if (toolName === 'manage_docker_compose') {
+        return [{ id: 'compose-1', name: 'storefront', nodeId: 'node-1' }];
+      }
+      if (toolName === 'list_docker_builds') {
+        return [
+          {
+            id: 'build-1',
+            repositoryPath: 'wiolett/storefront',
+            branch: 'main',
+            target: { kind: 'compose_project', nodeId: 'node-1', composeProjectId: 'compose-1' },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const result = await findResource(
+      {
+        executeToolInternal,
+        nodesService: {} as never,
+        dockerService: {} as never,
+      },
+      { ...BASE_USER, scopes: ['docker:compose:view:node-1/compose-1'] },
+      { query: '', types: ['docker_compose_project', 'docker_build'] }
+    );
+
+    expect(result.results).toEqual([
+      expect.objectContaining({ type: 'docker_compose_project', id: 'compose-1', name: 'storefront' }),
+      expect.objectContaining({ type: 'docker_build', id: 'build-1', name: 'wiolett/storefront' }),
+    ]);
+  });
+
   it('requires a query or a concrete resource type before delegating searches', async () => {
     const proxyService = { listProxyHosts: vi.fn() };
     const service = createService({ proxyService });

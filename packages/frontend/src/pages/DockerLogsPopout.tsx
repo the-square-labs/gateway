@@ -143,6 +143,8 @@ export function DockerLogsPopout() {
             const updated = [...prev, ...processLogs(msg.lines ?? [])];
             return capNewestLogs(updated);
           });
+        } else if (msg.type === "logs_ended") {
+          ws.close(1012, "Log stream ended");
         } else if (msg.type === "auth_error") {
           authFailedRef.current = true;
           terminalErrorRef.current = true;
@@ -176,6 +178,7 @@ export function DockerLogsPopout() {
     };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       wsRef.current = null;
       if (!mountedRef.current) return;
       if (authFailedRef.current || terminalErrorRef.current) return;

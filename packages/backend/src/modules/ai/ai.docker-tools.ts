@@ -1,5 +1,18 @@
 import { container } from '@/container.js';
-import { hasScopeForResource } from '@/lib/permissions.js';
+import { hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import {
+  ComposeAdoptInputSchema,
+  ComposeCreateInputSchema,
+  ComposeOperationActionSchema,
+  ComposeOperationInputSchema,
+  ComposeOperationListQuerySchema,
+  ComposeProjectNameSchema,
+  ComposeRevisionCreateInputSchema,
+  ComposeSecretCreateSchema,
+  ComposeSecretUpdateSchema,
+  ComposeYamlInputSchema,
+} from '@/modules/docker/compose/compose.schemas.js';
+import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import {
   ContainerCreateSchema,
   ContainerStopSchema,
@@ -16,13 +29,21 @@ import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.
 import {
   DockerBuildCreateSchema,
   DockerBuildListQuerySchema,
+  DockerBuildLogQuerySchema,
+  DockerBuildSecretNameSchema,
+  DockerBuildSecretValueSchema,
   DockerSourceBindingConfigSchema,
+  DockerSourceBindingUpsertSchema,
+  DockerSourceResourceCreateSchema,
   type DockerSourceTarget,
 } from '@/modules/docker/docker-build.schemas.js';
 import {
   DockerDeploymentDeploySchema,
   DockerDeploymentSwitchSchema,
 } from '@/modules/docker/docker-deployment.schemas.js';
+import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
+import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { inspectConsoleCommand, parseConsoleCommandResult } from './ai.console-safety.js';
@@ -74,7 +95,9 @@ export const DOCKER_TOOL_NAMES = new Set([
   'manage_docker_registry',
   'manage_docker_volume',
   'manage_docker_network',
+  'manage_docker_compose',
   'list_docker_builds',
+  'manage_docker_build',
   'manage_docker_source',
   'manage_docker_task',
 ]);
@@ -388,8 +411,12 @@ export async function executeDockerTool(
       return manageDockerVolume(context, user, args);
     case 'manage_docker_network':
       return manageDockerNetwork(context, user, args);
+    case 'manage_docker_compose':
+      return manageDockerCompose(context, user, args);
     case 'list_docker_builds':
       return listDockerBuilds(user, args);
+    case 'manage_docker_build':
+      return manageDockerBuild(user, args);
     case 'manage_docker_source':
       return manageDockerSource(context, user, args);
     case 'manage_docker_task':
@@ -397,6 +424,162 @@ export async function executeDockerTool(
     default:
       throw new Error(`Unsupported Docker tool: ${toolName}`);
   }
+}
+
+async function manageDockerCompose(context: DockerToolContext, user: User, args: Record<string, unknown>) {
+  const a = args as any;
+  const operation = String(a.operation);
+  const service = container.resolve(DockerComposeService);
+
+  if (operation === 'list') {
+    if (!hasScopeBase(user.scopes, 'docker:compose:view')) {
+      throw new Error('PERMISSION_DENIED: Missing required scope docker:compose:view');
+    }
+    const nodeId = optionalNonEmptyString(a.nodeId);
+    const projects = await service.list(nodeId);
+    return projects.filter((project) =>
+      hasDockerResourceScope(user.scopes, 'docker:compose:view', project.nodeId, project.id)
+    );
+  }
+
+  const nodeId = String(a.nodeId || '');
+  if (!nodeId) throw new Error('nodeId is required');
+  if (operation === 'validate' || operation === 'create') {
+    context.ensureToolScopeForResource(user, 'docker:compose:create', nodeId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    if (operation === 'validate') {
+      return service.validate(
+        ComposeYamlInputSchema.parse({
+          projectName: a.projectName,
+          yaml: a.yaml,
+          variables: a.variables ?? {},
+          secretKeys: a.secretKeys ?? [],
+        })
+      );
+    }
+    return service.create(
+      nodeId,
+      ComposeCreateInputSchema.parse({
+        projectName: a.projectName,
+        yaml: a.yaml,
+        variables: a.variables ?? {},
+        secretKeys: a.secretKeys ?? [],
+      }),
+      user.id
+    );
+  }
+
+  const projectId = String(a.projectId || '');
+  if (!projectId) throw new Error('projectId is required');
+  const resourceId = `${nodeId}/${projectId}`;
+
+  if (operation === 'get') {
+    context.ensureToolScopeForResource(user, 'docker:compose:view', resourceId);
+    return service.get(nodeId, projectId);
+  }
+  if (operation === 'adopt') {
+    context.ensureToolScopeForResource(user, 'docker:compose:create', resourceId);
+    context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    return service.adopt(
+      nodeId,
+      projectId,
+      ComposeAdoptInputSchema.parse({
+        yaml: a.yaml,
+        variables: a.variables ?? {},
+        secretKeys: a.secretKeys ?? [],
+      }),
+      user.id
+    );
+  }
+  if (operation === 'delete') {
+    context.ensureToolScopeForResource(user, 'docker:compose:delete', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    await service.deleteProject(nodeId, projectId, user.id);
+    return { success: true };
+  }
+  if (operation === 'revision_list') {
+    context.ensureToolScopeForResource(user, 'docker:compose:view', resourceId);
+    await service.get(nodeId, projectId);
+    return service.listRevisions(projectId);
+  }
+  if (operation === 'revision_get') {
+    context.ensureToolScopeForResource(user, 'docker:compose:view', resourceId);
+    await service.get(nodeId, projectId);
+    return service.getRevisionForApi(projectId, String(a.revisionId || ''));
+  }
+  if (operation === 'revision_create') {
+    context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    return service.createRevision(
+      nodeId,
+      projectId,
+      ComposeRevisionCreateInputSchema.parse({
+        yaml: a.yaml,
+        variables: a.variables ?? {},
+        secretKeys: a.secretKeys ?? [],
+      }),
+      user.id
+    );
+  }
+  if (operation === 'revision_delete') {
+    context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    await service.deleteRevision(nodeId, projectId, String(a.revisionId || ''), user.id);
+    return { success: true };
+  }
+  if (operation === 'operation_list') {
+    context.ensureToolScopeForResource(user, 'docker:compose:view', resourceId);
+    return service.listOperations(
+      nodeId,
+      projectId,
+      ComposeOperationListQuerySchema.parse({ cursor: a.cursor, limit: a.limit ?? 50 })
+    );
+  }
+  if (operation === 'operation_start') {
+    const action = ComposeOperationActionSchema.parse(a.action);
+    context.ensureToolScopeForResource(
+      user,
+      action === 'delete_volumes' ? 'docker:compose:delete' : 'docker:compose:manage',
+      resourceId
+    );
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    return service.startOperation(
+      nodeId,
+      projectId,
+      action,
+      ComposeOperationInputSchema.parse({
+        revisionId: a.revisionId,
+        idempotencyKey: a.idempotencyKey,
+        removeOrphans: a.removeOrphans ?? false,
+        volumeNames: a.volumeNames ?? [],
+      }),
+      user.id
+    );
+  }
+  if (operation === 'secret_list') {
+    context.ensureToolScopeForResource(user, 'docker:compose:view', resourceId);
+    return service.listSecrets(nodeId, projectId, false);
+  }
+  if (operation === 'secret_create') {
+    context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    const input = ComposeSecretCreateSchema.parse({ key: a.key, value: a.value });
+    return service.createSecret(nodeId, projectId, input.key, input.value, user.id);
+  }
+  if (operation === 'secret_update') {
+    context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    const input = ComposeSecretUpdateSchema.parse({ value: a.value });
+    return service.updateSecret(nodeId, projectId, String(a.secretId || ''), input.value, user.id);
+  }
+  if (operation === 'secret_delete') {
+    context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
+    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    await service.deleteSecret(nodeId, projectId, String(a.secretId || ''), user.id);
+    return { success: true };
+  }
+  throw new Error(`Unsupported Docker Compose operation: ${operation}`);
 }
 
 async function executeDockerContainerConsoleCommand(
@@ -590,7 +773,11 @@ async function listDockerBuilds(user: User, args: Record<string, unknown>) {
   const a = args as any;
   const query = DockerBuildListQuerySchema.parse({
     sourceBindingId: optionalNonEmptyString(a.sourceBindingId),
+    builderNodeId: optionalNonEmptyString(a.builderNodeId),
     status: optionalNonEmptyString(a.status),
+    provider: optionalNonEmptyString(a.provider),
+    branch: optionalNonEmptyString(a.branch),
+    search: optionalNonEmptyString(a.search),
     limit: a.limit ?? 20,
   });
   const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
@@ -611,6 +798,54 @@ async function listDockerBuilds(user: User, args: Record<string, unknown>) {
   });
 }
 
+function canAccessDockerBuild(user: User, build: any, action: 'view' | 'manage') {
+  if (build.target.kind === 'pages_project') {
+    return hasScopeForResource(
+      user.scopes,
+      action === 'view' ? 'pages:view' : 'pages:deploy',
+      build.target.pageProjectId
+    );
+  }
+  const compose = build.target.kind === 'compose_project';
+  const resourceId =
+    build.target.kind === 'container'
+      ? build.target.containerName
+      : build.target.kind === 'deployment'
+        ? build.target.deploymentId
+        : build.target.composeProjectId;
+  return hasDockerResourceScope(
+    user.scopes,
+    compose ? `docker:compose:${action}` : `docker:containers:${action}`,
+    build.target.nodeId,
+    resourceId
+  );
+}
+
+async function manageDockerBuild(user: User, args: Record<string, unknown>) {
+  const a = args as any;
+  const operation = String(a.operation);
+  const buildId = String(a.buildId || '');
+  if (!buildId) throw new Error('buildId is required');
+  const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
+  const service = container.resolve(DockerBuildService);
+  const build = await service.get(buildId);
+  const action = operation === 'cancel' || operation === 'retry' ? 'manage' : 'view';
+  if (!canAccessDockerBuild(user, build, action)) {
+    throw new Error(`PERMISSION_DENIED: Missing build target ${action} scope`);
+  }
+  if (operation === 'get') return build;
+  if (operation === 'logs') {
+    const query = DockerBuildLogQuerySchema.parse({
+      afterSequence: a.afterSequence ?? -1,
+      limit: a.limit ?? 200,
+    });
+    return service.listLogs(buildId, query.afterSequence, query.limit);
+  }
+  if (operation === 'cancel') return service.requestCancellation(buildId, user.id);
+  if (operation === 'retry') return service.retry(buildId, user.id);
+  throw new Error(`Unsupported Docker build operation: ${operation}`);
+}
+
 async function manageDockerSource(
   context: DockerToolContext,
   user: User,
@@ -624,14 +859,149 @@ async function manageDockerSource(
     const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
     return container.resolve(DockerBuildService).admissionStatus();
   }
+  if (operation === 'repositories') {
+    if (
+      !hasScopeBase(user.scopes, 'docker:containers:view') &&
+      !hasScopeBase(user.scopes, 'docker:compose:view') &&
+      !hasScopeBase(user.scopes, 'pages:view')
+    ) {
+      throw new Error('PERMISSION_DENIED: Missing Docker, Compose, or Pages view scope');
+    }
+    return container.resolve(IntegrationsService).listDockerBuildSourceRepositories(user, String(a.connectorId || ''));
+  }
 
-  const targetType = a.targetType === 'deployment' ? 'deployment' : 'container';
+  const sourceConfig = () =>
+    DockerSourceBindingConfigSchema.parse({
+      connectorId: a.connectorId,
+      projectId: a.projectId,
+      branch: a.branch,
+      dockerfilePath: a.dockerfilePath ?? 'Dockerfile',
+      contextPath: a.contextPath ?? '.',
+      composeFilePath: a.composeFilePath,
+      composeVariables: a.composeVariables ?? {},
+      composeSecretKeys: a.composeSecretKeys ?? [],
+      autoBuild: a.autoBuild ?? true,
+      autoDeploy: a.autoDeploy ?? true,
+      buildArgs: a.buildArgs ?? {},
+      buildSecretNames: a.buildSecretNames ?? [],
+      policy: a.policy,
+    });
+  const sourceUpsert = (target: DockerSourceTarget) =>
+    DockerSourceBindingUpsertSchema.parse({
+      ...sourceConfig(),
+      target,
+    });
+
+  if (operation === 'create') {
+    if (!nodeId) throw new Error('nodeId is required');
+    const { DockerSourceService } = await import('@/modules/docker/docker-source.service.js');
+    const sourceService = container.resolve(DockerSourceService);
+    if (a.targetType === 'compose') {
+      context.ensureToolScopeForResource(user, 'docker:compose:create', nodeId);
+      await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+      const composeService = container.resolve(DockerComposeService);
+      const projectName = ComposeProjectNameSchema.parse(a.projectName);
+      const config = sourceConfig();
+      if (!config.composeFilePath) throw new Error('Compose file path is required');
+      const project = await composeService.createPendingGitProject(nodeId, projectName, user.id);
+      const target = { kind: 'compose_project' as const, composeProjectId: project.id };
+      try {
+        const source = await sourceService.upsert(DockerSourceBindingUpsertSchema.parse({ ...config, target }), user);
+        const queued = await sourceService.createBuild(target, { force: false }, user);
+        return { project, source, ...queued };
+      } catch (error) {
+        await sourceService.remove(target, user.id).catch(() => false);
+        await composeService.discardPendingGitProject(project.id).catch(() => false);
+        throw error;
+      }
+    }
+
+    context.ensureToolScopeForResource(user, 'docker:containers:create', nodeId);
+    const input = DockerSourceResourceCreateSchema.parse({
+      source: sourceConfig(),
+      resource:
+        a.targetType === 'deployment'
+          ? {
+              kind: 'deployment',
+              name: a.resourceName,
+              routes: a.routes,
+              health: a.health ?? {},
+              drainSeconds: a.drainSeconds ?? 30,
+              routerImage: a.routerImage ?? 'nginx:alpine',
+              restartPolicy: a.restartPolicy ?? 'unless-stopped',
+              runtimeProfile: a.runtimeProfile ?? 'default',
+            }
+          : {
+              kind: 'container',
+              name: a.resourceName,
+              restartPolicy: a.restartPolicy ?? 'no',
+              runtimeProfile: a.runtimeProfile ?? 'default',
+            },
+    });
+    let target: DockerSourceTarget;
+    let initialConfig: Record<string, unknown> | null = null;
+    let pendingDeploymentId: string | null = null;
+    if (input.resource.kind === 'deployment') {
+      const deployment = await container
+        .resolve(DockerDeploymentService)
+        .createPending(
+          nodeId,
+          { ...input.resource, image: 'gateway.invalid/pending-source-build:latest' },
+          user.id,
+          user.scopes
+        );
+      pendingDeploymentId = deployment.id;
+      target = { kind: 'deployment', deploymentId: deployment.id };
+    } else {
+      const containers = await context.dockerService.listContainers(nodeId);
+      const existing = Array.isArray(containers)
+        ? containers.some(
+            (candidate: any) =>
+              String(candidate.name ?? candidate.Name ?? '').replace(/^\//, '') === input.resource.name
+          )
+        : false;
+      if (existing) throw new Error(`Container name already exists: ${input.resource.name}`);
+      target = { kind: 'container', nodeId, containerName: input.resource.name };
+      const { kind: _kind, ...config } = input.resource;
+      initialConfig = config;
+    }
+    try {
+      const source = await sourceService.upsert({ ...input.source, target }, user, {
+        allowMissingTarget: input.resource.kind === 'container',
+        initialConfig,
+      });
+      const queued = await sourceService.createBuild(target, { force: false }, user);
+      return { source, ...queued, target };
+    } catch (error) {
+      await sourceService.remove(target, user.id).catch(() => false);
+      if (pendingDeploymentId) {
+        await container
+          .resolve(DockerDeploymentService)
+          .discardPending(nodeId, pendingDeploymentId)
+          .catch(() => false);
+      }
+      throw error;
+    }
+  }
+
+  const targetType =
+    a.targetType === 'deployment' ? 'deployment' : a.targetType === 'compose' ? 'compose' : 'container';
   let target: DockerSourceTarget;
-  if (targetType === 'deployment') {
+  if (targetType === 'compose') {
+    const composeProjectId = String(a.composeProjectId || '');
+    if (!composeProjectId) throw new Error('composeProjectId is required');
+    const requiredScope =
+      operation === 'get' || operation === 'secret_list' ? 'docker:compose:view' : 'docker:compose:manage';
+    context.ensureToolScopeForResource(user, requiredScope, `${nodeId}/${composeProjectId}`);
+    if (operation === 'upsert') {
+      await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    }
+    target = { kind: 'compose_project', composeProjectId };
+  } else if (targetType === 'deployment') {
     const deploymentId = String(a.deploymentId || '');
     if (!deploymentId) throw new Error('deploymentId is required');
     const requiredScope =
-      operation === 'get'
+      operation === 'get' || operation === 'secret_list'
         ? 'docker:containers:view'
         : operation === 'build'
           ? 'docker:containers:manage'
@@ -642,7 +1012,7 @@ async function manageDockerSource(
     const containerName = String(a.containerName || '');
     if (!containerName) throw new Error('containerName is required');
     const requiredScope =
-      operation === 'get'
+      operation === 'get' || operation === 'secret_list'
         ? 'docker:containers:view'
         : operation === 'build'
           ? 'docker:containers:manage'
@@ -657,23 +1027,7 @@ async function manageDockerSource(
     case 'get':
       return sourceService.get(target);
     case 'upsert':
-      return sourceService.upsert(
-        {
-          ...DockerSourceBindingConfigSchema.parse({
-            connectorId: a.connectorId,
-            projectId: a.projectId,
-            branch: a.branch,
-            dockerfilePath: a.dockerfilePath ?? 'Dockerfile',
-            contextPath: a.contextPath ?? '.',
-            autoDeploy: a.autoDeploy ?? true,
-            buildArgs: a.buildArgs ?? {},
-            buildSecretNames: a.buildSecretNames ?? [],
-            policy: a.policy,
-          }),
-          target,
-        },
-        user
-      );
+      return sourceService.upsert(sourceUpsert(target), user);
     case 'remove':
       return { success: true, removed: await sourceService.remove(target, user.id) };
     case 'resolve':
@@ -684,6 +1038,17 @@ async function manageDockerSource(
         DockerBuildCreateSchema.parse({ commitSha: optionalNonEmptyString(a.commitSha), force: a.force ?? false }),
         user
       );
+    case 'secret_list':
+      return sourceService.listBuildSecrets(target);
+    case 'secret_upsert': {
+      const name = DockerBuildSecretNameSchema.parse(a.secretName);
+      const { value } = DockerBuildSecretValueSchema.parse({ value: a.secretValue });
+      return sourceService.upsertBuildSecret(target, name, value, user.id);
+    }
+    case 'secret_delete': {
+      const name = DockerBuildSecretNameSchema.parse(a.secretName);
+      return { success: true, removed: await sourceService.deleteBuildSecret(target, name, user.id) };
+    }
     default:
       throw new Error(`Unsupported Docker source operation: ${operation}`);
   }

@@ -184,13 +184,15 @@ MCP accepts only OAuth access tokens issued for the Gateway MCP resource. It rej
 
 The `mcp:use` scope is a user-account capability gate. The owning user must have it for MCP access.
 
-By default, MCP starts with a compact core toolset. Clients call `discover_tools` to activate a domain toolset in the current MCP session. Gateway then sends `notifications/tools/list_changed`, and a compliant client refreshes `tools/list` so the newly activated tools become callable.
+By default, Extended MCP compatibility is enabled and the first `tools/list` response includes every tool allowed by the OAuth grant. Administrators can disable it for clients that support dynamic discovery; in that mode MCP starts with a compact core toolset, clients call `discover_tools`, Gateway sends `notifications/tools/list_changed`, and the client refreshes `tools/list` so the activated tools become callable.
 
 The `Ingress` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. For compatibility, callable tool names, resource URIs, OAuth scopes, and REST paths still use `proxy_host`, `proxy`, or `/api/proxy-hosts`; those identifiers refer to the Routes shown in the Operations Console.
 
-The same scoped automation surface includes managed database provisioning, safe lifecycle operations and workload bindings; Page Projects, Deployments, Tags, deploy tokens, and runtime configuration; path-based Additional Routes; and independent Additional Secure Link Bindings. Discover the `Databases`, `Pages`, or `Ingress` toolset before these workflows. Artifact bytes for Pages still use the resumable deploy API; the Pages MCP tool manages metadata and publication, including deploy-token lifecycle.
+The same scoped automation surface includes managed database provisioning and container/deployment/Compose-service bindings; first-class Compose discovery, revisions, lifecycle operations, secrets, activity and Git-source builds; Page Projects, Deployments, Tags, deploy tokens, runtime configuration and Git-source builds; Build Worker-filtered job history with logs/cancel/retry; path-based Additional Routes; and independent Additional Secure Link Bindings. Remote MCP clients can also upload Pages artifact bytes with the authenticated `upload_pages_artifact` begin/chunk/finalize tool, while ordinary API clients can use the resumable deploy API.
 
-Some MCP clients do not refresh their tool list after that notification. Enable **Extended MCP compatibility** in **Settings > Advanced** for those clients. In compatibility mode, the first `tools/list` response contains every tool allowed by the OAuth grant and `discover_tools` is omitted. This can expose hundreds of schemas, so keep the default discovery mode for clients that support list-change notifications.
+MCP clients can read the same permission-filtered internal operator documentation used by AI Workspace through `read_gateway_documentation` or the `gateway://docs` resource tree. General topics are available to any valid MCP authorization; subsystem topics are listed and readable only when the delegated OAuth scopes grant that subsystem.
+
+Extended compatibility can expose hundreds of schemas. Disable it only for clients that correctly handle `notifications/tools/list_changed` and need the smaller discovery-driven context.
 
 ### Scope Rules
 

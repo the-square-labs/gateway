@@ -226,6 +226,34 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
       }))
     );
   }
+  if (typeWanted('docker_compose_project') && hasScopeBase(user.scopes, 'docker:compose:view')) {
+    searchTasks.push(() =>
+      collect(
+        'docker_compose_project',
+        'manage_docker_compose',
+        { operation: 'list', nodeId: args.nodeId },
+        (project) => ({
+          id: project.id,
+          name: project.name || project.projectName,
+          nodeId: project.nodeId,
+        })
+      )
+    );
+  }
+  if (
+    typeWanted('docker_build') &&
+    (hasScopeBase(user.scopes, 'docker:containers:view') ||
+      hasScopeBase(user.scopes, 'docker:compose:view') ||
+      hasScopeBase(user.scopes, 'pages:view'))
+  ) {
+    searchTasks.push(() =>
+      collect('docker_build', 'list_docker_builds', { nodeId: args.nodeId, search: query, limit }, (build) => ({
+        id: build.id,
+        name: build.repositoryPath || build.repository || build.branch || build.id,
+        nodeId: build.target?.nodeId,
+      }))
+    );
+  }
   if (typeWanted('logging_environment') && hasScopeBase(user.scopes, 'logs:environments:view')) {
     searchTasks.push(() =>
       collect('logging_environment', 'manage_logging', {

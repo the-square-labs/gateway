@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { AIService } from './ai.service.js';
@@ -91,6 +92,65 @@ describe('AIService Docker tool routing', () => {
       { force: false },
       user
     );
+  });
+
+  it('routes Compose source builds through the project-scoped authorization identity', async () => {
+    const createBuild = vi.fn().mockResolvedValue({ build: { id: 'build-compose' }, created: true });
+    container.registerInstance(DockerSourceService, { createBuild } as never);
+    const service = createService({});
+    const user = {
+      ...BASE_USER,
+      scopes: ['docker:compose:manage:node-1/project-1'],
+    };
+
+    await expect(
+      service.executeTool(user, 'manage_docker_source', {
+        operation: 'build',
+        targetType: 'compose',
+        nodeId: 'node-1',
+        composeProjectId: 'project-1',
+      })
+    ).resolves.toMatchObject({ result: { build: { id: 'build-compose' }, created: true } });
+    expect(createBuild).toHaveBeenCalledWith(
+      { kind: 'compose_project', composeProjectId: 'project-1' },
+      { force: false },
+      user
+    );
+  });
+
+  it('reads Compose projects through the first-class Compose tool', async () => {
+    const get = vi.fn().mockResolvedValue({ id: 'project-1', nodeId: 'node-1', name: 'storefront' });
+    container.registerInstance(DockerComposeService, { get } as never);
+    const service = createService({});
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['docker:compose:view:node-1/project-1'] }, 'manage_docker_compose', {
+        operation: 'get',
+        nodeId: 'node-1',
+        projectId: 'project-1',
+      })
+    ).resolves.toMatchObject({ result: { id: 'project-1', name: 'storefront' } });
+    expect(get).toHaveBeenCalledWith('node-1', 'project-1');
+  });
+
+  it('reads build logs only when the caller can view the build target', async () => {
+    const get = vi.fn().mockResolvedValue({
+      id: 'build-1',
+      target: { kind: 'compose_project', nodeId: 'node-1', composeProjectId: 'project-1' },
+    });
+    const listLogs = vi.fn().mockResolvedValue({ data: [{ sequence: 1, line: 'done' }], nextSequence: 2 });
+    container.registerInstance(DockerBuildService, { get, listLogs } as never);
+    const service = createService({});
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['docker:compose:view:node-1/project-1'] }, 'manage_docker_build', {
+        operation: 'logs',
+        buildId: 'build-1',
+        afterSequence: 0,
+        limit: 50,
+      })
+    ).resolves.toMatchObject({ result: { data: [{ sequence: 1, line: 'done' }] } });
+    expect(listLogs).toHaveBeenCalledWith('build-1', 0, 50);
   });
 
   it('resolves a canonical container name for reference-only console results', async () => {

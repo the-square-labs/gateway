@@ -301,6 +301,7 @@ async function authenticateAndStartStream(
       if (!(await revalidateLogAccess(ws, state, credential, nodeId))) return;
       if (ended) {
         send(ws, { type: 'logs_ended' });
+        ws.close(1012, 'Log stream ended');
         return;
       }
       if (lines.length > 0) {

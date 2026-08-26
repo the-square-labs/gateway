@@ -237,10 +237,14 @@ async function startComposeStream(
     const service = (c.labels ?? c.Labels)?.['com.docker.compose.service'] ?? cname;
     const handlerKey = `${nodeId}:${cid}`;
 
-    const handler = (data: any) => {
+    const handler = (lines: string[], ended?: boolean) => {
       void (async () => {
         if (!(await revalidateComposeLogAccess(ws, state, nodeId))) return;
-        const lines: string[] = Array.isArray(data?.lines) ? data.lines : [];
+        if (ended) {
+          send(ws, { type: 'logs_ended', service });
+          ws.close(1012, 'Compose container log stream ended');
+          return;
+        }
         if (lines.length > 0) {
           send(ws, { type: 'new', lines: lines.map((l: string) => `${service} | ${l}`) });
         }

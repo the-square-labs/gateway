@@ -12,7 +12,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 - get_current_context: read the current UI route/resource when the user says "this page" or "current item".
 - wait: pause briefly when an operation is pending, then continue by re-checking status.
 - find_resource: globally search readable resources by name, ID, domain, image, etc.
-- internal_documentation: read workflow and argument docs before complex operations.
+- internal_documentation: read workflow and argument docs before complex operations in AI Workspace. Remote MCP clients use read_gateway_documentation or the gateway://docs resource tree with the same subsystem scope filtering.
 - ask_question: ask concise clarifying questions.
 - fetch: read a direct HTTP/HTTPS URL through Gateway when sandbox runner is enabled and the user has sandbox access.
 - web_search: available only when enabled by settings.
@@ -574,7 +574,8 @@ Gateway provides Portainer-like Docker container management through a daemon run
 - Git push-to-deploy, source mutation and automation, new build admission, and optional external Docker-client access to the internal registry require Business or Enterprise. The private internal registry itself remains available and operational on every plan. Let operators configure Repository mode fully, but explain that **Create and build** is the enforcement point when the current plan is below Business. After downgrade, existing source and build history remains readable and source bindings or Build Secrets may be removed, but edits, polling, webhooks, and new builds remain blocked.
 - A Git source is attached directly to an existing container, blue/green deployment, or Compose Project; there is no separate application entity. Repository mode in the Docker or Compose create dialog can reserve the resource and queue its first build.
 - Use \`list_docker_builds\` to inspect visible build status, exact commit, Build Worker, immutable artifact digest, and policy result.
-- Use \`manage_docker_source\` with \`get\`, \`upsert\`, \`remove\`, \`resolve\`, or \`build\` for an existing Docker resource. Use \`admission\` before promising a new build; it reports whether the internal registry and a dedicated Build Worker runtime are ready.
+- Use \`manage_docker_source\` with \`get\`, \`create\`, \`upsert\`, \`remove\`, \`resolve\`, \`build\`, source-secret operations, or repository discovery for containers, deployments, and Compose Projects. Use \`admission\` before promising a new build; it reports whether the internal registry and a dedicated Build Worker runtime are ready.
+- Use \`manage_docker_build\` for one visible build's status, incremental logs, cancellation, or retry. Use \`find_resource({ types: ["docker_build"] })\` or \`list_docker_builds\` with node, worker, provider, branch, status, or search filters for history.
 - Repository and integration IDs must come from an enabled allowlisted GitLab, GitHub, or generic Git connector. Gateway resolves the configured branch to an exact commit SHA and deduplicates ordinary builds by source binding plus commit.
 - Automatic deployment never runs a mutable Git-derived tag. An approved artifact is stored in the internal registry and addressed by digest; standalone containers recreate from that digest, deployments use the existing health-checked blue/green path, and Compose waits for every service build in the parent batch before creating one digest-pinned immutable revision. Manual Compose revisions remain image-only; repository Compose files support the bounded single-node build subset of context, dockerfile, and args.
 - Build admission fails closed when the registry is read-only or in maintenance, or when no online worker advertises the BuildKit execution, dedicated-runtime, and enforced-resource-profile capabilities. Image-based deployment remains available separately.
@@ -647,8 +648,8 @@ other stable hint to locate the recreated container and continue with its new ID
 ## Compose Boundaries
 - Community and paid plans discover existing Compose projects from canonical Docker labels and expose read-only inventory, status, monitoring, and logs. Adoption always requires a complete user-supplied single-file YAML document; Gateway never reads host Compose files or trusts label paths.
 - Personal and higher can deploy and manage single-node image-only Compose Projects with immutable revisions, explicit Pull & Apply, lifecycle operations, folders, logs, masked secrets, operation history, drift reporting, ordinary non-Swarm CPU/memory/PID limits, managed database links, and Route/Secure Link targeting by project/service identity.
-- The Assistant can inspect Compose resources and manage their folder placement when the user's scopes allow it. It does not currently expose direct Compose deployment or lifecycle tools; guide the user to the Compose UI or REST API instead of inventing a tool call.
-- Always reject \`build\` even when an image is also present. Also reject host bind mounts, privileged/device access, swarm/PaaS features, and direct mutations of project-owned child containers, named volumes, or non-external networks.
+- Use \`manage_docker_compose\` for project list/get/validate/create/adopt/delete, revision list/get/create/delete, operation history and lifecycle starts, and masked-secret lifecycle. It is available to AI Workspace and remote MCP with the same Compose resource scopes and Personal-or-higher mutation entitlement as REST. Use \`find_resource({ types: ["docker_compose_project"] })\` when only a name is known.
+- For manual YAML validation and revisions, always reject \`build\` even when an image is also present. Repository-backed Compose is the only supported build path and accepts only the bounded context/dockerfile/args subset. Also reject host bind mounts, privileged/device access, swarm/PaaS features, and direct mutations of project-owned child containers, named volumes, or non-external networks.
 - Images and external/shared volumes or networks remain global. Compose-managed resources cannot use Gateway cross-node migration.
 - Multi-node application clusters and multiple managed instances of one workload on one machine remain in development. Do not confuse them with current Compose Projects, cross-node migration, or blue/green deployment slots.
 
@@ -695,7 +696,7 @@ Managed database instances are not generic Docker workloads. The database node o
 - The tunnel terminates in Gateway's separate long-lived relay container. Ordinary app-only updates keep established binding traffic running; a red relay warning is a critical operator state after bounded automatic recovery fails, not a reason to publish a replacement port.
 - A TCP endpoint is an independent, explicit publication option for infrastructure outside Gateway. It requires engine authentication and may not be tunnel-encrypted unless the database engine is configured with TLS. Gateway does not change host firewalls automatically.
 - Each application binding gets a separate engine identity. Its URI and optional host/port/database/user/password environment values are injected into the selected application; do not reveal, log, or copy those values unless an explicit secret-reveal flow permits it.
-- Assistant and MCP flows use \`manage_managed_database\` for catalog/list/get/create/update/retry/delete, restart/pause/unpause, certificate rotation, and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, then create a container or deployment binding. Credential reveal and credential rotation remain outside this tool; never reveal owner or binding credentials.
+- Assistant and MCP flows use \`manage_managed_database\` for catalog/list/get/create/update/retry/delete, restart/pause/unpause, certificate rotation, and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, then create a standalone-container, deployment, or Compose-service binding. One database can have separate bindings for multiple services; each binding receives a distinct engine identity. Credential reveal and credential rotation remain outside this tool; never reveal owner or binding credentials.
 
 ## Providers
 - **Postgres**: schema/table explorer, paginated row browser, row insert/update/delete for PK-backed tables, SQL console, monitoring.
@@ -723,12 +724,13 @@ Managed database instances are not generic Docker workloads. The database node o
 
   pages: `# Pages
 
-Pages serves immutable static Deployments owned by a Page Project. Use \`find_resource({ types: ["page_project"] })\` and \`manage_pages\` for profile, project, deployment, Tag, deploy-token, migration, pinning, retention, and runtime-config operations.
+Pages serves immutable static Deployments owned by a Page Project. Use \`find_resource({ types: ["page_project"] })\` and \`manage_pages\` for profile, project, deployment, Tag, deploy-token, migration, pinning, retention, runtime-config, Git-source, Build Secret, and source-build operations.
 
 ## Workflow
 - The Pages profile must be licensed and enabled. A Project is placed on one Pages-capable node and can be migrated with \`project_migrate\`.
 - Remote MCP clients upload artifact bytes with \`upload_pages_artifact\`: call \`begin\` with the exact archive size and lowercase SHA-256, send ordered \`chunk\` calls with the returned upload ID/current offset and no more than 1 MiB decoded data per base64 chunk, then call \`finalize\`. Authentication comes from the MCP OAuth connection; never pass a token or Authorization value as a tool argument. The embedded AI Workspace does not expose this binary-transfer tool.
-- \`manage_pages\` operates deployment metadata and publication, not local archive bytes. The REST resumable deploy API remains available to ordinary API clients.
+- On Business and Enterprise, \`manage_pages\` can list source repositories, discover package.json, attach or remove a Git source, manage source-scoped Build Secrets, and queue builds. Use \`list_docker_builds\` and \`manage_docker_build\` for the resulting Build Worker jobs, logs, cancellation, and retry.
+- \`manage_pages\` operates deployment metadata, source configuration, builds, and publication, not local archive bytes. The REST resumable deploy API remains available to ordinary API clients.
 - Deploy tokens can be listed, created, and revoked with \`manage_pages\`. A newly created raw token is returned once; do not repeat it in later chat messages, notifications, or logs.
 - Deployments are immutable. Mutable Tags point at ready Deployments. Ingress Routes and Additional Routes target a Tag, never an immutable Deployment.
 - Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override.
@@ -1133,11 +1135,12 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 ## MCP
 - mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
 - Gateway MCP never delegates GitLab, GitHub, generic Git, or external SSH integration scopes. External agents must configure dedicated provider MCP servers for repository, CI, variable, webhook, registry, and SSH operations. Managed DNS uses the ordinary Domains tools and \`domains:*\` scopes.
-- The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
+- Extended MCP compatibility is enabled by default and returns every OAuth-scoped tool in the initial \`tools/list\` response. When an administrator disables it, MCP starts with a compact core toolset: \`discover_tools\` activates domain toolsets, Gateway sends \`notifications/tools/list_changed\`, and the client refreshes \`tools/list\`.
 - The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, raw route configuration, managed manual/Docker/Pages upstreams, and the canonical maintenance lifecycle. Route tools use UI-aligned names and arguments; resource URIs, scopes, REST paths, and persisted identifiers keep their existing compatibility contracts.
-- Use \`manage_additional_route\` for path-prefix locations inside a Route. It supports manual, Docker container/deployment, and Pages Tag targets plus location advanced config. Docker targets create and own their required Secure Link binding.
+- Use \`manage_additional_route\` for path-prefix locations inside a Route. It supports manual, standalone Docker container, Compose-service, Docker deployment, and Pages Tag targets plus location advanced config. Docker and Compose targets create and own their required Secure Link binding.
 - Use \`manage_additional_secure_link\` only for extra bindings referenced by a Route's advanced nginx config. Route-owned bindings are visible in its list but must be changed through \`manage_additional_route\`, not deleted independently.
-- The \`Pages\` toolset exposes Page Projects, Deployments, Tags, runtime configuration, profile settings, project migration, and an MCP-only resumable artifact uploader. Upload chunks are base64-encoded, capped at 1 MiB decoded, and authenticated by the MCP connection rather than a token argument. The \`Databases\` toolset includes managed database provisioning and application bindings.
+- The \`Docker\` toolset exposes Compose lifecycle and revisions, Git source settings and Build Secrets, Build Worker-filtered history, logs, cancellation, and retry. The \`Pages\` toolset exposes Page Projects, Deployments, Tags, runtime configuration, profile settings, project migration, Git-source builds, and an MCP-only resumable artifact uploader. Upload chunks are base64-encoded, capped at 1 MiB decoded, and authenticated by the MCP connection rather than a token argument. The \`Databases\` toolset includes managed database provisioning and standalone-container, deployment, or Compose-service bindings.
+- MCP clients can call \`read_gateway_documentation\` or read \`gateway://docs\`. General operator topics are available to every valid MCP grant; subsystem topics remain filtered by the delegated OAuth scopes.
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings
@@ -1379,7 +1382,7 @@ The notification system sends HTTP webhook notifications when alert conditions a
 
 ## Alert Rules
 Each alert rule defines:
-- **Category**: node, container, proxy, pages, gateway, logging, integration, certificate, security, database_postgres, database_clickhouse, or database_redis
+- **Category**: node, container, build, compose, proxy, pages, gateway, logging, integration, certificate, security, database_postgres, database_clickhouse, or database_redis
 - **Type**: threshold (metric breaches a value) or event (something happens)
 - **Threshold fields** (for threshold type): metric, metricTarget (optional sub-target such as a specific node disk mount), operator (>, >=, <, <=), thresholdValue, durationSeconds (fire observation window), fireThresholdPercent (percent of probes in that window that must breach), resolveAfterSeconds (resolve observation window, default 60s), resolveThresholdPercent (percent of probes in that window that must be clear)
 - **Event fields** (for event type): eventPattern (offline, stopped, oom_killed, etc.)
@@ -1421,6 +1424,8 @@ Available in message templates (per-alert) and body templates (per-webhook):
 
 ### Category-specific variables
 - Container: \`{{node_name}}\` — hosting node
+- Build: repository, branch, commit, Build Worker, target, and policy-safe failure context from build lifecycle events
+- Compose: project name/ID, node, operation, revision, and safe lifecycle outcome from Compose events
 - Proxy: \`{{health_status}}\` — health status
 - Certificate: \`{{days_until_expiry}}\`, \`{{expiry_date}}\`
 - Database: \`{{metric}}\`, \`{{value}}\`, \`{{threshold}}\`, and \`{{resource.name}}\`
@@ -1616,7 +1621,7 @@ If evidence is insufficient, state what could be verified and direct an administ
 
 /** Map doc topics to the scope required to read them */
 export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
-  discovery: 'ai:workspace:use',
+  discovery: ['ai:workspace:use', 'mcp:use'],
   pki: 'pki:ca:view:root',
   ssl: 'ssl:cert:view',
   proxy: 'proxy:view',
@@ -1644,7 +1649,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'node-files': ['nodes:files:read', 'nodes:files:write'],
   docker: ['docker:containers:view', 'docker:compose:view'],
   sandbox: 'ai:sandbox:use',
-  conversations: 'ai:workspace:use',
+  conversations: ['ai:workspace:use', 'mcp:use'],
   databases: 'databases:view',
   postgres: 'databases:view',
   redis: 'databases:view',
@@ -1652,8 +1657,8 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'ai-settings': 'feat:ai:configure',
   'status-page': 'status-page:view',
   housekeeping: 'housekeeping:view',
-  permissions: 'ai:workspace:use',
-  api: 'ai:workspace:use',
+  permissions: ['ai:workspace:use', 'mcp:use'],
+  api: ['ai:workspace:use', 'mcp:use'],
   'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
   'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
   inference: [
@@ -1668,13 +1673,13 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   ],
   gitlab: 'integrations:gitlab:view',
   notifications: ['notifications:view', 'audit:siem:view'],
-  overview: 'ai:workspace:use',
-  installation: 'ai:workspace:use',
-  authentication: 'ai:workspace:use',
+  overview: ['ai:workspace:use', 'mcp:use'],
+  installation: ['ai:workspace:use', 'mcp:use'],
+  authentication: ['ai:workspace:use', 'mcp:use'],
   cloudflare: 'integrations:cloudflare:view',
   'docker-registries': 'docker:registries:view',
   clickhouse: 'databases:view',
-  troubleshooting: 'ai:workspace:use',
+  troubleshooting: ['ai:workspace:use', 'mcp:use'],
 };
 
 export function getInternalDocumentation(topic: string, userScopes: string[]): { topic: string; content: string } {

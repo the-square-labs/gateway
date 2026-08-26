@@ -31,6 +31,7 @@ export function ComposeLogsView({
   const mountedRef = useRef(true);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const authFailedRef = useRef(false);
+  const connectionGenerationRef = useRef(0);
 
   const [, setContainers] = useState<
     Array<{ id: string; name: string; service: string; state: string }>
@@ -59,9 +60,12 @@ export function ComposeLogsView({
 
   const connect = useCallback(async () => {
     if (!canViewLogs || !nodeId || !project) return;
+    const generation = ++connectionGenerationRef.current;
     if (wsRef.current) {
-      wsRef.current.close();
+      const previous = wsRef.current;
       wsRef.current = null;
+      previous.onclose = null;
+      previous.close();
     }
     if (!mountedRef.current) return;
 
@@ -78,7 +82,8 @@ export function ComposeLogsView({
       document.head.appendChild(link);
     }
 
-    if (!termRef.current || !mountedRef.current) return;
+    if (!termRef.current || !mountedRef.current || generation !== connectionGenerationRef.current)
+      return;
 
     if (!terminalRef.current) {
       const terminal = new Terminal({
@@ -147,6 +152,8 @@ export function ComposeLogsView({
               terminal.write(`${line}\r\n`);
             }
           }
+        } else if (msg.type === "logs_ended") {
+          ws.close(1012, "Compose log stream ended");
         } else if (msg.type === "error") {
           terminal.write(`\x1b[31mError: ${msg.message}\x1b[0m\r\n`);
         } else if (msg.type === "auth_error") {
@@ -164,7 +171,13 @@ export function ComposeLogsView({
     };
 
     ws.onclose = () => {
-      if (!mountedRef.current) return;
+      if (
+        !mountedRef.current ||
+        generation !== connectionGenerationRef.current ||
+        wsRef.current !== ws
+      )
+        return;
+      wsRef.current = null;
       if (authFailedRef.current) return;
       terminal.write(`\r\n\x1b[90mConnection lost. Reconnecting...\x1b[0m\r\n`);
       reconnectTimer.current = setTimeout(() => {
@@ -178,16 +191,13 @@ export function ComposeLogsView({
     };
   }, [canViewLogs, getServiceColor, nodeId, project, getTerminalTheme]);
 
-  const didConnect = useRef(false);
   useEffect(() => {
     if (!canViewLogs) return;
     mountedRef.current = true;
-    if (!didConnect.current) {
-      didConnect.current = true;
-      connect();
-    }
+    void connect();
     return () => {
       mountedRef.current = false;
+      connectionGenerationRef.current += 1;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (cleanupRef.current) {
         cleanupRef.current();

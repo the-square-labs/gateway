@@ -10,7 +10,7 @@ Community is available only for noncommercial purposes permitted by the [PolyFor
 
 The commercial grant begins when the key is issued, continues through its expiration date, and remains in effect for 30 calendar days afterwards. A key without an expiration date grants commercial use while it remains active. Revocation for breach, fraud, chargeback, or refund ends the grant immediately without grace. Neither license permits modification, derivative works, or redistribution.
 
-Entitlements schema version 3 adds the `pages` feature to Personal, Business, and Enterprise grants. Community grants do not include Pages.
+Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterprise, adds `compose-applications` to every paid plan, and adds `git-push-to-deploy` to Business and Enterprise. Gateway still accepts legacy version 3 grants, but those grants do not unlock managed Compose lifecycle or Git source builds until the license server reissues version 4 entitlements. Community grants include read-only external Compose discovery through the shared Docker feature but do not include Pages or managed Compose mutations.
 
 ## Plan Positioning
 
@@ -18,7 +18,7 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 |---|---|---|---|
 | **Community** | Noncommercial personal, hobby, educational, research, and qualifying noncommercial use | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
 | **Personal** | Commercially operated installations that need unlimited node/user/group quotas, Compose deployment and lifecycle management, and current workload lifecycle features, without the in-development application-cluster capabilities | Unlimited nodes, users, and custom permission groups | Standard |
-| **Business** | Teams that need Docker and Compose Git push-to-deploy, isolated Build Workers, external access to the internal registry, Secure Runtime isolation, structured logging, audit export, guided onboarding, and planned application scaling/security scanning | Unlimited | Priority |
+| **Business** | Teams that need Git push-to-deploy for containers, deployments, Compose, and Pages; isolated Build Workers; external access to the internal registry; Secure Runtime isolation; structured logging; audit export; guided onboarding; and planned application scaling/security scanning | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
 ## Feature Availability
@@ -59,7 +59,7 @@ Entitlements schema version 3 adds the `pages` feature to Personal, Business, an
 | Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
 | Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
-| Git Repository Push-To-Deploy and Isolated Build Workers | Ready | — | — | ✅ | ✅ |
+| Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
 | Git Build Vulnerability Scanning and Admission Policy | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |

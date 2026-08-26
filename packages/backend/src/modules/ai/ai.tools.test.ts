@@ -827,7 +827,9 @@ describe('AI tool scope filtering', () => {
       'manage_docker_registry',
       'manage_docker_volume',
       'manage_docker_network',
+      'manage_docker_compose',
       'list_docker_builds',
+      'manage_docker_build',
       'manage_docker_source',
       'manage_docker_task',
       'manage_docker_container_config',
@@ -840,6 +842,7 @@ describe('AI tool scope filtering', () => {
       'get_docker_container_stats',
       'get_docker_container_logs',
       'list_docker_builds',
+      'manage_docker_build',
       'manage_docker_source',
       'manage_docker_container_config',
     ]);
@@ -863,12 +866,19 @@ describe('AI tool scope filtering', () => {
       'get_docker_container_stats',
       'get_docker_container_logs',
       'list_docker_builds',
+      'manage_docker_build',
       'manage_docker_source',
       'manage_docker_container_config',
     ]);
     expect(dockerToolNamesForScopes(['docker:images:view'])).toEqual(['list_docker_images']);
     expect(dockerToolNamesForScopes(['docker:volumes:view'])).toEqual(['list_docker_volumes']);
     expect(dockerToolNamesForScopes(['docker:networks:view'])).toEqual(['list_docker_networks']);
+    expect(dockerToolNamesForScopes(['docker:compose:view'])).toEqual([
+      'manage_docker_compose',
+      'list_docker_builds',
+      'manage_docker_build',
+      'manage_docker_source',
+    ]);
     expect(dockerToolNamesForScopes(['docker:containers:console:node-1'])).toContain(
       'execute_docker_container_console_command'
     );
@@ -881,6 +891,8 @@ describe('AI tool scope filtering', () => {
     expect(isDestructiveTool('create_docker_container')).toBe(true);
     expect(isDestructiveTool('execute_docker_container_console_command')).toBe(true);
     expect(isDestructiveTool('list_docker_builds')).toBe(false);
+    expect(isDestructiveTool('manage_docker_build')).toBe(true);
+    expect(isDestructiveTool('manage_docker_compose')).toBe(true);
     expect(isDestructiveTool('manage_docker_source')).toBe(true);
     expect(isDestructiveTool('manage_docker_task')).toBe(false);
   });

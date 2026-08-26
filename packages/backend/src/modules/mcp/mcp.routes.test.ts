@@ -327,6 +327,7 @@ describe('MCP tools', () => {
     expect(names).not.toContain('list_projects');
     expect(names).not.toContain('list_chat_projects');
     expect(names).not.toContain('internal_documentation');
+    expect(names).toContain('read_gateway_documentation');
     expect(names).not.toContain('web_search');
     expect(names).not.toContain('wait');
     expect(names).not.toContain('send_comment');

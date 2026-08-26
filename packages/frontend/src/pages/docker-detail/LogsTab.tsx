@@ -73,6 +73,8 @@ export function LogsTab(props: LogsTabProps) {
       popoutUrl: `/docker/logs/${props.nodeId}/${props.containerId}`,
     };
   }, [props.containerId, props.containerState, props.nodeId, props.source]);
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
   const inspectData = props.source ? undefined : props.inspectData;
   const [lines, setLines] = useState<string[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -192,7 +194,7 @@ export function LogsTab(props: LogsTabProps) {
     setLoadingMore(false);
     terminalErrorRef.current = false;
 
-    const ws = source.createWebSocket(200);
+    const ws = sourceRef.current.createWebSocket(200);
     wsRef.current = ws;
 
     ws.onmessage = (evt) => {
@@ -222,7 +224,10 @@ export function LogsTab(props: LogsTabProps) {
         } else if (msg.type === "connected") {
           setWsConnected(true);
         } else if (msg.type === "logs_ended") {
-          // Stream ended — will auto-reconnect via onclose handler
+          // A container restart ends Docker's follow stream while the browser
+          // socket can otherwise remain open forever. Closing it activates the
+          // normal reconnect path and fetches the new runtime's initial logs.
+          ws.close(1012, "Log stream ended");
         } else if (msg.type === "error" || msg.type === "auth_error") {
           const message = msg.message || "Log stream error";
           terminalErrorRef.current = msg.type === "auth_error" || isTerminalLogError(message);
@@ -239,6 +244,7 @@ export function LogsTab(props: LogsTabProps) {
     };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       wsRef.current = null;
       if (!mountedRef.current) return;
       setWsConnected(false);
@@ -256,7 +262,7 @@ export function LogsTab(props: LogsTabProps) {
       setWsConnected(false);
       setIsConnecting(false);
     };
-  }, [processLogs, source]);
+  }, [processLogs]);
 
   const isRunning = source.state === "running";
 
@@ -264,21 +270,22 @@ export function LogsTab(props: LogsTabProps) {
   const fetchStaticLogs = useCallback(async () => {
     setIsConnecting(true);
     try {
-      const data = await source.getLogs({ tail: 500, timestamps: true });
+      const data = await sourceRef.current.getLogs({ tail: 500, timestamps: true });
       setLines(capNewestLogs(processLogs(data ?? [])));
       setHasMore(false);
     } catch {
       /* */
     }
     setIsConnecting(false);
-  }, [processLogs, source]);
+  }, [processLogs]);
 
-  // Auto-connect on mount (skip if popout detected)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: connect once on mount
+  // Connect for the current source/runtime. Re-run when a container is
+  // recreated or moves between running and stopped states while this tab stays open.
   useEffect(() => {
+    const channelId = source.channelId;
     mountedRef.current = true;
     const connectTimeout = setTimeout(() => {
-      if (mountedRef.current && !isPopoutRef.current) {
+      if (mountedRef.current && !isPopoutRef.current && sourceRef.current.channelId === channelId) {
         if (isRunning) {
           connectWs();
         } else {
@@ -298,7 +305,7 @@ export function LogsTab(props: LogsTabProps) {
         wsRef.current = null;
       }
     };
-  }, []);
+  }, [connectWs, fetchStaticLogs, isRunning, source.channelId]);
 
   // If popout opens after we already connected, disconnect
   useEffect(() => {

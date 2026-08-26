@@ -11,6 +11,22 @@ import {
 } from './mcp-ai-audit.test-helpers.js';
 
 describe('AIService MCP audit core behavior', () => {
+  it('reads internal Gateway documentation through the MCP-safe tool', async () => {
+    const service = createService({
+      nodesService: {},
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+    });
+
+    const result = await service.executeTool(
+      USER,
+      'read_gateway_documentation',
+      { topic: 'api' },
+      { source: 'mcp', scopes: ['nodes:details'] }
+    );
+
+    expect(result).toMatchObject({ result: { topic: 'api', content: expect.stringContaining('# Gateway REST API') } });
+  });
+
   it('writes mcp audit entries for mutating MCP tool calls', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const nodesService = {

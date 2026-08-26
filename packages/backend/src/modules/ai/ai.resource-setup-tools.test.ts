@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
+import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageDeploymentService } from '@/modules/pages/deployments/page-deployment.service.js';
 import { PageProjectService } from '@/modules/pages/page-project.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { PagePublicationService } from '@/modules/pages/tags/page-publication.service.js';
 import { PageDeployTokenService } from '@/modules/pages/tokens/page-deploy-token.service.js';
+import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
 import { executeResourceSetupTool } from './ai.resource-setup-tools.js';
 
@@ -149,6 +151,74 @@ describe('resource setup AI tools', () => {
       'user-1'
     );
     expect(revoke).toHaveBeenCalledWith('project-1', 'token-1', 'user-1');
+  });
+
+  it('dispatches Pages Git-source configuration through the shared source service', async () => {
+    const upsert = vi.fn().mockResolvedValue({ id: 'source-1', target: { kind: 'pages_project' } });
+    container.registerInstance(LicensePolicyService, {
+      requireFeature: vi.fn().mockResolvedValue(undefined),
+    } as unknown as LicensePolicyService);
+    container.registerInstance(PageProfileService, {
+      requireEnabled: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PageProfileService);
+    container.registerInstance(PageProjectService, {} as PageProjectService);
+    container.registerInstance(DockerSourceService, { upsert } as unknown as DockerSourceService);
+    const projectId = '11111111-1111-4111-8111-111111111111';
+    const user = { ...USER, scopes: [`pages:edit:${projectId}`] };
+
+    await expect(
+      executeResourceSetupTool(user, 'manage_pages', {
+        operation: 'source_upsert',
+        projectId,
+        sourceConnectorId: '22222222-2222-4222-8222-222222222222',
+        repositoryProjectId: '33333333-3333-4333-8333-333333333333',
+        branch: 'main',
+        applicationRoot: '.',
+        packageManager: 'pnpm',
+        nodeVersion: '24',
+        buildScript: 'build',
+        artifactDirectory: 'dist',
+        publishTag: 'production',
+      })
+    ).resolves.toMatchObject({ id: 'source-1' });
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: 'pages_project', pageProjectId: projectId },
+        branch: 'main',
+        packageManager: 'pnpm',
+        artifactDirectory: 'dist',
+      }),
+      user
+    );
+  });
+
+  it('creates a Compose-service Additional Secure Link with stable project identity', async () => {
+    const createAdditionalSecureLink = vi.fn().mockResolvedValue({ id: 'binding-1', status: 'ready' });
+    container.registerInstance(ProxyService, { createAdditionalSecureLink } as unknown as ProxyService);
+    const user = { ...USER, scopes: ['proxy:edit:route-1'] };
+
+    await expect(
+      executeResourceSetupTool(user, 'manage_additional_secure_link', {
+        operation: 'create',
+        routeId: 'route-1',
+        name: 'STORE_DB',
+        upstreamKind: 'docker_container',
+        forwardScheme: 'http',
+        dockerNodeId: '11111111-1111-4111-8111-111111111111',
+        dockerComposeProjectId: '22222222-2222-4222-8222-222222222222',
+        dockerComposeServiceName: 'api',
+        dockerContainerPort: 8080,
+      })
+    ).resolves.toMatchObject({ id: 'binding-1' });
+    expect(createAdditionalSecureLink).toHaveBeenCalledWith(
+      'route-1',
+      expect.objectContaining({
+        dockerContainerName: undefined,
+        dockerComposeProjectId: '22222222-2222-4222-8222-222222222222',
+        dockerComposeServiceName: 'api',
+      }),
+      'user-1'
+    );
   });
 
   it('dispatches safe managed-database lifecycle operations', async () => {

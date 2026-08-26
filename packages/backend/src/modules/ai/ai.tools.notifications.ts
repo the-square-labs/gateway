@@ -4,7 +4,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_alert_rules',
     description:
-      'List all notification alert rules. Returns id, name, enabled, type (threshold/event), category (node/container/proxy/gateway/logging/integration/certificate/database_postgres/database_clickhouse/database_redis), severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds.',
+      'List all notification alert rules. Returns id, name, enabled, type (threshold/event), category, severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds. Categories include node, container, build, compose, proxy, pages, gateway, logging, integration, certificate, security, and managed database types.',
     parameters: {
       type: 'object',
       properties: {
@@ -13,8 +13,15 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
           enum: [
             'node',
             'container',
+            'build',
+            'compose',
             'proxy',
+            'pages',
+            'gateway',
+            'logging',
+            'integration',
             'certificate',
+            'security',
             'database_postgres',
             'database_clickhouse',
             'database_redis',
@@ -58,8 +65,15 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
           enum: [
             'node',
             'container',
+            'build',
+            'compose',
             'proxy',
+            'pages',
+            'gateway',
+            'logging',
+            'integration',
             'certificate',
+            'security',
             'database_postgres',
             'database_clickhouse',
             'database_redis',

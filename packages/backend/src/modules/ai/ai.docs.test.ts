@@ -47,14 +47,14 @@ describe('AI internal docs registry', () => {
       'troubleshooting',
     ]);
     expect(DOC_TOPIC_SCOPES).toMatchObject({
-      discovery: 'ai:workspace:use',
-      permissions: 'ai:workspace:use',
+      discovery: ['ai:workspace:use', 'mcp:use'],
+      permissions: ['ai:workspace:use', 'mcp:use'],
       docker: ['docker:containers:view', 'docker:compose:view'],
       logging: ['logs:environments:view', 'logs:schemas:view', 'logs:read', 'logs:manage'],
       folders: expect.arrayContaining(['nodes:folders:manage', 'domains:folders:manage']),
       'node-files': ['nodes:files:read', 'nodes:files:write'],
       sandbox: 'ai:sandbox:use',
-      conversations: 'ai:workspace:use',
+      conversations: ['ai:workspace:use', 'mcp:use'],
       'ai-settings': 'feat:ai:configure',
       'status-page': 'status-page:view',
       'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
@@ -62,13 +62,13 @@ describe('AI internal docs registry', () => {
       gitlab: 'integrations:gitlab:view',
       notifications: ['notifications:view', 'audit:siem:view'],
       siem: 'audit:siem:view',
-      overview: 'ai:workspace:use',
-      installation: 'ai:workspace:use',
-      authentication: 'ai:workspace:use',
+      overview: ['ai:workspace:use', 'mcp:use'],
+      installation: ['ai:workspace:use', 'mcp:use'],
+      authentication: ['ai:workspace:use', 'mcp:use'],
       cloudflare: 'integrations:cloudflare:view',
       'docker-registries': 'docker:registries:view',
       clickhouse: 'databases:view',
-      troubleshooting: 'ai:workspace:use',
+      troubleshooting: ['ai:workspace:use', 'mcp:use'],
       proxy: 'proxy:view',
       pages: 'pages:view',
       inference: expect.arrayContaining(['ai:workspace:use', 'inference:providers:manage', 'inference:models:manage']),
@@ -77,11 +77,16 @@ describe('AI internal docs registry', () => {
 
   it('keeps internal_documentation tool topics aligned with the docs registry', () => {
     const tool = AI_TOOLS.find((candidate) => candidate.name === 'internal_documentation');
+    const mcpTool = AI_TOOLS.find((candidate) => candidate.name === 'read_gateway_documentation');
     expect(tool).toBeDefined();
+    expect(mcpTool).toBeDefined();
+    expect(mcpTool?.mcpOnly).toBe(true);
     expect(tool?.description).toContain('logging');
     expect(tool?.description).toContain('discovery');
     const parameters = tool?.parameters as { properties: { topic: { enum: string[] } } };
+    const mcpParameters = mcpTool?.parameters as { properties: { topic: { enum: string[] } } };
     expect(parameters.properties.topic.enum).toEqual(Object.keys(INTERNAL_DOCS));
+    expect(mcpParameters.properties.topic.enum).toEqual(Object.keys(INTERNAL_DOCS));
   });
 
   it('returns allowed documentation and preserves permission topic content', () => {
@@ -95,6 +100,8 @@ describe('AI internal docs registry', () => {
     expect(INTERNAL_DOCS.permissions).toContain('docker:compose:view');
 
     expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('discover_tools');
+    expect(getInternalDocumentation('discovery', ['mcp:use']).content).toContain('discover_tools');
+    expect(getInternalDocumentation('docker', ['mcp:use']).content).toContain('do not have permission');
     expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('get_current_context');
     expect(getInternalDocumentation('discovery', ['ai:workspace:use']).content).toContain('find_resource');
     expect(getInternalDocumentation('logging', ['logs:schemas:view']).content).toContain('manage_logging');
@@ -113,6 +120,11 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain(
       'Personal and higher can deploy and manage'
     );
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain('manage_docker_compose');
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).toContain('manage_docker_build');
+    expect(getInternalDocumentation('docker', ['docker:compose:view']).content).not.toContain(
+      'does not currently expose direct Compose deployment'
+    );
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Isolation Profiles');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
@@ -130,6 +142,7 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('databases', ['databases:view']).content).toContain(
       'never reveal owner or binding credentials'
     );
+    expect(getInternalDocumentation('databases', ['databases:view']).content).toContain('Compose-service binding');
     expect(getInternalDocumentation('node-files', ['nodes:files:read']).content).toContain('manage_node_file');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('download_artifact');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('list_artifact_files');
@@ -198,6 +211,10 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('gateway-settings', ['settings:gateway:view']).content).toContain(
       'mcpExtendedCompatibility'
     );
+    expect(getInternalDocumentation('gateway-settings', ['settings:gateway:view']).content).toContain(
+      'read_gateway_documentation'
+    );
+    expect(getInternalDocumentation('pages', ['pages:view']).content).toContain('source repositories');
     expect(getInternalDocumentation('licensing-updates', ['license:view']).content).toContain('get_license_status');
     expect(getInternalDocumentation('licensing-updates', ['admin:update']).content).toContain('manage_system_updates');
     expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(

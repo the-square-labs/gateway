@@ -67,7 +67,7 @@ const MCP_EXCLUDED_TOOLS = new Set([
 ]);
 const SENSITIVE_TOOL_ARG_RE =
   /(?:password|passwd|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64)/i;
-const MCP_ALWAYS_VISIBLE_AI_TOOLS = new Set(['find_resource']);
+const MCP_ALWAYS_VISIBLE_AI_TOOLS = new Set(['find_resource', 'read_gateway_documentation']);
 const MCP_TOOLS_PAGE_SIZE = 80;
 const MCP_DISCOVERY_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 

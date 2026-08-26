@@ -10,11 +10,21 @@ import {
 } from '@/modules/databases/databases.schemas.js';
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
+import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import {
+  DockerBuildCreateSchema,
+  DockerBuildSecretNameSchema,
+  DockerBuildSecretValueSchema,
+  DockerSourceBindingUpsertSchema,
+  PagesBuildDiscoverySchema,
+} from '@/modules/docker/docker-build.schemas.js';
 import {
   DockerMigrationCreateInputSchema,
   DockerMigrationPreflightInputSchema,
 } from '@/modules/docker/docker-migration.schemas.js';
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
+import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
+import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
@@ -158,6 +168,8 @@ async function managePages(user: User, args: Record<string, unknown>) {
     'tag_list',
     'token_list',
     'config_list',
+    'source_get',
+    'source_secret_list',
   ]);
   if (!readOperations.has(operation)) await profile.requireEnabled();
 
@@ -189,6 +201,82 @@ async function managePages(user: User, args: Record<string, unknown>) {
     ensureResourceScope(user, 'pages:delete', projectId);
     await projects.delete(projectId, user.id);
     return { success: true };
+  }
+
+  const sourceTarget = { kind: 'pages_project' as const, pageProjectId: projectId };
+  const sources = () => container.resolve(DockerSourceService);
+  if (operation === 'source_get') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return sources().get(sourceTarget);
+  }
+  if (operation === 'source_repositories') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return container
+      .resolve(IntegrationsService)
+      .listDockerBuildSourceRepositories(user, requiredString(args.sourceConnectorId));
+  }
+  if (operation === 'source_discover') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return sources().discoverPagesBuild(
+      PagesBuildDiscoverySchema.parse({
+        connectorId: args.sourceConnectorId,
+        projectId: args.repositoryProjectId,
+        branch: args.branch,
+        applicationRoot: args.applicationRoot ?? '.',
+      }),
+      user
+    );
+  }
+  if (operation === 'source_upsert') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return sources().upsert(
+      DockerSourceBindingUpsertSchema.parse({
+        target: sourceTarget,
+        connectorId: args.sourceConnectorId,
+        projectId: args.repositoryProjectId,
+        branch: args.branch,
+        applicationRoot: args.applicationRoot ?? '.',
+        packageManager: args.packageManager,
+        packageManagerVersion: args.packageManagerVersion,
+        nodeVersion: args.nodeVersion,
+        buildScript: args.buildScript,
+        artifactDirectory: args.artifactDirectory,
+        publishTag: args.publishTag,
+        autoBuild: args.autoBuild ?? true,
+        autoDeploy: args.autoDeploy ?? true,
+        buildArgs: args.buildArgs ?? {},
+        buildSecretNames: args.buildSecretNames ?? [],
+        policy: args.policy ?? {},
+      }),
+      user
+    );
+  }
+  if (operation === 'source_remove') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    return { success: true, removed: await sources().remove(sourceTarget, user.id) };
+  }
+  if (operation === 'source_build') {
+    ensureResourceScope(user, 'pages:deploy', projectId);
+    return sources().createBuild(
+      sourceTarget,
+      DockerBuildCreateSchema.parse({ commitSha: args.commitSha, force: args.force ?? false }),
+      user
+    );
+  }
+  if (operation === 'source_secret_list') {
+    ensureResourceScope(user, 'pages:view', projectId);
+    return sources().listBuildSecrets(sourceTarget);
+  }
+  if (operation === 'source_secret_upsert') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    const name = DockerBuildSecretNameSchema.parse(args.secretName);
+    const { value } = DockerBuildSecretValueSchema.parse({ value: args.secretValue });
+    return sources().upsertBuildSecret(sourceTarget, name, value, user.id);
+  }
+  if (operation === 'source_secret_delete') {
+    ensureResourceScope(user, 'pages:edit', projectId);
+    const name = DockerBuildSecretNameSchema.parse(args.secretName);
+    return { success: true, removed: await sources().deleteBuildSecret(sourceTarget, name, user.id) };
   }
 
   if (operation === 'deployment_list') {
@@ -327,6 +415,8 @@ async function manageAdditionalSecureLink(user: User, args: Record<string, unkno
         forwardScheme: requiredEnum(args.forwardScheme, ['http', 'https']),
         dockerNodeId: optionalString(args.dockerNodeId),
         dockerContainerName: optionalString(args.dockerContainerName),
+        dockerComposeProjectId: optionalString(args.dockerComposeProjectId),
+        dockerComposeServiceName: optionalString(args.dockerComposeServiceName),
         dockerDeploymentId: optionalString(args.dockerDeploymentId),
         dockerContainerPort: requiredNumber(args.dockerContainerPort),
       },
@@ -488,7 +578,19 @@ function ensureBindingTargetScopes(
       : target.targetType === 'deployment'
         ? ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']
         : ['docker:containers:environment', 'docker:containers:secrets'];
-  for (const scope of scopes) ensureScope(user, scope);
+  const targetResourceId =
+    target.targetType === 'compose_service'
+      ? target.targetResourceId.split(':', 1)[0] || target.targetResourceId
+      : target.targetResourceId;
+  for (const scope of scopes) {
+    if (!hasDockerResourceScope(user.scopes, scope, target.targetNodeId, targetResourceId)) {
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        `Missing required scope: ${scope}:${target.targetNodeId}/${targetResourceId}`
+      );
+    }
+  }
 }
 
 function ensureScope(user: User, scope: string) {

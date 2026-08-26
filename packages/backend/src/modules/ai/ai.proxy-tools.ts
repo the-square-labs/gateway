@@ -73,6 +73,8 @@ export async function executeProxyTool(
             forwardScheme: a.forwardScheme || 'http',
             dockerNodeId: a.dockerNodeId,
             dockerContainerName: a.dockerContainerName,
+            dockerComposeProjectId: a.dockerComposeProjectId,
+            dockerComposeServiceName: a.dockerComposeServiceName,
             dockerDeploymentId: a.dockerDeploymentId,
             dockerContainerPort: a.dockerContainerPort,
             pageProjectId: a.pageProjectId,
