@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   type DockerBuildScanSummary,
@@ -175,7 +175,13 @@ export class DockerBuildService {
           : await tx
               .select()
               .from(dockerBuilds)
-              .where(and(eq(dockerBuilds.sourceBindingId, source.id), eq(dockerBuilds.commitSha, commitSha)));
+              .where(
+                and(
+                  eq(dockerBuilds.sourceBindingId, source.id),
+                  eq(dockerBuilds.commitSha, commitSha),
+                  eq(dockerBuilds.sourceConfigGeneration, source.configGeneration)
+                )
+              );
       const existingByService = new Map(existing.map((build) => [build.serviceName ?? '', build]));
       const missing = specs.filter((spec) => !existingByService.has(spec.serviceName ?? ''));
       const inserted =
@@ -190,8 +196,8 @@ export class DockerBuildService {
                   dedupeKey: batchId
                     ? `${batchId}:${spec.serviceName}`
                     : input.force
-                      ? `${source.id}:${commitSha}:${spec.serviceName ?? 'default'}:${randomUUID()}`
-                      : `${source.id}:${commitSha}:${spec.serviceName ?? 'default'}`,
+                      ? `${source.id}:${commitSha}:${source.configGeneration}:${spec.serviceName ?? 'default'}:${randomUUID()}`
+                      : `${source.id}:${commitSha}:${source.configGeneration}:${spec.serviceName ?? 'default'}`,
                   trigger: input.trigger,
                   triggerDeliveryId: input.triggerDeliveryId ?? null,
                   repositoryRemoteId: source.repositoryRemoteId,
@@ -209,6 +215,7 @@ export class DockerBuildService {
                   buildScript: source.buildScript,
                   artifactDirectory: source.artifactDirectory,
                   publishTag: source.publishTag,
+                  sourceConfigGeneration: source.configGeneration,
                   status: 'queued' as const,
                   createdById: input.createdById ?? null,
                   queuedAt: now,
@@ -242,7 +249,10 @@ export class DockerBuildService {
             and(
               eq(dockerBuilds.sourceBindingId, source.id),
               eq(dockerBuilds.status, 'queued'),
-              ne(dockerBuilds.commitSha, commitSha)
+              or(
+                ne(dockerBuilds.commitSha, commitSha),
+                ne(dockerBuilds.sourceConfigGeneration, source.configGeneration)
+              )
             )
           );
       if (inserted.length > 0)
@@ -259,7 +269,10 @@ export class DockerBuildService {
             and(
               eq(dockerBuilds.sourceBindingId, source.id),
               inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES),
-              ne(dockerBuilds.commitSha, commitSha)
+              or(
+                ne(dockerBuilds.commitSha, commitSha),
+                ne(dockerBuilds.sourceConfigGeneration, source.configGeneration)
+              )
             )
           );
       const batch = batchId
@@ -275,7 +288,7 @@ export class DockerBuildService {
     const [source, builds] = await Promise.all([
       this.db.select().from(dockerSourceBindings).where(eq(dockerSourceBindings.id, sourceBindingId)).limit(1),
       this.db
-        .select({ serviceName: dockerBuilds.serviceName })
+        .select({ serviceName: dockerBuilds.serviceName, sourceConfigGeneration: dockerBuilds.sourceConfigGeneration })
         .from(dockerBuilds)
         .where(
           and(eq(dockerBuilds.sourceBindingId, sourceBindingId), eq(dockerBuilds.commitSha, commitSha.toLowerCase()))
@@ -283,7 +296,11 @@ export class DockerBuildService {
     ]);
     const expected =
       source[0]?.targetKind === 'compose_project' ? (source[0].composeBuildPlan?.services ?? []) : [null];
-    const present = new Set(builds.map((build) => build.serviceName));
+    const present = new Set(
+      builds
+        .filter((build) => build.sourceConfigGeneration === source[0]?.configGeneration)
+        .map((build) => build.serviceName)
+    );
     return (
       expected.length > 0 &&
       expected.every((spec) => present.has(spec && typeof spec === 'object' ? spec.serviceName : null))
@@ -533,7 +550,11 @@ export class DockerBuildService {
         errorMessage: artifact.artifact.policyReason || 'Built artifact did not satisfy source policy',
       });
     }
-    if (current.sourceAutoDeploy === false && current.target.kind !== 'compose_project') {
+    if (
+      current.sourceAutoDeploy === false &&
+      current.target.kind !== 'compose_project' &&
+      current.target.kind !== 'pages_project'
+    ) {
       return this.transition(event.buildId, leaseOwner, 'succeeded');
     }
     if (!this.artifactRollout) {

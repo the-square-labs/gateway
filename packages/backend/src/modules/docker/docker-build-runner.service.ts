@@ -107,6 +107,13 @@ export class DockerBuildRunnerService {
         .where(eq(dockerSourceBindings.id, build.sourceBindingId))
         .limit(1);
       if (!source) throw new Error('Docker source binding disappeared after the build was claimed');
+      if (source.configGeneration !== build.sourceConfigGeneration) {
+        await this.builds.transition(build.id, leaseOwner, 'superseded', {
+          errorCode: 'SUPERSEDED_BY_SOURCE_CONFIG',
+          errorMessage: 'Build settings or Build Secrets changed before the build was dispatched',
+        });
+        return;
+      }
       if (!this.sources) throw new Error('Docker source secret service is unavailable');
       const buildSecrets = await this.sources.getDecryptedBuildSecrets(source.id);
       const credential = await this.integrations.resolveDockerBuildCheckoutCredential({

@@ -95,6 +95,33 @@ func TestRenderPagesDockerfileUsesGeneratedBuildRecipe(t *testing.T) {
 	}
 }
 
+func TestPagesBuildControlFilesStayOutsideRepositoryCheckout(t *testing.T) {
+	workspace := t.TempDir()
+	jobDir := filepath.Join(workspace, validPagesBuildCommand().GetBuildId())
+	if err := os.Mkdir(jobDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(workspace, "outside")
+	if err := os.WriteFile(outside, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".dockerignore", ".gateway-pages.Dockerfile"} {
+		if err := os.Symlink(outside, filepath.Join(jobDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := NewManager(DefaultRuntimeConfig(0), workspace, DefaultGitAskpassPath, nil)
+	command := validPagesBuildCommand()
+	err := manager.buildPages(context.Background(), command, jobDir, filepath.Join(jobDir, "metadata.json"), "image")
+	if err == nil {
+		t.Fatal("Pages build unexpectedly completed without a BuildKit worker")
+	}
+	content, readErr := os.ReadFile(outside)
+	if readErr != nil || string(content) != "unchanged" {
+		t.Fatalf("repository symlink target was modified: content=%q err=%v", content, readErr)
+	}
+}
+
 func TestBuildLogRedactsBuildSecretValues(t *testing.T) {
 	var emitted *pb.DockerBuildEvent
 	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) {

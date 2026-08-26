@@ -152,10 +152,11 @@ export class DockerSourceService {
       composeSecretKeys: input.composeSecretKeys,
       composeBuildPlan: prepared.composeBuildPlan,
       autoBuild: input.autoBuild,
-      autoDeploy: input.autoDeploy,
+      autoDeploy: input.target.kind === 'pages_project' ? true : input.autoDeploy,
       initialConfig: options.initialConfig === undefined ? (existing?.initialConfig ?? null) : options.initialConfig,
       buildArgs: input.buildArgs,
       buildSecretNames: input.buildSecretNames,
+      configGeneration: existing ? sql`${dockerSourceBindings.configGeneration} + 1` : 1,
       applicationRoot: input.target.kind === 'pages_project' ? (input.applicationRoot ?? '.') : '.',
       packageManager: input.target.kind === 'pages_project' ? input.packageManager : null,
       packageManagerVersion: input.target.kind === 'pages_project' ? (input.packageManagerVersion ?? null) : null,
@@ -595,7 +596,12 @@ export class DockerSourceService {
         .orderBy(asc(dockerBuildSecrets.name));
       await tx
         .update(dockerSourceBindings)
-        .set({ buildSecretNames: names.map((item) => item.name), updatedAt: now, updatedById: userId })
+        .set({
+          buildSecretNames: names.map((item) => item.name),
+          configGeneration: sql`${dockerSourceBindings.configGeneration} + 1`,
+          updatedAt: now,
+          updatedById: userId,
+        })
         .where(eq(dockerSourceBindings.id, source.id));
       return saved;
     });
@@ -625,7 +631,12 @@ export class DockerSourceService {
         .orderBy(asc(dockerBuildSecrets.name));
       await tx
         .update(dockerSourceBindings)
-        .set({ buildSecretNames: names.map((item) => item.name), updatedAt: new Date(), updatedById: userId })
+        .set({
+          buildSecretNames: names.map((item) => item.name),
+          configGeneration: sql`${dockerSourceBindings.configGeneration} + 1`,
+          updatedAt: new Date(),
+          updatedById: userId,
+        })
         .where(eq(dockerSourceBindings.id, source.id));
       return true;
     });

@@ -429,11 +429,16 @@ func (m *Manager) build(ctx context.Context, command *pb.DockerBuildCommand, job
 }
 
 func (m *Manager) buildPages(ctx context.Context, command *pb.DockerBuildCommand, jobDir, metadataPath, imageRef string) error {
-	dockerfilePath := filepath.Join(jobDir, ".gateway-pages.Dockerfile")
-	dockerignorePath := filepath.Join(jobDir, ".dockerignore")
-	if err := os.WriteFile(dockerignorePath, []byte(".git\n.gateway-pages.Dockerfile\n"), 0o600); err != nil {
-		return fmt.Errorf("write Pages .dockerignore: %w", err)
+	controlDir, err := os.MkdirTemp(m.workspace, ".gateway-pages-control-")
+	if err != nil {
+		return fmt.Errorf("create managed Pages build directory: %w", err)
 	}
+	if err := os.Chmod(controlDir, 0o700); err != nil {
+		_ = os.RemoveAll(controlDir)
+		return fmt.Errorf("protect managed Pages build directory: %w", err)
+	}
+	defer secureRemoveAll(controlDir)
+	dockerfilePath := filepath.Join(controlDir, "Dockerfile")
 	dockerfile, err := renderPagesDockerfile(command)
 	if err != nil {
 		return err
@@ -442,7 +447,7 @@ func (m *Manager) buildPages(ctx context.Context, command *pb.DockerBuildCommand
 		return fmt.Errorf("write managed Pages Dockerfile: %w", err)
 	}
 	args := []string{"--addr", "unix://" + m.config.BuildkitSocket, "build", "--frontend", "dockerfile.v0",
-		"--local", "context=" + jobDir, "--local", "dockerfile=" + jobDir,
+		"--local", "context=" + jobDir, "--local", "dockerfile=" + controlDir,
 		"--opt", "filename=" + filepath.Base(dockerfilePath), "--opt", "platform=" + command.GetPlatform(),
 		"--metadata-file", metadataPath,
 		"--output", "type=image,name=" + imageRef + ",push=true,compression=gzip,force-compression=true,oci-mediatypes=true",

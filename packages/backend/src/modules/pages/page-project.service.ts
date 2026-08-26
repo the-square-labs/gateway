@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, ilike, inArray, isNull, max, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  dockerSourceBindings,
   nodes,
   pageDeployments,
   pageProjectFolders,
@@ -409,6 +410,7 @@ export class PageProjectService {
           )
         );
       }
+      await tx.delete(dockerSourceBindings).where(eq(dockerSourceBindings.pageProjectId, id));
       await tx.delete(pageProjects).where(eq(pageProjects.id, id));
     });
     await this.auditService.log({

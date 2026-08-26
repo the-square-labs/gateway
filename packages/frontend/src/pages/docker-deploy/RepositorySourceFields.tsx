@@ -143,19 +143,21 @@ export function RepositorySourceFields({
         </div>
         <Switch checked={autoBuild} onChange={onAutoBuildChange} ariaLabel="Automatic builds" />
       </div>
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium">Automatic deployment</p>
-          <p className="text-xs text-muted-foreground">
-            Deploy accepted artifacts after successful builds.
-          </p>
+      {!pages && (
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">Automatic deployment</p>
+            <p className="text-xs text-muted-foreground">
+              Deploy accepted artifacts after successful builds.
+            </p>
+          </div>
+          <Switch
+            checked={autoDeploy}
+            onChange={onAutoDeployChange}
+            ariaLabel="Automatic deployment"
+          />
         </div>
-        <Switch
-          checked={autoDeploy}
-          onChange={onAutoDeployChange}
-          ariaLabel="Automatic deployment"
-        />
-      </div>
+      )}
     </div>
   );
 }

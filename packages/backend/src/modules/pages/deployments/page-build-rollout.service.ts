@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerBuildArtifacts, dockerBuilds, dockerSourceBindings } from '@/db/schema/index.js';
+import { dockerArtifactPins, dockerBuildArtifacts, dockerBuilds, dockerSourceBindings } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerRegistryTokenService } from '@/modules/docker/docker-registry-token.service.js';
 import type { PagePublicationService } from '../tags/page-publication.service.js';
@@ -49,83 +49,111 @@ export class PageBuildRolloutService {
     if (joined.source.desiredCommitSha?.toLowerCase() !== joined.build.commitSha.toLowerCase()) {
       return 'superseded';
     }
-    if (!joined.source.pageProjectId || !joined.source.publishTag) {
+    if (joined.source.configGeneration !== joined.build.sourceConfigGeneration) {
+      return 'superseded';
+    }
+    if (!joined.source.pageProjectId || !joined.build.publishTag) {
       throw new AppError(409, 'PAGES_BUILD_SOURCE_INVALID', 'Pages build source configuration is incomplete');
     }
     const actorId = joined.build.createdById ?? joined.source.updatedById ?? joined.source.createdById;
     if (!actorId) throw new AppError(409, 'PAGES_BUILD_ACTOR_MISSING', 'Pages build has no owning user');
 
-    const layer = await this.resolveLayer(
-      joined.artifact.registryRepository,
-      joined.artifact.digest,
-      joined.build.platform,
-      buildId
-    );
-    const principal: PageDeployPrincipal = {
-      kind: 'user',
-      userId: actorId,
-      scopes: [`pages:deploy:${joined.source.pageProjectId}`],
-    };
-    const created = await this.deployments.create(
-      {
-        projectId: joined.source.pageProjectId,
-        declaredSizeBytes: layer.size,
-        sha256: layer.digest.slice('sha256:'.length),
-        idempotencyKey: `pages-build:${buildId}`,
-        tag: joined.source.publishTag,
-        source: {
-          repository: joined.build.repositoryFullPath,
-          commitSha: joined.build.commitSha,
-          ref: joined.build.ref,
-          actor: actorId,
+    const pinOwner = `pages-build:${buildId}`;
+    await this.db
+      .insert(dockerArtifactPins)
+      .values({
+        artifactId: joined.artifact.id,
+        kind: 'build_in_progress',
+        ownerKey: pinOwner,
+        reason: 'Pages artifact import is in progress',
+        expiresAt: new Date(Date.now() + 6 * 60 * 60_000),
+      })
+      .onConflictDoNothing();
+    try {
+      const layer = await this.resolveLayer(
+        joined.artifact.registryRepository,
+        joined.artifact.digest,
+        joined.build.platform,
+        buildId
+      );
+      const principal: PageDeployPrincipal = {
+        kind: 'user',
+        userId: actorId,
+        scopes: [`pages:deploy:${joined.source.pageProjectId}`],
+      };
+      const created = await this.deployments.create(
+        {
+          projectId: joined.source.pageProjectId,
+          declaredSizeBytes: layer.size,
+          sha256: layer.digest.slice('sha256:'.length),
+          idempotencyKey: `pages-build:${buildId}`,
+          tag: joined.build.publishTag,
+          source: {
+            repository: joined.build.repositoryFullPath,
+            commitSha: joined.build.commitSha,
+            ref: joined.build.ref,
+            actor: actorId,
+          },
         },
-      },
-      principal
-    );
+        principal
+      );
 
-    const deploymentId = created.deployment.id;
-    if (!['stored', 'staging', 'ready'].includes(created.deployment.status)) {
-      if (!created.upload) {
-        throw new AppError(409, 'PAGES_BUILD_UPLOAD_MISSING', 'Pages build upload session is unavailable');
+      const deploymentId = created.deployment.id;
+      if (!['stored', 'staging', 'ready'].includes(created.deployment.status)) {
+        if (!created.upload) {
+          throw new AppError(409, 'PAGES_BUILD_UPLOAD_MISSING', 'Pages build upload session is unavailable');
+        }
+        try {
+          await this.streamLayer(
+            joined.artifact.registryRepository,
+            layer.digest,
+            buildId,
+            created.upload.id,
+            created.upload.offset,
+            principal
+          );
+          await this.deployments.finalize(created.upload.id, principal);
+        } catch (error) {
+          await this.deployments.abortUpload(created.upload.id, principal).catch(() => undefined);
+          throw error;
+        }
       }
-      try {
-        await this.streamLayer(
-          joined.artifact.registryRepository,
-          layer.digest,
-          buildId,
-          created.upload.id,
-          created.upload.offset,
-          principal
-        );
-        await this.deployments.finalize(created.upload.id, principal);
-      } catch (error) {
-        await this.deployments.abortUpload(created.upload.id, principal).catch(() => undefined);
-        throw error;
-      }
+
+      return await this.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${joined.source.id}`}))`);
+        const [current] = await tx
+          .select({
+            desiredCommitSha: dockerSourceBindings.desiredCommitSha,
+            configGeneration: dockerSourceBindings.configGeneration,
+          })
+          .from(dockerSourceBindings)
+          .where(eq(dockerSourceBindings.id, joined.source.id))
+          .limit(1);
+        if (
+          !current ||
+          current.desiredCommitSha?.toLowerCase() !== joined.build.commitSha.toLowerCase() ||
+          current.configGeneration !== joined.build.sourceConfigGeneration
+        ) {
+          return 'superseded';
+        }
+        await this.publication.markDeploymentReady(deploymentId);
+        await tx
+          .update(dockerSourceBindings)
+          .set({ deployedCommitSha: joined.build.commitSha, updatedAt: new Date() })
+          .where(
+            and(
+              eq(dockerSourceBindings.id, joined.source.id),
+              eq(dockerSourceBindings.desiredCommitSha, joined.build.commitSha),
+              eq(dockerSourceBindings.configGeneration, joined.build.sourceConfigGeneration)
+            )
+          );
+        return 'deployed';
+      });
+    } finally {
+      await this.db
+        .delete(dockerArtifactPins)
+        .where(and(eq(dockerArtifactPins.kind, 'build_in_progress'), eq(dockerArtifactPins.ownerKey, pinOwner)));
     }
-
-    return this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${joined.source.id}`}))`);
-      const [current] = await tx
-        .select({ desiredCommitSha: dockerSourceBindings.desiredCommitSha })
-        .from(dockerSourceBindings)
-        .where(eq(dockerSourceBindings.id, joined.source.id))
-        .limit(1);
-      if (!current || current.desiredCommitSha?.toLowerCase() !== joined.build.commitSha.toLowerCase()) {
-        return 'superseded';
-      }
-      await this.publication.markDeploymentReady(deploymentId);
-      await tx
-        .update(dockerSourceBindings)
-        .set({ deployedCommitSha: joined.build.commitSha, updatedAt: new Date() })
-        .where(
-          and(
-            eq(dockerSourceBindings.id, joined.source.id),
-            eq(dockerSourceBindings.desiredCommitSha, joined.build.commitSha)
-          )
-        );
-      return 'deployed';
-    });
   }
 
   private async getBuild(buildId: string) {

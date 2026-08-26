@@ -970,17 +970,19 @@ export function DockerGitSourcePanel({
             disabled={!canEdit}
           />
         </SettingsControlRow>
-        <SettingsControlRow
-          title="Automatic deployment"
-          description="Roll out an approved artifact after its build succeeds."
-        >
-          <Switch
-            checked={autoDeploy}
-            onChange={setAutoDeploy}
-            ariaLabel="Automatic deployment"
-            disabled={!canEdit}
-          />
-        </SettingsControlRow>
+        {!pagesTarget && (
+          <SettingsControlRow
+            title="Automatic deployment"
+            description="Roll out an approved artifact after its build succeeds."
+          >
+            <Switch
+              checked={autoDeploy}
+              onChange={setAutoDeploy}
+              ariaLabel="Automatic deployment"
+              disabled={!canEdit}
+            />
+          </SettingsControlRow>
+        )}
         {!pagesTarget && (
           <SettingsControlRow
             title="Vulnerability policy"
@@ -1098,7 +1100,7 @@ export function DockerGitSourcePanel({
         title="Build Secrets"
         description={
           pagesTarget
-            ? "Encrypted write-only values exposed to dependency installation and the selected build script."
+            ? "Encrypted write-only values exposed to dependency installation and the selected build script. Use only with trusted repository code."
             : "Encrypted values exposed only through explicit BuildKit secret mounts."
         }
         actions={

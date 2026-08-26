@@ -47,7 +47,7 @@ function canAccessBuild(
       | { kind: 'container'; nodeId: string; containerName: string }
       | { kind: 'deployment'; nodeId: string; deploymentId: string }
       | { kind: 'compose_project'; nodeId: string; composeProjectId: string }
-      | { kind: 'pages_project'; nodeId: string; pageProjectId: string };
+      | { kind: 'pages_project'; nodeId?: string; pageProjectId: string };
   }
 ) {
   if (build.target.kind === 'pages_project') {

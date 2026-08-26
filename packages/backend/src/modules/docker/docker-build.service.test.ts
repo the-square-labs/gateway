@@ -34,6 +34,7 @@ function queuedBuild(id: string) {
     buildScript: null,
     artifactDirectory: null,
     publishTag: null,
+    sourceConfigGeneration: 1,
     status: 'queued' as DockerBuildStatus,
     builderNodeId: null,
     platform: null,

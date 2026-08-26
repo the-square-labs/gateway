@@ -1,5 +1,5 @@
 {
-  "id": "89a7f64a-b514-48c4-8310-9d1257d7e9b7",
+  "id": "1fa65460-505a-4810-bc33-d16290391187",
   "prevId": "cef11b5f-672d-4508-9342-bff139a51a89",
   "version": "7",
   "dialect": "postgresql",
@@ -6557,6 +6557,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "source_config_generation": {
+          "name": "source_config_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "status": {
           "name": "status",
           "type": "varchar(32)",
@@ -7354,6 +7361,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'"
+        },
+        "config_generation": {
+          "name": "config_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
         },
         "application_root": {
           "name": "application_root",

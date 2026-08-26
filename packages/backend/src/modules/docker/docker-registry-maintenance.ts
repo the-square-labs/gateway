@@ -307,7 +307,7 @@ class DrizzleDockerRegistryMaintenanceStore implements DockerRegistryMaintenance
     return artifacts.map(({ buildStatus, ...artifact }) => ({
       ...artifact,
       pinned: pinned.has(artifact.id),
-      retainInHistory: buildStatus === 'succeeded',
+      retainInHistory: buildStatus === 'pushing' || buildStatus === 'deploying' || buildStatus === 'succeeded',
     }));
   }
 

@@ -13,17 +13,21 @@ function joinedBuild(overrides: { desiredCommitSha?: string | null } = {}) {
       platform: 'linux/amd64',
       repositoryFullPath: 'platform/site',
       ref: 'refs/heads/main',
+      publishTag: 'production',
+      sourceConfigGeneration: 1,
     },
     source: {
       id: 'source-1',
       targetKind: 'pages_project',
       pageProjectId: 'page-project-1',
       publishTag: 'production',
+      configGeneration: 1,
       desiredCommitSha: overrides.desiredCommitSha ?? commitSha,
       updatedById: null,
       createdById: 'user-1',
     },
     artifact: {
+      id: 'artifact-1',
       registryRepository: 'gateway/builds/source-1',
       digest: `sha256:${'c'.repeat(64)}`,
       policyDecision: 'approved',
@@ -43,6 +47,10 @@ function buildLookupDb(joined: ReturnType<typeof joinedBuild>) {
         })),
       })),
     })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({ onConflictDoNothing: vi.fn(async () => undefined) })),
+    })),
+    delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
   };
 }
 
@@ -53,6 +61,19 @@ describe('PageBuildRolloutService', () => {
 
   it('does not import an artifact after a newer commit supersedes the build', async () => {
     const db = buildLookupDb(joinedBuild({ desiredCommitSha: 'd'.repeat(40) }));
+    const tokens = { issueToken: vi.fn() };
+    const deployments = { create: vi.fn() };
+    const service = new PageBuildRolloutService(db as never, tokens as never, deployments as never, {} as never);
+
+    await expect(service.rollout('build-1')).resolves.toBe('superseded');
+    expect(tokens.issueToken).not.toHaveBeenCalled();
+    expect(deployments.create).not.toHaveBeenCalled();
+  });
+
+  it('does not import an artifact after the source configuration changes', async () => {
+    const joined = joinedBuild();
+    joined.source.configGeneration = 2;
+    const db = buildLookupDb(joined);
     const tokens = { issueToken: vi.fn() };
     const deployments = { create: vi.fn() };
     const service = new PageBuildRolloutService(db as never, tokens as never, deployments as never, {} as never);
@@ -96,7 +117,9 @@ describe('PageBuildRolloutService', () => {
       execute: vi.fn(async () => undefined),
       select: vi.fn(() => ({
         from: vi.fn(() => ({
-          where: vi.fn(() => ({ limit: vi.fn(async () => [{ desiredCommitSha: commitSha }]) })),
+          where: vi.fn(() => ({
+            limit: vi.fn(async () => [{ desiredCommitSha: commitSha, configGeneration: 1 }]),
+          })),
         })),
       })),
       update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
@@ -156,5 +179,7 @@ describe('PageBuildRolloutService', () => {
     expect(deployments.finalize).toHaveBeenCalledWith('upload-1', expect.objectContaining({ userId: 'user-1' }));
     expect(publication.markDeploymentReady).toHaveBeenCalledWith('deployment-1');
     expect(tx.update).toHaveBeenCalledOnce();
+    expect(db.insert).toHaveBeenCalledOnce();
+    expect(db.delete).toHaveBeenCalledOnce();
   });
 });
