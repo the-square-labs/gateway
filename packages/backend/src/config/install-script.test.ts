@@ -249,10 +249,15 @@ describe('database daemon installer prerequisites', () => {
     expect(source).toContain('grep -Eq \'^[[:space:]]+mode:[[:space:]]*"?builder"?[[:space:]]*$\'');
     expect(source).toContain('Builder profile must not contain Docker socket or allowlist access.');
     expect(source).toContain('[[ "$DOCKER_MODE" != "builder" ]] && docker_group_exists');
-    expect(source).toContain('install_builder_runtime_bundle');
-    expect(source).toContain('docker-builder-runtime-linux-' + '$' + '{ARCH}.tar.gz');
+    expect(source).toContain('install_builder_runtime');
+    expect(source).toContain('github.com/containerd/containerd/releases/download');
+    expect(source).toContain('github.com/moby/buildkit/releases/download');
+    expect(source).toContain('github.com/opencontainers/runc/releases/download');
+    expect(source).toContain('github.com/anchore/syft/releases/download');
+    expect(source).toContain('github.com/anchore/grype/releases/download');
     expect(source).toContain('containerd-shim-runc-v2');
-    expect(source).toContain('Builder runtime checksum verification failed.');
+    expect(source).toContain('Checksum verification failed for ${label}.');
+    expect(source).not.toContain('docker-builder-runtime-linux-');
   });
 });
 
