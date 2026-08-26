@@ -15,6 +15,10 @@ export function nodeTypeLabel(type: NodeType | string): string {
   return NODE_TYPE_LABELS[type as NodeType] ?? type;
 }
 
+export function daemonTypeForNode(type: NodeType | string): string {
+  return type === "databases" || type === "builder" ? "docker" : type;
+}
+
 export const NODE_APPEARANCE_COLOR_OPTIONS: Array<{
   value: NodeAppearanceColor;
   label: string;

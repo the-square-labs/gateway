@@ -111,4 +111,52 @@ describe("AdminNodes", () => {
       "--gateway-cert-sha256 sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
   });
+
+  it("creates a Build Worker with the isolated builder installer profile", async () => {
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 50,
+      totalPages: 0,
+    });
+    vi.spyOn(api, "listNodeFolders").mockResolvedValue([]);
+    vi.spyOn(api, "getDaemonUpdates").mockResolvedValue([]);
+    const createNodeSpy = vi.spyOn(api, "createNode").mockResolvedValue({
+      node: makeNode({ id: "builder-1", status: "pending", type: "builder" }),
+      enrollmentToken: "builder-token",
+      gatewayCertSha256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["nodes:details", "nodes:create"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderWithRouter(<AdminNodes />);
+    await waitFor(() => expect(api.listNodes).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole("button", { name: /add node/i })[0]!);
+    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Build Worker" }));
+
+    expect(
+      screen.getByText("Dedicated isolated worker for Git builds and artifact scanning")
+    ).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("US-East Ingress"), "Build Worker EU");
+    await user.click(screen.getByRole("button", { name: /create node/i }));
+
+    expect(createNodeSpy).toHaveBeenCalledWith({
+      type: "builder",
+      hostname: "pending",
+      displayName: "Build Worker EU",
+    });
+
+    expect(await screen.findByText("Node Created")).toBeInTheDocument();
+    const command = screen.getByText(/setup-docker-node\.sh/);
+    expect(command).toHaveTextContent("--mode builder");
+    expect(command).toHaveTextContent("--token builder-token");
+  });
 });
