@@ -509,6 +509,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
               .resolve(DockerBuildQuery)
               .get(resource.id)
               .catch(() => null);
+            if (build?.target.kind === 'pages_project') continue;
             if (!build || build.target.nodeId !== nodeId) continue;
             const scopeResourceId =
               build.target.kind === 'container'

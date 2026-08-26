@@ -1,4 +1,5 @@
 import { container } from '@/container.js';
+import { hasScopeForResource } from '@/lib/permissions.js';
 import {
   ContainerCreateSchema,
   ContainerStopSchema,
@@ -596,6 +597,9 @@ async function listDockerBuilds(user: User, args: Record<string, unknown>) {
   const builds = await container.resolve(DockerBuildService).list(query);
   return builds.filter((build) => {
     if (a.nodeId && build.target.nodeId !== a.nodeId) return false;
+    if (build.target.kind === 'pages_project') {
+      return hasScopeForResource(user.scopes, 'pages:view', build.target.pageProjectId);
+    }
     const resourceId =
       build.target.kind === 'container'
         ? build.target.containerName
