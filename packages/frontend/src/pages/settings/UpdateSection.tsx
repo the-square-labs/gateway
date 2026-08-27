@@ -104,7 +104,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     <>
       {gatewayUpdateAvailable && (
         <PanelShell
-          icon={<RefreshCw className="h-4 w-4" />}
+          icon={<RefreshCw className="h-4 w-4 text-warning" />}
           id="system-updates"
           title={<span className="text-warning">Gateway Update Available</span>}
           description="A Gateway update is ready to install"
@@ -156,7 +156,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
 
       {relayUpdateAvailable && (
         <PanelShell
-          icon={<RefreshCw className="h-4 w-4" />}
+          icon={<RefreshCw className="h-4 w-4 text-warning" />}
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
           title={<span className="text-warning">Relay Pool Update Available</span>}
           description="A signed Relay release is ready for a one-instance-at-a-time rollout"

@@ -33,6 +33,7 @@ import {
   validateDefaultEffort,
   validateModelInput,
   validatePricing,
+  validateSourceCompatibility,
 } from './inference-model.validation.js';
 import type { InferenceModelAccessService } from './inference-model-access.service.js';
 import { normalizeReasoningEfforts, validateReasoningMap } from './inference-reasoning.service.js';
@@ -54,6 +55,8 @@ interface PreparedSource {
   safeContextWindow: number;
   safeMaxInputTokens: number;
   safeAutoCompactTokenLimit: number;
+  modalities: string[];
+  capabilities: Record<string, boolean>;
 }
 
 @injectable()
@@ -212,11 +215,10 @@ export class InferenceModelConfigurationService {
       if (enabled) validateReasoningMap(model.reasoningEfforts, input.reasoningEffortMap);
       const coreReferences = coreSourceReferences(connection, upstreamModelId, discoveredModel?.metadata);
       const sourceType = provider.subscription ? 'subscription' : 'api';
+      const known = knownProviderModel(provider.id, upstreamModelId);
       const pricing =
         sourceType === 'api'
-          ? (pricingFromDiscoveredMetadata(discoveredModel?.metadata) ??
-            (discoveredModel ? knownProviderModel(provider.id, discoveredModel.remoteModelId)?.pricing : undefined) ??
-            input.pricing)
+          ? (pricingFromDiscoveredMetadata(discoveredModel?.metadata) ?? known?.pricing ?? input.pricing)
           : input.pricing;
       if (sourceType === 'api' && enabled) validatePricing(pricing);
       const technical = input.manualMetadata;
@@ -245,6 +247,8 @@ export class InferenceModelConfigurationService {
         safeMaxInputTokens: technical?.maxInputTokens ?? discoveredModel?.maxInputTokens ?? model.maxInputTokens,
         safeAutoCompactTokenLimit:
           technical?.autoCompactTokenLimit ?? discoveredModel?.autoCompactTokenLimit ?? model.autoCompactTokenLimit,
+        modalities: discoveredModel?.modalities ?? known?.modalities ?? ['text'],
+        capabilities: input.capabilitiesOverride ?? discoveredModel?.capabilities ?? known?.capabilities ?? {},
       };
     });
   }
@@ -272,18 +276,8 @@ function validatePublishableConfiguration(
   if (accessMode !== 'disabled' && enabled.length === 0) {
     throw new AppError(400, 'INFERENCE_MODEL_SOURCE_REQUIRED', 'Published model needs an enabled source');
   }
-  const first = sources[0];
-  if (
-    first &&
-    sources.some((source) => source.providerId !== first.providerId || source.upstreamModelId !== first.upstreamModelId)
-  ) {
-    throw new AppError(
-      400,
-      'INFERENCE_MODEL_PROVIDER_REQUIRED',
-      'A logical model must use one provider and one upstream model'
-    );
-  }
   for (const source of enabled) {
+    validateSourceCompatibility(model, source);
     if (
       model.contextWindow > source.safeContextWindow ||
       model.maxInputTokens > source.safeMaxInputTokens ||
@@ -360,4 +354,4 @@ function coreSourceReferences(
   };
 }
 
-export const __testOnly = { assertEnabledSourceAvailable, coreSourceReferences };
+export const __testOnly = { assertEnabledSourceAvailable, coreSourceReferences, validatePublishableConfiguration };

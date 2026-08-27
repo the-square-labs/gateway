@@ -1,7 +1,7 @@
 import 'reflect-metadata';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
-import { __testOnly, canFailOver } from './inference-routing.service.js';
+import { __testOnly, canFailOver, InferenceRoutingService } from './inference-routing.service.js';
 
 describe('inference routing policy', () => {
   const healthy = {
@@ -36,6 +36,124 @@ describe('inference routing policy', () => {
     }
     expect(highWins).toBeGreaterThan(1_700);
     expect(highWins).toBeLessThan(1_900);
+  });
+
+  it('selects the cross-provider route furthest above its reserve', () => {
+    const nearlyReserved = {
+      ...healthy,
+      id: 'provider-low',
+      providerId: 'provider-a',
+      remainingFraction: 0.12,
+      minimumRemainingFraction: 0.1,
+    };
+    const highCapacity = {
+      ...healthy,
+      id: 'provider-high',
+      providerId: 'provider-b',
+      remainingFraction: 0.7,
+      minimumRemainingFraction: 0.05,
+    };
+    expect(__testOnly.highestCapacityCandidate('thread-1', [nearlyReserved, highCapacity]).id).toBe('provider-high');
+  });
+
+  it('uses an unknown-capacity cross-provider route only when no fresh quota is known', () => {
+    const known = { ...healthy, id: 'known', providerId: 'provider-a', remainingFraction: 0.2 };
+    const unknown = { ...healthy, id: 'unknown', providerId: 'provider-b', remainingFraction: null };
+    expect(__testOnly.highestCapacityCandidate('thread-1', [known, unknown]).id).toBe('known');
+    expect(['unknown-a', 'unknown-b']).toContain(
+      __testOnly.highestCapacityCandidate('thread-1', [
+        { ...unknown, id: 'unknown-a' },
+        { ...unknown, id: 'unknown-b' },
+      ]).id
+    );
+  });
+
+  it('replaces old affinity when the pinned account is below its reserve', async () => {
+    const connections = [
+      {
+        id: 'provider-low',
+        providerId: 'openai',
+        enabled: true,
+        deletedAt: null,
+        routingOrder: 0,
+        status: 'quota_hot',
+        healthReason: null,
+        minimumRemainingPercent: 10,
+      },
+      {
+        id: 'provider-high',
+        providerId: 'openai',
+        enabled: true,
+        deletedAt: null,
+        routingOrder: 0,
+        status: 'healthy',
+        healthReason: null,
+        minimumRemainingPercent: 5,
+      },
+    ];
+    const selection = Promise.resolve(connections) as Promise<typeof connections> & {
+      from: () => unknown;
+      where: () => unknown;
+    };
+    selection.from = () => selection;
+    selection.where = () => selection;
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          connectionId: 'provider-low',
+          status: 'fresh',
+          dimension: '5h',
+          modelBucket: null,
+          remainingFraction: '0.07',
+          fetchedAt: new Date('2099-08-27T10:00:00Z'),
+          validUntil: new Date('2099-08-27T11:00:00Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          connectionId: 'provider-high',
+          status: 'fresh',
+          dimension: '5h',
+          modelBucket: null,
+          remainingFraction: '0.70',
+          fetchedAt: new Date('2099-08-27T10:00:00Z'),
+          validUntil: new Date('2099-08-27T11:00:00Z'),
+        },
+      ]);
+    const db = {
+      select: vi.fn().mockReturnValue(selection),
+      update: vi.fn(),
+      query: {
+        inferenceProviderSettings: { findFirst: vi.fn() },
+        inferenceQuotaSnapshots: { findMany },
+      },
+    };
+    const redis = {
+      get: vi.fn().mockResolvedValue('provider-low'),
+      exists: vi.fn().mockResolvedValue(0),
+      set: vi.fn().mockResolvedValue('OK'),
+    };
+
+    const selected = await new InferenceRoutingService(db as never, redis as never).select({
+      providerId: 'openai',
+      allowedConnectionIds: connections.map((connection) => connection.id),
+      affinityKey: 'thread-1',
+      existingThread: true,
+    });
+
+    expect(selected).toMatchObject({ connectionId: 'provider-high', providerId: 'openai' });
+    expect(redis.set).toHaveBeenCalled();
+  });
+
+  it('keeps a usable quota-hot affinity for an existing thread', async () => {
+    const candidates = [
+      { ...healthy, id: 'connection-low', status: 'quota_hot', remainingFraction: 0.07 },
+      { ...healthy, id: 'connection-high', remainingFraction: 0.75 },
+    ];
+    expect(__testOnly.preferredCandidate('connection-low', __testOnly.usableCandidates(candidates))?.id).toBe(
+      'connection-low'
+    );
   });
 
   it('excludes unknown quota candidates when known quota exists and falls back to even when all are unknown', () => {
@@ -82,6 +200,26 @@ describe('inference routing policy', () => {
     ];
 
     expect(__testOnly.usableCandidates(candidates).map((candidate) => candidate.id)).toEqual(['connection-normal']);
+  });
+
+  it('reports only routing-safe candidate diagnostics when capacity is unavailable', () => {
+    expect(
+      __testOnly.candidateDiagnostic({
+        ...healthy,
+        id: 'connection-low',
+        providerId: 'openai',
+        status: 'quota_hot',
+        remainingFraction: 0.07,
+        minimumRemainingFraction: 0.1,
+      })
+    ).toEqual({
+      connectionId: 'connection-low',
+      providerId: 'openai',
+      status: 'quota_hot',
+      remainingFraction: 0.07,
+      minimumRemainingFraction: 0.1,
+      usable: false,
+    });
   });
 
   it('uses routing order only for sequential selection', () => {

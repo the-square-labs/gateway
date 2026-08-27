@@ -33,6 +33,7 @@ import {
   validateDefaultEffort,
   validateModelInput,
   validatePricing,
+  validateSourceCompatibility,
 } from './inference-model.validation.js';
 import type { InferenceModelAccessService } from './inference-model-access.service.js';
 import { normalizeReasoningEfforts, validateReasoningMap } from './inference-reasoning.service.js';
@@ -219,16 +220,18 @@ export class InferenceModelService {
         'Reconnect the provider through the inference core before publishing models'
       );
     }
-    if (input.enabled !== false) {
-      await this.assertSingleProviderModel(modelId, connection.providerId, upstreamModelId);
-    }
     if (input.enabled !== false) validateReasoningMap(model.reasoningEfforts, input.reasoningEffortMap);
     const sourceType = provider.subscription ? 'subscription' : 'api';
+    const known = knownProviderModel(provider.id, upstreamModelId);
+    if (input.enabled !== false) {
+      validateSourceCompatibility(model, {
+        modalities: discovered?.modalities ?? known?.modalities ?? ['text'],
+        capabilities: input.capabilitiesOverride ?? discovered?.capabilities ?? known?.capabilities ?? {},
+      });
+    }
     const pricing =
       sourceType === 'api'
-        ? (pricingFromDiscoveredMetadata(discovered?.metadata) ??
-          (discovered ? knownProviderModel(provider.id, discovered.remoteModelId)?.pricing : undefined) ??
-          input.pricing)
+        ? (pricingFromDiscoveredMetadata(discovered?.metadata) ?? known?.pricing ?? input.pricing)
         : input.pricing;
     if (sourceType === 'api' && input.enabled !== false) validatePricing(pricing);
     const originMetadata = sourceOriginMetadata(provider.family, Boolean(discovered), input.manualMetadata);
@@ -283,7 +286,21 @@ export class InferenceModelService {
         where: eq(inferenceProviderConnections.id, source.connectionId),
       });
       if (!connection) throw new AppError(404, 'INFERENCE_PROVIDER_NOT_FOUND', 'Provider connection not found');
-      await this.assertSingleProviderModel(source.modelId, connection.providerId, source.upstreamModelId);
+      const discovered = source.discoveredModelId
+        ? await this.db.query.inferenceDiscoveredModels.findFirst({
+            where: eq(inferenceDiscoveredModels.id, source.discoveredModelId),
+          })
+        : null;
+      const known = knownProviderModel(connection.providerId, source.upstreamModelId);
+      validateSourceCompatibility(model, {
+        modalities: discovered?.modalities ?? known?.modalities ?? ['text'],
+        capabilities:
+          input.capabilitiesOverride ??
+          source.capabilitiesOverride ??
+          discovered?.capabilities ??
+          known?.capabilities ??
+          {},
+      });
       validateReasoningMap(model.reasoningEfforts, input.reasoningEffortMap ?? source.reasoningEffortMap);
     }
     if (input.enabled === true && source.sourceType === 'api' && !(await this.hasPricing(sourceId))) {
@@ -375,9 +392,14 @@ export class InferenceModelService {
 
   async suggestions(modelId: string) {
     const sources = await this.db
-      .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
+      .select({
+        source: inferenceModelSources,
+        connection: inferenceProviderConnections,
+        discovered: inferenceDiscoveredModels,
+      })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
+      .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
       .where(and(eq(inferenceModelSources.modelId, modelId), isNull(inferenceProviderConnections.deletedAt)));
     if (!sources.length) return [];
     const providerId = sources[0]!.connection.providerId;
@@ -477,9 +499,14 @@ export class InferenceModelService {
   private async validatePublish(modelId: string, candidate?: InferenceModelInput) {
     const model = candidate ?? (await this.requireModel(modelId));
     const sources = await this.db
-      .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
+      .select({
+        source: inferenceModelSources,
+        connection: inferenceProviderConnections,
+        discovered: inferenceDiscoveredModels,
+      })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
+      .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
       .where(
         and(
           eq(inferenceModelSources.modelId, modelId),
@@ -489,14 +516,12 @@ export class InferenceModelService {
       );
     if (!sources.length)
       throw new AppError(400, 'INFERENCE_MODEL_SOURCE_REQUIRED', 'Published model needs an enabled source');
-    assertSingleProviderBindings(
-      sources.map(({ source, connection }) => ({
-        providerId: connection.providerId,
-        upstreamModelId: source.upstreamModelId,
-        role: sourceRole(source),
-      }))
-    );
-    for (const { source } of sources) {
+    for (const { source, connection, discovered } of sources) {
+      const known = knownProviderModel(connection.providerId, source.upstreamModelId);
+      validateSourceCompatibility(model, {
+        modalities: discovered?.modalities ?? known?.modalities ?? ['text'],
+        capabilities: source.capabilitiesOverride ?? discovered?.capabilities ?? known?.capabilities ?? {},
+      });
       validateReasoningMap(model.reasoningEfforts, source.reasoningEffortMap);
       if (source.sourceType === 'api' && !(await this.hasPricing(source.id))) {
         throw new AppError(400, 'INFERENCE_PRICING_REQUIRED', 'Every enabled API source needs versioned pricing');
@@ -506,28 +531,6 @@ export class InferenceModelService {
     if (model.contextWindow > limits.contextWindow || model.maxInputTokens > limits.maxInputTokens) {
       throw new AppError(400, 'INFERENCE_MODEL_LIMIT_UNSAFE', 'Published limits exceed an enabled source safe limit');
     }
-  }
-
-  private async assertSingleProviderModel(modelId: string, providerId: string, upstreamModelId: string) {
-    const sources = await this.db
-      .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
-      .from(inferenceModelSources)
-      .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
-      .where(
-        and(
-          eq(inferenceModelSources.modelId, modelId),
-          eq(inferenceModelSources.enabled, true),
-          isNull(inferenceProviderConnections.deletedAt)
-        )
-      );
-    assertSingleProviderBindings(
-      sources.map(({ source, connection }) => ({
-        providerId: connection.providerId,
-        upstreamModelId: source.upstreamModelId,
-        role: sourceRole(source),
-      })),
-      { providerId, upstreamModelId, role: 'primary' }
-    );
   }
 
   private async safeLimits(
@@ -630,24 +633,28 @@ export class InferenceModelService {
       subscriptionMultiplier: Number(model.subscriptionMultiplier),
       createdAt: model.createdAt.toISOString(),
       updatedAt: model.updatedAt.toISOString(),
-      sources: sources.map(({ source, connection, discovered }) => ({
-        ...source,
-        subscriptionMultiplierOverride: source.subscriptionMultiplierOverride
-          ? Number(source.subscriptionMultiplierOverride)
-          : null,
-        providerId: connection.providerId,
-        connectionName: connection.name,
-        capabilities: source.capabilitiesOverride ?? discovered?.capabilities ?? {},
-        reasoningEfforts: discovered?.reasoningEfforts ?? [],
-        contextWindow: discovered?.contextWindow ?? null,
-        maxInputTokens: discovered?.maxInputTokens ?? null,
-        maxOutputTokens: discovered?.maxOutputTokens ?? null,
-        autoCompactTokenLimit: discovered?.autoCompactTokenLimit ?? null,
-        modalities: discovered?.modalities ?? [],
-        pricing: latestPricing(pricing.filter((row) => row.sourceId === source.id)),
-        createdAt: source.createdAt.toISOString(),
-        updatedAt: source.updatedAt.toISOString(),
-      })),
+      sources: sources.map((row) => {
+        const { source, connection, discovered } = row;
+        const contract = effectiveSourceContract(row);
+        return {
+          ...source,
+          subscriptionMultiplierOverride: source.subscriptionMultiplierOverride
+            ? Number(source.subscriptionMultiplierOverride)
+            : null,
+          providerId: connection.providerId,
+          connectionName: connection.name,
+          capabilities: contract.capabilities,
+          reasoningEfforts: discovered?.reasoningEfforts ?? contract.known?.reasoningEfforts ?? [],
+          contextWindow: discovered?.contextWindow ?? contract.known?.contextWindow ?? null,
+          maxInputTokens: discovered?.maxInputTokens ?? contract.known?.maxInputTokens ?? null,
+          maxOutputTokens: discovered?.maxOutputTokens ?? contract.known?.maxOutputTokens ?? null,
+          autoCompactTokenLimit: discovered?.autoCompactTokenLimit ?? contract.known?.autoCompactTokenLimit ?? null,
+          modalities: contract.modalities,
+          pricing: latestPricing(pricing.filter((row) => row.sourceId === source.id)),
+          createdAt: source.createdAt.toISOString(),
+          updatedAt: source.updatedAt.toISOString(),
+        };
+      }),
       accessRules: rules,
     };
   }
@@ -723,22 +730,28 @@ function detectedCapabilityState(configured: Record<string, boolean>, rows: Capa
   const sources = rows.filter(({ source }) => source.enabled && sourceRole(source) === 'primary');
   if (!sources.length) return { effective: configured, limitations: {} as Record<string, string[]> };
   const keys = new Set(Object.keys(configured));
-  for (const { source, discovered } of sources) {
-    for (const key of Object.keys(source.capabilitiesOverride ?? discovered?.capabilities ?? {})) keys.add(key);
+  for (const source of sources) {
+    for (const key of Object.keys(effectiveSourceContract(source).capabilities)) keys.add(key);
   }
   const effective: Record<string, boolean> = {};
   const limitations: Record<string, string[]> = {};
   for (const key of [...keys].sort()) {
-    const missing = sources.filter(({ source, discovered }) => {
-      const capabilities = source.capabilitiesOverride ?? discovered?.capabilities ?? {};
-      return capabilities[key] !== true;
-    });
+    const missing = sources.filter((source) => effectiveSourceContract(source).capabilities[key] !== true);
     effective[key] = missing.length === 0;
     if (missing.length) {
       limitations[key] = missing.map(({ source, connection }) => `${connection.name} · ${source.upstreamModelId}`);
     }
   }
   return { effective, limitations };
+}
+
+function effectiveSourceContract(row: CapabilitySourceRow) {
+  const known = knownProviderModel(row.connection.providerId, row.source.upstreamModelId);
+  return {
+    known,
+    modalities: row.discovered?.modalities ?? known?.modalities ?? ['text'],
+    capabilities: row.source.capabilitiesOverride ?? row.discovered?.capabilities ?? known?.capabilities ?? {},
+  };
 }
 
 function supportsFastServiceTier(rows: CapabilitySourceRow[]): boolean {
@@ -769,30 +782,6 @@ function sourceRole(source: typeof inferenceModelSources.$inferSelect): 'primary
     return (composition as { role?: unknown }).role === 'vision_sidecar' ? 'vision_sidecar' : 'primary';
   }
   return 'primary';
-}
-
-interface ProviderBinding {
-  providerId: string;
-  upstreamModelId: string;
-  role: 'primary' | 'vision_sidecar';
-}
-
-function assertSingleProviderBindings(bindings: ProviderBinding[], expected = bindings[0]): void {
-  if (!expected) return;
-  if (
-    bindings.some(
-      (binding) =>
-        binding.role !== 'primary' ||
-        binding.providerId !== expected.providerId ||
-        binding.upstreamModelId !== expected.upstreamModelId
-    )
-  ) {
-    throw new AppError(
-      400,
-      'INFERENCE_MODEL_PROVIDER_REQUIRED',
-      'A logical model must use one provider and one upstream model'
-    );
-  }
 }
 
 function sourceOriginMetadata(
@@ -848,8 +837,8 @@ export const __testOnly = {
   validatePricing,
   manualSourceAllowed,
   detectedCapabilityState,
+  effectiveSourceContract,
   supportsFastServiceTier,
-  assertSingleProviderBindings,
   sourceOriginMetadata,
   filterModelIdsByApiBudget,
   filterSourcesByApiUsage,

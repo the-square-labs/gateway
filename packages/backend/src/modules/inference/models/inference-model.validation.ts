@@ -22,6 +22,33 @@ export function validateModelInput(input: InferenceModelInput) {
   }
 }
 
+export function sourceSupportsModel(
+  model: Partial<Pick<InferenceModelInput, 'modalities' | 'capabilities'>>,
+  source: { modalities?: readonly string[]; capabilities?: Readonly<Record<string, boolean>> }
+): boolean {
+  const modelModalities = model.modalities ?? ['text'];
+  const modelCapabilities = model.capabilities ?? {};
+  const sourceModalities = source.modalities ?? ['text'];
+  const sourceCapabilities = source.capabilities ?? {};
+  return (
+    modelModalities.every((modality) => sourceModalities.includes(modality)) &&
+    Object.entries(modelCapabilities).every(([capability, required]) => !required || sourceCapabilities[capability])
+  );
+}
+
+export function validateSourceCompatibility(
+  model: Partial<Pick<InferenceModelInput, 'modalities' | 'capabilities'>>,
+  source: { modalities?: readonly string[]; capabilities?: Readonly<Record<string, boolean>> }
+): void {
+  if (!sourceSupportsModel(model, source)) {
+    throw new AppError(
+      400,
+      'INFERENCE_MODEL_SOURCE_INCOMPATIBLE',
+      'Every enabled source must support the published model modalities and capabilities'
+    );
+  }
+}
+
 export function normalizePublicId(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (!/^(?:[a-z0-9][a-z0-9._:/-]{0,254}|~[a-z0-9][a-z0-9._:/-]{0,253})$/.test(normalized)) {
