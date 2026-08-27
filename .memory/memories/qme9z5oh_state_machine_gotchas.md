@@ -13,8 +13,18 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.9,
   "created_at": 1783631313911,
-  "updated_at": 1783631313911
+  "updated_at": 1787862465912
 }
 ---
-Gateway AI chat runtime production-readiness gotchas confirmed on 2026-07-09: conversation snapshots have no global monotonic revision, backend publishes multiple unawaited snapshot fetches per conversation, and frontend applies every active-conversation snapshot while version-protecting only assistant draft text. A late old snapshot can therefore regress message/tool/wait/run/thinking state and tool grouping; remediation needs a durable conversation revision, consistent snapshot assembly, serialized/coalesced publication, and client rejection of non-newer revisions. Active AI execution and live drafts are process-local with no startup reconciler/lease, so restart can strand queued/running runs and an active compaction cannot be stopped through the API. Approval/final-answer DB commits are separate from continuation scheduling; duplicate retries do not re-enqueue. Provider adapters must require explicit successful terminal states: current Responses failed/incomplete/error and Chat finish_reason length can normalize as success. Verification must include concurrency ordering, restart/fault injection, mixed question+approval tool rounds, both provider modes, and authenticated browser parity for Default side panel and Lite.
+Gateway AI chat state-machine verification contract:
+
+- Snapshot ordering must be monotonic per conversation. Assemble snapshots consistently, serialize or coalesce publication, and reject non-newer revisions client-side so late responses cannot regress messages, tools, waits, runs, thinking state, or grouping.
+- Active execution and drafts require restart-safe ownership, reconciliation, and cancellation semantics; do not assume process-local state survives backend restart.
+- Approval and final-answer persistence must be transactionally consistent with continuation scheduling. Idempotent retries must replay or resume the persisted decision without duplicating execution.
+- Provider adapters require explicit successful terminal states. Failed, incomplete, error, length-limited, or otherwise non-success terminal events must not normalize as successful completion.
+- Revalidate the current implementation before treating any historical defect as still present.
+- Verification must cover concurrent snapshot ordering, restart/fault injection, cancellation and compaction, mixed question-plus-approval tool rounds, each provider protocol, and authenticated browser parity across Default and Lite UI surfaces.

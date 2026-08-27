@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "ml88valu",
-      "to_id": "3ta908aa",
-      "relation": "same_workflow",
-      "weight": 0.7,
-      "reason": "Both rely on secure-link validation and managed Nginx proxy infrastructure for deployment and verification.",
+      "to_id": "jlx77t6m",
+      "relation": "same_area",
+      "weight": 0.4866,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786611166903,
-      "updated_at": 1786611166903
+      "created_at": 1787862736628,
+      "updated_at": 1787862736628
     },
     {
       "from_id": "ml88valu",
       "to_id": "x7unpgb6",
       "relation": "same_area",
-      "weight": 0.88,
-      "reason": "Both define Nginx proxy security boundaries and generated-location access-control behavior.",
+      "weight": 0.4353,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786611166903,
-      "updated_at": 1786611166903
+      "created_at": 1787862736628,
+      "updated_at": 1787862736628
+    },
+    {
+      "from_id": "ml88valu",
+      "to_id": "vks9ym4c",
+      "relation": "related_to",
+      "weight": 0.3726,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736628,
+      "updated_at": 1787862736628
+    },
+    {
+      "from_id": "ml88valu",
+      "to_id": "x2uskhdm",
+      "relation": "related_to",
+      "weight": 0.3476,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736628,
+      "updated_at": 1787862736628
+    },
+    {
+      "from_id": "ml88valu",
+      "to_id": "a7elxcv1",
+      "relation": "related_to",
+      "weight": 0.3406,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736628,
+      "updated_at": 1787862736628
     }
   ]
 }

@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "iv7hhye3",
-      "to_id": "pzorr3qy",
+      "to_id": "adzvqx6l",
       "relation": "same_area",
-      "weight": 0.72,
-      "reason": "Both define Docker snapshot and reconciliation boundaries; metrics collection must remain in the persisted daemon snapshot flow without public-inventory filtering.",
+      "weight": 0.471,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787590600951,
-      "updated_at": 1787590600951
+      "created_at": 1787862736374,
+      "updated_at": 1787862736374
     },
     {
       "from_id": "iv7hhye3",
-      "to_id": "2tjfa2g5",
+      "to_id": "3mk44b9q",
       "relation": "same_area",
-      "weight": 0.56,
-      "reason": "The metrics endpoint follows the Gateway Docker volume routing conventions for node scoping and volume-name identity.",
+      "weight": 0.4561,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787590600951,
-      "updated_at": 1787590600951
+      "created_at": 1787862736374,
+      "updated_at": 1787862736374
+    },
+    {
+      "from_id": "iv7hhye3",
+      "to_id": "loolos87",
+      "relation": "uses_service",
+      "weight": 0.414,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736374,
+      "updated_at": 1787862736374
+    },
+    {
+      "from_id": "iv7hhye3",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.3825,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736374,
+      "updated_at": 1787862736374
+    },
+    {
+      "from_id": "iv7hhye3",
+      "to_id": "pzorr3qy",
+      "relation": "uses_service",
+      "weight": 0.3783,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736374,
+      "updated_at": 1787862736374
     }
   ]
 }

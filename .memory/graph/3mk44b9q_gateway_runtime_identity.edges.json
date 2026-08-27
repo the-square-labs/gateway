@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "3mk44b9q",
-      "to_id": "asy6c7bj",
-      "relation": "same_area",
-      "weight": 0.82,
-      "reason": "Both define DockerContainerDetail mutation, recreate, snapshot, and runtime-transition handling.",
+      "to_id": "iv7hhye3",
+      "relation": "uses_service",
+      "weight": 0.4561,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787594310242,
-      "updated_at": 1787594310242
+      "created_at": 1787862736074,
+      "updated_at": 1787862736074
     },
     {
       "from_id": "3mk44b9q",
-      "to_id": "kk05lizc",
-      "relation": "same_workflow",
-      "weight": 0.58,
-      "reason": "Both cover Docker container recreate lifecycles and replacement-container state handling.",
+      "to_id": "adzvqx6l",
+      "relation": "related_to",
+      "weight": 0.4493,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787594310242,
-      "updated_at": 1787594310242
+      "created_at": 1787862736074,
+      "updated_at": 1787862736074
+    },
+    {
+      "from_id": "3mk44b9q",
+      "to_id": "pzorr3qy",
+      "relation": "uses_service",
+      "weight": 0.4012,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736074,
+      "updated_at": 1787862736074
+    },
+    {
+      "from_id": "3mk44b9q",
+      "to_id": "j6oni2tm",
+      "relation": "same_workflow",
+      "weight": 0.3819,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736074,
+      "updated_at": 1787862736074
+    },
+    {
+      "from_id": "3mk44b9q",
+      "to_id": "asy6c7bj",
+      "relation": "uses_service",
+      "weight": 0.3732,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736074,
+      "updated_at": 1787862736074
     }
   ]
 }

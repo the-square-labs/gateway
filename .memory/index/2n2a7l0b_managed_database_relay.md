@@ -18,7 +18,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786111914144,
-  "updated_at": 1786119400859
+  "updated_at": 1787862309994
 }
 ---
-[→ iois3ul4] Independent relay migration, fixed-size database installer gate, and restart-safe connector socket lifecycle
+[→ iois3ul4] Remove managed-database test topology and retain migration/storage/socket contracts

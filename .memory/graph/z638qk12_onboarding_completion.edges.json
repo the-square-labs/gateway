@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "z638qk12",
-      "to_id": "8zbznen7",
-      "relation": "same_workflow",
-      "weight": 0.94,
-      "reason": "Both define the AI Workspace setup flow and how connector or Gateway-node prerequisites are handled without routing through Finalize Setup.",
+      "to_id": "dcfkgqwx",
+      "relation": "uses_service",
+      "weight": 0.5617,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787582921782,
-      "updated_at": 1787582921782
+      "created_at": 1787862736396,
+      "updated_at": 1787862736396
     },
     {
       "from_id": "z638qk12",
-      "to_id": "dcfkgqwx",
-      "relation": "uses_service",
-      "weight": 0.78,
-      "reason": "The onboarding contract embeds Gateway Inference in AI Workspace, which relies on the standalone Gateway inference service and its availability settings.",
+      "to_id": "8zbznen7",
+      "relation": "same_area",
+      "weight": 0.509,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787582921782,
-      "updated_at": 1787582921782
+      "created_at": 1787862736396,
+      "updated_at": 1787862736396
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "gpx2fdwu",
+      "relation": "uses_service",
+      "weight": 0.476,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736396,
+      "updated_at": 1787862736396
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "gahvf5k5",
+      "relation": "uses_service",
+      "weight": 0.4737,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736396,
+      "updated_at": 1787862736396
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "ifp3c48s",
+      "relation": "uses_service",
+      "weight": 0.4389,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736396,
+      "updated_at": 1787862736396
     }
   ]
 }

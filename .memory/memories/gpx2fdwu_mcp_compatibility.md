@@ -16,9 +16,9 @@
   "confidence": 0.99,
   "importance": 0.9,
   "created_at": 1786047219057,
-  "updated_at": 1786048312367
+  "updated_at": 1787862560463
 }
 ---
-Gateway MCP extended compatibility is opt-out: when `mcp:extended_compatibility` has no persisted value, McpSettingsService and the Settings UI treat it as `true`. A stored `false` remains an explicit administrator choice. The setting eagerly returns OAuth-scoped tools in the initial `tools/list`; disable it only for harnesses that inject every tool schema into context and exhaust it, because disabling can leave such a harness unable to use some Gateway tools. Keep the Settings description, Gateway Assistant documentation, and `update_gateway_settings` tool description synchronized with that contract.
+Gateway MCP extended compatibility is opt-out: when `mcp:extended_compatibility` has no persisted value, services and Settings treat it as enabled. A stored `false` remains an explicit administrator choice. The setting eagerly returns OAuth-scoped tools in the initial `tools/list`; disable it only for harnesses that inject every schema into context, because disabling can prevent those clients from discovering later tools. Keep Settings copy, Assistant documentation, and the `update_gateway_settings` tool description synchronized.
 
-For Gateway Inference harness setup, the embedded Assistant must read internal inference documentation first. If `get_gateway_settings` is available, it must call it and report `generalSettings.features.inferenceEnabled` and `generalSettings.inference.harnessSpecificEndpointsEnabled` before giving harness setup instructions. Without `settings:gateway:view`, it must not guess those global states and should tell the user an administrator must confirm them. Keep the system prompt, inference docs, `get_gateway_settings` description, and service/system-prompt/docs tests aligned.
+For Gateway Inference setup, the embedded Assistant reads internal inference documentation first. If `get_gateway_settings` is available, it reports whether `generalSettings.features.inferenceEnabled` is enabled before giving setup instructions. Without `settings:gateway:view`, it must not guess installation state and should tell the user an administrator must confirm it. Setup guidance uses `@sqgateway/inference`, discovery, and the single stable `/api/inference/v1` contract; do not reference removed harness-specific endpoint toggles.

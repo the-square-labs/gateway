@@ -5,21 +5,51 @@
       "from_id": "mv7zw8vw",
       "to_id": "hh3v2vdi",
       "relation": "same_area",
-      "weight": 0.82,
-      "reason": "Both cover GitLab-managed registry credentials, authentication behavior, and registry connectivity verification.",
+      "weight": 0.52,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786618696866,
-      "updated_at": 1786618696866
+      "created_at": 1787862736600,
+      "updated_at": 1787862736600
     },
     {
       "from_id": "mv7zw8vw",
-      "to_id": "qz6ixfnq",
+      "to_id": "adzvqx6l",
       "relation": "same_area",
-      "weight": 0.94,
-      "reason": "Both define Docker registry credential resolution and explicit registry selection for image pulls.",
+      "weight": 0.4906,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786618696866,
-      "updated_at": 1786618696866
+      "created_at": 1787862736600,
+      "updated_at": 1787862736600
+    },
+    {
+      "from_id": "mv7zw8vw",
+      "to_id": "w75b8az4",
+      "relation": "related_to",
+      "weight": 0.408,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736600,
+      "updated_at": 1787862736600
+    },
+    {
+      "from_id": "mv7zw8vw",
+      "to_id": "j6oni2tm",
+      "relation": "related_to",
+      "weight": 0.3863,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736600,
+      "updated_at": 1787862736600
+    },
+    {
+      "from_id": "mv7zw8vw",
+      "to_id": "b3glzfjy",
+      "relation": "related_to",
+      "weight": 0.3724,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736600,
+      "updated_at": 1787862736600
     }
   ]
 }

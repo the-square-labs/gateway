@@ -1,0 +1,55 @@
+{
+  "file_name": "43cdn720_siem_hmac_contract",
+  "edges": [
+    {
+      "from_id": "43cdn720",
+      "to_id": "iois3ul4",
+      "relation": "uses_service",
+      "weight": 0.4186,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736275,
+      "updated_at": 1787862736275
+    },
+    {
+      "from_id": "43cdn720",
+      "to_id": "z638qk12",
+      "relation": "uses_service",
+      "weight": 0.4168,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736275,
+      "updated_at": 1787862736275
+    },
+    {
+      "from_id": "43cdn720",
+      "to_id": "3ta908aa",
+      "relation": "uses_service",
+      "weight": 0.4166,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736275,
+      "updated_at": 1787862736275
+    },
+    {
+      "from_id": "43cdn720",
+      "to_id": "gahvf5k5",
+      "relation": "uses_service",
+      "weight": 0.3952,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736275,
+      "updated_at": 1787862736275
+    },
+    {
+      "from_id": "43cdn720",
+      "to_id": "adzvqx6l",
+      "relation": "related_to",
+      "weight": 0.3867,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736275,
+      "updated_at": 1787862736275
+    }
+  ]
+}

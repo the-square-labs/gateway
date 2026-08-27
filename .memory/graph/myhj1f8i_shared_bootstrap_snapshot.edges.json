@@ -3,13 +3,53 @@
   "edges": [
     {
       "from_id": "myhj1f8i",
-      "to_id": "gdptltym",
+      "to_id": "gahvf5k5",
       "relation": "same_workflow",
-      "weight": 0.8,
-      "reason": "Both define the dashboard bootstrap contract, including auth-context resets, scoped pin authorization, retries, and realtime safety.",
+      "weight": 0.6071,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786067601079,
-      "updated_at": 1786067601079
+      "created_at": 1787862736163,
+      "updated_at": 1787862736163
+    },
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.4019,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736163,
+      "updated_at": 1787862736163
+    },
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "2tjfa2g5",
+      "relation": "related_to",
+      "weight": 0.3733,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736163,
+      "updated_at": 1787862736163
+    },
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "ip47mets",
+      "relation": "related_to",
+      "weight": 0.3678,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736163,
+      "updated_at": 1787862736163
+    },
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "d8e1oh13",
+      "relation": "related_to",
+      "weight": 0.363,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736163,
+      "updated_at": 1787862736163
     }
   ]
 }

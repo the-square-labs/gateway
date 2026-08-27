@@ -13,8 +13,11 @@
   ],
   "layer": "lite",
   "ref": "qme9z5oh",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1783631313911,
-  "updated_at": 1783631313911
+  "updated_at": 1787862465912
 }
 ---
-[→ qme9z5oh] Gateway AI chat production-readiness state-machine gotchas
+[→ qme9z5oh] Convert dated AI runtime findings into revalidation requirements

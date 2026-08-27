@@ -12,13 +12,13 @@
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
-  "confidence": 0.62,
-  "importance": 0.5,
+  "confidence": 0.99,
+  "importance": 0.85,
   "created_at": 1783024139300,
-  "updated_at": 1783025294240
+  "updated_at": 1787862676652
 }
 ---
-Project: wiolett gateway (path: /Users/knownout/Projects/wiolett/gateway)
+Project: wiolett gateway (path: the Gateway repository)
 
 Issue summary:
 - Threshold notification alerts currently use composite resource IDs for state tracking. Render labels must be derived separately from the state IDs.

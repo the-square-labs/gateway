@@ -4,22 +4,52 @@
     {
       "from_id": "loolos87",
       "to_id": "adzvqx6l",
-      "relation": "same_workflow",
-      "weight": 0.88,
-      "reason": "Both define the Gateway Docker volume archive export workflow: raw archive transport and the required resource-scoped export permissions.",
+      "relation": "same_area",
+      "weight": 0.4354,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786281301039,
-      "updated_at": 1786281301039
+      "created_at": 1787862736702,
+      "updated_at": 1787862736702
+    },
+    {
+      "from_id": "loolos87",
+      "to_id": "j4jc2kmk",
+      "relation": "same_area",
+      "weight": 0.4322,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862736702,
+      "updated_at": 1787862736702
+    },
+    {
+      "from_id": "loolos87",
+      "to_id": "iv7hhye3",
+      "relation": "same_area",
+      "weight": 0.414,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862736702,
+      "updated_at": 1787862736702
+    },
+    {
+      "from_id": "loolos87",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.369,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736702,
+      "updated_at": 1787862736702
     },
     {
       "from_id": "loolos87",
       "to_id": "gnonxe58",
-      "relation": "same_area",
-      "weight": 0.67,
-      "reason": "Both address Docker log transport hazards; the export workflow specifically avoids text-oriented logs because large or invalid log data can corrupt or destabilize binary handling.",
+      "relation": "related_to",
+      "weight": 0.3651,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786281301039,
-      "updated_at": 1786281301039
+      "created_at": 1787862736702,
+      "updated_at": 1787862736702
     }
   ]
 }

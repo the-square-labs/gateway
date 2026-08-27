@@ -11,8 +11,11 @@
   ],
   "layer": "lite",
   "ref": "hc1xhdcx",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1785451683980,
-  "updated_at": 1785451683980
+  "updated_at": 1787862569398
 }
 ---
-[→ hc1xhdcx] Claude Code CLI uses native Gateway Anthropic transport with isolated credentials and owned settings
+[→ hc1xhdcx] Update Claude Code integration to the current @sqgateway inference contract

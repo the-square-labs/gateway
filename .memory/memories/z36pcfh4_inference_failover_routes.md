@@ -11,14 +11,18 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.88,
   "created_at": 1787837324629,
-  "updated_at": 1787837324629
+  "updated_at": 1787862474181
 }
 ---
-Gateway Inference runtime routing contract after v2.9.8:
+Gateway Inference runtime candidate-selection contract:
 
-- The model administration UI account count represents persisted enabled source bindings. It is not proof that every binding survived the data-plane runtime eligibility query.
-- In production, three OpenAI subscription bindings existed for gpt-5.6-sol/terra/luna, but two discovered-model rows were temporarily unavailable between provider sync cycles. `InferenceCoreProxyService.coreCandidates` filtered on `inference_discovered_models.available`, leaving only the 5%-remaining account at its 5% reserve and returning `provider_capacity_unavailable` despite two healthy high-capacity bindings.
-- A configured, enabled, non-deleted, core-backed source must remain a routing candidate across transient discovery omissions. Discovery availability is catalog freshness, not authoritative request-time reachability. If the core/upstream rejects the model, the response-level failover path owns excluding that connection and trying the next candidate.
-- Gateway v2.9.8 removes the discovery-availability predicate from core candidate selection. Keep capability compatibility, source/connection enablement, deletion, and core-link checks as hard filters.
-- Verification: targeted core-proxy and routing tests, backend typecheck, scoped Biome, tag pipeline 1947, and release publication all passed. Production CT250 was intentionally not updated by Codex.
+- The model administration UI account count represents persisted enabled source bindings; it does not prove every binding survives the data-plane eligibility query.
+- A configured, enabled, non-deleted, core-backed source remains a routing candidate across transient discovery omissions.
+- Discovery availability is catalog freshness, not authoritative request-time reachability.
+- Keep capability compatibility, source/connection enablement, deletion state, and core-link validity as hard filters.
+- If the core or upstream rejects a model, response-level failover owns excluding that connection and trying the next eligible candidate.
+- Regression coverage must include transient discovery omission with healthy alternate bindings, reserve thresholds, upstream rejection, and multi-candidate failover.

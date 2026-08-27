@@ -11,8 +11,11 @@
   ],
   "layer": "lite",
   "ref": "hh3v2vdi",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1783267576919,
-  "updated_at": 1783267576919
+  "updated_at": 1787862671358
 }
 ---
-[→ hh3v2vdi] Gateway GitLab-provided Docker registry test root path fix
+[→ hh3v2vdi] Remove machine-specific absolute checkout path

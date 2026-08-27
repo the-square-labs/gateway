@@ -5,31 +5,51 @@
       "from_id": "dulrcn1x",
       "to_id": "3fym4ikf",
       "relation": "same_area",
-      "weight": 0.72,
-      "reason": "Both address Gateway WebSocket authentication security and browser-origin or cookie handling.",
+      "weight": 0.5144,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786619232405,
-      "updated_at": 1786619232405
-    },
-    {
-      "from_id": "dulrcn1x",
-      "to_id": "7rchqhpz",
-      "relation": "same_workflow",
-      "weight": 0.62,
-      "reason": "Both cover local Gateway verification, browser reload behavior, and reusing the running Docker stand without recreation.",
-      "source": "auto",
-      "created_at": 1786619232405,
-      "updated_at": 1786619232405
+      "created_at": 1787862736585,
+      "updated_at": 1787862736585
     },
     {
       "from_id": "dulrcn1x",
       "to_id": "vrru6m60",
-      "relation": "same_workflow",
-      "weight": 0.94,
-      "reason": "Both define transport-specific session cookie selection, legacy compatibility, and matching HTTP/WebSocket authentication behavior.",
+      "relation": "related_to",
+      "weight": 0.5072,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786619232405,
-      "updated_at": 1786619232405
+      "created_at": 1787862736585,
+      "updated_at": 1787862736585
+    },
+    {
+      "from_id": "dulrcn1x",
+      "to_id": "dnv2klmw",
+      "relation": "related_to",
+      "weight": 0.4267,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736585,
+      "updated_at": 1787862736585
+    },
+    {
+      "from_id": "dulrcn1x",
+      "to_id": "7rchqhpz",
+      "relation": "related_to",
+      "weight": 0.4028,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736585,
+      "updated_at": 1787862736585
+    },
+    {
+      "from_id": "dulrcn1x",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.3941,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736585,
+      "updated_at": 1787862736585
     }
   ]
 }

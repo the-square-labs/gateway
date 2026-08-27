@@ -4,22 +4,52 @@
     {
       "from_id": "mzmjdewo",
       "to_id": "dcfkgqwx",
-      "relation": "uses_service",
-      "weight": 0.88,
-      "reason": "Codex usage integration routes through the Gateway inference service and its harness-specific endpoint controls.",
+      "relation": "related_to",
+      "weight": 0.4945,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787497562860,
-      "updated_at": 1787497562860
+      "created_at": 1787862736046,
+      "updated_at": 1787862736046
     },
     {
       "from_id": "mzmjdewo",
-      "to_id": "gpx2fdwu",
-      "relation": "same_workflow",
-      "weight": 0.72,
-      "reason": "Both define Gateway Inference harness setup and compatibility behavior for embedded Assistant and Codex workflows.",
+      "to_id": "hc1xhdcx",
+      "relation": "related_to",
+      "weight": 0.4286,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787497562860,
-      "updated_at": 1787497562860
+      "created_at": 1787862736046,
+      "updated_at": 1787862736046
+    },
+    {
+      "from_id": "mzmjdewo",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.398,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736046,
+      "updated_at": 1787862736046
+    },
+    {
+      "from_id": "mzmjdewo",
+      "to_id": "ifp3c48s",
+      "relation": "related_to",
+      "weight": 0.3976,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736046,
+      "updated_at": 1787862736046
+    },
+    {
+      "from_id": "mzmjdewo",
+      "to_id": "xg6y81q3",
+      "relation": "related_to",
+      "weight": 0.3756,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736046,
+      "updated_at": 1787862736046
     }
   ]
 }

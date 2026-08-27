@@ -5,11 +5,51 @@
       "from_id": "ifp3c48s",
       "to_id": "dcfkgqwx",
       "relation": "same_workflow",
-      "weight": 0.94,
-      "reason": "Both document the Gateway inference bounded context, including OpenAI-compatible routing, dedicated gwi_ tokens, controls, and accounting.",
+      "weight": 0.4856,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787137864292,
-      "updated_at": 1787137864292
+      "created_at": 1787862736104,
+      "updated_at": 1787862736104
+    },
+    {
+      "from_id": "ifp3c48s",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.4389,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736104,
+      "updated_at": 1787862736104
+    },
+    {
+      "from_id": "ifp3c48s",
+      "to_id": "gpx2fdwu",
+      "relation": "related_to",
+      "weight": 0.3992,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736104,
+      "updated_at": 1787862736104
+    },
+    {
+      "from_id": "ifp3c48s",
+      "to_id": "mzmjdewo",
+      "relation": "related_to",
+      "weight": 0.3976,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736104,
+      "updated_at": 1787862736104
+    },
+    {
+      "from_id": "ifp3c48s",
+      "to_id": "z36pcfh4",
+      "relation": "related_to",
+      "weight": 0.3941,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736104,
+      "updated_at": 1787862736104
     }
   ]
 }

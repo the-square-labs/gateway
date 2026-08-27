@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "35udxmwy",
-      "to_id": "02e60mqr",
+      "to_id": "kufbu8qt",
       "relation": "same_workflow",
-      "weight": 0.64,
-      "reason": "Gateway RC tags are part of the same release-note and tag inspection workflow.",
+      "weight": 0.3716,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786615295813,
-      "updated_at": 1786615295813
+      "created_at": 1787862736615,
+      "updated_at": 1787862736615
     },
     {
       "from_id": "35udxmwy",
-      "to_id": "kufbu8qt",
+      "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.78,
-      "reason": "Changelog generation uses the Gateway tag-based release workflow and its established release-note format.",
+      "weight": 0.3435,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786615295813,
-      "updated_at": 1786615295813
+      "created_at": 1787862736615,
+      "updated_at": 1787862736615
+    },
+    {
+      "from_id": "35udxmwy",
+      "to_id": "lvklfxgs",
+      "relation": "same_workflow",
+      "weight": 0.2981,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736615,
+      "updated_at": 1787862736615
+    },
+    {
+      "from_id": "35udxmwy",
+      "to_id": "ac5muwri",
+      "relation": "related_to",
+      "weight": 0.2977,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736615,
+      "updated_at": 1787862736615
+    },
+    {
+      "from_id": "35udxmwy",
+      "to_id": "pstn8fla",
+      "relation": "related_to",
+      "weight": 0.286,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736615,
+      "updated_at": 1787862736615
     }
   ]
 }

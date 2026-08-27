@@ -1,9 +1,227 @@
 {
   "version": 2,
-  "last_reconciled_at": "2026-08-07T01:54:16.211Z",
+  "last_reconciled_at": "2026-08-27T20:33:39.775Z",
   "report": {
-    "summary": "Project memory reconciliation was recorded and `.memory` changes verified. Completed: - Reviewed all 86 canonical project memories and graph health. - Corrected the MCP extended-compatibility default to opt-out. - Consolidated logging and PKI verification constraints into canonical records. - Split the mixed dashboard record down to its bootstrap/sidebar contract. - Removed a local database credential from the enrollment smoke workflow. - Confirmed the resulting graph has zero dead pointers and zero dangling edges; two independent orphan memories remain valid. Unresolved: the Agent Memory transport rejected every graph-maintenance and deletion call as “user cancelled,” despite the approved CLI confirmation. Therefore the deterministic graph repair did not run, and two proven redundant records (`vvdi4727`, `gdptltym`) remain, with their durable facts already preserved elsewhere.",
-    "changes": [],
-    "unresolved": []
+    "summary": "Reviewed all Gateway project memories. Removed real production and test topology, internal addresses, live hostnames, deployment snapshots, dated CI or release status, machine-specific checkout paths, and stale inference package or endpoint contracts. Confirmed no actual credentials or secret values were stored. Consolidated duplicated durable rules, deleted six superseded records, regenerated embeddings and indexes, and rebuilt graph links with clean structural health.",
+    "reviewed": 118,
+    "changes": [
+      {
+        "action": "updated",
+        "memory_id": "29r4kznl",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "2npkkqwm",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "3fym4ikf",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "3ta908aa",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "43cdn720",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "iois3ul4",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "rzidwe4n",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "yfhytkcz",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "zq6da64z",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "myhj1f8i",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "adzvqx6l",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "dcfkgqwx",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "qme9z5oh",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "z36pcfh4",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "ifp3c48s",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "w75b8az4",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "3mk44b9q",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "acdy69d9",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "mzmjdewo",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "gpx2fdwu",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "hc1xhdcx",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "412x4uua",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "7abclq2n",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "7oked0dp",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "8rqz22k0",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "92pnq26b",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "duvbj7h2",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "evv95a8g",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "fgmxlp0p",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "fk86zmru",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "hh3v2vdi",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "huz2cldt",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "nuc3c3hq",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "ph8ejel0",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "pstn8fla",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "updated",
+        "memory_id": "vrch49nc",
+        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "zsgne0nk",
+        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "vvdi4727",
+        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "gdptltym",
+        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "qz6ixfnq",
+        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "127mkya9",
+        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "c8ql9nhv",
+        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+      },
+      {
+        "action": "repaired",
+        "summary": "Rebuilt automatic graph links for all remaining project memories and verified zero dead pointers, dangling edges, orphan graph files, or invalid edges."
+      }
+    ],
+    "unresolved": [
+      "Earlier Git commits still contain some removed topology text. Current project memory is sanitized, but removing those strings from repository history would require a separately authorized history rewrite and force push."
+    ]
   }
 }

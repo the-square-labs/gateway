@@ -15,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785949175721,
-  "updated_at": 1786067598014
+  "updated_at": 1787862452594
 }
 ---
-[→ myhj1f8i] Split the mixed dashboard aggregate into its distinct bootstrap/sidebar contract; MFA, pins, session compatibility, routes, and their verification remain in their focused canonical memories.
+[→ myhj1f8i] Consolidate dashboard authorization rule and remove remediation status

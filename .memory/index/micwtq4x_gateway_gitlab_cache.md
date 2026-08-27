@@ -12,8 +12,11 @@
   ],
   "layer": "lite",
   "ref": "evv95a8g",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1783269480066,
-  "updated_at": 1783269480066
+  "updated_at": 1787862652653
 }
 ---
-[→ evv95a8g] Gateway GitLab connector allowlist cache contract
+[→ evv95a8g] Remove machine-specific absolute checkout path

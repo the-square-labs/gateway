@@ -3,13 +3,23 @@
   "edges": [
     {
       "from_id": "02e60mqr",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.5161,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736921,
+      "updated_at": 1787862736921
+    },
+    {
+      "from_id": "02e60mqr",
       "to_id": "h0g48t5u",
       "relation": "same_area",
       "weight": 0.4602,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967414,
-      "updated_at": 1786064967414
+      "created_at": 1787862736921,
+      "updated_at": 1787862736921
     },
     {
       "from_id": "02e60mqr",
@@ -18,38 +28,28 @@
       "weight": 0.4364,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786064967414,
-      "updated_at": 1786064967414
+      "created_at": 1787862736921,
+      "updated_at": 1787862736921
     },
     {
       "from_id": "02e60mqr",
-      "to_id": "kufbu8qt",
+      "to_id": "lvklfxgs",
       "relation": "same_workflow",
-      "weight": 0.5161,
+      "weight": 0.4265,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786064967414,
-      "updated_at": 1786064967414
+      "created_at": 1787862736921,
+      "updated_at": 1787862736921
     },
     {
       "from_id": "02e60mqr",
-      "to_id": "wlju46pr",
+      "to_id": "zq6da64z",
       "relation": "related_to",
-      "weight": 0.3675,
+      "weight": 0.3997,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064967414,
-      "updated_at": 1786064967414
-    },
-    {
-      "from_id": "02e60mqr",
-      "to_id": "zzulrspz",
-      "relation": "same_workflow",
-      "weight": 0.3807,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967414,
-      "updated_at": 1786064967414
+      "created_at": 1787862736921,
+      "updated_at": 1787862736921
     }
   ]
 }

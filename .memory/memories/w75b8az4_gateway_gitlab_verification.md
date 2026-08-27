@@ -15,17 +15,17 @@
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
-  "confidence": 0.72,
-  "importance": 0.8,
+  "confidence": 0.99,
+  "importance": 0.96,
   "created_at": 1783125493749,
-  "updated_at": 1783631292184
+  "updated_at": 1787862529599
 }
 ---
 Gateway GitLab/VCS connector safety contract:
-- AI approval UI, runtime tool-call history, saved history, snapshots, audit rows, and MCP-visible data must persist only with display-safe/redacted arguments.
-- Raw one-time secrets or raw PAT/deploy-token/variable/webhook values required for approval continuation may exist only in short-lived server-side protected checkpoint state and must be cleared on terminal transitions.
-- Do not persist raw secret arguments into ai_run_tool_calls.toolArgs or return them to frontend/MCP.
-- The 2026-07-09 production-readiness audit identified bypass-non-destructive and bypass-everything issues: gitlab_set_project_variable.value and gitlab_create_or_update_project_webhook.token can take an immediate path, be stored raw in the runtime ledger, and be returned by snapshots.
-- Verification must cover every approval mode and the immediate auto-approved path, not only approval-display/audit redaction.
-- The same audit found that native GitLab archive requests forward redirects while transmitting PRIVATE-TOKEN cross-origin and across HTTPS-to-HTTP downgrade; binary redirect handling must strip credentials or fail closed and be tested with two-origin fake-token fixtures.
-- Historical DB assessment and token rotation must be evidence-driven; do not claim production secrets were exposed without verifying actual rows/redirect usage.
+
+- AI approval UI, runtime tool-call history, saved history, snapshots, audit rows, and MCP-visible data persist only display-safe/redacted arguments.
+- Raw one-time PAT, deploy-token, variable, or webhook values needed for approval continuation may exist only in short-lived protected server-side checkpoint state and are cleared on terminal transitions.
+- Never persist raw secret arguments into tool-call ledgers or return them to frontend/MCP surfaces.
+- Every approval mode, including immediate auto-approved paths, must follow the same secret-handling contract.
+- Native archive/binary requests must not forward authentication across origin changes or HTTPS-to-HTTP downgrade. Strip credentials or fail closed, and cover redirect behavior with separate-origin fixtures.
+- Historical exposure assessment and credential rotation are evidence-driven; do not claim production compromise without verifying persisted rows and redirect usage.

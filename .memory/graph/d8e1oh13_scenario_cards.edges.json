@@ -3,13 +3,53 @@
   "edges": [
     {
       "from_id": "d8e1oh13",
-      "to_id": "myhj1f8i",
-      "relation": "same_area",
-      "weight": 0.72,
-      "reason": "Both define Gateway sidebar navigation conventions, including active states and attention-badge behavior relevant to Lite Mode.",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.4109,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786571554164,
-      "updated_at": 1786571554164
+      "created_at": 1787862736657,
+      "updated_at": 1787862736657
+    },
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "bf8b2nk9",
+      "relation": "related_to",
+      "weight": 0.3836,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736657,
+      "updated_at": 1787862736657
+    },
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "myhj1f8i",
+      "relation": "related_to",
+      "weight": 0.363,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736657,
+      "updated_at": 1787862736657
+    },
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "94t2cjlq",
+      "relation": "related_to",
+      "weight": 0.3624,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736657,
+      "updated_at": 1787862736657
+    },
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "mjeqvnoq",
+      "relation": "related_to",
+      "weight": 0.3473,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736657,
+      "updated_at": 1787862736657
     }
   ]
 }

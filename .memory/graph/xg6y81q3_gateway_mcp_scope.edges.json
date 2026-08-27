@@ -3,33 +3,53 @@
   "edges": [
     {
       "from_id": "xg6y81q3",
+      "to_id": "gpx2fdwu",
+      "relation": "same_area",
+      "weight": 0.6255,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862736779,
+      "updated_at": 1787862736779
+    },
+    {
+      "from_id": "xg6y81q3",
       "to_id": "123u7vfm",
       "relation": "same_area",
-      "weight": 0.84,
-      "reason": "MCP tool eligibility depends on the OAuth token, delegated scopes, and MCP authentication contract.",
+      "weight": 0.5978,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786067551577,
-      "updated_at": 1786067551577
+      "created_at": 1787862736779,
+      "updated_at": 1787862736779
     },
     {
       "from_id": "xg6y81q3",
       "to_id": "8rqz22k0",
       "relation": "related_to",
-      "weight": 0.67,
-      "reason": "Both govern conversation-scoped tool discovery and limiting visible Gateway tool schemas.",
+      "weight": 0.4567,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786067551577,
-      "updated_at": 1786067551577
+      "created_at": 1787862736779,
+      "updated_at": 1787862736779
     },
     {
       "from_id": "xg6y81q3",
-      "to_id": "gpx2fdwu",
-      "relation": "same_area",
-      "weight": 0.88,
-      "reason": "Both define Gateway MCP tool exposure, discovery, and compatibility behavior.",
+      "to_id": "dcfkgqwx",
+      "relation": "related_to",
+      "weight": 0.4456,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786067551577,
-      "updated_at": 1786067551577
+      "created_at": 1787862736779,
+      "updated_at": 1787862736779
+    },
+    {
+      "from_id": "xg6y81q3",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.4376,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736779,
+      "updated_at": 1787862736779
     }
   ]
 }

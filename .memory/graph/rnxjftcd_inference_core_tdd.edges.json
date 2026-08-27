@@ -3,33 +3,53 @@
   "edges": [
     {
       "from_id": "rnxjftcd",
-      "to_id": "ifp3c48s",
-      "relation": "same_workflow",
-      "weight": 0.84,
-      "reason": "Both document the wiolett inference-core workflow, including provider behavior, proxying, accounting, and verification lessons.",
+      "to_id": "qme9z5oh",
+      "relation": "uses_service",
+      "weight": 0.3204,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787354231379,
-      "updated_at": 1787354231379
+      "created_at": 1787862736428,
+      "updated_at": 1787862736428
+    },
+    {
+      "from_id": "rnxjftcd",
+      "to_id": "ifp3c48s",
+      "relation": "uses_service",
+      "weight": 0.2937,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736428,
+      "updated_at": 1787862736428
+    },
+    {
+      "from_id": "rnxjftcd",
+      "to_id": "7abclq2n",
+      "relation": "uses_service",
+      "weight": 0.2835,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736428,
+      "updated_at": 1787862736428
     },
     {
       "from_id": "rnxjftcd",
       "to_id": "dcfkgqwx",
-      "relation": "same_area",
-      "weight": 0.7,
-      "reason": "Both define Gateway inference provider contracts, accounting, feature controls, and testable runtime behavior.",
+      "relation": "uses_service",
+      "weight": 0.2822,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787354231379,
-      "updated_at": 1787354231379
+      "created_at": 1787862736428,
+      "updated_at": 1787862736428
     },
     {
       "from_id": "rnxjftcd",
-      "to_id": "qme9z5oh",
-      "relation": "same_area",
-      "weight": 0.52,
-      "reason": "Both address provider-backed AI runtime behavior and production verification concerns.",
+      "to_id": "ip47mets",
+      "relation": "uses_service",
+      "weight": 0.274,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787354231379,
-      "updated_at": 1787354231379
+      "created_at": 1787862736428,
+      "updated_at": 1787862736428
     }
   ]
 }

@@ -3,33 +3,33 @@
   "edges": [
     {
       "from_id": "wlmqdf8c",
-      "to_id": "94t2cjlq",
-      "relation": "related_to",
-      "weight": 0.3276,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967369,
-      "updated_at": 1786064967369
-    },
-    {
-      "from_id": "wlmqdf8c",
       "to_id": "c9rwyt9w",
       "relation": "same_area",
       "weight": 0.5412,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967369,
-      "updated_at": 1786064967369
+      "created_at": 1787862736862,
+      "updated_at": 1787862736862
     },
     {
       "from_id": "wlmqdf8c",
-      "to_id": "gdptltym",
+      "to_id": "dv6ewa57",
       "relation": "related_to",
-      "weight": 0.3077,
+      "weight": 0.3461,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064967369,
-      "updated_at": 1786064967369
+      "created_at": 1787862736862,
+      "updated_at": 1787862736862
+    },
+    {
+      "from_id": "wlmqdf8c",
+      "to_id": "94t2cjlq",
+      "relation": "related_to",
+      "weight": 0.3276,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736862,
+      "updated_at": 1787862736862
     },
     {
       "from_id": "wlmqdf8c",
@@ -38,8 +38,18 @@
       "weight": 0.3211,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064967369,
-      "updated_at": 1786064967369
+      "created_at": 1787862736862,
+      "updated_at": 1787862736862
+    },
+    {
+      "from_id": "wlmqdf8c",
+      "to_id": "ip47mets",
+      "relation": "related_to",
+      "weight": 0.3075,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736862,
+      "updated_at": 1787862736862
     }
   ]
 }

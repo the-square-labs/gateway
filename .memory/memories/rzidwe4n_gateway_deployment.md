@@ -13,9 +13,18 @@
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.95,
+  "importance": 0.9,
   "created_at": 1785951397694,
-  "updated_at": 1786459803428
+  "updated_at": 1787862303230
 }
 ---
-On 2026-08-11, a clean-room v2.5.2 -> HEAD migration was exercised on Gateway host 172.20.0.140 with Docker node .136 and Nginx node .137. Install v2.5.2 daemons first, preserve node identities, then update to HEAD. A real legacy docker_container Alias Link migrated to Secure Link generation 2 active; Nginx switched from direct 172.20.0.136:18082 to loopback listener 127.0.0.1:41419. Strong proof: temporarily reject .137 -> .136:18082 with iptables; direct path failed while the proxy still returned C:ok, then remove the rule via trap. PostgreSQL, Redis, and workload container IDs were preserved, workload restarts remained 0, and both nodes were online on HEAD. Important fixes: reread the proxy row inside the per-link migration lock so stale state cannot reset cutover_ready; force-recreate app before relay during update and tolerate transient unhealthy checks; installer scripts must fail closed when the requested daemon artifact cannot be downloaded rather than keep a mismatched existing binary. Public proxy API should expose only secureLinkActive:boolean and continue stripping internal Secure Link ports/status; UI may render a Secure Link badge from that boolean. Release-like local images must use immutable digest refs and a relay binary whose buildVersion matches GATEWAY_RELAY_BUILD_VERSION, otherwise the relay supervisor correctly reports unexpected_image or contract_mismatch.
+Gateway Secure Link migration rules:
+
+- Install compatible daemon versions before cutover and preserve node identities and stateful foundation services.
+- Under the per-link migration lock, reread the proxy/link row before writing cutover state so stale snapshots cannot reset a completed or ready transition.
+- Prove cutover by showing the old direct path is no longer required, while ensuring cleanup is automatically reversed after the test.
+- During self-update, recreate the app before the relay where required and tolerate only bounded transient unhealthy states.
+- Installer scripts fail closed when the requested daemon artifact cannot be downloaded; never retain a mismatched existing binary silently.
+- Public proxy APIs expose only the stable `secureLinkActive` boolean and continue stripping internal Secure Link ports and status details.
+- Release candidates use immutable digest references, and relay build identity must match the configured Gateway relay build version; otherwise supervision must report an image/contract mismatch.
+- Migration verification must cover workload continuity, persisted database state, proxy behavior, node reconnect, and absence of unexpected workload restarts without persisting host-specific topology in memory.

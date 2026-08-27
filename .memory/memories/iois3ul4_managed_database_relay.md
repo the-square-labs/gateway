@@ -16,42 +16,38 @@
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.98,
+  "importance": 0.95,
   "created_at": 1786111914144,
-  "updated_at": 1786119400859
+  "updated_at": 1787862309994
 }
 ---
 # Independent managed-database relay, upgrade, and storage contract
 
 ## Architecture and operator behavior
 
-- Standalone `gateway-relay` owns the existing public `:9443`; Gateway app keeps public `:3000` and internal relay/control access. Do not add another public port.
-- Each daemon maintains one additional process-lifetime multiplexed tunnel connection for data-plane traffic. Binding streams remain multiplexed; do not open one connection per binding.
+- Standalone `gateway-relay` owns the existing public relay endpoint; the Gateway app retains HTTP and internal control access. Do not add another public relay port.
+- Each daemon maintains one additional process-lifetime multiplexed tunnel for data-plane traffic. Binding streams remain multiplexed.
 - Control-plane monitoring stays on the existing app session.
-- Gateway supervises relay health and may perform bounded automatic recovery. If recovery fails, Dashboard shows a critical red notice with a compact title, short description, and CTA to a shared-shell detail modal.
+- Gateway supervises relay health with bounded automatic recovery; failed recovery produces a critical Dashboard notice linked to shared-shell details.
 
-## Stateful migration evidence
+## Stateful migration
 
-- A real v2.5.2-to-worktree migration on `172.20.0.131` created a signed stable baseline, legacy Docker workload, managed PostgreSQL binding with persisted data, nginx proxy route, and authenticated browser state before cutover.
-- The target-image foundation migrator created a timestamped rollback backup, moved public `:9443` from app to standalone relay, preserved PostgreSQL and Redis foundation container identities, and left app/relay healthy.
-- After migration, workload HTTP, proxy HTTP, persisted PostgreSQL data, binding queries, node reconnect, and browser views passed.
-- A long-lived PostgreSQL session survived complete app stop and force-recreate; a new binding session also opened while app was down. Relay identity and start time did not change.
-- Stable daemon tunnel v1 is not compatible with the standalone relay v2 lanes. Both participating Docker daemon endpoints must be upgraded during migration; a temporary tunnel interruption during that upgrade is expected.
-- Exact signed-candidate delivery is still unproven because the worktree candidate was locally built. Redis and ClickHouse managed-engine continuity remain separate release evidence gaps.
+- Relay migration must preserve PostgreSQL, Redis, managed-database data, node identities, authenticated application state, and existing workload behavior.
+- Long-lived database sessions should survive app-only replacement where the relay remains stable; new binding sessions must remain available while the app is unavailable.
+- Stable daemon tunnel v1 is incompatible with standalone relay v2 lanes. Every participating daemon endpoint must be upgraded during migration, with temporary tunnel interruption treated as expected.
+- The target-image foundation migrator owns reversible host configuration changes and rollback preparation.
+- Release acceptance must use the exact signed candidate and explicitly verify each supported managed engine rather than extrapolating from local worktree builds.
 
-## Fixed-size database storage and installer gate
+## Fixed-size storage and installer gate
 
-- Managed database capacity remains a hard fixed-size loop-backed ext4 image. Do not replace it with Docker volumes or soft quotas.
-- Database-profile installation must install/validate Docker before enrollment and run the runtime-equivalent lifecycle: required command checks, free loop device, non-sparse image allocation, ext4 format, loop attach with `--nooverlap` plus portable fallback, `noatime` mount, write probe, image growth, `losetup -c`, block-size verification, `resize2fs`, unmount, and detach.
+- Managed database capacity remains a hard fixed-size loop-backed ext4 image, not a Docker volume or soft quota.
+- Database-profile installation validates Docker before enrollment and exercises command checks, loop allocation, non-sparse image creation, ext4 formatting, attach/mount, write probe, grow/resize, unmount, detach, and cleanup.
 - Every preflight path uses cleanup traps and leaves no image, mount, or loop attachment after success or failure.
-- Unsupported LXC must fail before enrollment with actionable outer-host loop-device/mount passthrough guidance; it must not offer an unbounded storage fallback.
-- Real evidence: `172.20.0.132` LXC failed cleanly at the prerequisite gate; recreated `172.20.0.133` KVM VM installed Docker first, passed the complete preflight, enrolled, provisioned a fixed 1 GiB PostgreSQL image, and cleaned up without loop/mount residue.
+- Unsupported container environments fail before enrollment with actionable host passthrough guidance and no unbounded fallback.
 
 ## Connector socket lifecycle
 
-- Mounting the Unix socket file directly pins connector sidecars to a stale inode after Docker daemon restart.
-- The daemon owns a dedicated `database-tunnel/tunnel.sock` directory and connector sidecars mount only that directory read-only at `/run/gateway-db`.
-- On general Docker daemon Init, before enrollment or Gateway connectivity, exact first-party connector containers labeled `wiolett.gateway.managed-database.connector=true` are reconciled once from the legacy socket-file bind to the directory bind.
-- Migration recognizes both Docker `HostConfig.Binds` and structured `HostConfig.Mounts`, requires the exact legacy source/target pair, preserves the container configuration and network aliases, and is idempotent.
-- A failed required connector migration fails daemon initialization so systemd retries instead of advertising a healthy node with broken bindings.
-- Real Docker evidence on `.132`: the legacy connector was recreated once, became a read-only directory mount with its network alias preserved, and retained the same new container ID across the next daemon restart. The stateful PostgreSQL E2E then proved a fresh query after daemon restart.
+- Direct socket-file mounts pin connector sidecars to a stale inode after daemon restart.
+- The daemon owns a dedicated socket directory; connector sidecars mount that directory read-only.
+- On daemon initialization, exact first-party managed-database connector containers are reconciled once from the legacy socket-file bind to the directory bind.
+- Migration recognizes both bind and structured-mount representations, requires the exact legacy source/target relationship, preserves container configuration and network aliases, remains idempotent, and fails initialization when a required migration cannot complete.

@@ -16,7 +16,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1782930153895,
-  "updated_at": 1786067602781
+  "updated_at": 1787862320816
 }
 ---
-[→ yfhytkcz] Removed a local database credential from the enrollment smoke workflow without changing its durable security or verification pattern.
+[→ yfhytkcz] Remove one-off local enrollment smoke topology and retain selector security contract

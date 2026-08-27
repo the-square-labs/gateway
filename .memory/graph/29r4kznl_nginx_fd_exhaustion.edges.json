@@ -1,0 +1,55 @@
+{
+  "file_name": "29r4kznl_nginx_fd_exhaustion",
+  "edges": [
+    {
+      "from_id": "29r4kznl",
+      "to_id": "vks9ym4c",
+      "relation": "uses_service",
+      "weight": 0.4031,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736338,
+      "updated_at": 1787862736338
+    },
+    {
+      "from_id": "29r4kznl",
+      "to_id": "zq6da64z",
+      "relation": "uses_service",
+      "weight": 0.3793,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736338,
+      "updated_at": 1787862736338
+    },
+    {
+      "from_id": "29r4kznl",
+      "to_id": "x2uskhdm",
+      "relation": "uses_service",
+      "weight": 0.3622,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736338,
+      "updated_at": 1787862736338
+    },
+    {
+      "from_id": "29r4kznl",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.3562,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736338,
+      "updated_at": 1787862736338
+    },
+    {
+      "from_id": "29r4kznl",
+      "to_id": "8c9f2oec",
+      "relation": "uses_service",
+      "weight": 0.3475,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736338,
+      "updated_at": 1787862736338
+    }
+  ]
+}

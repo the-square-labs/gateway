@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "a7elxcv1",
-      "to_id": "3ta908aa",
-      "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "Both define Secure Link relay topology, lifecycle synchronization, and deferred reconciliation behavior.",
+      "to_id": "8c9f2oec",
+      "relation": "related_to",
+      "weight": 0.465,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786747616201,
-      "updated_at": 1786747616201
+      "created_at": 1787862736506,
+      "updated_at": 1787862736506
     },
     {
       "from_id": "a7elxcv1",
-      "to_id": "8c9f2oec",
-      "relation": "same_area",
-      "weight": 0.64,
-      "reason": "Both govern Nginx proxy-host and Domain relationships relevant to deletion preflight and node affinity.",
+      "to_id": "3ta908aa",
+      "relation": "same_workflow",
+      "weight": 0.4576,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786747616201,
-      "updated_at": 1786747616201
+      "created_at": 1787862736506,
+      "updated_at": 1787862736506
+    },
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "rzidwe4n",
+      "relation": "same_workflow",
+      "weight": 0.4233,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736506,
+      "updated_at": 1787862736506
+    },
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "vks9ym4c",
+      "relation": "same_workflow",
+      "weight": 0.4212,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736506,
+      "updated_at": 1787862736506
+    },
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "x7unpgb6",
+      "relation": "related_to",
+      "weight": 0.344,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736506,
+      "updated_at": 1787862736506
     }
   ]
 }

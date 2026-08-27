@@ -4,12 +4,52 @@
     {
       "from_id": "3ta908aa",
       "to_id": "iois3ul4",
-      "relation": "same_workflow",
-      "weight": 0.94,
-      "reason": "Both define the standalone gateway-relay architecture, multiplexed data tunnels, managed-database relay behavior, and upgrade or migration validation.",
+      "relation": "uses_service",
+      "weight": 0.6021,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1786469252905,
-      "updated_at": 1786469252905
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "rzidwe4n",
+      "relation": "same_workflow",
+      "weight": 0.5184,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "a7elxcv1",
+      "relation": "uses_service",
+      "weight": 0.4576,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "vks9ym4c",
+      "relation": "uses_service",
+      "weight": 0.422,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "43cdn720",
+      "relation": "uses_service",
+      "weight": 0.4166,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
     }
   ]
 }

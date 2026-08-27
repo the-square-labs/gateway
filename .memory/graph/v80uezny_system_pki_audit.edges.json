@@ -3,33 +3,23 @@
   "edges": [
     {
       "from_id": "v80uezny",
-      "to_id": "123u7vfm",
+      "to_id": "dv6ewa57",
       "relation": "related_to",
-      "weight": 0.264,
+      "weight": 0.5034,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064967359,
-      "updated_at": 1786064967359
+      "created_at": 1787862736847,
+      "updated_at": 1787862736847
     },
     {
       "from_id": "v80uezny",
-      "to_id": "pstn8fla",
+      "to_id": "x8kr3aye",
       "relation": "related_to",
-      "weight": 0.262,
+      "weight": 0.3593,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064967359,
-      "updated_at": 1786064967359
-    },
-    {
-      "from_id": "v80uezny",
-      "to_id": "w75b8az4",
-      "relation": "related_to",
-      "weight": 0.2914,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967359,
-      "updated_at": 1786064967359
+      "created_at": 1787862736847,
+      "updated_at": 1787862736847
     },
     {
       "from_id": "v80uezny",
@@ -38,8 +28,28 @@
       "weight": 0.3211,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064967359,
-      "updated_at": 1786064967359
+      "created_at": 1787862736847,
+      "updated_at": 1787862736847
+    },
+    {
+      "from_id": "v80uezny",
+      "to_id": "w75b8az4",
+      "relation": "related_to",
+      "weight": 0.2902,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736847,
+      "updated_at": 1787862736847
+    },
+    {
+      "from_id": "v80uezny",
+      "to_id": "xg6y81q3",
+      "relation": "related_to",
+      "weight": 0.268,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736847,
+      "updated_at": 1787862736847
     }
   ]
 }

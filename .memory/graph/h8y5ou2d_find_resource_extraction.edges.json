@@ -3,13 +3,23 @@
   "edges": [
     {
       "from_id": "h8y5ou2d",
-      "to_id": "412x4uua",
+      "to_id": "ph8ejel0",
       "relation": "same_area",
-      "weight": 0.442,
+      "weight": 0.7137,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967980,
-      "updated_at": 1786064967980
+      "created_at": 1787862737333,
+      "updated_at": 1787862737333
+    },
+    {
+      "from_id": "h8y5ou2d",
+      "to_id": "duvbj7h2",
+      "relation": "same_workflow",
+      "weight": 0.5157,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862737333,
+      "updated_at": 1787862737333
     },
     {
       "from_id": "h8y5ou2d",
@@ -18,38 +28,28 @@
       "weight": 0.4749,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967980,
-      "updated_at": 1786064967980
+      "created_at": 1787862737333,
+      "updated_at": 1787862737333
     },
     {
       "from_id": "h8y5ou2d",
-      "to_id": "duvbj7h2",
-      "relation": "same_workflow",
-      "weight": 0.4988,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "to_id": "412x4uua",
+      "relation": "same_area",
+      "weight": 0.4495,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967980,
-      "updated_at": 1786064967980
+      "created_at": 1787862737333,
+      "updated_at": 1787862737333
     },
     {
       "from_id": "h8y5ou2d",
       "to_id": "huz2cldt",
       "relation": "same_workflow",
-      "weight": 0.3881,
+      "weight": 0.3978,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786064967980,
-      "updated_at": 1786064967980
-    },
-    {
-      "from_id": "h8y5ou2d",
-      "to_id": "ph8ejel0",
-      "relation": "same_area",
-      "weight": 0.7061,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967980,
-      "updated_at": 1786064967980
+      "created_at": 1787862737333,
+      "updated_at": 1787862737333
     }
   ]
 }

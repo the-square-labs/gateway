@@ -11,8 +11,22 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.9,
   "created_at": 1787137855135,
-  "updated_at": 1787137855135
+  "updated_at": 1787862522385
 }
 ---
-План 08-19-opencodex-inference-core завершён (2026-08-19): кастомный inference-движок Gateway заменён на управляемый OpenCodex core (контейнер inference-core:10100, внутренняя docker-сеть, без публикации портов). Gateway = control plane: auth gwi_, модели, лимиты, прайсинг, accounting через HMAC-callbacks на :9410 (не публикуется). Data plane: прозрачный прокси /api/inference/v1/* с подписанным контекстом wiolett-core/v1 (rootRequestId === request row id, строка создаётся ДО подписи). WS — per-turn прокси: core держит сокет multi-turn, поэтому прокси сам закрывает upstream по терминальному событию, иначе ход клинивает. Concurrency lease держится весь ход, release в finalizeTurn. Уроки ревью: (1) при моках db в тестах легко замаскировать потерю поля — API-биллинг шёл в ноль из-за несохранённого pricingSnapshotId, тесты были зелёные; (2) идемпотентные redelivery-ответы должны replay'ить сохранённые решения (admittedMaxOutputTokens колонка); (3) клиенту-недоставленные oversized ответы сеттлятся как failed, иначе начисление за недоставку. Harness-роуты /api/inference/codex|anthropic и toggle удалены; единый base URL /api/inference/v1. Lab E2E отложен на lab-хост (план строка 218). Доказательства: .workflow/plans/08-19-opencodex-inference-core/artifacts/verification-t7.md.
+# Managed inference-core integration contract
+
+- Gateway owns the control plane: `gwi_` authentication, model/provider configuration, limits, pricing, and accounting.
+- The managed inference core is a private runtime dependency reachable only over the internal service network; it must not publish a public port.
+- The data plane is the stable transparent `/api/inference/v1/*` proxy with signed `wiolett-core/v1` context.
+- Create the request/accounting row before signing context, and keep `rootRequestId` equal to that durable request ID.
+- WebSocket proxying is per turn. Because the core socket may be multi-turn, Gateway closes the upstream socket after a terminal event so the client turn cannot hang.
+- Hold the concurrency lease for the entire turn and release it only in finalization.
+- Database mocks can hide missing persistence fields. Accounting regression tests must assert durable pricing snapshot linkage rather than only successful responses.
+- Idempotent redelivery replays persisted admission decisions, including admitted output limits.
+- Oversized responses that cannot be delivered to the client settle as failed rather than billing an undelivered success.
+- Legacy harness-specific Codex, Anthropic, setup, and toggle routes are removed. Clients use discovery and the single stable inference prefix.

@@ -17,7 +17,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1784934085269,
-  "updated_at": 1785963780885
+  "updated_at": 1787862445678
 }
 ---
-[→ dcfkgqwx] Corrected the canonical inference endpoint contract: harness-specific Codex, Anthropic, and setup endpoints default disabled, return the documented disabled error until enabled, and require explicit instability acknowledgement.
+[→ dcfkgqwx] Remove stale workflow status and update inference companion package contract

@@ -4,22 +4,52 @@
     {
       "from_id": "dnv2klmw",
       "to_id": "7rchqhpz",
-      "relation": "same_workflow",
-      "weight": 0.9,
-      "reason": "Both document updating the localhost Gateway stand while preserving existing containers, volumes, and database configuration to avoid auth breakage.",
+      "relation": "related_to",
+      "weight": 0.4802,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786637401615,
-      "updated_at": 1786637401615
+      "created_at": 1787862736540,
+      "updated_at": 1787862736540
     },
     {
       "from_id": "dnv2klmw",
       "to_id": "dulrcn1x",
-      "relation": "same_workflow",
-      "weight": 0.78,
-      "reason": "Both cover recovery of the preserved gateway-upgrade-e2e localhost stand, including session/auth verification and reuse of PostgreSQL, Redis, and Gateway state.",
+      "relation": "related_to",
+      "weight": 0.4267,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786637401615,
-      "updated_at": 1786637401615
+      "created_at": 1787862736540,
+      "updated_at": 1787862736540
+    },
+    {
+      "from_id": "dnv2klmw",
+      "to_id": "lvklfxgs",
+      "relation": "same_workflow",
+      "weight": 0.4175,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736540,
+      "updated_at": 1787862736540
+    },
+    {
+      "from_id": "dnv2klmw",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.4052,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736540,
+      "updated_at": 1787862736540
+    },
+    {
+      "from_id": "dnv2klmw",
+      "to_id": "wlju46pr",
+      "relation": "same_area",
+      "weight": 0.3947,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862736540,
+      "updated_at": 1787862736540
     }
   ]
 }

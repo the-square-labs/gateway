@@ -14,13 +14,13 @@
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
-  "confidence": 0.86,
-  "importance": 0.9,
+  "confidence": 0.99,
+  "importance": 0.92,
   "created_at": 1782003066839,
-  "updated_at": 1785537765392
+  "updated_at": 1787862639979
 }
 ---
-Repository: /Users/knownout/Projects/wiolett/gateway
+Repository: the Gateway repository
 Primary orchestration entrypoint: packages/backend/src/modules/databases/databases.service.ts
 
 Safe extraction boundaries and ownership:

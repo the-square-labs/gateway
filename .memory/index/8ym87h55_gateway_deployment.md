@@ -15,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785951397694,
-  "updated_at": 1786459803428
+  "updated_at": 1787862303230
 }
 ---
-[→ rzidwe4n] Gateway production-tag to HEAD migration E2E on .140/.136/.137
+[→ rzidwe4n] Replace dated migration topology with durable Secure Link migration rules

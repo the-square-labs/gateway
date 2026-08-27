@@ -16,7 +16,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786047219057,
-  "updated_at": 1786048312367
+  "updated_at": 1787862560463
 }
 ---
-[→ gpx2fdwu] MCP compatibility and harness-status guidance
+[→ gpx2fdwu] Remove deleted inference harness toggle from MCP compatibility memory

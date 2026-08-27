@@ -3,33 +3,53 @@
   "edges": [
     {
       "from_id": "dv6ewa57",
-      "to_id": "gdptltym",
-      "relation": "same_workflow",
-      "weight": 0.74,
-      "reason": "Covers authorization and transaction-test verification for PKI lifecycle changes.",
+      "to_id": "v80uezny",
+      "relation": "related_to",
+      "weight": 0.5034,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786067594059,
-      "updated_at": 1786067594059
+      "created_at": 1787862736764,
+      "updated_at": 1787862736764
     },
     {
       "from_id": "dv6ewa57",
-      "to_id": "v80uezny",
-      "relation": "related_to",
-      "weight": 0.78,
-      "reason": "Defines authorized audit access to system PKI lifecycle and evidence metadata.",
+      "to_id": "x8kr3aye",
+      "relation": "same_workflow",
+      "weight": 0.4268,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786067594059,
-      "updated_at": 1786067594059
+      "created_at": 1787862736764,
+      "updated_at": 1787862736764
     },
     {
       "from_id": "dv6ewa57",
       "to_id": "wlmqdf8c",
-      "relation": "same_area",
-      "weight": 0.61,
-      "reason": "Defines certificate inventory handling and system-certificate visibility in the PKI UI.",
+      "relation": "related_to",
+      "weight": 0.3461,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786067594059,
-      "updated_at": 1786067594059
+      "created_at": 1787862736764,
+      "updated_at": 1787862736764
+    },
+    {
+      "from_id": "dv6ewa57",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.3167,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736764,
+      "updated_at": 1787862736764
+    },
+    {
+      "from_id": "dv6ewa57",
+      "to_id": "mu4tydcq",
+      "relation": "related_to",
+      "weight": 0.3088,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736764,
+      "updated_at": 1787862736764
     }
   ]
 }

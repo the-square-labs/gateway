@@ -19,7 +19,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786463265800,
-  "updated_at": 1786469247366
+  "updated_at": 1787862245378
 }
 ---
-[→ 3ta908aa] Secure Link production runtime now includes relay-owned telemetry, adaptive admission, monitoring UI, and verified r4/r6 load behavior on 172.20.0.134.
+[→ 3ta908aa] Remove deployment topology and load snapshot from Secure Link memory

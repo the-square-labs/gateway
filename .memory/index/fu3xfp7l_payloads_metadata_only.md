@@ -11,8 +11,11 @@
   ],
   "layer": "lite",
   "ref": "fgmxlp0p",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1783279658914,
-  "updated_at": 1783279658914
+  "updated_at": 1787862647197
 }
 ---
-[→ fgmxlp0p] Gateway AI chat retrieval must keep tool payloads metadata-only
+[→ fgmxlp0p] Remove machine-specific absolute checkout path

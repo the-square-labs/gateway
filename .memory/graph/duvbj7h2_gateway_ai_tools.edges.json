@@ -5,51 +5,51 @@
       "from_id": "duvbj7h2",
       "to_id": "412x4uua",
       "relation": "same_area",
-      "weight": 0.5701,
+      "weight": 0.5488,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967969,
-      "updated_at": 1786064967969
-    },
-    {
-      "from_id": "duvbj7h2",
-      "to_id": "7oked0dp",
-      "relation": "same_area",
-      "weight": 0.4942,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967969,
-      "updated_at": 1786064967969
-    },
-    {
-      "from_id": "duvbj7h2",
-      "to_id": "8rqz22k0",
-      "relation": "same_workflow",
-      "weight": 0.4984,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967969,
-      "updated_at": 1786064967969
+      "created_at": 1787862735901,
+      "updated_at": 1787862735901
     },
     {
       "from_id": "duvbj7h2",
       "to_id": "h8y5ou2d",
       "relation": "same_workflow",
-      "weight": 0.4988,
+      "weight": 0.5157,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786064967969,
-      "updated_at": 1786064967969
+      "created_at": 1787862735901,
+      "updated_at": 1787862735901
     },
     {
       "from_id": "duvbj7h2",
       "to_id": "ph8ejel0",
       "relation": "same_area",
-      "weight": 0.5494,
+      "weight": 0.5154,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967969,
-      "updated_at": 1786064967969
+      "created_at": 1787862735901,
+      "updated_at": 1787862735901
+    },
+    {
+      "from_id": "duvbj7h2",
+      "to_id": "8rqz22k0",
+      "relation": "same_workflow",
+      "weight": 0.4658,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862735901,
+      "updated_at": 1787862735901
+    },
+    {
+      "from_id": "duvbj7h2",
+      "to_id": "7oked0dp",
+      "relation": "same_area",
+      "weight": 0.4607,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862735901,
+      "updated_at": 1787862735901
     }
   ]
 }

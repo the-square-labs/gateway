@@ -15,95 +15,40 @@
   "confidence": 0.99,
   "importance": 0.9,
   "created_at": 1786140832137,
-  "updated_at": 1786149756028
+  "updated_at": 1787862295928
 }
 ---
-# Gateway SIEM Context
+# Gateway SIEM contract
 
-## Deployment
+## Feature flag
 
-- Latest test-stand deployment: **2026-08-08**
-- Host: `172.20.0.134` (`test-gw-siem`)
-- Compose directory: `/opt/gateway`
-- Services:
-  - Gateway app: `:3000`
-  - Standalone relay: `:9443`
-  - PostgreSQL
-  - Redis
-- Current image: `gateway:siem-20260808-172-20-0-134-r4` for app and relay
-- Rollback images: `r3`, with earlier SIEM baseline `r2` retained
-- App and relay are healthy; internal and external `/health` checks return `ok`
-- PostgreSQL and Redis were preserved without restart; host Nginx fallback on port `80` was unchanged
-- Build and distribute images as `linux/amd64`
-- Preserve root-owned mode-600 `/opt/gateway/.env`; never expose credentials or generated secrets
+- `generalSettings.features.siemEnabled` is installation-wide and defaults to `true` for backward-compatible upgrades.
+- It is configured through **Settings → Gateway → General settings → SIEM audit export**.
+- When disabled, SIEM tabs/preloads disappear, SIEM-only users lose Notifications navigation, `/api/audit/siem` and SIEM AI tools fail closed, local audit records continue, new SIEM outbox rows are not created, and in-process delivery pauses.
+- Destinations, history, and queued records remain and resume when re-enabled.
+- Existing `system.config.changed` invalidation refreshes UI/config caches; no restart or extra service is required.
 
-Safe app/relay replacement:
+## Authentication
 
-```bash
-docker compose up -d --no-build --no-deps --force-recreate app relay
-```
+Supported modes are Bearer, HMAC-SHA256, and `custom_header`.
 
-Verify image tags, container health, internal health, and `http://172.20.0.134:3000/health`. Inspect port ownership first and do not stop unrelated containers using port `3000`.
-
-## SIEM Feature Flag
-
-- `generalSettings.features.siemEnabled` is installation-wide and defaults to `true`
-- Configured through **Settings → Gateway → General settings → SIEM audit export**
-- When disabled:
-  - SIEM tabs and preloads disappear
-  - SIEM-only users lose Notifications navigation
-  - `/api/audit/siem` returns `FEATURE_DISABLED`
-  - SIEM AI tools fail closed
-  - Local audit records continue
-  - New SIEM outbox records are not created
-  - In-process SIEM delivery pauses
-- Destinations, history, and queued records remain and resume when re-enabled
-- Existing `system.config.changed` invalidation refreshes UI/config caches; no restart, worker, or extra Compose service is required
-
-## Authentication Contract
-
-Supported modes:
-
-- Bearer
-- HMAC-SHA256
-- `custom_header`
-
-Custom-header requirements:
-
-- Store the validated header name separately from the encrypted one-time value
-- Reject malformed header names
-- Reject CR/LF in authentication values
-- Reject names overriding `Host`, `Content-Type`, or `X-Gateway-*`
-- `Authorization` is valid when collectors use a non-Bearer scheme
-
-HMAC delivery:
-
-- Send `X-Gateway-Timestamp`
-- Send `X-Gateway-Signature-256: sha256=<hex>`
-- Sign `${timestamp}.${rawJsonBody}`
-- Collectors must verify the exact raw body bytes using constant-time comparison
-- Reject stale timestamps
+- Store a validated custom header name separately from its encrypted one-time value.
+- Reject malformed names, CR/LF in values, and names overriding `Host`, `Content-Type`, or `X-Gateway-*`.
+- `Authorization` remains valid for collectors using a non-Bearer scheme.
+- HMAC delivery sends `X-Gateway-Timestamp` and `X-Gateway-Signature-256: sha256=<hex>`, signs `${timestamp}.${rawJsonBody}`, requires exact raw-body verification with constant-time comparison, and rejects stale timestamps.
 
 ## Schema and UI
 
-- SIEM V1 includes custom-header authentication
-- Additive migration `0095_light_jean_grey` follows the SIEM base migration
-- `siem_destinations.custom_header_name` stores the validated header name
-- Auth-field changes use `AnimatedHeight` with `AnimatePresence`
-- Keep the delivery-enabled control separated from the animated authentication fields with a local `pt-4` spacer in `SiemDestinationDialog`; do not change global `AnimatedHeight` spacing for this.
-- Destination rows show only last-delivery status
-- SIEM and ordinary notification logs use a compact, full-width, centered `End of logs` sentinel
-- SIEM Delivery Details follows **Audit Entry Details**: `max-w-[calc(100vw-2rem)] sm:max-w-3xl`, six-column metadata cards, and a bordered `Exported event` JSON section. Keep requeue in the standard `DialogFooter`; do not introduce a separate custom modal layout.
+- SIEM V1 includes custom-header authentication; `siem_destinations.custom_header_name` stores the validated header name.
+- Authentication field transitions use the shared animated-height pattern. Keep delivery enablement visually separate without changing global spacing.
+- Destination rows show only last-delivery status.
+- SIEM and notification logs use the shared compact end-of-list sentinel.
+- SIEM Delivery Details reuses the Audit Entry Details layout and standard dialog footer rather than a custom modal.
 
-## Relay and Related Deployment
+## Relay and deployment safety
 
-- Main test host: `172.20.0.131` (`test-gw-main`)
-- Compose files: `/opt/gateway/docker-compose.yml` and `/opt/gateway/.env`
-- `gateway-relay` owns public `:9443`; Gateway owns public `:3000`
-- Do not add another public relay port
-- Standalone relay v2 requires both Docker daemon endpoints to be upgraded; temporary tunnel interruption is expected
-- Stable daemon tunnel v1 is incompatible with standalone relay v2
-- Each daemon uses one additional process-lifetime multiplexed data-plane tunnel; binding streams remain multiplexed
-- Control-plane monitoring remains on the existing app session
-- Gateway supervises relay health with bounded recovery
-- Failed recovery creates a critical Dashboard notice with a CTA to shared-shell details
+- Standalone relay and Gateway app retain distinct public-port ownership; do not add another relay port.
+- Daemon data-plane tunnels are process-lifetime and multiplex binding streams; control-plane monitoring stays on the app session.
+- Gateway supervises relay health with bounded recovery and surfaces a critical Dashboard notice when recovery fails.
+- Upgrade compatibility must be checked for all participating daemon endpoints before relay cutover.
+- Deployment procedures must inspect ownership before replacing services, preserve stateful foundation services and credentials, use signed immutable artifacts, and fail closed on incompatible or unavailable artifacts.

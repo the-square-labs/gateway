@@ -3,43 +3,53 @@
   "edges": [
     {
       "from_id": "rzidwe4n",
-      "to_id": "hqwh565e",
+      "to_id": "3ta908aa",
       "relation": "same_workflow",
-      "weight": 0.57,
-      "reason": "The migration exposed installer-script requirements and relies on the Gateway installer’s upgrade and parity behavior.",
+      "weight": 0.5184,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786459809319,
-      "updated_at": 1786459809319
+      "created_at": 1787862736259,
+      "updated_at": 1787862736259
+    },
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "lvklfxgs",
+      "relation": "same_workflow",
+      "weight": 0.4822,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736259,
+      "updated_at": 1787862736259
     },
     {
       "from_id": "rzidwe4n",
       "to_id": "iois3ul4",
       "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "Both document Gateway daemon migration and relay cutover behavior, including preserved state, health checks, and upgrade sequencing.",
+      "weight": 0.4791,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786459809319,
-      "updated_at": 1786459809319
+      "created_at": 1787862736259,
+      "updated_at": 1787862736259
     },
     {
       "from_id": "rzidwe4n",
-      "to_id": "kufbu8qt",
+      "to_id": "a7elxcv1",
       "relation": "same_workflow",
-      "weight": 0.62,
-      "reason": "The migration runs from v2.5.2 to HEAD and depends on Gateway release, image, and signed update conventions.",
+      "weight": 0.4233,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786459809319,
-      "updated_at": 1786459809319
+      "created_at": 1787862736259,
+      "updated_at": 1787862736259
     },
     {
       "from_id": "rzidwe4n",
-      "to_id": "zsgne0nk",
-      "relation": "same_area",
-      "weight": 0.48,
-      "reason": "Both cover Gateway deployment topology, app/relay health verification, and production-like rollout practices.",
+      "to_id": "43cdn720",
+      "relation": "same_workflow",
+      "weight": 0.3774,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1786459809319,
-      "updated_at": 1786459809319
+      "created_at": 1787862736259,
+      "updated_at": 1787862736259
     }
   ]
 }

@@ -13,16 +13,19 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.9,
   "created_at": 1787594299433,
-  "updated_at": 1787594299433
+  "updated_at": 1787862535431
 }
 ---
 # Gateway container monitoring runtime identity contract
 
-- Container monitoring state belongs to one runtime generation, identified by Docker runtime container ID plus inspect State.StartedAt. Recreate changes the ID; restart can keep the ID but changes StartedAt.
-- Stats history must be filtered to samples whose timestamp is at or after the current runtime StartedAt. Late history, process-list, or SSE responses from a previous monitoring identity must be ignored.
-- When a recreate event adopts a replacement runtime ID, DockerContainerDetail must immediately fetch the replacement inspect even when the route resolver still holds a truthy old resolvedContainer.
-- StatsTab resets cards, histories, counter baselines, GPU samples, and process state when the monitoring identity changes. Repeated process polling keeps the existing PanelShell mounted and renders loading, temporary-error, or empty copy instead of making the process section disappear.
-- DockerSnapshotReconciler tracks active container transitions. While restart/recreate is active, health events that expose the old runtime as transiently exited must refresh inventory but must not replace the durable container-detail snapshot. Recreate completion refreshes the new runtime ID urgently.
-- Cached container detail decoration reconciles State.Status and State.Running from the latest daemon health report, including by stable container name when the cached runtime ID was replaced. This repairs already-stale Redis inspect snapshots without substituting cached configuration.
-- Verification: focused reconciler and transition tests, StatsTab identity/race tests, DockerContainerDetail identity test, backend typecheck, frontend production build, scoped Biome, and git diff --check.
+- Container monitoring state belongs to one runtime generation, identified by Docker runtime container ID plus inspect `State.StartedAt`. Recreate changes the ID; restart can keep the ID but changes `StartedAt`.
+- Filter stats history to samples whose timestamp is at or after the current runtime `StartedAt`. Ignore late history, process-list, or SSE responses from a previous identity.
+- When a recreate event adopts a replacement runtime ID, `DockerContainerDetail` immediately fetches replacement inspect data even if route resolution still holds the old object.
+- `StatsTab` resets cards, histories, counter baselines, GPU samples, and process state when identity changes. Repeated process polling keeps the shared panel mounted and renders loading, temporary-error, or empty states.
+- `DockerSnapshotReconciler` tracks active transitions. During restart/recreate, transient old-runtime exit events refresh inventory without replacing the durable detail snapshot; completion urgently refreshes the replacement runtime.
+- Cached detail decoration reconciles status/running state from the latest daemon health report, including by stable name when runtime ID changed, without substituting stale cached configuration.
+- Regression coverage must exercise restart versus recreate identity, late-response rejection, transition snapshots, replacement inspect fetch, process polling states, and cache reconciliation.

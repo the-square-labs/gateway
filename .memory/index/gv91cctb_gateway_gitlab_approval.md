@@ -18,7 +18,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1783125493749,
-  "updated_at": 1783631292184
+  "updated_at": 1787862529599
 }
 ---
-[→ w75b8az4] Gateway GitLab AI tool secret and redirect safety contract
+[→ w75b8az4] Remove dated audit findings and retain VCS secret and redirect safety requirements

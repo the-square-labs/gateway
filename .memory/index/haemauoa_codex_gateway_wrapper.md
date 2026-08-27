@@ -16,7 +16,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1787493437067,
-  "updated_at": 1787497558522
+  "updated_at": 1787862547447
 }
 ---
-[→ mzmjdewo] Gateway Codex wrapper, Desktop compatibility, Linux launcher discovery, and inference architecture contracts.
+[→ mzmjdewo] Replace removed experimental usage-wrapper behavior with current cleanup contract

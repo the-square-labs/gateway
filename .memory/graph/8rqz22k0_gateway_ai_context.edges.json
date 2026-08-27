@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "8rqz22k0",
-      "to_id": "7oked0dp",
-      "relation": "same_area",
-      "weight": 0.5674,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967934,
-      "updated_at": 1786064967934
-    },
-    {
-      "from_id": "8rqz22k0",
-      "to_id": "duvbj7h2",
-      "relation": "same_workflow",
-      "weight": 0.4984,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967934,
-      "updated_at": 1786064967934
-    },
-    {
-      "from_id": "8rqz22k0",
       "to_id": "fgmxlp0p",
       "relation": "same_area",
-      "weight": 0.5924,
+      "weight": 0.5765,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967934,
-      "updated_at": 1786064967934
+      "created_at": 1787862735977,
+      "updated_at": 1787862735977
+    },
+    {
+      "from_id": "8rqz22k0",
+      "to_id": "7oked0dp",
+      "relation": "same_area",
+      "weight": 0.5441,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862735977,
+      "updated_at": 1787862735977
     },
     {
       "from_id": "8rqz22k0",
       "to_id": "fk86zmru",
       "relation": "same_area",
-      "weight": 0.5574,
+      "weight": 0.5362,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967934,
-      "updated_at": 1786064967934
+      "created_at": 1787862735977,
+      "updated_at": 1787862735977
     },
     {
       "from_id": "8rqz22k0",
       "to_id": "pstn8fla",
       "relation": "same_area",
-      "weight": 0.5111,
+      "weight": 0.4894,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064967934,
-      "updated_at": 1786064967934
+      "created_at": 1787862735977,
+      "updated_at": 1787862735977
+    },
+    {
+      "from_id": "8rqz22k0",
+      "to_id": "duvbj7h2",
+      "relation": "same_workflow",
+      "weight": 0.4658,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862735977,
+      "updated_at": 1787862735977
     }
   ]
 }

@@ -4,22 +4,52 @@
     {
       "from_id": "vks9ym4c",
       "to_id": "8c9f2oec",
-      "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "Both define Gateway Nginx ingress and DNS reconciliation behavior for managed domains and proxy hosts.",
+      "relation": "same_area",
+      "weight": 0.6612,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787839919657,
-      "updated_at": 1787839919657
+      "created_at": 1787862736359,
+      "updated_at": 1787862736359
+    },
+    {
+      "from_id": "vks9ym4c",
+      "to_id": "x7unpgb6",
+      "relation": "same_area",
+      "weight": 0.4701,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862736359,
+      "updated_at": 1787862736359
     },
     {
       "from_id": "vks9ym4c",
       "to_id": "y53auic5",
       "relation": "same_workflow",
-      "weight": 0.72,
-      "reason": "The Nginx and DNS template behavior depends on the node service-address contract and effective address selection.",
+      "weight": 0.4488,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787839919657,
-      "updated_at": 1787839919657
+      "created_at": 1787862736359,
+      "updated_at": 1787862736359
+    },
+    {
+      "from_id": "vks9ym4c",
+      "to_id": "3ta908aa",
+      "relation": "same_workflow",
+      "weight": 0.422,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736359,
+      "updated_at": 1787862736359
+    },
+    {
+      "from_id": "vks9ym4c",
+      "to_id": "a7elxcv1",
+      "relation": "same_workflow",
+      "weight": 0.4212,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862736359,
+      "updated_at": 1787862736359
     }
   ]
 }

@@ -15,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786140832137,
-  "updated_at": 1786149756028
+  "updated_at": 1787862295928
 }
 ---
-[→ 43cdn720] Gateway SIEM UI contract now follows the audit-detail dialog and preserves form spacing around animated authentication fields.
+[→ 43cdn720] Remove SIEM deployment host details and retain feature, auth, UI, and relay contracts

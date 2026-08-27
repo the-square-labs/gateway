@@ -13,8 +13,11 @@
   ],
   "layer": "lite",
   "ref": "3mk44b9q",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1787594299433,
-  "updated_at": 1787594299433
+  "updated_at": 1787862535431
 }
 ---
-[→ 3mk44b9q] Gateway container monitoring follows runtime identity across restart and recreate
+[→ 3mk44b9q] Remove implementation verification snapshot from runtime identity memory

@@ -11,8 +11,11 @@
   ],
   "layer": "lite",
   "ref": "8rqz22k0",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1782786026080,
-  "updated_at": 1782786026080
+  "updated_at": 1787862619303
 }
 ---
-[→ 8rqz22k0] Gateway AI context estimate tool overhead fix
+[→ 8rqz22k0] Remove machine-specific absolute checkout path

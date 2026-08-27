@@ -5,51 +5,51 @@
       "from_id": "fgmxlp0p",
       "to_id": "7oked0dp",
       "relation": "same_area",
-      "weight": 0.6726,
+      "weight": 0.6491,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783279678881,
-      "updated_at": 1783279678881
-    },
-    {
-      "from_id": "fgmxlp0p",
-      "to_id": "8rqz22k0",
-      "relation": "same_area",
-      "weight": 0.5924,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1783279678881,
-      "updated_at": 1783279678881
-    },
-    {
-      "from_id": "fgmxlp0p",
-      "to_id": "fk86zmru",
-      "relation": "same_area",
-      "weight": 0.5468,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1783279678881,
-      "updated_at": 1783279678881
-    },
-    {
-      "from_id": "fgmxlp0p",
-      "to_id": "ph8ejel0",
-      "relation": "related_to",
-      "weight": 0.4795,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1783279678881,
-      "updated_at": 1783279678881
+      "created_at": 1787862735930,
+      "updated_at": 1787862735930
     },
     {
       "from_id": "fgmxlp0p",
       "to_id": "pstn8fla",
       "relation": "same_area",
-      "weight": 0.6658,
+      "weight": 0.6491,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783279678881,
-      "updated_at": 1783279678881
+      "created_at": 1787862735930,
+      "updated_at": 1787862735930
+    },
+    {
+      "from_id": "fgmxlp0p",
+      "to_id": "8rqz22k0",
+      "relation": "same_area",
+      "weight": 0.5765,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862735930,
+      "updated_at": 1787862735930
+    },
+    {
+      "from_id": "fgmxlp0p",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.5263,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1787862735930,
+      "updated_at": 1787862735930
+    },
+    {
+      "from_id": "fgmxlp0p",
+      "to_id": "ph8ejel0",
+      "relation": "related_to",
+      "weight": 0.4515,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862735930,
+      "updated_at": 1787862735930
     }
   ]
 }

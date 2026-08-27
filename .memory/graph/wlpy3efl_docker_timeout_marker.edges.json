@@ -3,13 +3,13 @@
   "edges": [
     {
       "from_id": "wlpy3efl",
-      "to_id": "c8ql9nhv",
+      "to_id": "zq6da64z",
       "relation": "related_to",
-      "weight": 0.4023,
+      "weight": 0.4554,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064968068,
-      "updated_at": 1786064968068
+      "created_at": 1787862737403,
+      "updated_at": 1787862737403
     },
     {
       "from_id": "wlpy3efl",
@@ -18,18 +18,8 @@
       "weight": 0.4146,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064968068,
-      "updated_at": 1786064968068
-    },
-    {
-      "from_id": "wlpy3efl",
-      "to_id": "h0g48t5u",
-      "relation": "related_to",
-      "weight": 0.3754,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064968068,
-      "updated_at": 1786064968068
+      "created_at": 1787862737403,
+      "updated_at": 1787862737403
     },
     {
       "from_id": "wlpy3efl",
@@ -38,18 +28,28 @@
       "weight": 0.4089,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786064968068,
-      "updated_at": 1786064968068
+      "created_at": 1787862737403,
+      "updated_at": 1787862737403
     },
     {
       "from_id": "wlpy3efl",
-      "to_id": "zq6da64z",
+      "to_id": "h0g48t5u",
       "relation": "related_to",
-      "weight": 0.3937,
+      "weight": 0.3754,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786064968068,
-      "updated_at": 1786064968068
+      "created_at": 1787862737403,
+      "updated_at": 1787862737403
+    },
+    {
+      "from_id": "wlpy3efl",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.3658,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862737403,
+      "updated_at": 1787862737403
     }
   ]
 }

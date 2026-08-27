@@ -4,22 +4,52 @@
     {
       "from_id": "jlx77t6m",
       "to_id": "ml88valu",
-      "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "Both define the managed proxy maintenance-bypass flow: scoped issuance and browser session status.",
+      "relation": "same_area",
+      "weight": 0.4866,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786628632128,
-      "updated_at": 1786628632128
+      "created_at": 1787862736557,
+      "updated_at": 1787862736557
     },
     {
       "from_id": "jlx77t6m",
       "to_id": "x7unpgb6",
-      "relation": "same_area",
-      "weight": 0.58,
-      "reason": "Both document Gateway proxy authorization boundaries and protections for managed proxy configuration.",
+      "relation": "related_to",
+      "weight": 0.4067,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786628632128,
-      "updated_at": 1786628632128
+      "created_at": 1787862736557,
+      "updated_at": 1787862736557
+    },
+    {
+      "from_id": "jlx77t6m",
+      "to_id": "xg6y81q3",
+      "relation": "related_to",
+      "weight": 0.3849,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736557,
+      "updated_at": 1787862736557
+    },
+    {
+      "from_id": "jlx77t6m",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.3795,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736557,
+      "updated_at": 1787862736557
+    },
+    {
+      "from_id": "jlx77t6m",
+      "to_id": "123u7vfm",
+      "relation": "related_to",
+      "weight": 0.3755,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736557,
+      "updated_at": 1787862736557
     }
   ]
 }

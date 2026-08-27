@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "8c9f2oec",
-      "to_id": "3ta908aa",
+      "to_id": "vks9ym4c",
       "relation": "same_area",
-      "weight": 0.45,
-      "reason": "Both concern managed proxy hosts and Nginx node-facing ingress behavior, though their primary contracts differ.",
+      "weight": 0.6612,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1786650490990,
-      "updated_at": 1786650490990
+      "created_at": 1787862736523,
+      "updated_at": 1787862736523
     },
     {
       "from_id": "8c9f2oec",
-      "to_id": "x7unpgb6",
-      "relation": "same_area",
-      "weight": 0.58,
-      "reason": "Both define durable Nginx proxy-host configuration contracts and generated configuration behavior.",
+      "to_id": "y53auic5",
+      "relation": "related_to",
+      "weight": 0.484,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786650490990,
-      "updated_at": 1786650490990
+      "created_at": 1787862736523,
+      "updated_at": 1787862736523
+    },
+    {
+      "from_id": "8c9f2oec",
+      "to_id": "a7elxcv1",
+      "relation": "related_to",
+      "weight": 0.465,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736523,
+      "updated_at": 1787862736523
+    },
+    {
+      "from_id": "8c9f2oec",
+      "to_id": "x2uskhdm",
+      "relation": "related_to",
+      "weight": 0.3719,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736523,
+      "updated_at": 1787862736523
+    },
+    {
+      "from_id": "8c9f2oec",
+      "to_id": "29r4kznl",
+      "relation": "related_to",
+      "weight": 0.3475,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736523,
+      "updated_at": 1787862736523
     }
   ]
 }

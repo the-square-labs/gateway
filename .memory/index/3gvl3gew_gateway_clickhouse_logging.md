@@ -14,7 +14,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1777399734516,
-  "updated_at": 1786067585216
+  "updated_at": 1787862239438
 }
 ---
-[→ 2npkkqwm] Absorbed the canonical logging record's only non-duplicated constraint before removing the duplicate logging memory.
+[→ 2npkkqwm] Remove production ClickHouse topology and retain logging contracts

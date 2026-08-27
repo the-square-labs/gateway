@@ -3,13 +3,53 @@
   "edges": [
     {
       "from_id": "pzorr3qy",
-      "to_id": "rzidwe4n",
-      "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "Both document Gateway Docker migration workflows and the safety checks needed to preserve managed service containers.",
+      "to_id": "adzvqx6l",
+      "relation": "related_to",
+      "weight": 0.4177,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1786557853081,
-      "updated_at": 1786557853081
+      "created_at": 1787862736671,
+      "updated_at": 1787862736671
+    },
+    {
+      "from_id": "pzorr3qy",
+      "to_id": "j6oni2tm",
+      "relation": "related_to",
+      "weight": 0.4034,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736671,
+      "updated_at": 1787862736671
+    },
+    {
+      "from_id": "pzorr3qy",
+      "to_id": "3mk44b9q",
+      "relation": "related_to",
+      "weight": 0.4012,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736671,
+      "updated_at": 1787862736671
+    },
+    {
+      "from_id": "pzorr3qy",
+      "to_id": "zq6da64z",
+      "relation": "related_to",
+      "weight": 0.3867,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736671,
+      "updated_at": 1787862736671
+    },
+    {
+      "from_id": "pzorr3qy",
+      "to_id": "iv7hhye3",
+      "relation": "related_to",
+      "weight": 0.3783,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1787862736671,
+      "updated_at": 1787862736671
     }
   ]
 }

@@ -11,14 +11,18 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.86,
   "created_at": 1785451683980,
-  "updated_at": 1785451683980
+  "updated_at": 1787862569398
 }
 ---
-Gateway inference supports Claude Code CLI as a separate `claude-code` harness when persisted harness-specific endpoints are enabled. The companion command is `npx @wiolett/gateway-inference setup claude-code`; package version for this feature is 0.2.0 and Claude Code >= 2.1.129 is required. It reuses setup OAuth and a dedicated `gwi_` token but stores that runtime credential in a distinct `runtime:<profile>:claude-code` slot, preserving the published Codex slot `runtime:<profile>` and allowing both harnesses on one device.
+Gateway supports Claude Code CLI through `npx -y @sqgateway/inference@latest setup claude-code`; Claude Code 2.1.129 or newer is required.
 
-Claude Code uses its native gateway contract directly, without a loopback proxy or daemon: `ANTHROPIC_BASE_URL` points at `/api/inference/anthropic`, model discovery calls `/v1/models`, and inference calls `/v1/messages`. The backend exposes reversible `claude-gateway-<base64url logical id>` aliases because Claude Code accepts only IDs starting with `claude` or `anthropic`; Messages and Count Tokens resolve aliases back to logical models, while response projection preserves the requested alias. Incoming `X-Claude-Code-Session-Id` supplies affinity, and supported `anthropic-version`/`anthropic-beta`, context management, and native tool fields are preserved on Anthropic-native upstreams.
-
-The CLI keeps the `gwi_` token out of Claude settings. It installs the private bundled runtime and writes an `apiKeyHelper` command that prints only the Claude Code credential. It atomically merges owned values into `~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR/settings.json`: `apiKeyHelper`, `ANTHROPIC_BASE_URL`, gateway model discovery, login/logout suppression, and default Opus/Sonnet/Haiku aliases. State is stored under the Gateway data directory. Setup refuses foreign ownership conflicts; removal restores exact previous values, preserves unrelated/later-added settings, and stops if an owned value was edited.
-
-Setup verifies the installed Claude version, authenticated `/v1/models`, and a minimal SSE Messages completion before reporting success. The interactive manager independently reports, diagnoses, repairs, and removes Codex and Claude Code. Claude Desktop, the VS Code extension, MCP registration, Tool Search enablement, publication, and deployment are intentionally outside this integration.
+- Setup issues a dedicated `gwi_` runtime token, validates Gateway model discovery and native Anthropic streaming, and stores the credential in the operating-system credential store.
+- Claude settings receive package-owned `ANTHROPIC_BASE_URL`, gateway model discovery, and an `apiKeyHelper`; the token itself is never written to the settings file.
+- Gateway models use stable `claude-gateway-*` aliases accepted by Claude Code. Default Opus, Sonnet, and Haiku selections map to available Gateway models, while users may select any discovered alias.
+- Merge settings atomically, preserve unrelated values, restore exact previous values on removal, and stop if a package-owned value was subsequently edited.
+- The interactive manager reports, diagnoses, repairs, and removes Codex and Claude Code integrations independently.
+- This integration configures Claude Code CLI only. Claude Desktop and the VS Code extension have separate configuration surfaces and are not modified automatically.
