@@ -152,6 +152,24 @@ export class UpdateService {
     return (await response.json()) as ReleaseRecord[];
   }
 
+  private async fetchNextRelease(
+    component: 'gateway' | 'relay',
+    currentVersion: string
+  ): Promise<ReleaseRecord | null> {
+    const url = new URL(this.releasesUrl);
+    url.searchParams.set('component', component);
+    url.searchParams.set('current', currentVersion);
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (response.status === 204) return null;
+    if (!response.ok) throw new Error(`Release resolver returned ${response.status}`);
+    const payload = (await response.json()) as { target?: ReleaseRecord };
+    if (!payload.target) throw new Error('Release resolver returned no target');
+    return payload.target;
+  }
+
   private gatewayImageRepositories(currentImage: string): string[] {
     const configured = (this.env.GATEWAY_UPDATE_IMAGE_REPOSITORIES ?? '')
       .split(',')
@@ -286,15 +304,11 @@ export class UpdateService {
     }
 
     try {
-      const releases = await this.fetchReleases();
-
-      if (!releases.length) {
-        logger.debug('No releases found');
-        return this.getCachedStatus();
-      }
-
-      const latest = selectLatestGatewayRelease(releases);
-      const latestRelay = selectLatestRelayRelease(releases);
+      const currentRelayVersion = this.env.GATEWAY_RELAY_BUILD_VERSION ?? currentVersion;
+      const [latest, latestRelay] = await Promise.all([
+        this.fetchNextRelease('gateway', currentVersion),
+        this.fetchNextRelease('relay', currentRelayVersion),
+      ]);
       if (latest) {
         await this.upsertSetting(SETTINGS_KEYS.latestVersion, latest.tag_name);
         await this.upsertSetting(SETTINGS_KEYS.releaseNotes, releaseNotes(latest));

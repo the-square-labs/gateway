@@ -14,18 +14,18 @@ export const OPENCODEX_RELEASE_TAG_RE = /^v\d+\.\d+\.\d+-wiolett\.\d+$/;
 
 /** Fetch the newest published OpenCodex core tag, or null when none exist yet. */
 export async function fetchLatestOpenCodexTag(releasesApiUrl: string): Promise<string | null> {
-  const response = await fetch(releasesApiUrl, {
+  const url = new URL(releasesApiUrl);
+  url.searchParams.set('component', 'inference-core');
+  const response = await fetch(url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(10_000),
   });
+  if (response.status === 204) return null;
   if (!response.ok) {
     throw new AppError(502, 'CORE_RELEASE_UNAVAILABLE', `Failed to list core releases: ${response.status}`);
   }
-  const tags = ((await response.json()) as ReleaseRecord[])
-    .map((release) => release.tag_name)
-    .filter((tag) => OPENCODEX_RELEASE_TAG_RE.test(tag));
-  if (tags.length === 0) return null;
-  return tags.reduce((newest, tag) => (compareOpenCodexVersions(tag, newest) > 0 ? tag : newest));
+  const target = ((await response.json()) as { target?: ReleaseRecord }).target;
+  return target && OPENCODEX_RELEASE_TAG_RE.test(target.tag_name) ? target.tag_name : null;
 }
 
 /** Compare `1.2.3-wiolett.4` style versions: semver first, then the build number. */

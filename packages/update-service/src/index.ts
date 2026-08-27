@@ -34,6 +34,22 @@ interface NormalizedRelease {
 	_links: { self: string };
 }
 
+type UpdateComponent = keyof typeof TAG_PATTERNS;
+
+interface ParsedReleaseVersion {
+	major: number;
+	minor: number;
+	patch: number;
+	build: number;
+}
+
+interface NextUpdateResponse {
+	component: UpdateComponent;
+	current: string | null;
+	target: NormalizedRelease;
+	reason: "latest" | "patch" | "minor-baseline";
+}
+
 const TAG_PATTERNS: Readonly<Record<string, RegExp>> = {
 	gateway: /^v\d+\.\d+\.\d+$/,
 	relay: /^v\d+\.\d+\.\d+-relay$/,
@@ -145,10 +161,167 @@ function normalizeRelease(release: GitHubRelease): NormalizedRelease {
 	};
 }
 
+function parseReleaseVersion(
+	component: UpdateComponent,
+	value: string,
+): ParsedReleaseVersion | null {
+	const clean = value.replace(/^v/, "");
+	if (component === "inference-core") {
+		const match = /^(\d+)\.(\d+)\.(\d+)-wiolett\.(\d+)$/.exec(clean);
+		if (!match) return null;
+		return {
+			major: Number(match[1]),
+			minor: Number(match[2]),
+			patch: Number(match[3]),
+			build: Number(match[4]),
+		};
+	}
+	const suffix =
+		component === "gateway"
+			? ""
+			: component === "relay" || component === "relay-supervisor"
+				? "-relay"
+				: component === "nginx-daemon"
+					? "-nginx"
+					: component === "docker-daemon"
+						? "-docker"
+						: "-monitoring";
+	const optionalSuffix = suffix ? `(?:${suffix})?` : "";
+	const match = new RegExp(`^(\\d+)\\.(\\d+)\\.(\\d+)${optionalSuffix}$`).exec(
+		clean,
+	);
+	if (!match) return null;
+	return {
+		major: Number(match[1]),
+		minor: Number(match[2]),
+		patch: Number(match[3]),
+		build: 0,
+	};
+}
+
+function compareReleaseVersions(
+	a: ParsedReleaseVersion,
+	b: ParsedReleaseVersion,
+): number {
+	for (const key of ["major", "minor", "patch", "build"] as const) {
+		if (a[key] !== b[key]) return a[key] - b[key];
+	}
+	return 0;
+}
+
+function selectNextRelease(
+	component: UpdateComponent,
+	current: string | null,
+	releases: GitHubRelease[],
+): { release: GitHubRelease; reason: NextUpdateResponse["reason"] } | null {
+	const candidates = releases
+		.filter(
+			(release) =>
+				!release.draft &&
+				!release.prerelease &&
+				TAG_PATTERNS[component].test(release.tag_name),
+		)
+		.map((release) => ({
+			release,
+			version: parseReleaseVersion(component, release.tag_name),
+		}))
+		.filter(
+			(
+				candidate,
+			): candidate is {
+				release: GitHubRelease;
+				version: ParsedReleaseVersion;
+			} => candidate.version !== null,
+		);
+	if (candidates.length === 0) return null;
+
+	if (!current) {
+		const latest = candidates.sort((a, b) =>
+			compareReleaseVersions(b.version, a.version),
+		)[0];
+		return latest ? { release: latest.release, reason: "latest" } : null;
+	}
+	const currentVersion = parseReleaseVersion(component, current);
+	if (!currentVersion) throw new Error("invalid_current_version");
+
+	if (component === "inference-core") {
+		const latest = candidates.sort((a, b) =>
+			compareReleaseVersions(b.version, a.version),
+		)[0];
+		return latest && compareReleaseVersions(latest.version, currentVersion) > 0
+			? { release: latest.release, reason: "latest" }
+			: null;
+	}
+
+	const patch = candidates
+		.filter(
+			(candidate) =>
+				candidate.version.major === currentVersion.major &&
+				candidate.version.minor === currentVersion.minor &&
+				candidate.version.patch > currentVersion.patch,
+		)
+		.sort((a, b) => b.version.patch - a.version.patch)[0];
+	if (patch) return { release: patch.release, reason: "patch" };
+
+	const higherMinor = candidates.filter(
+		(candidate) =>
+			candidate.version.major === currentVersion.major &&
+			candidate.version.minor > currentVersion.minor,
+	);
+	if (higherMinor.length === 0) return null;
+	const nextMinor = Math.min(
+		...higherMinor.map((candidate) => candidate.version.minor),
+	);
+	const baseline = higherMinor
+		.filter((candidate) => candidate.version.minor === nextMinor)
+		.sort((a, b) => a.version.patch - b.version.patch)[0];
+	return baseline
+		? { release: baseline.release, reason: "minor-baseline" }
+		: null;
+}
+
 async function handleReleaseList(
+	request: Request,
 	env: Env,
 	fetcher: Fetcher,
 ): Promise<Response> {
+	const url = new URL(request.url);
+	const componentValue = url.searchParams.get("component");
+	if (componentValue) {
+		if (!(componentValue in TAG_PATTERNS))
+			return jsonResponse({ error: "invalid_component" }, 400);
+		const component = componentValue as UpdateComponent;
+		const current = url.searchParams.get("current");
+		const repository = repositoryForPackage(env, component);
+		const upstream = await fetcher(
+			githubApiUrl(env, repository, "/releases?per_page=100"),
+			{ headers: githubHeaders(repository) },
+		);
+		if (!upstream.ok)
+			return jsonResponse({ error: "release_source_unavailable" }, 502);
+		try {
+			const selected = selectNextRelease(
+				component,
+				current,
+				await readBoundedJson<GitHubRelease[]>(upstream),
+			);
+			if (!selected) return new Response(null, { status: 204 });
+			return jsonResponse(
+				{
+					component,
+					current,
+					target: normalizeRelease(selected.release),
+					reason: selected.reason,
+				} satisfies NextUpdateResponse,
+				200,
+				"public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
+			);
+		} catch (error) {
+			if (error instanceof Error && error.message === "invalid_current_version")
+				return jsonResponse({ error: "invalid_current_version" }, 400);
+			throw error;
+		}
+	}
 	const repositories = [gatewayRepository(env), inferenceCoreRepository(env)];
 	const upstreams = await Promise.all(
 		repositories.map((repository) =>
@@ -369,7 +542,8 @@ export async function handleRequest(
 			200,
 			"no-store",
 		);
-	if (pathname === "/gateway/releases") return handleReleaseList(env, fetcher);
+	if (pathname === "/gateway/releases")
+		return handleReleaseList(request, env, fetcher);
 	return handleArtifact(request, env, fetcher);
 }
 

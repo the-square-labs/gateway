@@ -98,13 +98,19 @@ export class DaemonUpdateService {
     this.releasesUrl = this.env.RELEASES_API_URL;
   }
 
-  private async fetchReleases(): Promise<ReleaseRecord[]> {
-    const response = await fetch(this.releasesUrl, {
+  private async fetchNextRelease(packageName: string, currentVersion: string): Promise<ReleaseRecord | null> {
+    const url = new URL(this.releasesUrl);
+    url.searchParams.set('component', packageName);
+    url.searchParams.set('current', currentVersion);
+    const response = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) throw new Error(`Release API returned ${response.status}`);
-    return (await response.json()) as ReleaseRecord[];
+    if (response.status === 204) return null;
+    if (!response.ok) throw new Error(`Release resolver returned ${response.status}`);
+    const payload = (await response.json()) as { target?: ReleaseRecord };
+    if (!payload.target) throw new Error('Release resolver returned no target');
+    return payload.target;
   }
 
   private getArtifactSource(daemonType: DaemonType, tag: string, arch: string): ReleaseArtifactSource {
@@ -128,20 +134,18 @@ export class DaemonUpdateService {
     const lastCheckedAt = new Date().toISOString();
 
     try {
-      const releases = await this.fetchReleases();
+      const allNodes = await this.db.select().from(nodes);
 
-      // Find latest release per daemon type
+      // Resolve one staged target for the oldest compatible cohort of each type.
       for (const type of DAEMON_TYPES) {
         const suffix = TAG_SUFFIX_MAP[type];
-        const matching = releases
-          .filter((r) => r.tag_name.endsWith(suffix))
-          .map((r) => ({
-            ...r,
-            version: r.tag_name.replace(suffix, ''),
-          }))
-          .sort((a, b) => compareSemver(b.version, a.version));
-
-        const latest = matching[0];
+        const currentVersion = allNodes
+          .filter((node) => NODE_TYPE_MAP[node.type] === type)
+          .map((node) => node.daemonVersion ?? '')
+          .filter((version) => version !== 'dev' && version !== 'unknown' && parseSemver(version) !== null)
+          .sort(compareSemver)[0];
+        const release = currentVersion ? await this.fetchNextRelease(DAEMON_PACKAGE_MAP[type], currentVersion) : null;
+        const latest = release ? { ...release, version: release.tag_name.replace(suffix, '') } : null;
         if (latest) {
           await this.upsertSetting(`daemon-update:${type}:latest_version`, latest.version);
           await this.upsertSetting(`daemon-update:${type}:latest_tag`, latest.tag_name);

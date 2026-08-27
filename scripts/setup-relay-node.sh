@@ -40,7 +40,7 @@ case "$(uname -m)" in
 esac
 
 if [[ "$VERSION" == "latest" ]]; then
-  TAG=$(curl -fsSL "${RELEASES_API_URL}" | jq -r '[.[].tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-relay$"))][0] // empty')
+  TAG=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
   [[ -n "$TAG" ]] || { echo "No Relay release is available" >&2; exit 1; }
   VERSION="${TAG%-relay}"
 else

@@ -853,7 +853,7 @@ resolve_download_url() {
         log "Resolving latest docker release tag..."
         local latest_tag
         local releases_json
-        releases_json=$(curl -fsSL "${RELEASES_API_URL}")
+        releases_json=$(curl -fsSL "${RELEASES_API_URL}?component=docker-daemon")
         latest_tag=$(printf '%s' "$releases_json" | grep -o '"tag_name":"v[0-9]*\.[0-9]*\.[0-9]*-docker"' | head -1 | cut -d'"' -f4 || true)
         if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
             die "Could not resolve latest docker release tag from ${RELEASES_API_URL}"

@@ -82,8 +82,13 @@ download_release_artifact() {
   curl -fsSL "$(artifact_url "$package_name" "$tag" "$artifact_name")" -o "$output" >>"$LOG_FILE" 2>&1
 }
 
-fetch_release_list() {
-  curl -fsSL "$RELEASES_API_URL" 2>>"$LOG_FILE"
+fetch_release() {
+  local component="$1" current_version="${2:-}" url
+  url="${RELEASES_API_URL}?component=${component}"
+  if [[ -n "$current_version" ]]; then
+    url="${url}&current=${current_version}"
+  fi
+  curl -fsSL "$url" 2>>"$LOG_FILE"
 }
 
 prompt_menu() {
@@ -589,30 +594,42 @@ prepare_install_metadata() {
     return
   fi
 
-  local release_json relay_tag relay_version current_relay_version
+  local release_json relay_json relay_tag relay_version current_gateway_version current_relay_version
   info "Resolving the latest Gateway release"
-  release_json="$(fetch_release_list)" || die "Unable to query releases"
-  VERSION="$(
-    printf '%s' "$release_json" |
-      grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
-      sed -E 's/^.*"([^"]+)"$/\1/' |
-      grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
-      sort -V |
-      tail -n1 || true
-  )"
+  current_gateway_version="$(env_value GATEWAY_IMAGE_REF)"
+  current_gateway_version="${current_gateway_version##*:}"
+  [[ "$current_gateway_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || current_gateway_version=""
+  release_json="$(fetch_release gateway "$current_gateway_version")" || die "Unable to query Gateway releases"
+  if [[ -z "$release_json" && -n "$current_gateway_version" ]]; then
+    VERSION="$current_gateway_version"
+  else
+    VERSION="$(
+      printf '%s' "$release_json" |
+        grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
+        sed -E 's/^.*"([^"]+)"$/\1/' |
+        grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
+        sort -V |
+        tail -n1 || true
+    )"
+  fi
   [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
   info "Version: ${VERSION}"
   verify_signed_release "$VERSION"
   current_relay_version="$(env_value GATEWAY_RELAY_BUILD_VERSION)"
   if [[ "$FRESH" == 1 || -z "$(env_value GATEWAY_RELAY_IMAGE_REF)" || -z "$current_relay_version" ]]; then
-    relay_tag="$(
-      printf '%s' "$release_json" |
-        grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
-        sed -E 's/^.*"([^"]+)"$/\1/' |
-        grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+-relay$' |
-        sort -V |
-        tail -n1 || true
-    )"
+    relay_json="$(fetch_release relay "$current_relay_version")" || die "Unable to query Relay releases"
+    if [[ -z "$relay_json" && -n "$current_relay_version" ]]; then
+      relay_tag="${current_relay_version}-relay"
+    else
+      relay_tag="$(
+        printf '%s' "$relay_json" |
+          grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
+          sed -E 's/^.*"([^"]+)"$/\1/' |
+          grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+-relay$' |
+          sort -V |
+          tail -n1 || true
+      )"
+    fi
     [[ -n "$relay_tag" ]] || die "The release API did not return an eligible Relay release"
     relay_version="${relay_tag%-relay}"
     if [[ "$FRESH" == 1 || -z "$current_relay_version" ]] || version_is_newer "$relay_version" "$current_relay_version"; then

@@ -69,8 +69,8 @@ describe('OpenCodex release version helpers', () => {
 describe('fetchLatestOpenCodexTag', () => {
   it('accepts provider-neutral GitHub-style release rows', async () => {
     stubFetch((url) =>
-      url === 'https://updates.thesqlabs.com/gateway/releases'
-        ? Response.json([{ tag_name: 'v2.26.0-wiolett.2' }, { tag_name: 'v2.27.0-wiolett.1' }])
+      url === 'https://updates.thesqlabs.com/gateway/releases?component=inference-core'
+        ? Response.json({ target: { tag_name: 'v2.27.0-wiolett.1' } })
         : undefined
     );
     await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).resolves.toBe(
@@ -79,21 +79,14 @@ describe('fetchLatestOpenCodexTag', () => {
   });
 
   it('returns the newest wiolett tag from GitHub Releases', async () => {
-    stubFetch(() =>
-      Response.json([
-        { tag_name: 'v2.25.0-wiolett.3' },
-        { tag_name: 'v2.26.0-wiolett.1' },
-        { tag_name: 'v2.26.0-wiolett.2' },
-        { tag_name: 'not-a-release' },
-      ])
-    );
+    stubFetch(() => Response.json({ target: { tag_name: 'v2.26.0-wiolett.2' } }));
     await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).resolves.toBe(
       'v2.26.0-wiolett.2'
     );
   });
 
   it('returns null when no wiolett release exists', async () => {
-    stubFetch(() => Response.json([{ tag_name: 'v2.7.9-relay' }]));
+    stubFetch(() => new Response(null, { status: 204 }));
     await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).resolves.toBeNull();
   });
 
