@@ -223,7 +223,9 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
         title={
           <span className="flex items-center gap-2">
             External access
-            {externalAccessRequiresUpgrade && <LicensePlanBadge plan="business" label="Business+" />}
+            {externalAccessRequiresUpgrade && (
+              <LicensePlanBadge plan="business" label="Business+" />
+            )}
           </span>
         }
         description="Internal builds and pulls keep working when this is disabled."
