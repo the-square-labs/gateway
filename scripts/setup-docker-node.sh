@@ -1500,20 +1500,39 @@ write_database_profile_config() {
 write_builder_profile_config() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
     [[ "$RUN_USER" == "root" ]] || die "Builder docker-daemon profile must run as root."
-    local config_path="/etc/docker-daemon/config.yaml"
+    local config_path="${1:-/etc/docker-daemon/config.yaml}"
     [[ -f "$config_path" ]] || die "docker-daemon config was not created by enrollment."
     grep -q '^docker:$' "$config_path" || die "docker-daemon config has no docker section."
     grep -Eq '^[[:space:]]+mode:[[:space:]]*"?builder"?[[:space:]]*$' "$config_path" || die "Refusing a builder profile without docker.mode=builder."
     if grep -Eq '^[[:space:]]+(socket|allowlist):' "$config_path"; then
         die "Builder profile must not contain Docker socket or allowlist access."
     fi
-    if grep -Eq '^[[:space:]]+builder:' "$config_path"; then
-        sed -i -E "s/^([[:space:]]+)egress_profile:.*/\1egress_profile: \"${BUILDER_EGRESS_PROFILE}\"/" "$config_path"
-    else
-        sed -i "/^docker:$/a\\
-    builder:\\
-        egress_profile: \"${BUILDER_EGRESS_PROFILE}\"" "$config_path"
-    fi
+    local tmp_config="${config_path}.tmp.$$"
+    awk -v profile="$BUILDER_EGRESS_PROFILE" '
+        $0 == "docker:" {
+            print "docker:"
+            print "  mode: \"builder\""
+            print "  builder:"
+            print "    egress_profile: \"" profile "\""
+            rewriting = 1
+            replaced = 1
+            next
+        }
+        rewriting {
+            # Remove the malformed top-level lines emitted by Gateway v2.9.6,
+            # as well as the previous nested docker section.
+            if ($0 ~ /^builder:[[:space:]]*$/ || $0 ~ /^[[:space:]]*egress_profile:/) next
+            if ($0 ~ /^[^[:space:]]/) {
+                rewriting = 0
+                print
+            }
+            next
+        }
+        { print }
+        END { if (!replaced) exit 1 }
+    ' "$config_path" > "$tmp_config" || { rm -f "$tmp_config"; die "Could not write builder docker profile."; }
+    chmod 600 "$tmp_config"
+    mv -f "$tmp_config" "$config_path"
     chmod 600 "$config_path"
     ok "Builder docker profile written without Docker Engine access (egress: ${BUILDER_EGRESS_PROFILE})"
 }

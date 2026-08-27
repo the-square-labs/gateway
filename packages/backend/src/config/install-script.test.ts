@@ -1,6 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
@@ -259,6 +262,42 @@ describe('database daemon installer prerequisites', () => {
     expect(source).toContain('containerd-shim-runc-v2');
     expect(source).toContain('Checksum verification failed for ${label}.');
     expect(source).not.toContain('docker-builder-runtime-linux-');
+  });
+
+  it.each([
+    ['fresh config', 'docker:\n  mode: "builder"\n'],
+    [
+      'v2.9.6 malformed config',
+      'docker:\nbuilder:\n    egress_profile: "internet"\n  mode: "builder"\n',
+    ],
+  ])('writes a valid canonical builder profile from %s', (_name, dockerSection) => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+    const start = source.indexOf('write_builder_profile_config() {');
+    const end = source.indexOf('\n}\n', start) + 3;
+    const fn = source.slice(start, end);
+    const directory = mkdtempSync(join(tmpdir(), 'gateway-builder-profile-'));
+    const configPath = join(directory, 'config.yaml');
+    writeFileSync(
+      configPath,
+      `gateway:\n  address: gateway.example:9443\n${dockerSection}`,
+      'utf8'
+    );
+
+    const result = spawnSync('bash', ['-c', `${fn}\ndie() { printf '%s\\n' "$*" >&2; return 1; }\nok() { :; }\nwrite_builder_profile_config "$1"`, 'test', configPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DOCKER_MODE: 'builder',
+        RUN_USER: 'root',
+        BUILDER_EGRESS_PROFILE: 'internet',
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = parse(readFileSync(configPath, 'utf8')) as {
+      docker: { mode: string; builder: { egress_profile: string } };
+    };
+    expect(parsed.docker).toEqual({ mode: 'builder', builder: { egress_profile: 'internet' } });
   });
 });
 
