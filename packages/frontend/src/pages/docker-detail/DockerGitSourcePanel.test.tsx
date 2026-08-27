@@ -1,8 +1,10 @@
-import { screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
 import { renderWithRouter } from "@/test/render";
 import type { DockerSourceBinding } from "@/types";
 import { DockerGitSourcePanel } from "./DockerGitSourcePanel";
@@ -60,10 +62,18 @@ describe("DockerGitSourcePanel Build Secrets", () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it("renders a source that arrives after the initial loading state", async () => {
-    const { rerender } = renderWithRouter(<DockerGitSourcePanel source={null} loading={false} />);
+    const { rerender } = render(
+      <MemoryRouter>
+        <DockerGitSourcePanel source={null} loading={false} />
+      </MemoryRouter>
+    );
     expect(screen.getByText(/No repository connected/)).toBeInTheDocument();
 
-    rerender(<DockerGitSourcePanel source={source} loading={false} />);
+    rerender(
+      <MemoryRouter>
+        <DockerGitSourcePanel source={source} loading={false} />
+      </MemoryRouter>
+    );
 
     expect(await screen.findByText("platform/api")).toBeInTheDocument();
     expect(screen.queryByText(/No repository connected/)).not.toBeInTheDocument();
@@ -122,5 +132,29 @@ describe("DockerGitSourcePanel Build Secrets", () => {
     expect(screen.getByText("VITE_API_URL")).toBeInTheDocument();
     expect(screen.getByText(/VITE_\* values are embedded/)).toBeInTheDocument();
     expect(screen.queryByText("Dockerfile")).not.toBeInTheDocument();
+  });
+
+  it("opens the node setup modal when no Build Worker is available", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    vi.spyOn(api, "createDockerSourceBuild").mockRejectedValue(
+      new ApiRequestError("No online Build Worker supports the required dedicated build runtime", {
+        status: 503,
+        code: "NO_BUILD_WORKER_AVAILABLE",
+      })
+    );
+    renderWithRouter(
+      <DockerGitSourcePanel
+        target={{ kind: "pages_project", pageProjectId: "page-project-1" }}
+        source={pagesSource}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Build now" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Connect a Build Worker first" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open Nodes/ })).toBeInTheDocument();
   });
 });

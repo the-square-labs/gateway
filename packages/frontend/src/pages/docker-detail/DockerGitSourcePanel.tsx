@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -40,6 +41,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { DockerBuildSecret, DockerSourceBinding, DockerSourceTarget } from "@/types";
 import { RepositorySourceFields } from "../docker-deploy/RepositorySourceFields";
@@ -91,10 +93,12 @@ export function DockerGitSourcePanel({
   canEdit = true,
   canBuild = true,
 }: DockerGitSourcePanelProps) {
+  const navigate = useNavigate();
   const [source, setSource] = useState<DockerSourceBinding | null>(suppliedSource ?? null);
   const [loading, setLoading] = useState(suppliedSource === undefined);
   const [saving, setSaving] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [buildWorkerRequiredOpen, setBuildWorkerRequiredOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [branch, setBranch] = useState(suppliedSource?.branch ?? "main");
   const [dockerfilePath, setDockerfilePath] = useState(
@@ -543,6 +547,10 @@ export function DockerGitSourcePanel({
       toast.success("Build queued");
       onBuildQueued?.();
     } catch (error) {
+      if (error instanceof ApiRequestError && error.code === "NO_BUILD_WORKER_AVAILABLE") {
+        setBuildWorkerRequiredOpen(true);
+        return;
+      }
       if (!handleLicenseApiError(error, "Git push-to-deploy")) {
         toast.error(error instanceof Error ? error.message : "Failed to queue build");
       }
@@ -1425,6 +1433,30 @@ export function DockerGitSourcePanel({
             </Button>
             <Button onClick={saveBuildVariable} disabled={!variableName.trim()}>
               Save variable
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={buildWorkerRequiredOpen} onOpenChange={setBuildWorkerRequiredOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Connect a Build Worker first</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Repository builds run on a connected Build Worker. Add a Build Worker node first, then
+            return here to queue the build.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBuildWorkerRequiredOpen(false)}>
+              Close
+            </Button>
+            <Button
+              onClick={() => {
+                setBuildWorkerRequiredOpen(false);
+                navigate("/nodes");
+              }}
+            >
+              Open Nodes <ArrowRight className="h-4 w-4" />
             </Button>
           </DialogFooter>
         </DialogContent>
