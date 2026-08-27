@@ -52,7 +52,7 @@ type InferenceAction =
   | 'logout';
 
 export async function runInteractiveRootCommand(input: InteractiveCommandInput): Promise<number> {
-  input.ui.intro('Square Gateway Inference');
+  input.ui.intro('Good Gateway Inference');
   return runInteractiveInferenceCommand(input, false);
 }
 
@@ -60,7 +60,7 @@ export async function runInteractiveInferenceCommand(
   input: InteractiveCommandInput,
   showIntro = true
 ): Promise<number> {
-  if (showIntro) input.ui.intro('Square Gateway Inference');
+  if (showIntro) input.ui.intro('Good Gateway Inference');
   const codexIntegration = createIntegration(input);
   const claudeCodeIntegration = createClaudeCodeIntegration(input);
   const state = await loadInferenceMenuState(input);
@@ -116,7 +116,7 @@ export async function runInteractiveInferenceCommand(
 }
 
 export async function runInteractiveHarnessSetupCommand(input: InteractiveCommandInput): Promise<number> {
-  input.ui.intro('Square Gateway Inference · Setup');
+  input.ui.intro('Good Gateway Inference · Setup');
   return setupHarness(input, createIntegration(input), createClaudeCodeIntegration(input));
 }
 

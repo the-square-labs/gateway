@@ -88,7 +88,7 @@ GitHub connector OAuth works out of the box with Gateway's built-in product-wide
 Set `GITHUB_OAUTH_CLIENT_ID` only to override the built-in client with a custom organization-owned **GitHub OAuth App**, for example for a fork or white-label deployment. Do not create a separate OAuth App per Gateway instance.
 
 1. In GitHub, open **Settings > Developer settings > OAuth apps > New OAuth App**.
-2. Set an operator-facing application name such as `Square Gateway` and use the product's public website as the homepage URL.
+2. Set an operator-facing application name such as `Good Gateway` and use the product's public website as the homepage URL.
 3. GitHub requires an authorization callback URL when registering the app. Use a stable HTTPS page controlled by the product, such as `https://gateway.thesquarelabs.com/`. Gateway's Device Flow does not redirect to this URL.
 4. Enable **Device Flow**, then register the app.
 5. Copy the app's **Client ID**. Gateway does not need a client secret; do not generate or distribute one for this integration.

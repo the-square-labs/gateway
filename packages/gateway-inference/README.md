@@ -1,6 +1,6 @@
 # Gateway Inference
 
-`@wiolett/gateway-inference` is the interactive inference companion for Square Gateway. It configures supported AI harnesses while keeping dedicated `gwi_` runtime tokens out of their configuration files.
+`@wiolett/gateway-inference` is the interactive inference companion for Good Gateway. It configures supported AI harnesses while keeping dedicated `gwi_` runtime tokens out of their configuration files.
 
 Node.js 22 or newer is required. Run the package through npm exec; a global installation and `PATH` changes are not required. Before setup, an administrator must enable **Inference** under **Settings > General > General settings**. All harness traffic uses the Gateway's single stable `/api/inference/v1` prefix.
 
@@ -81,4 +81,4 @@ Run `npx -y @wiolett/gateway-inference@latest --help` for the complete public co
 
 ## License
 
-Square Labs-owned source in this package is available for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Square Labs-issued Personal, Business, or Enterprise Gateway key provides the named licensee a limited commercial-use grant under [Square Gateway Commercial Key License 1.0](COMMERCIAL-LICENSE.md). Neither license permits modification or redistribution.
+Square Labs-owned source in this package is available for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Square Labs-issued Personal, Business, or Enterprise Gateway key provides the named licensee a limited commercial-use grant under [Good Gateway Commercial Key License 1.0](COMMERCIAL-LICENSE.md). Neither license permits modification or redistribution.

@@ -1,7 +1,7 @@
 {
   "name": "@wiolett/gateway-inference",
   "version": "0.3.8",
-  "description": "Interactive inference companion for Square Gateway",
+  "description": "Interactive inference companion for Good Gateway",
   "type": "module",
   "bin": {
     "gateway-inference": "dist/cli.js"

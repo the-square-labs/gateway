@@ -1,6 +1,6 @@
-# Square Gateway Commercial Key License 1.0
+# Good Gateway Commercial Key License 1.0
 
-These terms provide a limited commercial-use license for official Square Gateway releases. They supplement, and do not modify, the [PolyForm Strict License 1.0.0](LICENSE.md).
+These terms provide a limited commercial-use license for official Good Gateway releases. They supplement, and do not modify, the [PolyForm Strict License 1.0.0](LICENSE.md).
 
 ## Acceptance
 
@@ -8,7 +8,7 @@ These terms are automatically offered with every Personal, Business, or Enterpri
 
 ## Commercial-use grant
 
-Subject to these terms, Square Labs grants the person or organization identified in the paid license record a non-exclusive, non-transferable license to use an official, unmodified release of Square Gateway for commercial purposes on one Gateway installation at a time.
+Subject to these terms, Square Labs grants the person or organization identified in the paid license record a non-exclusive, non-transferable license to use an official, unmodified release of Good Gateway for commercial purposes on one Gateway installation at a time.
 
 The grant includes using Gateway in the licensee's own business operations and in delivering the licensee's own services. It does not permit offering Gateway itself, or access to Gateway as a substantially similar hosted or managed product, for resale to third parties.
 

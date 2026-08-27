@@ -116,8 +116,8 @@ function renderAuthEmail(content: EmailContent): string {
           <tr><td style="height:1px;background:#7161a8;font-size:1px;line-height:1px">&nbsp;</td></tr>
           <tr><td style="padding:40px 42px 38px">
             <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-              <td style="padding-right:9px"><img src="${GATEWAY_EMAIL_LOGO_URL}" width="27" height="27" alt="Square Gateway" style="display:block;border:0;outline:none;text-decoration:none"></td>
-              <td style="color:#f4f4f5;font-family:Arial,sans-serif;font-size:16px;font-weight:600;letter-spacing:-0.3px">Square Gateway</td>
+              <td style="padding-right:9px"><img src="${GATEWAY_EMAIL_LOGO_URL}" width="27" height="27" alt="Good Gateway" style="display:block;border:0;outline:none;text-decoration:none"></td>
+              <td style="color:#f4f4f5;font-family:Arial,sans-serif;font-size:16px;font-weight:600;letter-spacing:-0.3px">Good Gateway</td>
             </tr></table>
             <div style="height:1px;margin:29px 0;background:#303034;font-size:1px;line-height:1px">&nbsp;</div>
             ${badge}

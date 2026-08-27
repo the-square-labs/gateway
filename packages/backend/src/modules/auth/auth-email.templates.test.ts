@@ -11,7 +11,7 @@ describe('authentication email templates', () => {
     expect(message.subject).toBe('Gateway: set your password');
     expect(message.text).toContain('https://gateway.example/reset-password?token=<test-token>');
     expect(message.html).toContain(GATEWAY_EMAIL_LOGO_URL);
-    expect(message.html).toContain('Square Gateway');
+    expect(message.html).toContain('Good Gateway');
     expect(message.html).toContain('Set password');
     expect(message.html).toContain('token=&lt;test-token&gt;');
     expect(message.html).toContain('Powered by Square Labs');
