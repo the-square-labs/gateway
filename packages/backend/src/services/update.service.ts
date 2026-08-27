@@ -561,6 +561,14 @@ export class UpdateService {
         `set -eu
 compose() { docker compose --project-name ${composeProject} --project-directory ${composeDir} -f ${composeDir}/docker-compose.yml "$@"; }
 service_exists() { compose config --services | grep -qx "$1"; }
+ensure_registry() { if service_exists registry; then compose up -d registry; fi; }
+registry_ready() {
+  if ! service_exists registry; then return 0; fi
+  registry_id="$(compose ps -q registry)"
+  [ -n "$registry_id" ] || return 1
+  registry_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$registry_id")"
+  [ "$registry_health" = healthy ]
+}
 relay_reachable() {
   compose exec -T app node -e 'const net=require("node:net");const socket=net.connect(9443,"relay",()=>{socket.end();process.exit(0)});socket.setTimeout(3000,()=>{socket.destroy();process.exit(1)});socket.on("error",()=>process.exit(1));'
 }
@@ -589,6 +597,7 @@ rollback() {
     [ "$attempt" -lt 10 ]
     sleep 2
   done
+  ensure_registry
   if [ "$rollback_has_relay" -eq 1 ]; then
     compose up -d --no-deps app
   else
@@ -599,12 +608,12 @@ rollback() {
     app_id="$(compose ps -q app)"
     if [ -n "$app_id" ]; then
       app_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$app_id")"
-      if [ "$rollback_has_relay" -eq 0 ] && [ "$app_health" = healthy ]; then return 0; fi
+      if [ "$rollback_has_relay" -eq 0 ] && [ "$app_health" = healthy ] && registry_ready; then return 0; fi
       if [ "$rollback_has_relay" -eq 1 ]; then
         relay_id="$(compose ps -q relay)"
         if [ -n "$relay_id" ]; then
           relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
-          if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ] && relay_reachable; then return 0; fi
+          if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ] && relay_reachable && registry_ready; then return 0; fi
         fi
       fi
     fi
@@ -621,6 +630,7 @@ on_exit() {
 }
 trap on_exit EXIT
 sleep 2
+ensure_registry
 if service_exists relay; then
   compose up -d --no-deps --force-recreate app
 else
@@ -640,7 +650,7 @@ while [ "$attempt" -lt 150 ]; do
       relay_public_port="$(docker port "$relay_id" 9443/tcp)"
       # Health states alone do not prove that Compose preserved ownership,
       # attached the relay network, published 9443, or connected app -> relay.
-      if [ "$app_working_dir" = ${composeDir} ] && [ "$relay_working_dir" = ${composeDir} ] && [ "$relay_networks" -gt 0 ] && [ -n "$relay_public_port" ] && relay_reachable; then
+      if [ "$app_working_dir" = ${composeDir} ] && [ "$relay_working_dir" = ${composeDir} ] && [ "$relay_networks" -gt 0 ] && [ -n "$relay_public_port" ] && relay_reachable && registry_ready; then
         exit 0
       fi
     fi

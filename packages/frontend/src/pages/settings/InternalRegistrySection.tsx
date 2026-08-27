@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { DockerInternalRegistryState, Node, SSLCertificate } from "@/types";
 
 interface InternalRegistrySectionProps {
@@ -41,6 +43,7 @@ function certificateCoversHostname(certificate: SSLCertificate, hostname: string
 }
 
 export function InternalRegistrySection({ nodesList }: InternalRegistrySectionProps) {
+  const licensePlan = useUIBootstrapStore((store) => store.snapshot?.license.plan);
   const [state, setState] = useState<DockerInternalRegistryState | null>(null);
   const [externalEnabled, setExternalEnabled] = useState(false);
   const [hostname, setHostname] = useState("");
@@ -80,6 +83,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   const used = state?.storageUsedBytes ?? 0;
   const capacity = state?.storageCapacityBytes ?? null;
   const free = capacity === null ? null : Math.max(0, capacity - used);
+  const externalAccessRequiresUpgrade = licensePlan !== "business" && licensePlan !== "enterprise";
 
   const save = async () => {
     if (!state) return;
@@ -219,9 +223,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
         title={
           <span className="flex items-center gap-2">
             External access
-            <Badge variant="default" size="inline">
-              Business+
-            </Badge>
+            {externalAccessRequiresUpgrade && <LicensePlanBadge plan="business" label="Business+" />}
           </span>
         }
         description="Internal builds and pulls keep working when this is disabled."

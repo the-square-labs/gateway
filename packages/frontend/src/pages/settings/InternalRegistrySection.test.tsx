@@ -149,6 +149,19 @@ describe("InternalRegistrySection", () => {
     expect(screen.queryByPlaceholderText("registry.example.com")).not.toBeInTheDocument();
   });
 
+  it("hides the Business badge when the current Enterprise plan supports external access", async () => {
+    useUIBootstrapStore.setState({
+      snapshot: {
+        license: { plan: "enterprise", entitlements: { features: ["git-push-to-deploy"] } },
+      } as never,
+    });
+
+    renderWithRouter(<InternalRegistrySection nodesList={[nginxNode]} />);
+
+    await screen.findByText("Local volume");
+    expect(screen.queryByText("Business+")).not.toBeInTheDocument();
+  });
+
   it("discards external draft fields when access is disabled", async () => {
     const user = userEvent.setup();
     renderWithRouter(<InternalRegistrySection nodesList={[nginxNode]} />);
