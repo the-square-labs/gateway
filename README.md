@@ -4,9 +4,6 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 
 AI-first but not AI-dependent self-hosted infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
-> [!NOTE]
-> Primary development happens on [GitHub](https://github.com/the-square-labs/gateway). Issues and feature requests are welcome in the [GitHub issue tracker](https://github.com/the-square-labs/gateway/issues).
-
 ## Why Gateway
 
 Gateway gives small infrastructure teams one product for the daily work that usually lives across nginx configs, shell scripts, Docker hosts, certificate folders, database clients, dashboards, and alert tools.
