@@ -4,12 +4,7 @@ import { releaseArtifactSource, releaseFileSource, releaseNotes, releaseUrl } fr
 describe('release artifact providers', () => {
   it('builds provider-neutral GitHub release facade URLs', () => {
     expect(
-      releaseFileSource(
-        'https://updates.thesqlabs.com/gateway/',
-        'gateway',
-        'v2.9.11',
-        'gateway-image.update.json'
-      )
+      releaseFileSource('https://updates.thesqlabs.com/gateway/', 'gateway', 'v2.9.11', 'gateway-image.update.json')
     ).toEqual({
       url: 'https://updates.thesqlabs.com/gateway/gateway/v2.9.11/gateway-image.update.json',
       trustedPrefix: 'https://updates.thesqlabs.com/gateway/',
@@ -22,8 +17,7 @@ describe('release artifact providers', () => {
         'nginx-daemon-linux-amd64'
       )
     ).toEqual({
-      artifactUrl:
-        'https://updates.thesqlabs.com/gateway/nginx-daemon/v2.9.11-nginx/nginx-daemon-linux-amd64',
+      artifactUrl: 'https://updates.thesqlabs.com/gateway/nginx-daemon/v2.9.11-nginx/nginx-daemon-linux-amd64',
       manifestUrl:
         'https://updates.thesqlabs.com/gateway/nginx-daemon/v2.9.11-nginx/nginx-daemon-linux-amd64.update.json',
       trustedPrefix: 'https://updates.thesqlabs.com/gateway/',

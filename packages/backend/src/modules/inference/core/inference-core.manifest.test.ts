@@ -108,18 +108,12 @@ describe('fetchLatestOpenCodexTag', () => {
 describe('fetchOpenCodexImageManifest', () => {
   it('loads a signed manifest from the provider-neutral artifact base', async () => {
     stubFetch((url) =>
-      url ===
-      'https://updates.thesqlabs.com/gateway/inference-core/v2.26.0-wiolett.1/opencodex-image.update.json'
+      url === 'https://updates.thesqlabs.com/gateway/inference-core/v2.26.0-wiolett.1/opencodex-image.update.json'
         ? new Response(signedManifest())
         : undefined
     );
     await expect(
-      fetchOpenCodexImageManifest(
-        'https://updates.thesqlabs.com/gateway/',
-        'v2.26.0-wiolett.1',
-        IMAGE,
-        publicKeyPem
-      )
+      fetchOpenCodexImageManifest('https://updates.thesqlabs.com/gateway/', 'v2.26.0-wiolett.1', IMAGE, publicKeyPem)
     ).resolves.toMatchObject({ version: '2.26.0-wiolett.1', digest: DIGEST });
   });
 

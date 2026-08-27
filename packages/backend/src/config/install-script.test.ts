@@ -121,9 +121,7 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain(
       'RELEASES_API_URL="$' + '{RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"'
     );
-    expect(source).toContain(
-      'ARTIFACT_BASE_URL="$' + '{ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"'
-    );
+    expect(source).toContain('ARTIFACT_BASE_URL="$' + '{ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"');
     expect(source).toContain('DEFAULT_IMAGE="ghcr.io/the-square-labs/gateway"');
     expect(source).toContain('download_release_artifact gateway "$version" gateway-image.update.json');
     expect(source).toContain('download_release_artifact relay "$relay_tag" relay-image.update.json');
@@ -270,7 +268,7 @@ describe('database daemon installer prerequisites', () => {
     expect(source).toContain('github.com/anchore/syft/releases/download');
     expect(source).toContain('github.com/anchore/grype/releases/download');
     expect(source).toContain('containerd-shim-runc-v2');
-    expect(source).toContain('Checksum verification failed for ${label}.');
+    expect(source).toContain('Checksum verification failed for $' + '{label}.');
     expect(source).not.toContain('docker-builder-runtime-linux-');
   });
 

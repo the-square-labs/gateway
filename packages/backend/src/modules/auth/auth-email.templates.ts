@@ -66,8 +66,7 @@ function getEmailContent(input: AuthEmailInput): EmailContent {
       return {
         subject: 'Gateway: email-code sign-in enabled',
         title: 'Email-code sign-in is enabled',
-        body:
-          'An administrator enabled email-code sign-in for your Gateway account. Enter your email address at sign-in to receive a one-time code.',
+        body: 'An administrator enabled email-code sign-in for your Gateway account. Enter your email address at sign-in to receive a one-time code.',
         text: `An administrator enabled email-code sign-in for your Gateway account. Open Gateway: ${input.actionUrl}`,
         securityNote:
           'A new one-time code is sent for each sign-in and expires after 10 minutes. We will never ask for a code by phone, chat, or email.',

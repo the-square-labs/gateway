@@ -59,9 +59,7 @@ export async function createLoopbackReceiver(): Promise<LoopbackReceiver> {
       return;
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    response.end(
-      '<!doctype html><title>Good Gateway</title><p>Authorization received. You can close this window.</p>'
-    );
+    response.end('<!doctype html><title>Good Gateway</title><p>Authorization received. You can close this window.</p>');
     if (callback) callback(url);
     else requests.push(url);
   });

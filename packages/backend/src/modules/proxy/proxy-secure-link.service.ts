@@ -1333,9 +1333,7 @@ export class ProxySecureLinkService {
           allowNetworkReselection: binding.upstreamKind === 'docker_container',
         })),
       ].filter(
-        (binding) =>
-          !excludedNetwork ||
-          (binding.targetNetwork !== excludedNetwork && !binding.allowNetworkReselection)
+        (binding) => !excludedNetwork || (binding.targetNetwork !== excludedNetwork && !binding.allowNetworkReselection)
       );
       const additionalIds = new Set(additional.map((binding: ProxyAdditionalSecureLinkRow) => binding.id));
       let result = await this.dispatch.sendProxySecureLinks(nodeId, targetBindings);
