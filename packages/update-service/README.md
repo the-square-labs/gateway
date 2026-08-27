@@ -11,10 +11,11 @@ It exposes:
 
 The Worker aggregates GitHub Releases from the public
 `the-square-labs/gateway` repository and the private
-`the-square-labs/inference-core` repository. It stores private-repository access
-only in the `GITHUB_INFERENCE_CORE_TOKEN` Worker secret and does not use R2.
-Release metadata is cached briefly, while immutable release assets use
-long-lived edge caching.
+`the-square-labs/inference-core` repository. It keeps the GitHub token only in
+the `GITHUB_INFERENCE_CORE_TOKEN` Worker secret. The token provides private core
+access and authenticated public Gateway API reads that avoid shared anonymous
+rate limits. The service does not use R2. Release metadata is cached briefly,
+while immutable release assets use long-lived edge caching.
 
 ```bash
 pnpm --filter @sqgateway/update-service test

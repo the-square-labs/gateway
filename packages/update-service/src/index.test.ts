@@ -75,7 +75,9 @@ describe("gateway update facade", () => {
 		]);
 		const gatewayHeaders = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
 		const coreHeaders = new Headers(fetcher.mock.calls[1]?.[1]?.headers);
-		expect(gatewayHeaders.has("Authorization")).toBe(false);
+		expect(gatewayHeaders.get("Authorization")).toBe(
+			"Bearer private-core-token",
+		);
 		expect(coreHeaders.get("Authorization")).toBe("Bearer private-core-token");
 	});
 

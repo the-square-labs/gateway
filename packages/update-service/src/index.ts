@@ -102,7 +102,10 @@ function githubApiUrl(
 }
 
 function gatewayRepository(env: Env): GitHubRepository {
-	return { name: env.GITHUB_GATEWAY_REPO };
+	return {
+		name: env.GITHUB_GATEWAY_REPO,
+		token: env.GITHUB_INFERENCE_CORE_TOKEN,
+	};
 }
 
 function inferenceCoreRepository(env: Env): GitHubRepository {
