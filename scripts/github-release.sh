@@ -211,6 +211,7 @@ publish_daemon() {
     return
   fi
   require_signing_key
+  ./scripts/sync-update-trust-anchor.sh
   (
     cd packages/daemons
     go test "./${daemon_dir}/..." ./shared/...
@@ -228,6 +229,7 @@ publish_connector() {
     return
   fi
   docker_login
+  ./scripts/sync-update-trust-anchor.sh
   (
     cd packages/daemons
     go test "./${connector_name}/..." ./shared/...
@@ -265,6 +267,7 @@ publish_relay() {
 
   require_signing_key
   docker_login
+  ./scripts/sync-update-trust-anchor.sh
   (cd packages/relay && go test ./...)
   (
     cd packages/daemons
