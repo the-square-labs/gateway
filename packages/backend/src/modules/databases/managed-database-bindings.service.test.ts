@@ -309,6 +309,84 @@ describe('managed database binding provisioning guardrails', () => {
     });
   });
 
+  it('reapplies the target binding after recreating a connector with a new network address', async () => {
+    const database = {
+      id: 'database-1',
+      nodeId: 'database-node-1',
+      type: 'postgres',
+      status: 'ready',
+      pendingOperation: null,
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+    };
+    const binding = {
+      id: 'binding-1',
+      managedDatabaseId: database.id,
+      targetNodeId: 'docker-node-1',
+      targetType: 'compose_service',
+      targetResourceId: 'project-1:relay',
+      connectorName: 'gateway-db-connector-binding-1',
+      connectorAlias: 'db-binding-1',
+      networkName: 'gateway-db-binding-1',
+      environment: { connectionUri: 'DATABASE_URL' },
+      status: 'ready',
+      encryptedCredentials: database.encryptedOwnerCredentials,
+    };
+    const applyManagedDatabaseBinding = vi.fn().mockResolvedValue(undefined);
+    const reconcileTargetNode = vi.fn().mockResolvedValue(undefined);
+    const sendDockerContainerCommand = vi.fn(async (_nodeId: string, action: string) => {
+      if (action === 'inspect') return { success: false, error: 'No such container' };
+      if (action === 'create') return { success: true, detail: JSON.stringify({ id: 'c'.repeat(64) }) };
+      return { success: true };
+    });
+    const instance = new ManagedDatabaseBindingService(
+      {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ innerJoin: vi.fn().mockResolvedValue([{ database, binding }]) })),
+        })),
+      } as never,
+      {} as never,
+      {
+        decryptString: vi.fn(() => JSON.stringify({ username: 'owner', password: 'secret', databaseName: 'app' })),
+      } as never,
+      {
+        sendRelayGrantBundle: vi.fn().mockResolvedValue({
+          success: true,
+          detail: JSON.stringify({ socketPath: '/var/lib/docker-daemon/database-tunnel/tunnel.sock' }),
+        }),
+        sendDockerNetworkCommand: vi.fn().mockResolvedValue({
+          success: true,
+          detail: JSON.stringify([{ Name: binding.networkName, Driver: 'bridge' }]),
+        }),
+        sendDockerImageCommand: vi.fn().mockResolvedValue({ success: true }),
+        sendDockerContainerCommand,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      DEVELOPMENT_DATABASE_CONNECTOR_IMAGE,
+      true,
+      {
+        ensureBindingRoute: vi.fn().mockResolvedValue(undefined),
+        getNodeGrantBundle: vi.fn(async () => ({ revision: '1', generatedAtUnixMs: '1', grants: [] })),
+        revokeOwner: vi.fn(),
+      },
+      { applyManagedDatabaseBinding } as never
+    );
+    instance.setTargetRuntimeReconciler({ reconcileTargetNode, releaseTargetNetwork: vi.fn() });
+
+    await instance.reconcileBindingPrincipals(binding.targetNodeId);
+
+    expect(applyManagedDatabaseBinding).toHaveBeenCalledWith(
+      binding.targetNodeId,
+      binding.targetResourceId,
+      binding.id,
+      binding.networkName,
+      { DATABASE_URL: 'postgresql://owner:secret@db-binding-1:5432/app' },
+      'system'
+    );
+    expect(reconcileTargetNode).toHaveBeenCalledWith(binding.targetNodeId);
+  });
+
   it('restores a binding left in deletion error when either node reconnects', async () => {
     const database = {
       id: 'database-1',

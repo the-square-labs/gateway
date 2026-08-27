@@ -218,7 +218,11 @@ export class ManagedDatabaseBindingService {
             );
           }
         }
-        await this.reconcileBindingRuntime(database, binding);
+        const runtimeChanged = await this.reconcileBindingRuntime(database, binding);
+        if (runtimeChanged) {
+          await this.applyTargetBinding(database, binding, credentials, 'system', {});
+          await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
+        }
         this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
       } catch (error) {
         failures += 1;
@@ -244,8 +248,8 @@ export class ManagedDatabaseBindingService {
   }
 
   private async reconcileBindingRuntime(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
-    if (!this.relayPolicy) return;
-    if (this.bindingRuntimeReconciliationBindings.has(binding.id)) return;
+    if (!this.relayPolicy) return false;
+    if (this.bindingRuntimeReconciliationBindings.has(binding.id)) return false;
     this.bindingRuntimeReconciliationBindings.add(binding.id);
     try {
       await this.relayPolicy.ensureBindingRoute(
@@ -268,7 +272,7 @@ export class ManagedDatabaseBindingService {
           )
         );
       }
-      await this.ensureBindingConnector(database, binding, targetPrepared.detail);
+      return await this.ensureBindingConnector(database, binding, targetPrepared.detail);
     } finally {
       this.bindingRuntimeReconciliationBindings.delete(binding.id);
     }
@@ -280,7 +284,7 @@ export class ManagedDatabaseBindingService {
     relayGrantDetail: string | undefined
   ) {
     const socketMount = this.tunnelSocketMount(relayGrantDetail);
-    await this.ensureBindingNetwork(binding);
+    const networkCreated = await this.ensureBindingNetwork(binding);
 
     const inspected = await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'inspect', {
       containerId: binding.connectorName,
@@ -296,7 +300,7 @@ export class ManagedDatabaseBindingService {
             containerId: binding.connectorName,
           })
         );
-        return;
+        return networkCreated;
       }
       this.requireSuccessOrMissing(
         await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
@@ -309,6 +313,7 @@ export class ManagedDatabaseBindingService {
     }
 
     await this.createBindingConnector(database, binding, socketMount);
+    return true;
   }
 
   private async ensureBindingNetwork(binding: ManagedDatabaseBindingRow) {
@@ -329,7 +334,7 @@ export class ManagedDatabaseBindingService {
       if (typeof driver === 'string' && driver !== 'bridge') {
         throw new Error(`network ${binding.networkName} exists with an unexpected driver`);
       }
-      return;
+      return false;
     }
     this.requireSuccess(
       await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'create', {
@@ -337,6 +342,7 @@ export class ManagedDatabaseBindingService {
         driver: 'bridge',
       })
     );
+    return true;
   }
 
   private connectorRuntimeState(
