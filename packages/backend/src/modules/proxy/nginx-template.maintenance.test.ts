@@ -61,10 +61,12 @@ describe('canonical Gateway nginx pages', () => {
       null
     );
 
-    expect(rendered).toContain('map $host $gateway_upstream_host_11111111_1111_4111_8111_111111111111 {');
+    const variableName = rendered.match(/map \$host \$(gw_up_[a-f0-9]{16}) \{/)?.[1];
+    expect(variableName).toBeDefined();
+    expect(variableName!.length).toBeLessThanOrEqual(22);
     expect(rendered).toContain('default "pearl-diver-game-production.pages.dev";');
     expect(rendered).toContain('resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;');
-    expect(rendered).toContain('proxy_pass https://$gateway_upstream_host_11111111_1111_4111_8111_111111111111:443;');
+    expect(rendered).toContain(`proxy_pass https://$${variableName}:443;`);
     expect(rendered).not.toContain('proxy_pass https://pearl-diver-game-production.pages.dev:443;');
   });
 
@@ -81,7 +83,7 @@ describe('canonical Gateway nginx pages', () => {
     );
 
     expect(rendered).toContain('proxy_pass https://dual-stack.example.com:443;');
-    expect(rendered).not.toContain('gateway_upstream_host_');
+    expect(rendered).not.toContain('gw_up_');
     expect(rendered).not.toContain('ipv6=off');
   });
 
@@ -107,7 +109,7 @@ describe('canonical Gateway nginx pages', () => {
     );
 
     expect(rendered).toContain('proxy_pass http://10.0.0.2:8080;');
-    expect(rendered).not.toContain('gateway_upstream_host_');
+    expect(rendered).not.toContain('gw_up_');
     expect(rendered).not.toContain('ipv6=off');
   });
 

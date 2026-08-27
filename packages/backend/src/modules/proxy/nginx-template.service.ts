@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { count, eq, inArray } from 'drizzle-orm';
 import Handlebars from 'handlebars';
@@ -948,7 +949,7 @@ export class NginxTemplateService {
     }
 
     const staticUpstream = `${host.forwardScheme}://${formatHostPort(forwardHost, host.forwardPort)}`;
-    const variableName = `gateway_upstream_host_${host.id.replace(/-/g, '_')}`;
+    const variableName = `gw_up_${createHash('sha256').update(host.id).digest('hex').slice(0, 16)}`;
     const dynamicUpstream = `${host.forwardScheme}://$${variableName}:${host.forwardPort}`;
     if (!rendered.includes(staticUpstream)) return rendered;
 

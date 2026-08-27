@@ -6,13 +6,17 @@
     "dns",
     "ipv6",
     "nginx",
-    "proxy-hosts",
+    "production-validation",
+    "proxy",
     "templates"
   ],
   "layer": "lite",
   "ref": "vks9ym4c",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1787839113583,
-  "updated_at": 1787839113583
+  "updated_at": 1787839913574
 }
 ---
-[→ vks9ym4c] Nginx upstream IP-family and template reconciliation contract
+[→ vks9ym4c] Record compact Nginx resolver-variable naming and realistic syntax-validation requirements

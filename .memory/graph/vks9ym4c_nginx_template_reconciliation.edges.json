@@ -3,23 +3,23 @@
   "edges": [
     {
       "from_id": "vks9ym4c",
-      "to_id": "x7unpgb6",
+      "to_id": "8c9f2oec",
       "relation": "same_workflow",
-      "weight": 0.84,
-      "reason": "Both require built-in Nginx template changes to regenerate or reapply every affected managed proxy host while preserving special-case behavior.",
+      "weight": 0.86,
+      "reason": "Both define Gateway Nginx ingress and DNS reconciliation behavior for managed domains and proxy hosts.",
       "source": "auto",
-      "created_at": 1787839125252,
-      "updated_at": 1787839125252
+      "created_at": 1787839919657,
+      "updated_at": 1787839919657
     },
     {
       "from_id": "vks9ym4c",
-      "to_id": "8c9f2oec",
-      "relation": "same_area",
+      "to_id": "y53auic5",
+      "relation": "same_workflow",
       "weight": 0.72,
-      "reason": "Both define DNS and Nginx behavior for Gateway proxy hosts, including address resolution and node-specific ingress handling.",
+      "reason": "The Nginx and DNS template behavior depends on the node service-address contract and effective address selection.",
       "source": "auto",
-      "created_at": 1787839125252,
-      "updated_at": 1787839125252
+      "created_at": 1787839919657,
+      "updated_at": 1787839919657
     }
   ]
 }
