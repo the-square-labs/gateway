@@ -56,6 +56,15 @@ function selectChain(rows: unknown[]) {
   return chain;
 }
 
+function containsColumn(value: unknown, columnName: string, seen = new WeakSet<object>()): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  const candidate = value as Record<string, unknown>;
+  if (candidate.name === columnName && candidate.table) return true;
+  return Object.values(candidate).some((item) => containsColumn(item, columnName, seen));
+}
+
 function createContext(
   body: string | FormData | Buffer | null,
   headers: Record<string, string> = {},
@@ -90,10 +99,10 @@ function createService(
     pricing?: unknown;
   } = {}
 ) {
+  const sourceRows = options.sources ?? [{ model: MODEL, source: SOURCE, connection: CONNECTION }];
+  const selection = selectChain(sourceRows);
   const db = {
-    select: vi
-      .fn()
-      .mockReturnValue(selectChain(options.sources ?? [{ model: MODEL, source: SOURCE, connection: CONNECTION }])),
+    select: vi.fn().mockReturnValue(selection),
     query: {
       inferencePricingSnapshots: {
         findFirst: vi.fn().mockResolvedValue(
@@ -110,7 +119,6 @@ function createService(
       },
     },
   };
-  const sourceRows = options.sources ?? [{ model: MODEL, source: SOURCE, connection: CONNECTION }];
   const models = {
     listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [{ id: MODEL.publicId }] }),
     resolveForUser: vi.fn().mockResolvedValue({
@@ -154,7 +162,7 @@ function createService(
           })
       );
   vi.stubGlobal('fetch', fetchStub);
-  return { service, models, routing, bridge, coreAccounting, fetchStub };
+  return { service, models, routing, bridge, coreAccounting, fetchStub, selection };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -306,6 +314,24 @@ describe('inference core proxy', () => {
       CONNECTION_2,
       0
     );
+  });
+
+  it('keeps configured core sources routable across transient discovery omissions', async () => {
+    const { service, routing, selection } = createService({
+      sources: [
+        { source: SOURCE, connection: CONNECTION, discovered: { available: false } },
+        { source: SOURCE_2, connection: CONNECTION_2, discovered: { available: true } },
+      ],
+    });
+
+    await service.resolveTarget(USER as never, MODEL.publicId);
+
+    expect(routing.select).toHaveBeenCalledWith({
+      allowedConnectionIds: ['conn-1', 'conn-2'],
+      existingThread: false,
+    });
+    const where = (selection.where as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(containsColumn(where, 'available')).toBe(false);
   });
 
   it('streams the upstream body through and finalizes the request', async () => {

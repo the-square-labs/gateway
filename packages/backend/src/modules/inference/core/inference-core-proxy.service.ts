@@ -644,7 +644,6 @@ export class InferenceCoreProxyService {
       .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
-      .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
       .where(
         and(
           eq(inferenceModelSources.modelId, modelId),
@@ -652,8 +651,7 @@ export class InferenceCoreProxyService {
           eq(inferenceModelSources.enabled, true),
           isNotNull(inferenceModelSources.coreAccountId),
           eq(inferenceProviderConnections.enabled, true),
-          isNull(inferenceProviderConnections.deletedAt),
-          or(isNull(inferenceModelSources.discoveredModelId), eq(inferenceDiscoveredModels.available, true))
+          isNull(inferenceProviderConnections.deletedAt)
         )
       )
       .orderBy(asc(inferenceModelSources.priority), asc(inferenceProviderConnections.routingOrder));
