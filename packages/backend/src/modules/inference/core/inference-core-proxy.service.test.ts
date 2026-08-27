@@ -10,6 +10,8 @@ const MODEL = {
   enabled: true,
   sortOrder: 0,
   subscriptionMultiplier: '1',
+  modalities: ['text'],
+  capabilities: {},
   reasoningEfforts: ['low', 'high'],
   defaultReasoningEffort: null,
 };
@@ -40,10 +42,11 @@ const SOURCE_2 = {
   ...SOURCE,
   id: 'source-2',
   connectionId: 'conn-2',
-  coreAccountId: 'core-conn-2',
-  coreModelId: 'core-conn-2/gpt-5.5',
+  coreAccountId: 'anthropic',
+  coreModelId: 'anthropic/claude-sonnet-5',
+  upstreamModelId: 'claude-sonnet-5',
 };
-const CONNECTION_2 = { ...CONNECTION, id: 'conn-2', routingOrder: 1 };
+const CONNECTION_2 = { ...CONNECTION, id: 'conn-2', providerId: 'anthropic', routingOrder: 1 };
 
 function selectChain(rows: unknown[]) {
   const chain = Promise.resolve(rows) as Promise<unknown[]> & Record<string, unknown>;
@@ -107,9 +110,17 @@ function createService(
       },
     },
   };
+  const sourceRows = options.sources ?? [{ model: MODEL, source: SOURCE, connection: CONNECTION }];
   const models = {
     listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [{ id: MODEL.publicId }] }),
-    resolveForUser: vi.fn().mockResolvedValue({ model: MODEL, sources: [SOURCE] }),
+    resolveForUser: vi.fn().mockResolvedValue({
+      model: MODEL,
+      sources: sourceRows.map((row) => ({
+        ...((row as { source?: Record<string, unknown> }).source ?? (row as Record<string, unknown>)),
+        modalities: ['text'],
+        capabilities: {},
+      })),
+    }),
   };
   const routing = { select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }) };
   const bridge = options.coreError
@@ -245,7 +256,7 @@ describe('inference core proxy', () => {
     expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ isCompaction: true }));
   });
 
-  it('performs cross-account failover in Gateway with a new signed pin', async () => {
+  it('performs cross-provider failover in Gateway with a new signed pin', async () => {
     const { service, routing, coreAccounting, fetchStub } = createService({
       sources: [
         { source: SOURCE, connection: CONNECTION },
@@ -254,7 +265,7 @@ describe('inference core proxy', () => {
     });
     routing.select
       .mockResolvedValueOnce({ connectionId: 'conn-1', providerId: CONNECTION.providerId })
-      .mockResolvedValueOnce({ connectionId: 'conn-2', providerId: CONNECTION.providerId });
+      .mockResolvedValueOnce({ connectionId: 'conn-2', providerId: CONNECTION_2.providerId });
     fetchStub
       .mockResolvedValueOnce(
         Response.json({ error: { code: 'provider_rate_limited', message: 'busy' } }, { status: 429 })
@@ -264,7 +275,9 @@ describe('inference core proxy', () => {
       );
 
     const response = await service.proxy(
-      createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }), { 'content-type': 'application/json' }),
+      createContext(JSON.stringify({ model: 'gpt-5.5', input: 'continue', previous_response_id: 'resp_previous' }), {
+        'content-type': 'application/json',
+      }),
       'responses'
     );
     expect(response.status).toBe(200);
@@ -273,8 +286,20 @@ describe('inference core proxy', () => {
       const encoded = (init.headers as Record<string, string>)['x-wiolett-context'];
       return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     });
-    expect(contexts.map((claims) => claims.coreAccountId)).toEqual(['core-conn-1', 'core-conn-2']);
+    expect(contexts.map((claims) => claims.coreAccountId)).toEqual(['core-conn-1', 'anthropic']);
     expect(contexts[0].rootRequestId).toBe(contexts[1].rootRequestId);
+    const bodies = fetchStub.mock.calls.map(([, init]) => JSON.parse(init.body as string));
+    expect(bodies.map((body) => body.model)).toEqual(['core-conn-1/gpt-5.5', 'anthropic/claude-sonnet-5']);
+    expect(bodies.map((body) => body.previous_response_id)).toEqual(['resp_previous', 'resp_previous']);
+    expect(routing.select).toHaveBeenNthCalledWith(1, {
+      allowedConnectionIds: ['conn-1', 'conn-2'],
+      existingThread: true,
+    });
+    expect(routing.select).toHaveBeenNthCalledWith(2, {
+      providerId: 'anthropic',
+      allowedConnectionIds: ['conn-2'],
+      existingThread: true,
+    });
     expect(coreAccounting.retargetCoreRequest).toHaveBeenCalledWith(
       '3fa85f64-5717-4562-b3fc-2c963f66afa6',
       SOURCE_2,

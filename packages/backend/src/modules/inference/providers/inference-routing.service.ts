@@ -6,12 +6,15 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { inferenceProviderConnections, inferenceProviderSettings, inferenceQuotaSnapshots } from '@/db/schema/index.js';
 import type { InferenceConnectionStatus, InferenceRoutingStrategy } from '@/db/schema/inference-providers.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 
 const AFFINITY_TTL_SECONDS = 24 * 60 * 60;
+const logger = createChildLogger('InferenceRoutingService');
 
 export interface InferenceRoutingInput {
-  providerId: string;
+  /** Omit only when a logical model intentionally spans multiple providers. */
+  providerId?: string;
   allowedConnectionIds?: string[];
   affinityKey?: string;
   preferredConnectionId?: string;
@@ -45,6 +48,13 @@ export class InferenceRoutingService {
     const preferred = await this.preferred(input);
     const usable = usableCandidates(candidates);
     if (usable.length === 0) {
+      logger.warn('No inference provider connection has usable capacity', {
+        providerId: input.providerId ?? null,
+        allowedConnectionIds: input.allowedConnectionIds ?? [],
+        existingThread: input.existingThread,
+        hasAffinityKey: Boolean(input.affinityKey),
+        candidates: candidates.map(candidateDiagnostic),
+      });
       throw new InferenceProtocolError(
         503,
         'provider_capacity_unavailable',
@@ -52,8 +62,13 @@ export class InferenceRoutingService {
       );
     }
 
-    const sticky = preferred ? usable.find((candidate) => candidate.id === preferred) : undefined;
-    const selected = sticky ?? (await this.choose(input.providerId, input.affinityKey, usable));
+    const sticky = preferredCandidate(preferred, usable);
+    const capacityPriorityRequired = !input.providerId || usable.some((candidate) => candidate.status === 'quota_hot');
+    const selected =
+      sticky ??
+      (capacityPriorityRequired
+        ? highestCapacityCandidate(input.affinityKey ?? crypto.randomUUID(), usable)
+        : await this.choose(input.providerId!, input.affinityKey, usable));
     if (input.affinityKey) {
       await this.redis.set(this.affinityKey(input.affinityKey), selected.id, 'EX', AFFINITY_TTL_SECONDS);
     }
@@ -102,11 +117,8 @@ export class InferenceRoutingService {
   }
 
   private async loadCandidates(input: InferenceRoutingInput): Promise<Candidate[]> {
-    const conditions = [
-      eq(inferenceProviderConnections.providerId, input.providerId),
-      eq(inferenceProviderConnections.enabled, true),
-      isNull(inferenceProviderConnections.deletedAt),
-    ];
+    const conditions = [eq(inferenceProviderConnections.enabled, true), isNull(inferenceProviderConnections.deletedAt)];
+    if (input.providerId) conditions.push(eq(inferenceProviderConnections.providerId, input.providerId));
     if (input.allowedConnectionIds?.length) {
       conditions.push(inArray(inferenceProviderConnections.id, input.allowedConnectionIds));
     }
@@ -174,6 +186,21 @@ function usableCandidates(candidates: Candidate[]): Candidate[] {
   return candidates.filter(isUsable);
 }
 
+function preferredCandidate(preferred: string | undefined, candidates: Candidate[]): Candidate | undefined {
+  return preferred ? candidates.find((candidate) => candidate.id === preferred) : undefined;
+}
+
+function candidateDiagnostic(candidate: Candidate) {
+  return {
+    connectionId: candidate.id,
+    providerId: candidate.providerId,
+    status: candidate.status,
+    remainingFraction: candidate.remainingFraction,
+    minimumRemainingFraction: candidate.minimumRemainingFraction,
+    usable: isUsable(candidate),
+  };
+}
+
 function latestQuotaWindows(rows: Array<typeof inferenceQuotaSnapshots.$inferSelect>) {
   const latestFetchedAt = rows.reduce(
     (latest, row) => Math.max(latest, row.fetchedAt.getTime()),
@@ -215,6 +242,24 @@ function quotaWeightedCandidate(seed: string, candidates: Candidate[]): Candidat
   return highestScore(seed, knownCandidates, (candidate) => candidate.remainingFraction!);
 }
 
+/** Capacity-sensitive admission prefers the route furthest above its configured reserve. */
+function highestCapacityCandidate(seed: string, candidates: Candidate[]): Candidate {
+  const knownCandidates = candidates.filter((candidate) => candidate.remainingFraction !== null);
+  if (knownCandidates.length === 0) return highestScore(seed, candidates, () => 1);
+  return [...knownCandidates].sort(
+    (a, b) =>
+      normalizedHeadroom(b) - normalizedHeadroom(a) ||
+      b.remainingFraction! - a.remainingFraction! ||
+      a.id.localeCompare(b.id)
+  )[0]!;
+}
+
+function normalizedHeadroom(candidate: Candidate): number {
+  if (candidate.remainingFraction === null) return Number.NEGATIVE_INFINITY;
+  const usableRange = Math.max(Number.EPSILON, 1 - candidate.minimumRemainingFraction);
+  return (candidate.remainingFraction - candidate.minimumRemainingFraction) / usableRange;
+}
+
 function firstSequentialCandidate(candidates: Candidate[]): Candidate {
   return [...candidates].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))[0]!;
 }
@@ -240,10 +285,14 @@ export const __testOnly = {
   uniformScore,
   weightedScore,
   quotaWeightedCandidate,
+  highestCapacityCandidate,
+  normalizedHeadroom,
   highestScore,
   firstSequentialCandidate,
   isUsable,
   usableCandidates,
+  preferredCandidate,
+  candidateDiagnostic,
   statusAfterCooldown,
   latestQuotaWindows,
 };

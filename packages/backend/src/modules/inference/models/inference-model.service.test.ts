@@ -75,6 +75,19 @@ describe('inference model publication validation', () => {
     });
   });
 
+  it('uses the known catalog contract when a source has no discovery row', () => {
+    expect(
+      __testOnly.effectiveSourceContract({
+        source: { upstreamModelId: 'gpt-5.6-sol', capabilitiesOverride: null },
+        connection: { providerId: 'openai' },
+        discovered: null,
+      } as never)
+    ).toMatchObject({
+      modalities: ['text', 'image'],
+      capabilities: expect.objectContaining({ tools: true }),
+    });
+  });
+
   it('uses current discovered limits instead of a stale model snapshot', () => {
     expect(
       __testOnly.effectiveTechnicalLimits(
@@ -131,32 +144,6 @@ describe('inference model publication validation', () => {
       maxOutputTokens: 128_000,
       autoCompactTokenLimit: 320_000,
     });
-  });
-
-  it('allows account bindings only for one provider and one upstream model', () => {
-    const valid = [
-      { providerId: 'kimi', upstreamModelId: 'k3', role: 'primary' as const },
-      { providerId: 'kimi', upstreamModelId: 'k3', role: 'primary' as const },
-    ];
-    expect(() => __testOnly.assertSingleProviderBindings(valid)).not.toThrow();
-    expect(() =>
-      __testOnly.assertSingleProviderBindings([
-        ...valid,
-        { providerId: 'openrouter', upstreamModelId: 'k3', role: 'primary' },
-      ])
-    ).toThrow(/one provider and one upstream model/);
-    expect(() =>
-      __testOnly.assertSingleProviderBindings([
-        ...valid,
-        { providerId: 'kimi', upstreamModelId: 'k2', role: 'primary' },
-      ])
-    ).toThrow(/one provider and one upstream model/);
-    expect(() =>
-      __testOnly.assertSingleProviderBindings([
-        ...valid,
-        { providerId: 'kimi', upstreamModelId: 'k3', role: 'vision_sidecar' },
-      ])
-    ).toThrow(/one provider and one upstream model/);
   });
 
   it('advertises Fast only when every enabled source is an eligible ChatGPT subscription model', () => {

@@ -16,6 +16,7 @@ import { unitCharge } from '../accounting/inference-accounting.helpers.js';
 import type { InferenceAccountingService } from '../accounting/inference-accounting.service.js';
 import type { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import type { InferenceModelService } from '../models/inference-model.service.js';
+import { sourceSupportsModel } from '../models/inference-model.validation.js';
 import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { canFailOver, type InferenceRoutingService } from '../providers/inference-routing.service.js';
@@ -127,15 +128,19 @@ export class InferenceCoreProxyService {
   ): Promise<ResolvedCoreTarget> {
     const resolved = await this.models.resolveForUser(user, publicModelId);
     const excluded = new Set(options.excludeConnectionIds ?? []);
-    const candidates = (
-      await this.coreCandidates(
-        resolved.model.id,
-        resolved.sources.map((source) => source.id)
+    const compatibleSourceIds = resolved.sources
+      .filter((source) =>
+        sourceSupportsModel(resolved.model, { modalities: source.modalities, capabilities: source.capabilities })
       )
-    ).filter((candidate) => !excluded.has(candidate.connection.id));
+      .map((source) => source.id);
+    const candidates = (await this.coreCandidates(resolved.model.id, compatibleSourceIds)).filter(
+      (candidate) => !excluded.has(candidate.connection.id)
+    );
     assertRoutable(candidates);
+    const providerIds = new Set(candidates.map((candidate) => candidate.connection.providerId));
+    const singleProviderId = providerIds.size === 1 ? candidates[0]!.connection.providerId : undefined;
     const selection = await this.routing.select({
-      providerId: candidates[0]!.connection.providerId,
+      ...(singleProviderId ? { providerId: singleProviderId } : {}),
       allowedConnectionIds: candidates.map((row) => row.connection.id),
       ...(options.affinityKey ? { affinityKey: options.affinityKey } : {}),
       existingThread: options.existingThread === true,
@@ -805,13 +810,6 @@ function assertRoutable(candidates: SourceCandidate[]): void {
       503,
       'service_unavailable',
       'Inference is not configured yet; connect and publish a model first'
-    );
-  }
-  if (candidates.some((row) => row.connection.providerId !== first.connection.providerId)) {
-    throw new InferenceProtocolError(
-      503,
-      'model_configuration_invalid',
-      'A logical model must use one provider and one upstream model'
     );
   }
 }
