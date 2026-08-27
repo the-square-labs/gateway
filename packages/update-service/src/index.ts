@@ -305,7 +305,12 @@ async function handleReleaseList(
 				current,
 				await readBoundedJson<GitHubRelease[]>(upstream),
 			);
-			if (!selected) return new Response(null, { status: 204 });
+			if (!selected) {
+				return new Response(null, {
+					status: 204,
+					headers: { "Cache-Control": "no-store" },
+				});
+			}
 			return jsonResponse(
 				{
 					component,
@@ -314,7 +319,7 @@ async function handleReleaseList(
 					reason: selected.reason,
 				} satisfies NextUpdateResponse,
 				200,
-				"public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
+				"public, max-age=30, s-maxage=60",
 			);
 		} catch (error) {
 			if (error instanceof Error && error.message === "invalid_current_version")

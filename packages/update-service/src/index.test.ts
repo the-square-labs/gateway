@@ -137,6 +137,7 @@ describe("gateway update facade", () => {
 			fetcher,
 		);
 		expect(response.status).toBe(204);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
 	});
 
 	it("returns the latest inference core build directly", async () => {
