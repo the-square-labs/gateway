@@ -163,6 +163,77 @@ describe('admin user identity validation', () => {
   });
 });
 
+describe('admin user email onboarding', () => {
+  it('sends an onboarding email when an email-code user is created', async () => {
+    registerSession(['admin:users']);
+    const groupId = '33333333-3333-4333-8333-333333333333';
+    const createdUser = { ...TARGET_USER, groupId, authMethod: 'email_otp' as const };
+    const createUser = vi.fn().mockResolvedValue(createdUser);
+    const requestPasswordLink = vi.fn().mockResolvedValue(undefined);
+    const sendEmailOtpOnboarding = vi.fn().mockResolvedValue(undefined);
+    const auditLog = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AuthService, { createUser } as unknown as AuthService);
+    container.registerInstance(GroupService, {
+      getGroup: vi.fn().mockResolvedValue({ id: groupId, name: 'viewer', scopes: [], inheritedScopes: [] }),
+    } as unknown as GroupService);
+    container.registerInstance(AuthMailService, {
+      getPublicConfig: vi.fn().mockResolvedValue({ verifiedAt: '2026-08-27T00:00:00.000Z' }),
+    } as unknown as AuthMailService);
+    container.registerInstance(LocalAuthService, {
+      requestPasswordLink,
+      sendEmailOtpOnboarding,
+    } as unknown as LocalAuthService);
+    container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+
+    const response = await createApp().request('/api/admin/users', {
+      method: 'POST',
+      headers: sessionHeaders(),
+      body: JSON.stringify({
+        email: createdUser.email,
+        name: createdUser.name,
+        groupId,
+        authMethod: 'email_otp',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(createUser).toHaveBeenCalledWith(
+      expect.objectContaining({ email: createdUser.email, authMethod: 'email_otp' })
+    );
+    expect(sendEmailOtpOnboarding).toHaveBeenCalledWith(createdUser.email);
+    expect(requestPasswordLink).not.toHaveBeenCalled();
+  });
+
+  it('sends the same onboarding email when an existing user is switched to email-code sign-in', async () => {
+    registerSession(['admin:users', 'nodes:details:node-1']);
+    const updatedUser = { ...TARGET_USER, authMethod: 'email_otp' as const };
+    const updateUserAuthMethod = vi.fn().mockResolvedValue(updatedUser);
+    const sendEmailOtpOnboarding = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AuthService, {
+      getUserById: vi.fn().mockResolvedValue({ ...TARGET_USER, authMethod: 'oidc' }),
+      updateUserAuthMethod,
+    } as unknown as AuthService);
+    container.registerInstance(AuthMailService, {
+      getPublicConfig: vi.fn().mockResolvedValue({ verifiedAt: '2026-08-27T00:00:00.000Z' }),
+    } as unknown as AuthMailService);
+    container.registerInstance(LocalAuthService, {
+      requestPasswordLink: vi.fn(),
+      sendEmailOtpOnboarding,
+    } as unknown as LocalAuthService);
+    container.registerInstance(AuditService, { log: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService);
+
+    const response = await createApp().request(`/api/admin/users/${TARGET_USER.id}/auth-method`, {
+      method: 'PATCH',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ authMethod: 'email_otp' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateUserAuthMethod).toHaveBeenCalledWith(TARGET_USER.id, 'email_otp');
+    expect(sendEmailOtpOnboarding).toHaveBeenCalledWith(updatedUser.email);
+  });
+});
+
 describe('admin user impersonation', () => {
   function registerImpersonationDependencies(target: User) {
     registerSession(['admin:users:impersonate', 'nodes:details']);

@@ -506,15 +506,19 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:u
   }
 
   try {
-    if (input.authMethod === 'password' && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+    const localEmailAuth = input.authMethod === 'password' || input.authMethod === 'email_otp';
+    if (localEmailAuth && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
       return c.json(
-        { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before creating a password account' },
+        { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before creating an email sign-in account' },
         409
       );
     }
     const createdUser = await authService.createUser(input);
+    const localAuthService = container.resolve(LocalAuthService);
     if (input.authMethod === 'password') {
-      await container.resolve(LocalAuthService).requestPasswordLink(input.email, 'password_setup');
+      await localAuthService.requestPasswordLink(createdUser.email, 'password_setup');
+    } else if (input.authMethod === 'email_otp') {
+      await localAuthService.sendEmailOtpOnboarding(createdUser.email);
     }
 
     await auditService.log({
@@ -556,15 +560,19 @@ adminRoutes.openapi({ ...updateUserAuthMethodRoute, middleware: requireScope('ad
   if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
   const denyReason = canManageUser(actorScopes, targetUser.scopes);
   if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
-  if (authMethod === 'password' && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+  const localEmailAuth = authMethod === 'password' || authMethod === 'email_otp';
+  if (localEmailAuth && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
     return c.json(
-      { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before switching to password sign-in' },
+      { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before switching to email sign-in' },
       409
     );
   }
   const updated = await authService.updateUserAuthMethod(userId, authMethod);
+  const localAuthService = container.resolve(LocalAuthService);
   if (authMethod === 'password') {
-    await container.resolve(LocalAuthService).requestPasswordLink(updated.email, 'password_setup');
+    await localAuthService.requestPasswordLink(updated.email, 'password_setup');
+  } else if (authMethod === 'email_otp') {
+    await localAuthService.sendEmailOtpOnboarding(updated.email);
   }
   await auditService.log({
     userId: currentUser.id,

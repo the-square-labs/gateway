@@ -131,6 +131,16 @@ export class LocalAuthService {
     return userId ? resolveLiveUser(this.db, userId) : null;
   }
 
+  async sendEmailOtpOnboarding(email: string): Promise<void> {
+    const baseUrl = this.generalSettingsService
+      ? await this.generalSettingsService.requirePublicUrl()
+      : getEnv().APP_URL;
+    await this.authMailService.sendSecurityEmail(normalizeEmail(email), {
+      kind: 'email_otp_enabled',
+      actionUrl: new URL('/login', baseUrl).toString(),
+    });
+  }
+
   async requestPasswordLink(email: string, purpose: 'password_setup' | 'password_reset'): Promise<void> {
     const methods = (await this.authSettingsService.getConfig()).methods;
     if (!methods.password) return;

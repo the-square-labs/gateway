@@ -1,11 +1,17 @@
 export const GATEWAY_EMAIL_LOGO_URL = 'https://s3.wiolett.net/static/net/wiolett/gateway/wiolett-gateway-256c.png';
 
-export type AuthEmailKind = 'smtp_configuration' | 'password_setup' | 'password_reset' | 'email_otp';
+export type AuthEmailKind =
+  | 'smtp_configuration'
+  | 'password_setup'
+  | 'password_reset'
+  | 'email_otp_enabled'
+  | 'email_otp';
 
 export type AuthEmailInput =
   | { kind: 'smtp_configuration' }
   | { kind: 'password_setup'; actionUrl: string }
   | { kind: 'password_reset'; actionUrl: string }
+  | { kind: 'email_otp_enabled'; actionUrl: string }
   | { kind: 'email_otp'; code: string };
 
 export interface AuthEmailMessage {
@@ -55,6 +61,17 @@ function getEmailContent(input: AuthEmailInput): EmailContent {
         securityNote:
           'This link is valid for 30 minutes and can be used once. If you did not request a password reset, no action is required.',
         action: { label: 'Reset password', url: input.actionUrl },
+      };
+    case 'email_otp_enabled':
+      return {
+        subject: 'Gateway: email-code sign-in enabled',
+        title: 'Email-code sign-in is enabled',
+        body:
+          'An administrator enabled email-code sign-in for your Gateway account. Enter your email address at sign-in to receive a one-time code.',
+        text: `An administrator enabled email-code sign-in for your Gateway account. Open Gateway: ${input.actionUrl}`,
+        securityNote:
+          'A new one-time code is sent for each sign-in and expires after 10 minutes. We will never ask for a code by phone, chat, or email.',
+        action: { label: 'Open Gateway', url: input.actionUrl },
       };
     case 'email_otp':
       return {

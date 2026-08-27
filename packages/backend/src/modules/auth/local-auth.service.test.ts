@@ -73,3 +73,18 @@ describe('LocalAuthService.requestPasswordLink', () => {
     expect(authMailService.sendSecurityEmail).toHaveBeenCalledTimes(3);
   });
 });
+
+describe('LocalAuthService.sendEmailOtpOnboarding', () => {
+  it('sends the account onboarding message with the Gateway login URL', async () => {
+    const { service, authMailService } = createService({
+      methods: { password: false, emailOtp: true },
+    });
+
+    await service.sendEmailOtpOnboarding(' USER@EXAMPLE.COM ');
+
+    expect(authMailService.sendSecurityEmail).toHaveBeenCalledWith('user@example.com', {
+      kind: 'email_otp_enabled',
+      actionUrl: 'https://gateway.example.test/login',
+    });
+  });
+});
