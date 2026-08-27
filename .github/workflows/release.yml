@@ -14,13 +14,215 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CI: 'true'
+  GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
+
 jobs:
+  test:
+    name: Test
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out tagged revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test frontend
+        run: pnpm --filter frontend test
+
+      - name: Test backend
+        run: pnpm --filter backend test
+
+      - name: Test assistant Docker contract
+        run: pnpm --filter backend test -- src/modules/ai/ai.assistant-docker.e2e.test.ts
+
+  build:
+    name: Build
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out tagged revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push immutable image
+        run: |
+          ./scripts/sync-update-trust-anchor.sh
+          docker build \
+            --tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" \
+            --build-arg "APP_VERSION=${GITHUB_REF_NAME}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            .
+          sh scripts/push-image-with-digest.sh \
+            "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" \
+            gateway-image.digest \
+            "gateway image"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gateway-image-digest
+          path: gateway-image.digest
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    name: Sign
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UPDATE_SIGNING_PRIVATE_KEY_PEM_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 }}
+    steps:
+      - name: Check out tagged revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.24.4'
+          cache-dependency-path: packages/daemons/go.work.sum
+
+      - name: Download image digest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: gateway-image-digest
+
+      - name: Sign update manifest
+        run: |
+          test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || {
+            echo 'UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 is required' >&2
+            exit 1
+          }
+          digest=$(cat gateway-image.digest)
+          echo "$digest" | grep -Eq '^sha256:[a-f0-9]{64}$'
+          (
+            cd packages/daemons
+            go run ./shared/cmd/update-trust sign \
+              --kind gateway-image \
+              --version "$GITHUB_REF_NAME" \
+              --tag "$GITHUB_REF_NAME" \
+              --image "$GATEWAY_IMAGE" \
+              --digest "$digest" \
+              --git-commit-sha "$GITHUB_SHA" \
+              --git-pipeline-id "$GITHUB_RUN_ID" \
+              --out ../../gateway-image.update.json
+          )
+
+      - name: Upload signed manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gateway-update-manifest
+          path: gateway-image.update.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out tagged revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Download signed manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: gateway-update-manifest
+
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Publish image aliases
+        run: |
+          docker pull "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}"
+          docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}"
+          docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:latest"
+          docker push "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}"
+          docker push "${GATEWAY_IMAGE}:latest"
+
+      - name: Upload release asset to draft
+        run: |
+          git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            printf 'Gateway release %s\n' "$GITHUB_REF_NAME" > release-notes.md
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Gateway ${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --verify-tag \
+              --title "Gateway ${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md
+          fi
+          gh release upload "$GITHUB_REF_NAME" gateway-image.update.json --clobber
+
   release:
-    name: Build, sign, and publish release
+    name: Release
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify and publish release
+        run: |
+          assets=$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name')
+          grep -Fxq gateway-image.update.json <<<"$assets"
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+
+  component-release:
+    name: Component release
+    if: ${{ contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      CI: 'true'
       GH_TOKEN: ${{ github.token }}
       UPDATE_SIGNING_PRIVATE_KEY_PEM_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 }}
     steps:
@@ -53,5 +255,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build, sign, and publish
+      - name: Build, sign, publish, and release component
         run: scripts/github-release.sh
