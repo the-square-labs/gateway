@@ -142,7 +142,12 @@ describe('inference routing policy', () => {
     });
 
     expect(selected).toMatchObject({ connectionId: 'provider-high', providerId: 'anthropic' });
-    expect(redis.set).toHaveBeenCalledWith(expect.stringContaining('inference:affinity:'), 'provider-high', 'EX', 86_400);
+    expect(redis.set).toHaveBeenCalledWith(
+      expect.stringContaining('inference:affinity:'),
+      'provider-high',
+      'EX',
+      86_400
+    );
   });
 
   it('keeps a usable quota-hot affinity for an existing thread', async () => {

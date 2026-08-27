@@ -309,10 +309,7 @@ describe('core responses websocket proxy', () => {
     expect(upstreamInstances).toHaveLength(1);
     expect(proxy.resolveTarget).toHaveBeenCalledTimes(1);
     expect(accounting.retargetCoreRequest).not.toHaveBeenCalled();
-    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
-      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-      'failed'
-    );
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'failed');
   });
 
   it('does not fail over after substantive output was delivered', async () => {
