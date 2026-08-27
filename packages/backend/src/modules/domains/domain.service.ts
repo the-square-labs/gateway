@@ -1952,6 +1952,11 @@ export class DomainsService {
       const providerIps = addressRecords.map((record) => record.content).sort();
       if (!this.sameStringSet(providerIps, [...expectedIps].sort())) return 'invalid';
       if (addressRecords.some((record) => record.proxied === true)) return 'valid';
+      // A managed non-proxied record is still authoritative when the public
+      // resolver itself is unavailable. Do not downgrade a confirmed
+      // Cloudflare target to pending because UDP DNS timed out or failed;
+      // genuine missing records are reported as `empty` and remain pending.
+      if (addressResolution === 'error') return 'valid';
     }
 
     const resolvedIps = [...resolvedRecords.a, ...resolvedRecords.aaaa].sort();

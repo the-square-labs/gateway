@@ -1154,6 +1154,71 @@ describe('DomainsService Cloudflare lifecycle', () => {
     );
   });
 
+  it('keeps managed non-proxied Cloudflare DNS valid when the public resolver fails', async () => {
+    vi.mocked(probeDnsRecords).mockResolvedValueOnce({
+      queryName: 'app.example.com',
+      addressResolution: 'error',
+      records: { a: [], aaaa: [], cname: [], caa: [], mx: [], txt: [] },
+    });
+    const row = {
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'cloudflare',
+      integrationConnectorId: 'connector-1',
+      providerZoneId: 'zone-1',
+      providerRecordIds: ['record-a'],
+      dnsTargetIps: ['203.0.113.10'],
+      dnsRecordType: 'A',
+      dnsStatus: 'valid',
+      dnsTtl: 1,
+      dnsProxied: false,
+      pendingDnsTargetIp: null,
+    };
+    const updateSet = vi.fn((value) => ({
+      where: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ ...row, ...value }]),
+      })),
+    }));
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([row]) })),
+        })),
+      })),
+      update: vi.fn(() => ({ set: updateSet })),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    service.setIntegrationsService({
+      getCloudflareDnsContextForRecord: vi.fn().mockResolvedValue({
+        zone: { remoteId: 'zone-1' },
+        client: {
+          listDnsRecords: vi.fn().mockResolvedValue([
+            {
+              id: 'record-a',
+              type: 'A',
+              name: 'app.example.com',
+              content: '203.0.113.10',
+              ttl: 1,
+              proxied: false,
+            },
+          ]),
+          updateDnsRecord: vi.fn(),
+          deleteDnsRecord: vi.fn(),
+          createDnsRecord: vi.fn(),
+        },
+      }),
+    } as never);
+
+    await service.checkDns('domain-1');
+
+    expect(updateSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        dnsStatus: 'valid',
+        dnsRecords: expect.objectContaining({ a: ['203.0.113.10'] }),
+      })
+    );
+  });
+
   it('does not clear non-proxied Cloudflare records during background checks', async () => {
     vi.mocked(probeDnsRecords).mockResolvedValueOnce({
       queryName: 'app.example.com',
