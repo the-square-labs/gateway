@@ -8,8 +8,8 @@ GATEWAY_CERT_SHA256=""
 ADVERTISE_ADDRESS=""
 SERVICE_PORT="9443"
 VERSION="latest"
-GITLAB_URL="https://gitlab.wiolett.net"
-GITLAB_PROJECT="wiolett/gateway"
+RELEASES_API_URL="${GATEWAY_RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
+ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 
 usage() {
   echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z]"
@@ -23,8 +23,6 @@ while [[ $# -gt 0 ]]; do
     --advertise-address) ADVERTISE_ADDRESS="$2"; shift 2 ;;
     --service-port) SERVICE_PORT="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
-    --gitlab-url) GITLAB_URL="${2%/}"; shift 2 ;;
-    --gitlab-project) GITLAB_PROJECT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -41,10 +39,8 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-ENCODED_PROJECT=$(printf '%s' "$GITLAB_PROJECT" | sed 's#/#%2F#g')
-API="${GITLAB_URL}/api/v4/projects/${ENCODED_PROJECT}"
 if [[ "$VERSION" == "latest" ]]; then
-  TAG=$(curl -fsSL "${API}/releases?per_page=100" | jq -r '[.[].tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-relay$"))][0] // empty')
+  TAG=$(curl -fsSL "${RELEASES_API_URL}" | jq -r '[.[].tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-relay$"))][0] // empty')
   [[ -n "$TAG" ]] || { echo "No Relay release is available" >&2; exit 1; }
   VERSION="${TAG%-relay}"
 else
@@ -52,7 +48,7 @@ else
   TAG="${VERSION}-relay"
 fi
 
-PACKAGE_BASE="${API}/packages/generic/relay-supervisor/${TAG}"
+PACKAGE_BASE="${ARTIFACT_BASE_URL}/relay-supervisor/${TAG}"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 

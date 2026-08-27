@@ -36,7 +36,7 @@ Gateway daemons have a small resource footprint compared with the services they 
 Universal setup command:
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-daemon.sh | \
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-daemon.sh | \
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -50,14 +50,14 @@ The wrapper downloads the daemon-specific installer and forwards all arguments.
 Nginx node:
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-node.sh | \
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
 Docker node:
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-docker-node.sh | \
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -132,7 +132,7 @@ The GPU must appear as attachable on the node before it can be selected. A devic
 Monitoring node:
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-monitoring-node.sh | \
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-monitoring-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -148,8 +148,6 @@ Common daemon setup options:
 | `--host <host>` / `--port <port>` | Alternative to `--gateway` when specifying the Gateway address in separate parts. |
 | `--version <tag>` | Install a specific daemon version. |
 | `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user. Database nodes accept only `--user root`. |
-| `--gitlab-url <url>` | Use a custom GitLab instance. |
-| `--gitlab-project <path>` | Use a custom GitLab project path. |
 | `--dry-run` | Validate inputs and show the plan without changing the host. |
 | `-y`, `--yes` | Non-interactive mode. |
 | `--help` | Show all supported options. |
@@ -168,7 +166,7 @@ The nginx installer supports:
 Example:
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-daemon.sh | \
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-daemon.sh | \
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT> --nginx-mode integrate
 ```
 
@@ -275,11 +273,11 @@ Manual setup is useful for locked-down hosts or custom packaging.
 Example checksum flow:
 
 ```bash
-curl -fsSL "https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/nginx-daemon/v2.0.0-nginx/nginx-daemon-linux-amd64" \
+curl -fsSL "https://updates.thesqlabs.com/gateway/nginx-daemon/v2.0.0-nginx/nginx-daemon-linux-amd64" \
   -o /tmp/nginx-daemon-linux-amd64
-curl -fsSL "https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/nginx-daemon/v2.0.0-nginx/checksums.txt" \
+curl -fsSL "https://updates.thesqlabs.com/gateway/nginx-daemon/v2.0.0-nginx/checksums.txt" \
   -o /tmp/nginx-daemon-checksums.txt
-curl -fsSL "https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/nginx-daemon/v2.0.0-nginx/nginx-daemon-linux-amd64.update.json" \
+curl -fsSL "https://updates.thesqlabs.com/gateway/nginx-daemon/v2.0.0-nginx/nginx-daemon-linux-amd64.update.json" \
   -o /tmp/nginx-daemon-linux-amd64.update.json
 
 expected=$(awk '/nginx-daemon-linux-amd64/ { print $1 }' /tmp/nginx-daemon-checksums.txt)

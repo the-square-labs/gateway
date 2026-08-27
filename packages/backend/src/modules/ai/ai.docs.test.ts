@@ -218,13 +218,13 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('licensing-updates', ['license:view']).content).toContain('get_license_status');
     expect(getInternalDocumentation('licensing-updates', ['admin:update']).content).toContain('manage_system_updates');
     expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
-      'npx -y @wiolett/gateway-inference@latest setup codex'
+      'npx -y @sqgateway/inference@latest setup codex'
     );
     expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'Gateway Inference access, personal usage visibility, and creation or revocation'
     );
     expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
-      'npx -y @wiolett/gateway-inference@latest setup claude-code'
+      'npx -y @sqgateway/inference@latest setup claude-code'
     );
     expect(getInternalDocumentation('inference', ['ai:workspace:use']).content).toContain(
       'generalSettings.features.inferenceEnabled'

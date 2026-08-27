@@ -125,7 +125,7 @@ export class CodexIntegrationService {
 
   async sync(input: { profileName: string; discovery: InferenceDiscovery }) {
     // `sync` is also the upgrade path for the long-lived private runtime used
-    // by Codex. Without refreshing this copy, `npx @wiolett/gateway-inference@latest`
+    // by Codex. Without refreshing this copy, `npx @sqgateway/inference@latest`
     // could successfully update the catalog itself while every subsequent MCP
     // process kept executing an older bundled implementation indefinitely.
     await this.installRuntime();

@@ -2,11 +2,11 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-DEFAULT_IMAGE="registry.gitlab.wiolett.net/wiolett/gateway"
+DEFAULT_IMAGE="ghcr.io/the-square-labs/gateway"
 DOCKER_COMPOSE_CLI_IMAGE_REF="docker.io/library/docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c"
 DEFAULT_INSTALL_DIR="/opt/gateway"
-GITLAB_API_URL="${GITLAB_API_URL:-https://gitlab.wiolett.net}"
-GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-wiolett/gateway}"
+RELEASES_API_URL="${RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
+ARTIFACT_BASE_URL="${ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 INSTALL_DIR="${GATEWAY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 IMAGE="${GATEWAY_IMAGE:-$DEFAULT_IMAGE}"
 TRANSPORT="${GATEWAY_WEB_TRANSPORT:-}"
@@ -70,6 +70,20 @@ short_digest() {
   else
     printf '%s...%s' "${value:0:4}" "${value: -4}"
   fi
+}
+
+artifact_url() {
+  local package_name="$1" tag="$2" artifact_name="$3"
+  printf '%s/%s/%s/%s' "${ARTIFACT_BASE_URL%/}" "$package_name" "$tag" "$artifact_name"
+}
+
+download_release_artifact() {
+  local package_name="$1" tag="$2" artifact_name="$3" output="$4"
+  curl -fsSL "$(artifact_url "$package_name" "$tag" "$artifact_name")" -o "$output" >>"$LOG_FILE" 2>&1
+}
+
+fetch_release_list() {
+  curl -fsSL "$RELEASES_API_URL" 2>>"$LOG_FILE"
 }
 
 prompt_menu() {
@@ -384,7 +398,7 @@ decode_base64url() {
 }
 
 verify_signed_release() {
-  local version="$1" encoded_project="$2"
+  local version="$1"
   local tmp_dir manifest_file payload_file signature_file key_file
   local payload signature kind manifest_version tag image digest image_ref connector_image_ref connector_image connector_digest secure_connector_image_ref secure_connector_image secure_connector_digest
 
@@ -395,7 +409,7 @@ verify_signed_release() {
   key_file="${tmp_dir}/update-signing-public-key.pem"
 
   info "Verifying signed release manifest for ${version}"
-  if ! curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/packages/generic/gateway/${version}/gateway-image.update.json" -o "$manifest_file" >>"$LOG_FILE" 2>&1; then
+  if ! download_release_artifact gateway "$version" gateway-image.update.json "$manifest_file"; then
     rm -rf "$tmp_dir"
     die "Could not download the signed release manifest. Check ${LOG_FILE} for details."
   fi
@@ -455,7 +469,7 @@ verify_signed_release() {
 }
 
 verify_signed_relay() {
-  local relay_tag="$1" encoded_project="$2"
+  local relay_tag="$1"
   local tmp_dir manifest_file payload_file signature_file key_file
   local payload signature kind manifest_version tag image digest image_ref protocol_major min_gateway_version
   local connector_image_ref connector_image connector_digest secure_connector_image_ref secure_connector_image secure_connector_digest
@@ -467,7 +481,7 @@ verify_signed_relay() {
   key_file="${tmp_dir}/update-signing-public-key.pem"
 
   info "Verifying signed relay manifest for ${relay_tag}"
-  if ! curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/packages/generic/relay/${relay_tag}/relay-image.update.json" -o "$manifest_file" >>"$LOG_FILE" 2>&1; then
+  if ! download_release_artifact relay "$relay_tag" relay-image.update.json "$manifest_file"; then
     rm -rf "$tmp_dir"
     die "Could not download the signed relay manifest. Check ${LOG_FILE} for details."
   fi
@@ -575,10 +589,9 @@ prepare_install_metadata() {
     return
   fi
 
-  local encoded_project release_json relay_tag relay_version current_relay_version
-  encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
+  local release_json relay_tag relay_version current_relay_version
   info "Resolving the latest Gateway release"
-  release_json="$(curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/releases?per_page=100")" || die "Unable to query releases"
+  release_json="$(fetch_release_list)" || die "Unable to query releases"
   VERSION="$(
     printf '%s' "$release_json" |
       grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
@@ -589,7 +602,7 @@ prepare_install_metadata() {
   )"
   [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
   info "Version: ${VERSION}"
-  verify_signed_release "$VERSION" "$encoded_project"
+  verify_signed_release "$VERSION"
   current_relay_version="$(env_value GATEWAY_RELAY_BUILD_VERSION)"
   if [[ "$FRESH" == 1 || -z "$(env_value GATEWAY_RELAY_IMAGE_REF)" || -z "$current_relay_version" ]]; then
     relay_tag="$(
@@ -603,7 +616,7 @@ prepare_install_metadata() {
     [[ -n "$relay_tag" ]] || die "The release API did not return an eligible Relay release"
     relay_version="${relay_tag%-relay}"
     if [[ "$FRESH" == 1 || -z "$current_relay_version" ]] || version_is_newer "$relay_version" "$current_relay_version"; then
-      verify_signed_relay "$relay_tag" "$encoded_project"
+      verify_signed_relay "$relay_tag"
     fi
   fi
   ARTIFACT_DIGEST="${IMAGE_REF##*@sha256:}"
@@ -628,7 +641,7 @@ selects native HTTPS or HTTP for port 3000. Non-interactive installs default
 to native HTTPS. All product configuration continues in the browser wizard.
 
 --source-dir builds the Gateway image from a local source checkout on this
-host. It is intended for a fresh test installation and skips GitLab release
+host. It is intended for a fresh test installation and skips remote release
 discovery and image pulls.
 
 --dry-run renders the interactive flow and planned installation without

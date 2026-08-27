@@ -67,37 +67,66 @@ describe('OpenCodex release version helpers', () => {
 });
 
 describe('fetchLatestOpenCodexTag', () => {
-  it('returns the newest wiolett tag from the package listing', async () => {
+  it('accepts provider-neutral GitHub-style release rows', async () => {
     stubFetch((url) =>
-      url.includes('/packages?')
-        ? Response.json([
-            { version: 'v2.25.0-wiolett.3' },
-            { version: 'v2.26.0-wiolett.1' },
-            { version: 'v2.26.0-wiolett.2' },
-            { version: 'not-a-release' },
-          ])
+      url === 'https://updates.thesqlabs.com/gateway/releases'
+        ? Response.json([{ tag_name: 'v2.26.0-wiolett.2' }, { tag_name: 'v2.27.0-wiolett.1' }])
         : undefined
     );
-    await expect(fetchLatestOpenCodexTag('https://gitlab.test', 'wiolett/gateway')).resolves.toBe('v2.26.0-wiolett.2');
+    await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).resolves.toBe(
+      'v2.27.0-wiolett.1'
+    );
+  });
+
+  it('returns the newest wiolett tag from GitHub Releases', async () => {
+    stubFetch(() =>
+      Response.json([
+        { tag_name: 'v2.25.0-wiolett.3' },
+        { tag_name: 'v2.26.0-wiolett.1' },
+        { tag_name: 'v2.26.0-wiolett.2' },
+        { tag_name: 'not-a-release' },
+      ])
+    );
+    await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).resolves.toBe(
+      'v2.26.0-wiolett.2'
+    );
   });
 
   it('returns null when no wiolett release exists', async () => {
-    stubFetch(() => Response.json([{ version: 'v2.7.9-relay' }]));
-    await expect(fetchLatestOpenCodexTag('https://gitlab.test', 'wiolett/gateway')).resolves.toBeNull();
+    stubFetch(() => Response.json([{ tag_name: 'v2.7.9-relay' }]));
+    await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).resolves.toBeNull();
   });
 
   it('fails closed on registry errors', async () => {
     stubFetch(() => new Response('nope', { status: 500 }));
-    await expect(fetchLatestOpenCodexTag('https://gitlab.test', 'wiolett/gateway')).rejects.toBeInstanceOf(AppError);
+    await expect(fetchLatestOpenCodexTag('https://updates.thesqlabs.com/gateway/releases')).rejects.toBeInstanceOf(
+      AppError
+    );
   });
 });
 
 describe('fetchOpenCodexImageManifest', () => {
+  it('loads a signed manifest from the provider-neutral artifact base', async () => {
+    stubFetch((url) =>
+      url ===
+      'https://updates.thesqlabs.com/gateway/inference-core/v2.26.0-wiolett.1/opencodex-image.update.json'
+        ? new Response(signedManifest())
+        : undefined
+    );
+    await expect(
+      fetchOpenCodexImageManifest(
+        'https://updates.thesqlabs.com/gateway/',
+        'v2.26.0-wiolett.1',
+        IMAGE,
+        publicKeyPem
+      )
+    ).resolves.toMatchObject({ version: '2.26.0-wiolett.1', digest: DIGEST });
+  });
+
   it('verifies and returns a signed manifest', async () => {
     stubFetch((url) => (url.includes('opencodex-image.update.json') ? new Response(signedManifest()) : undefined));
     const artifact = await fetchOpenCodexImageManifest(
-      'https://gitlab.test',
-      'wiolett/gateway',
+      'https://updates.thesqlabs.com/gateway',
       'v2.26.0-wiolett.1',
       IMAGE,
       publicKeyPem
@@ -114,7 +143,7 @@ describe('fetchOpenCodexImageManifest', () => {
     tampered.signature = Buffer.from('forged-signature-padding-forged-signature').toString('base64url');
     stubFetch(() => new Response(JSON.stringify(tampered)));
     await expect(
-      fetchOpenCodexImageManifest('https://gitlab.test', 'wiolett/gateway', 'v2.26.0-wiolett.1', IMAGE, publicKeyPem)
+      fetchOpenCodexImageManifest('https://updates.thesqlabs.com/gateway', 'v2.26.0-wiolett.1', IMAGE, publicKeyPem)
     ).rejects.toMatchObject({ statusCode: 502, code: 'UNTRUSTED_UPDATE_ARTIFACT' });
   });
 
@@ -122,8 +151,7 @@ describe('fetchOpenCodexImageManifest', () => {
     stubFetch(() => new Response(signedManifest()));
     await expect(
       fetchOpenCodexImageManifest(
-        'https://gitlab.test',
-        'wiolett/gateway',
+        'https://updates.thesqlabs.com/gateway',
         'v2.26.0-wiolett.1',
         'evil/image',
         publicKeyPem
@@ -131,7 +159,7 @@ describe('fetchOpenCodexImageManifest', () => {
     ).rejects.toMatchObject({ code: 'UNTRUSTED_UPDATE_ARTIFACT' });
     stubFetch(() => new Response(signedManifest({ tag: 'v9.9.9-wiolett.1' })));
     await expect(
-      fetchOpenCodexImageManifest('https://gitlab.test', 'wiolett/gateway', 'v2.26.0-wiolett.1', IMAGE, publicKeyPem)
+      fetchOpenCodexImageManifest('https://updates.thesqlabs.com/gateway', 'v2.26.0-wiolett.1', IMAGE, publicKeyPem)
     ).rejects.toMatchObject({ code: 'UNTRUSTED_UPDATE_ARTIFACT' });
   });
 
@@ -139,7 +167,7 @@ describe('fetchOpenCodexImageManifest', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     await expect(
-      fetchOpenCodexImageManifest('https://gitlab.test', 'wiolett/gateway', 'latest', IMAGE, publicKeyPem)
+      fetchOpenCodexImageManifest('https://updates.thesqlabs.com/gateway', 'latest', IMAGE, publicKeyPem)
     ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CORE_VERSION' });
     expect(fetchSpy).not.toHaveBeenCalled();
   });

@@ -121,8 +121,10 @@ const envSchema = z.object({
   COMPOSE_PROJECT_DIR: z.string().optional(),
 
   // Updates
-  GITLAB_API_URL: z.string().default('https://gitlab.wiolett.net'),
-  GITLAB_PROJECT_PATH: z.string().default('wiolett/gateway'),
+  RELEASES_API_URL: z.string().url().default('https://updates.thesqlabs.com/gateway/releases'),
+  ARTIFACT_BASE_URL: z.string().url().default('https://updates.thesqlabs.com/gateway'),
+  GATEWAY_UPDATE_IMAGE_REPOSITORIES: z.string().default('ghcr.io/the-square-labs/gateway'),
+  INFERENCE_CORE_UPDATE_IMAGE_REPOSITORIES: z.string().default('ghcr.io/the-square-labs/inference-core'),
   UPDATE_CHECK_INTERVAL_HOURS: z.coerce.number().default(4),
 
   // Managed inference core. The distribution image repository is derived from

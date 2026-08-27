@@ -40,7 +40,8 @@ const NODE_TYPES: Array<{ value: NodeType; label: string; description: string }>
     description: "Collect infrastructure health and metrics.",
   },
 ];
-const DAEMON_INSTALLER_URL = "https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts";
+const DAEMON_INSTALLER_URL =
+  "https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts";
 const DAEMON_INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   nginx: "setup-node.sh",
   docker: "setup-docker-node.sh",

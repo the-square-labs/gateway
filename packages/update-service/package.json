@@ -1,0 +1,23 @@
+{
+	"name": "@sqgateway/update-service",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "wrangler deploy --dry-run --outdir dist",
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"lint": "biome check src package.json tsconfig.json wrangler.jsonc",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit",
+		"types": "wrangler types --include-runtime=false",
+		"types:check": "wrangler types --include-runtime=false --check"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.9",
+		"@cloudflare/workers-types": "5.20260827.1",
+		"typescript": "^5.7.2",
+		"vitest": "^4.1.5",
+		"wrangler": "4.127.0"
+	}
+}

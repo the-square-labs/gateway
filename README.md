@@ -5,7 +5,7 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 AI-first but not AI-dependent self-hosted infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
 > [!NOTE]
-> Primary development happens on [Square Labs GitLab](https://gitlab.wiolett.net/wiolett/gateway). The [GitHub repository](https://github.com/wiolett-industries/gateway) is a public mirror. Issues and feature requests are welcome on [GitHub](https://github.com/wiolett-industries/gateway/issues).
+> Primary development happens on [GitHub](https://github.com/the-square-labs/gateway). Issues and feature requests are welcome in the [GitHub issue tracker](https://github.com/the-square-labs/gateway/issues).
 
 ## Why Gateway
 
@@ -27,7 +27,7 @@ Use it when you want to:
 Install Gateway on a Linux server with Docker:
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/install.sh | bash
 ```
 
 > [!IMPORTANT]
@@ -102,7 +102,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Integrations | GitLab project, repository, CI/CD, variable, webhook, registry, and sandbox workflows; GitHub repository and Actions workflows; generic Git connectors; external SSH connectors; and Cloudflare DNS/ACME automation. Connector credentials are encrypted and access is scope-gated. |
 | Relay | A long-lived local relay owns public `9443/tcp` for daemon control and managed tunnel traffic. Relay Pool can add remote supervisor/worker pairs, explicit placement and rebalancing, draining, and rolling signed updates while preserving one logical Secure Link. |
 | AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. |
-| Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
+| Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@sqgateway/inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
 ## How It Works

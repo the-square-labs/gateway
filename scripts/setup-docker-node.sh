@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Installs docker-daemon on a host and enrolls it with the Gateway.
 #
 # Usage:
-#   curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-docker-node.sh | \
+#   curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | \
 #     sudo bash -s -- --gateway gateway.example.com:9443 --token <ENROLLMENT_TOKEN> --gateway-cert-sha256 sha256:<HEX>
 #
 # Or download and run:
@@ -36,8 +36,8 @@ GATEWAY_ADDR="${GATEWAY_NODE_ADDRESS:-}"
 ENROLL_TOKEN="${GATEWAY_NODE_TOKEN:-}"
 GATEWAY_CERT_SHA256="${GATEWAY_NODE_CERT_SHA256:-}"
 DAEMON_VERSION="${GATEWAY_NODE_DAEMON_VERSION:-latest}"
-GITLAB_URL="${GATEWAY_GITLAB_URL:-https://gitlab.wiolett.net}"
-GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
+RELEASES_API_URL="${GATEWAY_RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
+ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 RUN_USER=""
 NON_INTERACTIVE=0
 NO_LOGO=0
@@ -809,11 +809,6 @@ check_dependencies() {
     ensure_curl_installed
 }
 
-build_gitlab_api() {
-    local encoded_project="${GITLAB_PROJECT//\//%2F}"
-    GITLAB_API="${GITLAB_URL}/api/v4/projects/${encoded_project}"
-}
-
 normalize_daemon_version() {
     local version="$1"
     version="${version%-docker}"
@@ -858,17 +853,17 @@ resolve_download_url() {
         log "Resolving latest docker release tag..."
         local latest_tag
         local releases_json
-        releases_json=$(curl -fsSL "${GITLAB_API}/releases?per_page=100")
+        releases_json=$(curl -fsSL "${RELEASES_API_URL}")
         latest_tag=$(printf '%s' "$releases_json" | grep -o '"tag_name":"v[0-9]*\.[0-9]*\.[0-9]*-docker"' | head -1 | cut -d'"' -f4 || true)
         if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
-            die "Could not resolve latest docker release tag from ${GITLAB_API}/releases"
+            die "Could not resolve latest docker release tag from ${RELEASES_API_URL}"
         fi
         log "Resolved tag: ${latest_tag}"
         RESOLVED_DAEMON_VERSION="${latest_tag%-docker}"
-        RELEASE_BASE="${GITLAB_API}/releases/${latest_tag}/downloads"
+        RELEASE_BASE="${ARTIFACT_BASE_URL}/docker-daemon/${latest_tag}"
     else
         RESOLVED_DAEMON_VERSION=$(normalize_daemon_version "$version")
-        RELEASE_BASE="${GITLAB_API}/releases/${RESOLVED_DAEMON_VERSION}-docker/downloads"
+        RELEASE_BASE="${ARTIFACT_BASE_URL}/docker-daemon/${RESOLVED_DAEMON_VERSION}-docker"
     fi
 
     DOWNLOAD_URL="${RELEASE_BASE}/${binary_name}"
@@ -896,8 +891,6 @@ Options:
   --version <ver>          Daemon version to install (default: latest)
   --mode <profile>         Node profile: docker, builder, or databases (default: docker)
   --user <user>            Run daemon as this user (default: root)
-  --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
-  --gitlab-project <proj>  GitLab project path (default: wiolett/gateway)
   --no-logo                Suppress the logo banner
   --dry-run                Validate inputs and show the plan without changing the host
   -y, --yes                Non-interactive mode (no prompts, all values required via flags)
@@ -912,8 +905,8 @@ Environment variables:
   GATEWAY_NODE_DAEMON_VERSION   Same as --version
   GATEWAY_DOCKER_MODE           Same as --mode
   GATEWAY_BUILDER_EGRESS_PROFILE Same as --builder-egress (internet or offline; default: internet)
-  GATEWAY_GITLAB_URL            Same as --gitlab-url
-  GATEWAY_GITLAB_PROJECT        Same as --gitlab-project
+  GATEWAY_RELEASES_API_URL      Override the Gateway release feed
+  GATEWAY_ARTIFACT_BASE_URL     Override the Gateway artifact base URL
 
 Examples:
   # Interactive (prompts for everything):
@@ -922,8 +915,8 @@ Examples:
   # Fully non-interactive:
   sudo bash setup-docker-node.sh -y --host gateway.example.com --token gw_node_abc123 --gateway-cert-sha256 sha256:<HEX>
 
-  # Custom GitLab and user:
-  sudo bash setup-docker-node.sh --gitlab-url https://git.example.com --user dockeruser --gateway gw:9443 --token TOKEN --gateway-cert-sha256 sha256:<HEX>
+  # Custom daemon user:
+  sudo bash setup-docker-node.sh --user dockeruser --gateway gw:9443 --token TOKEN --gateway-cert-sha256 sha256:<HEX>
 HELP
     exit 0
 }
@@ -939,8 +932,6 @@ while [[ $# -gt 0 ]]; do
         --mode)           DOCKER_MODE="$2"; shift 2 ;;
         --builder-egress) BUILDER_EGRESS_PROFILE="$2"; shift 2 ;;
         --user)           RUN_USER="$2"; shift 2 ;;
-        --gitlab-url)     GITLAB_URL="$2"; shift 2 ;;
-        --gitlab-project) GITLAB_PROJECT="$2"; shift 2 ;;
         --no-logo)        NO_LOGO=1; shift ;;
         --dry-run)        DRY_RUN=1; shift ;;
         -y|--yes)         NON_INTERACTIVE=1; NO_LOGO=1; shift ;;
@@ -982,7 +973,6 @@ fi
 detect_os
 detect_arch
 check_dependencies
-build_gitlab_api
 detect_existing_install
 
 if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
@@ -1133,7 +1123,7 @@ summary_row "Current ver: $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "${EXISTING_
 summary_row "Mode:        $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "update" || echo "fresh install")"
 summary_row "Profile:     ${DOCKER_MODE}"
 summary_row "Run as:      ${RUN_USER}:${RUN_GROUP}"
-summary_row "GitLab:      ${GITLAB_URL}"
+summary_row "Updates:     ${ARTIFACT_BASE_URL}"
 summary_end
 
 if ! prompt_yes_no "Proceed with installation?" "Y"; then

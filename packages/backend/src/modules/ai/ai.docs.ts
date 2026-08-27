@@ -447,13 +447,13 @@ The UI shows ready-to-copy commands. Run one of these on the target server as ro
 
 For **nginx** nodes:
 \`\`\`bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-node.sh | sudo bash -s -- \\
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
 
 For **docker** nodes:
 \`\`\`bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-docker-node.sh | sudo bash -s -- \\
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
 
@@ -463,7 +463,7 @@ For **database** nodes, run setup-database-node.sh with the generated Gateway ad
 
 For **monitoring** nodes:
 \`\`\`bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-monitoring-node.sh | sudo bash -s -- \\
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-monitoring-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
 
@@ -1241,7 +1241,7 @@ The \`gwi_\` secret is shown once. Never repeat it after creation, store it in a
 No global installation or PATH change is required:
 
 \`\`\`bash
-npx -y @wiolett/gateway-inference@latest
+npx -y @sqgateway/inference@latest
 \`\`\`
 
 An administrator must first enable **Inference** in **Settings > General**. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report \`generalSettings.features.inferenceEnabled\`. Without that read permission, do not guess its value: explain that an administrator must confirm it. The interactive manager asks for the Gateway URL and offers either isolated browser OAuth/PKCE or a masked existing \`gwi_\` token, then can configure, diagnose, repair, or remove supported harness integrations. Browser OAuth always prints the complete authorization URL before attempting to open it, preserving a manual fallback when the browser does not start. The token is validated before it is saved, identifies its owning user, and requires no email. Direct commands are \`login [gateway]\`, \`logout\`, \`setup [harness]\`, and the offline recovery command \`uninstall codex-usage\`; non-interactive token login uses \`--token\`. \`--home /data/inference\` or \`GATEWAY_INFERENCE_HOME=/data/inference\` keeps all companion-owned filesystem state and mode-0600 credentials below one directory and is propagated to installed helper processes. Harness configuration still remains in the native Codex or Claude Code directory. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
@@ -1249,9 +1249,9 @@ An administrator must first enable **Inference** in **Settings > General**. Befo
 #### Codex CLI and Desktop
 
 \`\`\`bash
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...
-npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @sqgateway/inference@latest login https://gateway.example.com
+npx -y @sqgateway/inference@latest login https://gateway.example.com --token gwi_...
+npx -y @sqgateway/inference@latest setup codex
 \`\`\`
 
 Codex setup issues a dedicated runtime token, writes only package-managed Codex configuration sections, installs a private helper and loopback proxy, and maintains the authoritative Gateway model catalog. It does not replace native Codex usage or quota displays. Catalog changes apply after starting a new Codex process. Codex Desktop must also be signed in to an OpenAI account through Codex's normal login flow; after Gateway setup or login changes, fully quit and reopen Codex.
@@ -1261,9 +1261,9 @@ Codex setup issues a dedicated runtime token, writes only package-managed Codex 
 Claude Code 2.1.129 or newer is required:
 
 \`\`\`bash
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...
-npx -y @wiolett/gateway-inference@latest setup claude-code
+npx -y @sqgateway/inference@latest login https://gateway.example.com
+npx -y @sqgateway/inference@latest login https://gateway.example.com --token gwi_...
+npx -y @sqgateway/inference@latest setup claude-code
 \`\`\`
 
 Claude Code setup issues a separate dedicated runtime token and configures the native Anthropic gateway contract with \`ANTHROPIC_BASE_URL\`, model discovery, and a private \`apiKeyHelper\`. It does not use the Codex loopback proxy. This setup supports the Claude Code CLI only; Claude Desktop and the Claude Code VS Code extension are separate and are not modified automatically.

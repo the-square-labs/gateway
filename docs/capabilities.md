@@ -267,7 +267,7 @@ Logging features:
 - Search UI with filters and event detail inspection.
 - Housekeeping caps by total rows and approximate on-disk size, in addition to per-environment TTL.
 - Always-on ClickHouse health and internal-log budget guard with Dashboard warnings.
-- Official TypeScript SDK published as [`@wiolett/gateway-logger`](https://www.npmjs.com/package/@wiolett/gateway-logger), with source in `packages/logging-sdk`.
+- Official TypeScript SDK published as [`@sqgateway/logger`](https://www.npmjs.com/package/@sqgateway/logger), with source in `packages/logging-sdk`.
 
 Logging is optional. When structured logging is set to **Disabled** in Gateway settings, logging routes report that logging is disabled and the frontend hides the Logging section.
 
@@ -313,7 +313,7 @@ Inference features:
 - Enforce default and per-user five-hour, weekly, monthly, and API-spend budgets.
 - Expose a base OpenAI-compatible API plus optional Codex- and Anthropic-specific adapters.
 - Issue dedicated `gwi_` runtime tokens that are accepted only by inference data-plane routes.
-- Configure Codex CLI/Desktop and Claude Code through the interactive [`@wiolett/gateway-inference`](../packages/gateway-inference) companion.
+- Configure Codex CLI/Desktop and Claude Code through the interactive [`@sqgateway/inference`](../packages/gateway-inference) companion.
 
 Inference is disabled by default. See the [inference guide](inference.md) for provider, model, limit, token, and client setup.
 

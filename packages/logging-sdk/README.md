@@ -1,17 +1,17 @@
 # Gateway Logging SDK
 
-`@wiolett/gateway-logger` is a Node-first TypeScript SDK for sending application logs into Square Labs Gateway. It handles Gateway ingest tokens, context merging, batching, retries, rate-limit backoff, trace/span identifiers, and graceful shutdown flushing.
+`@sqgateway/logger` is a Node-first TypeScript SDK for sending application logs into Square Labs Gateway. It handles Gateway ingest tokens, context merging, batching, retries, rate-limit backoff, trace/span identifiers, and graceful shutdown flushing.
 
 Use it when an external service, worker, script, or backend needs to write structured logs into Gateway without calling the ingest API manually.
 
 ## Installation
 
 ```sh
-pnpm add @wiolett/gateway-logger
+pnpm add @sqgateway/logger
 ```
 
 ```sh
-npm install @wiolett/gateway-logger
+npm install @sqgateway/logger
 ```
 
 The package is ESM-only and ships TypeScript declarations. It expects a runtime with `fetch`; modern Node.js versions provide it globally. For older runtimes, pass a custom `fetch` implementation in the logger options.
@@ -28,7 +28,7 @@ Logging ingest tokens use the `gwl_` prefix. Keep them server-side. Do not put t
 ## Quick Start
 
 ```ts
-import { GatewayLogger } from "@wiolett/gateway-logger";
+import { GatewayLogger } from "@sqgateway/logger";
 
 const logger = new GatewayLogger({
   endpoint: "https://gateway.example.com",
@@ -335,7 +335,7 @@ const logger = new GatewayLogger({
 For long-running Node processes, install the shutdown hook so queued logs are flushed on common process shutdown signals:
 
 ```ts
-import { GatewayLoggerHook } from "@wiolett/gateway-logger";
+import { GatewayLoggerHook } from "@sqgateway/logger";
 
 const uninstallHook = logger.hooks.install(GatewayLoggerHook.SHUTDOWN);
 
@@ -424,7 +424,7 @@ Avoid placing secrets, passwords, API keys, tokens, raw authorization headers, p
 Creates a Gateway logger instance.
 
 ```ts
-import { GatewayLogger } from "@wiolett/gateway-logger";
+import { GatewayLogger } from "@sqgateway/logger";
 ```
 
 ### `GatewayLogger` class
@@ -481,10 +481,10 @@ The package exports these public types:
 From the repository root:
 
 ```sh
-pnpm --filter @wiolett/gateway-logger test
-pnpm --filter @wiolett/gateway-logger lint
-pnpm --filter @wiolett/gateway-logger typecheck
-pnpm --filter @wiolett/gateway-logger build
+pnpm --filter @sqgateway/logger test
+pnpm --filter @sqgateway/logger lint
+pnpm --filter @sqgateway/logger typecheck
+pnpm --filter @sqgateway/logger build
 ```
 
 The package publishes `dist` only.

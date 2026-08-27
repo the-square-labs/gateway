@@ -576,7 +576,7 @@ describe("SetupWizardPage", () => {
     expect(screen.getByText(/Community is for noncommercial use only/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Commercial Key License" })).toHaveAttribute(
       "href",
-      "https://gitlab.wiolett.net/wiolett/gateway/-/blob/main/COMMERCIAL-LICENSE.md"
+      "https://github.com/the-square-labs/gateway/blob/main/COMMERCIAL-LICENSE.md"
     );
     await user.click(screen.getByRole("button", { name: "Continue for noncommercial use" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));

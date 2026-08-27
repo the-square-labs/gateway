@@ -78,7 +78,7 @@ class MemoryCredentials implements CredentialStore {
   }
 }
 
-describe('@wiolett/gateway-inference CLI', () => {
+describe('@sqgateway/inference CLI', () => {
   it('exposes only the focused commands and keeps Codex lifecycle operations interactive or private', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gateway-inference-cli-'));
     const paths: CliPaths = {
@@ -304,7 +304,7 @@ describe('@wiolett/gateway-inference CLI', () => {
     expect(values.at(-1)).toMatchObject({ error: { code: 'INVALID_ARGUMENT' } });
 
     expect(await runCli(['--help'], dependencies)).toBe(0);
-    expect(human.at(-1)).toContain('npx @wiolett/gateway-inference');
+    expect(human.at(-1)).toContain('npx @sqgateway/inference');
     expect(human.at(-1)).not.toMatch(/\n {2}(status|inference|tokens|doctor|sync|remove|mcp|auth)\b/i);
     expect(human.at(-1)).not.toContain('--profile');
 

@@ -330,7 +330,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         result.gatewayEnrollmentTargets?.local?.gateway;
       if (!target) throw new Error("Gateway enrollment address is unavailable");
       setEnrollCommand(
-        `curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-relay-node.sh | sudo bash -s -- --gateway ${target} --token ${result.enrollmentToken} --gateway-cert-sha256 ${result.gatewayCertSha256} --advertise-address ${enrollAddress.trim()}`
+        `curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-relay-node.sh | sudo bash -s -- --gateway ${target} --token ${result.enrollmentToken} --gateway-cert-sha256 ${result.gatewayCertSha256} --advertise-address ${enrollAddress.trim()}`
       );
       toast.success("Relay enrollment created");
     } catch (error) {

@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const CLI_COMMAND = "npx -y @wiolett/gateway-inference@latest";
+const CLI_COMMAND = "npx -y @sqgateway/inference@latest";
 
 export function InferenceEndpointSettingsPanel() {
   const [instructionsOpen, setInstructionsOpen] = useState(false);

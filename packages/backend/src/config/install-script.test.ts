@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parse } from 'yaml';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
 const gitlabPipeline = fileURLToPath(new URL('../../../../.gitlab-ci.yml', import.meta.url));
@@ -118,6 +118,16 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay/identity:ro');
     expect(source).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
     expect(source).toContain('ensure_env GATEWAY_REGISTRY_IMAGE_REF "registry:3"');
+    expect(source).toContain(
+      'RELEASES_API_URL="$' + '{RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"'
+    );
+    expect(source).toContain(
+      'ARTIFACT_BASE_URL="$' + '{ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"'
+    );
+    expect(source).toContain('DEFAULT_IMAGE="ghcr.io/the-square-labs/gateway"');
+    expect(source).toContain('download_release_artifact gateway "$version" gateway-image.update.json');
+    expect(source).toContain('download_release_artifact relay "$relay_tag" relay-image.update.json');
+    expect(source).not.toContain('GitLab compatibility source');
     expect(source).toContain('ensure_env GATEWAY_REGISTRY_HTTP_SECRET "$(openssl rand -hex 32)"');
     expect(source).toContain('com.wiolett.gateway.managed-service: registry');
     expect(source).toContain('gateway_registry_data:/var/lib/registry');
@@ -266,10 +276,7 @@ describe('database daemon installer prerequisites', () => {
 
   it.each([
     ['fresh config', 'docker:\n  mode: "builder"\n'],
-    [
-      'v2.9.6 malformed config',
-      'docker:\nbuilder:\n    egress_profile: "internet"\n  mode: "builder"\n',
-    ],
+    ['v2.9.6 malformed config', 'docker:\nbuilder:\n    egress_profile: "internet"\n  mode: "builder"\n'],
   ])('writes a valid canonical builder profile from %s', (_name, dockerSection) => {
     const source = readFileSync(dockerNodeInstaller, 'utf8');
     const start = source.indexOf('write_builder_profile_config() {');
@@ -277,21 +284,26 @@ describe('database daemon installer prerequisites', () => {
     const fn = source.slice(start, end);
     const directory = mkdtempSync(join(tmpdir(), 'gateway-builder-profile-'));
     const configPath = join(directory, 'config.yaml');
-    writeFileSync(
-      configPath,
-      `gateway:\n  address: gateway.example:9443\n${dockerSection}`,
-      'utf8'
-    );
+    writeFileSync(configPath, `gateway:\n  address: gateway.example:9443\n${dockerSection}`, 'utf8');
 
-    const result = spawnSync('bash', ['-c', `${fn}\ndie() { printf '%s\\n' "$*" >&2; return 1; }\nok() { :; }\nwrite_builder_profile_config "$1"`, 'test', configPath], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        DOCKER_MODE: 'builder',
-        RUN_USER: 'root',
-        BUILDER_EGRESS_PROFILE: 'internet',
-      },
-    });
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        `${fn}\ndie() { printf '%s\\n' "$*" >&2; return 1; }\nok() { :; }\nwrite_builder_profile_config "$1"`,
+        'test',
+        configPath,
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          DOCKER_MODE: 'builder',
+          RUN_USER: 'root',
+          BUILDER_EGRESS_PROFILE: 'internet',
+        },
+      }
+    );
 
     expect(result.status, result.stderr).toBe(0);
     const parsed = parse(readFileSync(configPath, 'utf8')) as {
@@ -328,10 +340,12 @@ describe('node installer daemon downloads', () => {
     ['nginx', nginxNodeInstaller],
     ['docker', dockerNodeInstaller],
     ['monitoring', monitoringNodeInstaller],
-  ])('%s searches enough GitLab releases to find less frequently published daemon tags', (_name, path) => {
+  ])('%s uses the shared Gateway release feed for daemon tags', (_name, path) => {
     const source = readFileSync(path, 'utf8');
 
-    expect(source).toContain('/releases?per_page=100');
+    expect(source).toContain('https://updates.thesqlabs.com/gateway/releases');
+    expect(source).toContain('https://updates.thesqlabs.com/gateway');
+    expect(source).not.toContain('gitlab.wiolett.net');
   });
 
   it.each([

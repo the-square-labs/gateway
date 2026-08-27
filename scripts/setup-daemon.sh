@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Downloads and runs the appropriate setup script for a daemon type.
 #
 # Usage:
-#   curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-daemon.sh | \
+#   curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-daemon.sh | \
 #     sudo bash -s -- --type nginx --gateway gateway.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
 # ────────────────────────────────────────────────────────────────────
 
@@ -24,8 +24,7 @@ ERROR_TAG='\033[48;2;96;61;43m\033[38;2;245;221;202m'
 
 # ── Defaults ────────────────────────────────────────────────────────
 DAEMON_TYPE=""
-GITLAB_URL="${GATEWAY_GITLAB_URL:-https://gitlab.wiolett.net}"
-GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
+GITHUB_RAW_BASE="${GATEWAY_GITHUB_RAW_BASE:-https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts}"
 LOCAL_SCRIPT_DIR="${GATEWAY_SETUP_SCRIPT_DIR:-}"
 PASSTHROUGH_ARGS=()
 
@@ -141,8 +140,6 @@ Usage:
 
 Options:
   --type <type>            Daemon type: nginx, docker, databases, or monitoring
-  --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
-  --gitlab-project <proj>  GitLab project path (default: wiolett/gateway)
   --script-dir <path>      Run a daemon-specific installer from a local directory
   -h, --help               Show this help
 
@@ -155,8 +152,8 @@ Examples:
   # Direct nginx setup:
   sudo bash setup-daemon.sh --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
 
-  # Docker daemon with custom GitLab:
-  sudo bash setup-daemon.sh --type docker --gitlab-url https://git.example.com --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
+  # Docker daemon:
+  sudo bash setup-daemon.sh --type docker --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
 HELP
     exit 0
 }
@@ -164,8 +161,6 @@ HELP
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --type)           DAEMON_TYPE="$2"; shift 2 ;;
-        --gitlab-url)     GITLAB_URL="$2"; PASSTHROUGH_ARGS+=("--gitlab-url" "$2"); shift 2 ;;
-        --gitlab-project) GITLAB_PROJECT="$2"; PASSTHROUGH_ARGS+=("--gitlab-project" "$2"); shift 2 ;;
         --script-dir)     LOCAL_SCRIPT_DIR="$2"; shift 2 ;;
         -h|--help)        show_help ;;
         *)                PASSTHROUGH_ARGS+=("$1"); shift ;;
@@ -208,18 +203,14 @@ case "$DAEMON_TYPE" in
     monitoring) SCRIPT_NAME="setup-monitoring-node.sh" ;;
 esac
 
-# ── Build GitLab API URL ────────────────────────────────────────────
-ENCODED_PROJECT="${GITLAB_PROJECT//\//%2F}"
-GITLAB_API="${GITLAB_URL}/api/v4/projects/${ENCODED_PROJECT}"
-
 # ── Resolve and execute ─────────────────────────────────────────────
 if [[ -n "$LOCAL_SCRIPT_DIR" ]]; then
     TMPSCRIPT="${LOCAL_SCRIPT_DIR%/}/${SCRIPT_NAME}"
     [[ -f "$TMPSCRIPT" ]] || die "Local installer not found: ${TMPSCRIPT}"
     log "Running local ${SCRIPT_NAME}..."
 else
-    DOWNLOAD_URL="${GITLAB_URL}/${GITLAB_PROJECT}/-/raw/main/scripts/${SCRIPT_NAME}"
-    log "Downloading ${SCRIPT_NAME} from ${GITLAB_URL}..."
+    DOWNLOAD_URL="${GITHUB_RAW_BASE%/}/${SCRIPT_NAME}"
+    log "Downloading ${SCRIPT_NAME} from GitHub..."
 
     TMPSCRIPT=$(mktemp_compat /tmp/gateway-setup)
     trap 'rm -f "$TMPSCRIPT"' EXIT

@@ -5,7 +5,7 @@
 AI-first 但不依赖 AI 的自托管基础设施控制平面，用于 nginx ingress、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
 
 > [!NOTE]
-> 主要开发在 [Square Labs GitLab](https://gitlab.wiolett.net/wiolett/gateway) 进行。[GitHub 仓库](https://github.com/wiolett-industries/gateway) 是公开镜像。Issues 和功能请求可以提交到 [GitHub](https://github.com/wiolett-industries/gateway/issues)。
+> 主要开发在 [GitHub](https://github.com/the-square-labs/gateway) 进行。Issues 和功能请求可以提交到 [GitHub issue tracker](https://github.com/the-square-labs/gateway/issues)。
 
 ## 为什么需要 Gateway
 
@@ -27,7 +27,7 @@ AI Workspace 是推荐的 intent-driven 界面：从完整 Scenario 开始或描
 在带 Docker 的 Linux 服务器上安装 Gateway：
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/install.sh | bash
 ```
 
 > [!IMPORTANT]
@@ -102,7 +102,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | Integrations | GitLab project、repository、CI/CD、variable、webhook、registry 和 sandbox workflows；GitHub repository 与 Actions workflows；generic Git connectors；external SSH connectors；以及 Cloudflare DNS/ACME automation。Connector credentials 会加密保存，访问受 scopes 限制。 |
 | Relay | Long-lived local relay 负责公开 `9443/tcp` 上的 daemon control 与 managed tunnel traffic。Relay Pool 可增加 remote supervisor/worker pairs、显式 placement/rebalancing、drain 与 rolling signed updates，同时保持一个逻辑 Secure Link。 |
 | AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
-| Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
+| Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@sqgateway/inference` 管理的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
 ## 工作方式

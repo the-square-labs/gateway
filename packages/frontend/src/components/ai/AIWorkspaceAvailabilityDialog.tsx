@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 
 export type AIWorkspaceAvailability = "needs_configuration" | "not_configured" | "no_access";
 
@@ -19,11 +20,14 @@ export function AIWorkspaceAvailabilityDialog({
   onClose: () => void;
   onConfigure: () => void;
 }) {
-  const canConfigure = state === "needs_configuration";
+  const visibleState = useRetainedDialogValue(state, state !== null);
+  const canConfigure = visibleState === "needs_configuration";
   const title =
-    state === "no_access" ? "AI Workspace access required" : "AI Workspace is not configured";
+    visibleState === "no_access"
+      ? "AI Workspace access required"
+      : "AI Workspace is not configured";
   const description =
-    state === "no_access"
+    visibleState === "no_access"
       ? "Your account does not have access to AI Workspace. Ask an administrator to grant the AI Workspace permission."
       : canConfigure
         ? "AI Workspace needs a model connection before it can be used. Configure it now or continue in Operations Console."

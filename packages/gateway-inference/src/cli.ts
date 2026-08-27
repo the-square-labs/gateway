@@ -48,7 +48,7 @@ interface CliDependencies {
 
 const CONNECTION_NAME = 'default';
 
-const HELP = `Usage: npx @wiolett/gateway-inference [--home <path>] [command]
+const HELP = `Usage: npx @sqgateway/inference [--home <path>] [command]
 
 Commands:
   login [GATEWAY]                  Authorize through OAuth or an existing gwi_ token

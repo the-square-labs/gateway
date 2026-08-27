@@ -2,7 +2,7 @@ import { CliError } from './errors.js';
 import { assertTrustedEndpoint, type Fetch, requestJson } from './http.js';
 import type { InferenceDiscovery, OAuthMetadata } from './types.js';
 
-export const CLI_VERSION = '0.3.8';
+export const CLI_VERSION = '0.3.9';
 
 interface RawInferenceDiscovery {
   schemaVersion?: number;
@@ -65,7 +65,7 @@ export async function discoverInference(
   if (compareVersions(CLI_VERSION, discovery.minimumCliVersion) < 0) {
     throw new CliError(
       'CLI_UPDATE_REQUIRED',
-      `Gateway requires @wiolett/gateway-inference ${discovery.minimumCliVersion} or newer (current ${CLI_VERSION}).`
+      `Gateway requires @sqgateway/inference ${discovery.minimumCliVersion} or newer (current ${CLI_VERSION}).`
     );
   }
   // Both schemas expose the standard OpenAI and Anthropic adapter URLs. Keep

@@ -362,9 +362,10 @@ beforeEach(() => {
     store as never,
     docker as never,
     {
-      GITLAB_API_URL: 'https://gitlab.test',
-      GITLAB_PROJECT_PATH: 'wiolett/gateway',
       APP_VERSION: '2.8.0',
+      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+      INFERENCE_CORE_UPDATE_IMAGE_REPOSITORIES: 'ghcr.io/the-square-labs/inference-core',
     } as never,
     vault as never,
     operations as never,

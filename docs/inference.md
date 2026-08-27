@@ -64,15 +64,15 @@ The `/api/inference/v1` endpoint exposes the OpenAI-compatible Models, Responses
 For Codex and Claude Code, prefer the companion package instead of editing configuration or copying tokens manually:
 
 ```bash
-npx -y @wiolett/gateway-inference@latest
+npx -y @sqgateway/inference@latest
 ```
 
 The interactive package asks for the Gateway URL and then offers browser OAuth with resource-isolated PKCE or a masked existing `gwi_` token. Before attempting to open the browser, OAuth always prints the complete authorization URL to the console so it can be opened manually. The token is validated before it is saved and already identifies its user, so no email is required. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available; non-interactive token login uses `--token`:
 
 ```bash
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...
-npx -y @wiolett/gateway-inference@latest setup codex
-npx -y @wiolett/gateway-inference@latest setup claude-code
+npx -y @sqgateway/inference@latest login https://gateway.example.com --token gwi_...
+npx -y @sqgateway/inference@latest setup codex
+npx -y @sqgateway/inference@latest setup claude-code
 ```
 
 Codex setup issues a dedicated runtime token, installs a private stable helper and loopback proxy, and maintains the authoritative Gateway model catalog. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog. Native Codex usage and quota displays are not overridden.

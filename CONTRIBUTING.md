@@ -1,6 +1,6 @@
 # Contributing to Gateway
 
-Thank you for your interest in Gateway. Bug reports, reproducible issue descriptions, and feature requests are welcome through [GitHub Issues](https://github.com/wiolett-industries/gateway/issues).
+Thank you for your interest in Gateway. Bug reports, reproducible issue descriptions, and feature requests are welcome through [GitHub Issues](https://github.com/the-square-labs/gateway/issues).
 
 ## Source-code changes
 

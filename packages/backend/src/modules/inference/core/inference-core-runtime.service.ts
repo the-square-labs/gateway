@@ -197,16 +197,15 @@ export class InferenceCoreRuntimeService {
 
   /** Explicit "check for updates" action; persists the discovery result. */
   async checkForUpdates(): Promise<InferenceCoreLatestInfo | null> {
-    const tag = await fetchLatestOpenCodexTag(this.env.GITLAB_API_URL, this.env.GITLAB_PROJECT_PATH);
+    const tag = await fetchLatestOpenCodexTag(this.env.RELEASES_API_URL);
     if (!tag) {
       await this.storeLatestInfo(null);
       return null;
     }
     const artifact = await fetchOpenCodexImageManifest(
-      this.env.GITLAB_API_URL,
-      this.env.GITLAB_PROJECT_PATH,
+      this.env.ARTIFACT_BASE_URL,
       tag,
-      await this.expectedDistributionImage()
+      await this.trustedDistributionImages()
     );
     const info: InferenceCoreLatestInfo = {
       version: artifact.version,
@@ -486,13 +485,12 @@ export class InferenceCoreRuntimeService {
     operationId: string
   ): Promise<TrustedOpenCodexImageArtifact> {
     await this.operations.heartbeat(operationId);
-    const tag = targetVersion ?? (await fetchLatestOpenCodexTag(this.env.GITLAB_API_URL, this.env.GITLAB_PROJECT_PATH));
+    const tag = targetVersion ?? (await fetchLatestOpenCodexTag(this.env.RELEASES_API_URL));
     if (!tag) throw new AppError(502, 'CORE_RELEASE_UNAVAILABLE', 'No published core release found');
     const artifact = await fetchOpenCodexImageManifest(
-      this.env.GITLAB_API_URL,
-      this.env.GITLAB_PROJECT_PATH,
+      this.env.ARTIFACT_BASE_URL,
       tag.startsWith('v') ? tag : `v${tag}`,
-      await this.expectedDistributionImage()
+      await this.trustedDistributionImages()
     );
     const compatibility = checkOpenCodexGatewayCompatibility(artifact, this.env.APP_VERSION);
     if (!compatibility.compatible) {
@@ -823,6 +821,16 @@ export class InferenceCoreRuntimeService {
     if (this.env.INFERENCE_CORE_DISTRIBUTION_IMAGE) return this.env.INFERENCE_CORE_DISTRIBUTION_IMAGE;
     const self = await this.docker.inspectSelf();
     return `${imageRepositoryFromRef(self.Config.Image)}/opencodex`;
+  }
+
+  private async trustedDistributionImages(): Promise<string[]> {
+    if (this.env.INFERENCE_CORE_DISTRIBUTION_IMAGE) return [this.env.INFERENCE_CORE_DISTRIBUTION_IMAGE];
+    const current = await this.expectedDistributionImage();
+    const configured = (this.env.INFERENCE_CORE_UPDATE_IMAGE_REPOSITORIES ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return [...new Set([current, ...configured])];
   }
 
   private coreBaseUrl(): string {

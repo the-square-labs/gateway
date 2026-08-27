@@ -5,10 +5,16 @@ import { nodes, relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from
 import { settings } from '@/db/schema/settings.js';
 import { DEFAULT_SANDBOX_WORKSPACE_DIR } from '@/foundation/foundation-migrator.js';
 import { createChildLogger } from '@/lib/logger.js';
+import {
+  type ReleaseFileSource,
+  type ReleaseRecord,
+  releaseFileSource,
+  releaseNotes,
+  releaseUrl,
+} from '@/lib/release-artifacts.js';
 import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
 import type { TrustedDaemonUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
-  normalizeGitLabApiUrl,
   type TrustedGatewayUpdateArtifact,
   type TrustedRelayUpdateArtifact,
   verifyGatewayImageManifest,
@@ -47,12 +53,6 @@ export interface RelayUpdateStatus {
   operation: RelayUpdateOperation | null;
 }
 
-interface GitLabRelease {
-  tag_name: string;
-  description: string;
-  _links: { self: string };
-}
-
 interface FoundationMigrationOutput {
   ok: true;
   changedFiles: string[];
@@ -81,7 +81,7 @@ export function isGatewayReleaseTag(tag: string): boolean {
   return /^v?\d+\.\d+\.\d+$/.test(tag);
 }
 
-export function selectLatestGatewayRelease(releases: GitLabRelease[]): GitLabRelease | null {
+export function selectLatestGatewayRelease(releases: ReleaseRecord[]): ReleaseRecord | null {
   const matching = releases
     .filter((release) => isGatewayReleaseTag(release.tag_name))
     .sort((a, b) => compareSemver(b.tag_name, a.tag_name));
@@ -93,7 +93,7 @@ export function isRelayReleaseTag(tag: string): boolean {
   return /^v?\d+\.\d+\.\d+-relay$/.test(tag);
 }
 
-export function selectLatestRelayRelease(releases: GitLabRelease[]): GitLabRelease | null {
+export function selectLatestRelayRelease(releases: ReleaseRecord[]): ReleaseRecord | null {
   return (
     releases
       .filter((release) => isRelayReleaseTag(release.tag_name))
@@ -129,9 +129,7 @@ const SETTINGS_KEYS = {
 } as const;
 
 export class UpdateService {
-  private readonly gitlabReleasesUrl: string;
-  private readonly encodedProjectPath: string;
-  private readonly gitlabApiUrl: string;
+  private readonly releasesUrl: string;
   private relayUpdateOperation: RelayUpdateOperation | null = null;
   private relayPoolRuntime?: RelayPoolUpdateRuntime;
 
@@ -141,9 +139,42 @@ export class UpdateService {
     private readonly env: Env,
     private readonly relayRuntime?: RelayUpdateRuntime
   ) {
-    this.gitlabApiUrl = normalizeGitLabApiUrl(this.env.GITLAB_API_URL);
-    this.encodedProjectPath = encodeURIComponent(this.env.GITLAB_PROJECT_PATH);
-    this.gitlabReleasesUrl = `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/releases?per_page=100`;
+    this.releasesUrl = this.env.RELEASES_API_URL;
+  }
+
+  private async fetchReleases(): Promise<ReleaseRecord[]> {
+    logger.debug('Checking release provider for updates', { url: this.releasesUrl });
+    const response = await fetch(this.releasesUrl, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`Release API returned ${response.status}`);
+    return (await response.json()) as ReleaseRecord[];
+  }
+
+  private gatewayImageRepositories(currentImage: string): string[] {
+    const configured = (this.env.GATEWAY_UPDATE_IMAGE_REPOSITORIES ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return [...new Set([currentImage, ...configured])];
+  }
+
+  private getManifestSource(packageName: string, tag: string, fileName: string): ReleaseFileSource {
+    return releaseFileSource(this.env.ARTIFACT_BASE_URL, packageName, tag, fileName);
+  }
+
+  private async fetchSignedManifest(source: ReleaseFileSource, label: string): Promise<string> {
+    const response = await fetch(source.url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (response.ok) return response.text();
+    throw new AppError(
+      502,
+      'UNTRUSTED_UPDATE_ARTIFACT',
+      `Failed to fetch ${label} update manifest: ${response.status}`
+    );
   }
 
   setRelayPoolUpdateRuntime(runtime: RelayPoolUpdateRuntime): void {
@@ -255,18 +286,7 @@ export class UpdateService {
     }
 
     try {
-      logger.debug('Checking GitLab for updates', { url: this.gitlabReleasesUrl });
-
-      const response = await fetch(this.gitlabReleasesUrl, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(15_000),
-      });
-
-      if (!response.ok) {
-        throw new Error(`GitLab API returned ${response.status}`);
-      }
-
-      const releases = (await response.json()) as GitLabRelease[];
+      const releases = await this.fetchReleases();
 
       if (!releases.length) {
         logger.debug('No releases found');
@@ -277,15 +297,15 @@ export class UpdateService {
       const latestRelay = selectLatestRelayRelease(releases);
       if (latest) {
         await this.upsertSetting(SETTINGS_KEYS.latestVersion, latest.tag_name);
-        await this.upsertSetting(SETTINGS_KEYS.releaseNotes, latest.description || '');
-        await this.upsertSetting(SETTINGS_KEYS.releaseUrl, latest._links?.self || '');
+        await this.upsertSetting(SETTINGS_KEYS.releaseNotes, releaseNotes(latest));
+        await this.upsertSetting(SETTINGS_KEYS.releaseUrl, releaseUrl(latest));
       }
       if (latestRelay) {
         const relayVersion = latestRelay.tag_name.replace(/-relay$/, '');
         const relayArtifact = await this.prepareRelayUpdate(relayVersion, true);
         await this.upsertSetting(SETTINGS_KEYS.relayLatestVersion, relayVersion);
-        await this.upsertSetting(SETTINGS_KEYS.relayReleaseNotes, latestRelay.description || '');
-        await this.upsertSetting(SETTINGS_KEYS.relayReleaseUrl, latestRelay._links?.self || '');
+        await this.upsertSetting(SETTINGS_KEYS.relayReleaseNotes, releaseNotes(latestRelay));
+        await this.upsertSetting(SETTINGS_KEYS.relayReleaseUrl, releaseUrl(latestRelay));
         await this.upsertSetting(SETTINGS_KEYS.relayMinGatewayVersion, relayArtifact.minGatewayVersion);
       }
       if (!latest && !latestRelay) logger.debug('No Gateway or relay releases found');
@@ -298,20 +318,10 @@ export class UpdateService {
   }
 
   async getReleaseNotes(version: string): Promise<string> {
-    const encodedPath = encodeURIComponent(this.env.GITLAB_PROJECT_PATH);
-    const url = `${this.gitlabApiUrl}/api/v4/projects/${encodedPath}/releases/${encodeURIComponent(version)}`;
-
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch release notes for ${version}: ${response.status}`);
-    }
-
-    const release = (await response.json()) as GitLabRelease;
-    return release.description || '';
+    const releases = await this.fetchReleases();
+    const release = releases.find((candidate) => candidate.tag_name === version);
+    if (!release) throw new Error(`Release ${version} was not found`);
+    return releaseNotes(release);
   }
 
   /**
@@ -319,16 +329,7 @@ export class UpdateService {
    * Returns newest first.
    */
   async getReleaseNotesSince(after: string, upTo: string): Promise<{ version: string; notes: string }[]> {
-    const response = await fetch(this.gitlabReleasesUrl, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`GitLab API returned ${response.status}`);
-    }
-
-    const releases = (await response.json()) as GitLabRelease[];
+    const releases = await this.fetchReleases();
 
     // Filter releases: newer than `after` and up to `upTo` (inclusive)
     return releases
@@ -337,40 +338,32 @@ export class UpdateService {
         return isGatewayReleaseTag(tag) && compareSemver(tag, after) > 0 && compareSemver(tag, upTo) <= 0;
       })
       .sort((a, b) => compareSemver(b.tag_name, a.tag_name))
-      .map((r) => ({ version: r.tag_name, notes: r.description || '' }));
+      .map((r) => ({ version: r.tag_name, notes: releaseNotes(r) }));
   }
 
   async prepareGatewayUpdate(targetVersion: string): Promise<TrustedGatewayUpdateArtifact> {
     const tag = normalizeVersionTag(targetVersion);
     const selfInfo = await this.dockerService.inspectSelf();
-    const imageBase = imageRepositoryFromRef(selfInfo.Config.Image);
-    const manifestUrl = this.getGatewayManifestUrl(tag);
-
-    const response = await fetch(manifestUrl, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) {
-      throw new AppError(
-        502,
-        'UNTRUSTED_UPDATE_ARTIFACT',
-        `Failed to fetch gateway update manifest: ${response.status}`
-      );
+    const currentImage = imageRepositoryFromRef(selfInfo.Config.Image);
+    const signedManifest = await this.fetchSignedManifest(
+      this.getManifestSource('gateway', tag, 'gateway-image.update.json'),
+      'gateway'
+    );
+    let artifact: TrustedGatewayUpdateArtifact | null = null;
+    let verificationError: unknown;
+    for (const image of this.gatewayImageRepositories(currentImage)) {
+      try {
+        artifact = verifyGatewayImageManifest(signedManifest, { version: tag, tag, image });
+        break;
+      } catch (error) {
+        verificationError = error;
+      }
     }
-
-    const signedManifest = await response.text();
-    let artifact: TrustedGatewayUpdateArtifact;
-    try {
-      artifact = verifyGatewayImageManifest(signedManifest, {
-        version: tag,
-        tag,
-        image: imageBase,
-      });
-    } catch (error) {
+    if (!artifact) {
       logger.warn('Gateway update manifest verification failed', {
         targetVersion,
-        imageBase,
-        error: error instanceof Error ? error.message : String(error),
+        currentImage,
+        error: verificationError instanceof Error ? verificationError.message : String(verificationError),
       });
       throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', 'Gateway update artifact is not trusted');
     }
@@ -385,23 +378,31 @@ export class UpdateService {
     const version = normalizeVersionTag(targetVersion);
     const tag = `${version}-relay`;
     const selfInfo = await this.dockerService.inspectSelf();
-    const image = `${imageRepositoryFromRef(selfInfo.Config.Image)}/relay`;
-    const response = await fetch(this.getRelayManifestUrl(version), {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) {
-      throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', `Failed to fetch relay update manifest: ${response.status}`);
+    const currentImage = imageRepositoryFromRef(selfInfo.Config.Image);
+    const signedManifest = await this.fetchSignedManifest(
+      this.getManifestSource('relay', tag, 'relay-image.update.json'),
+      'relay'
+    );
+    let artifact: TrustedRelayUpdateArtifact | null = null;
+    let verificationError: unknown;
+    for (const gatewayImage of this.gatewayImageRepositories(currentImage)) {
+      try {
+        artifact = verifyRelayImageManifest(signedManifest, {
+          version,
+          tag,
+          image: `${gatewayImage}/relay`,
+          protocolMajor: 1,
+        });
+        break;
+      } catch (error) {
+        verificationError = error;
+      }
     }
-    const signedManifest = await response.text();
-    let artifact: TrustedRelayUpdateArtifact;
-    try {
-      artifact = verifyRelayImageManifest(signedManifest, { version, tag, image, protocolMajor: 1 });
-    } catch (error) {
+    if (!artifact) {
       logger.warn('Relay update manifest verification failed', {
         targetVersion,
-        image,
-        error: error instanceof Error ? error.message : String(error),
+        currentImage,
+        error: verificationError instanceof Error ? verificationError.message : String(verificationError),
       });
       throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', 'Relay update artifact is not trusted');
     }
@@ -446,8 +447,8 @@ export class UpdateService {
     if (!parseSemver(targetVersion)) throw new Error(`Invalid version format: ${targetVersion}`);
 
     const tag = normalizeVersionTag(targetVersion);
-    if (artifact.payload.image !== imageBase) {
-      throw new Error(`Signed update image ${artifact.payload.image} does not match running image ${imageBase}`);
+    if (!this.gatewayImageRepositories(imageBase).includes(artifact.payload.image)) {
+      throw new Error(`Signed update image ${artifact.payload.image} is not an allowed Gateway image repository`);
     }
     if (artifact.payload.version !== tag) {
       throw new Error(`Signed update version ${artifact.payload.version} does not match requested ${tag}`);
@@ -1119,12 +1120,12 @@ backup="$FOUNDATION_BACKUP_DIR"
 
   getGatewayManifestUrl(version: string): string {
     const tag = normalizeVersionTag(version);
-    return `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/packages/generic/gateway/${tag}/gateway-image.update.json`;
+    return this.getManifestSource('gateway', tag, 'gateway-image.update.json').url;
   }
 
   getRelayManifestUrl(version: string): string {
     const tag = `${normalizeVersionTag(version)}-relay`;
-    return `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/packages/generic/relay/${tag}/relay-image.update.json`;
+    return this.getManifestSource('relay', tag, 'relay-image.update.json').url;
   }
 
   private async upsertSetting(key: string, value: unknown): Promise<void> {

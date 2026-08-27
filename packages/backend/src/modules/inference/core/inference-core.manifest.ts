@@ -1,47 +1,29 @@
+import { type ReleaseRecord, releaseFileSource } from '@/lib/release-artifacts.js';
 import { compareSemver, parseSemver } from '@/lib/semver.js';
-import {
-  normalizeGitLabApiUrl,
-  type TrustedOpenCodexImageArtifact,
-  verifyOpenCodexImageManifest,
-} from '@/lib/update-artifact-trust.js';
+import { type TrustedOpenCodexImageArtifact, verifyOpenCodexImageManifest } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { INFERENCE_CORE_PROTOCOL_MAJOR } from './inference-core.contract.js';
 
 /**
  * Release channel for the managed OpenCodex core. Releases are published by the
- * OpenCodex pipeline into the Gateway distribution namespace: one generic
- * package per tag holding the signed `opencodex-image.update.json`. Discovery
- * lists the package registry; the manifest itself is always signature-verified
- * before any Docker mutation is considered.
+ * OpenCodex pipeline into GitHub Releases. The signed manifest is always
+ * signature-verified before any Docker mutation is considered.
  */
 
 export const OPENCODEX_RELEASE_TAG_RE = /^v\d+\.\d+\.\d+-wiolett\.\d+$/;
 
-interface GitLabPackageRow {
-  version?: unknown;
-}
-
-function encodeProjectPath(projectPath: string): string {
-  return encodeURIComponent(projectPath);
-}
-
 /** Fetch the newest published OpenCodex core tag, or null when none exist yet. */
-export async function fetchLatestOpenCodexTag(gitlabApiUrl: string, projectPath: string): Promise<string | null> {
-  const base = normalizeGitLabApiUrl(gitlabApiUrl);
-  const url =
-    `${base}/api/v4/projects/${encodeProjectPath(projectPath)}` +
-    `/packages?package_type=generic&package_name=opencodex&per_page=100&sort=desc&order_by=created_at`;
-  const response = await fetch(url, {
+export async function fetchLatestOpenCodexTag(releasesApiUrl: string): Promise<string | null> {
+  const response = await fetch(releasesApiUrl, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
     throw new AppError(502, 'CORE_RELEASE_UNAVAILABLE', `Failed to list core releases: ${response.status}`);
   }
-  const rows = (await response.json()) as GitLabPackageRow[];
-  const tags = rows
-    .map((row) => row.version)
-    .filter((version): version is string => typeof version === 'string' && OPENCODEX_RELEASE_TAG_RE.test(version));
+  const tags = ((await response.json()) as ReleaseRecord[])
+    .map((release) => release.tag_name)
+    .filter((tag) => OPENCODEX_RELEASE_TAG_RE.test(tag));
   if (tags.length === 0) return null;
   return tags.reduce((newest, tag) => (compareOpenCodexVersions(tag, newest) > 0 ? tag : newest));
 }
@@ -68,20 +50,16 @@ export function parseOpenCodexVersion(version: string): { base: string; build: n
  * trust failure — the caller must treat both as "no Docker mutation happened".
  */
 export async function fetchOpenCodexImageManifest(
-  gitlabApiUrl: string,
-  projectPath: string,
+  artifactBaseUrl: string,
   tag: string,
-  expectedImage: string,
+  expectedImages: string | readonly string[],
   publicKey?: string | Buffer
 ): Promise<TrustedOpenCodexImageArtifact> {
   if (!OPENCODEX_RELEASE_TAG_RE.test(tag)) {
     throw new AppError(400, 'INVALID_CORE_VERSION', `Core release tag must match vX.Y.Z-wiolett.N, got "${tag}"`);
   }
-  const base = normalizeGitLabApiUrl(gitlabApiUrl);
-  const url =
-    `${base}/api/v4/projects/${encodeProjectPath(projectPath)}` +
-    `/packages/generic/opencodex/${encodeURIComponent(tag)}/opencodex-image.update.json`;
-  const response = await fetch(url, {
+  const source = releaseFileSource(artifactBaseUrl, 'inference-core', tag, 'opencodex-image.update.json');
+  const response = await fetch(source.url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(10_000),
   });
@@ -89,20 +67,24 @@ export async function fetchOpenCodexImageManifest(
     throw new AppError(502, 'CORE_RELEASE_UNAVAILABLE', `Failed to fetch core release manifest: ${response.status}`);
   }
   const signedManifest = await response.text();
-  try {
-    return verifyOpenCodexImageManifest(
-      signedManifest,
-      {
-        image: expectedImage,
-        coreProtocolMajor: INFERENCE_CORE_PROTOCOL_MAJOR,
-        version: tag.slice(1),
-        tag,
-      },
-      publicKey
-    );
-  } catch {
-    throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', 'Core release artifact is not trusted');
+  const imageRepositories = typeof expectedImages === 'string' ? [expectedImages] : expectedImages;
+  for (const image of imageRepositories) {
+    try {
+      return verifyOpenCodexImageManifest(
+        signedManifest,
+        {
+          image,
+          coreProtocolMajor: INFERENCE_CORE_PROTOCOL_MAJOR,
+          version: tag.slice(1),
+          tag,
+        },
+        publicKey
+      );
+    } catch {
+      // Try the next explicitly trusted repository during the registry bridge.
+    }
   }
+  throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', 'Core release artifact is not trusted');
 }
 
 /**

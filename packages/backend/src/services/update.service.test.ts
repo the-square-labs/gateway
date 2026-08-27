@@ -14,6 +14,47 @@ import {
 } from './update.service.js';
 
 describe('UpdateService release selection', () => {
+  it('builds provider-neutral Gateway and Relay manifest URLs when configured', () => {
+    const service = new UpdateService(
+      {} as never,
+      makeDockerService() as never,
+      {
+        APP_VERSION: 'v2.9.10',
+        GITLAB_API_URL: 'https://gitlab.wiolett.net',
+        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway/',
+      } as never
+    );
+
+    expect(service.getGatewayManifestUrl('2.9.11')).toBe(
+      'https://updates.thesqlabs.com/gateway/gateway/v2.9.11/gateway-image.update.json'
+    );
+    expect(service.getRelayManifestUrl('2.9.11')).toBe(
+      'https://updates.thesqlabs.com/gateway/relay/v2.9.11-relay/relay-image.update.json'
+    );
+  });
+
+  it('reads GitHub-style release notes from the update facade', async () => {
+    const service = new UpdateService(
+      {} as never,
+      makeDockerService() as never,
+      {
+        APP_VERSION: 'v2.9.10',
+        GITLAB_API_URL: 'https://gitlab.wiolett.net',
+        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      } as never
+    );
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json([{ tag_name: 'v2.9.10', body: 'Release notes' }]));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(service.getReleaseNotes('v2.9.10')).resolves.toBe('Release notes');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   describe('isGatewayReleaseTag', () => {
     it('accepts plain gateway tags', () => {
       expect(isGatewayReleaseTag('v2.1.2')).toBe(true);
@@ -119,8 +160,8 @@ describe('UpdateService release selection', () => {
       makeDockerService() as never,
       {
         APP_VERSION: 'v2.4.2',
-        GITLAB_API_URL: 'https://gitlab.example.com/api/v4',
-        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
         GATEWAY_RELAY_BUILD_VERSION: 'v2.4.1',
       } as never
     );
@@ -382,6 +423,19 @@ describe('UpdateService foundation migration', () => {
     );
   });
 
+  it('allows a signed migration from the running registry to an allow-listed GHCR repository', async () => {
+    const dockerService = makeDockerService();
+    const service = makeUpdateService(dockerService, undefined, {
+      GATEWAY_UPDATE_IMAGE_REPOSITORIES: 'ghcr.io/the-square-labs/gateway',
+    });
+    const artifact = makeArtifact(`ghcr.io/the-square-labs/gateway@sha256:${'c'.repeat(64)}`);
+    artifact.payload.image = 'ghcr.io/the-square-labs/gateway';
+
+    await service.performUpdate('v2.4.3', artifact);
+
+    expect(dockerService.pullImageRef).toHaveBeenCalledWith(artifact.imageRef);
+  });
+
   it('prepares a custom sandbox workspace directory from the migrator output', async () => {
     const dockerService = makeDockerService();
     dockerService.runOneShot.mockResolvedValueOnce({ exitCode: 0, output: '{"ok":true}' }).mockResolvedValueOnce({
@@ -406,7 +460,8 @@ describe('UpdateService foundation migration', () => {
 
 function makeUpdateService(
   dockerService: ReturnType<typeof makeDockerService>,
-  relayRuntime?: ConstructorParameters<typeof UpdateService>[3]
+  relayRuntime?: ConstructorParameters<typeof UpdateService>[3],
+  envOverrides: Record<string, unknown> = {}
 ): UpdateService {
   return new UpdateService(
     {} as never,
@@ -414,11 +469,12 @@ function makeUpdateService(
     {
       APP_VERSION: 'v2.4.2',
       COMPOSE_PROJECT_DIR: '/srv/gateway',
-      GITLAB_API_URL: 'https://gitlab.example.com/api/v4',
-      GITLAB_PROJECT_PATH: 'wiolett/gateway',
+      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
       GATEWAY_RELAY_IMAGE_REF: `registry.example.com/wiolett/gateway/relay@sha256:${'b'.repeat(64)}`,
       GATEWAY_RELAY_BUILD_VERSION: 'v2.4.2',
       GATEWAY_RELAY_PROTOCOL_MAJOR: 1,
+      ...envOverrides,
     } as never,
     relayRuntime
   );

@@ -15,7 +15,7 @@ describe("InferenceEndpointSettingsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Set up a harness" }));
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("npx -y @wiolett/gateway-inference@latest")).toBeInTheDocument();
+    expect(screen.getByText("npx -y @sqgateway/inference@latest")).toBeInTheDocument();
     expect(screen.getByText(/setup codex/)).toBeInTheDocument();
     expect(screen.getByText(/setup claude-code/)).toBeInTheDocument();
     expect(screen.getByText("Codex Desktop requires extra setup")).toBeInTheDocument();

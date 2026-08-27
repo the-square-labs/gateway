@@ -34,7 +34,7 @@ The builder profile writes and starts dedicated egress-policy, containerd, and B
 ## Install
 
 ```bash
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/install.sh | bash
 ```
 
 The installer downloads the latest release and asks one question on a fresh interactive install: whether port 3000 should start with native HTTPS. HTTPS is the default, including non-interactive installs. Choose HTTP only when you deliberately want plaintext on the internal hop or will terminate TLS elsewhere.
@@ -43,10 +43,10 @@ Explicit non-interactive examples:
 
 ```bash
 # Native HTTPS (also the default)
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash -s -- --https
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/install.sh | bash -s -- --https
 
 # Plain HTTP on port 3000
-curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash -s -- --http
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/install.sh | bash -s -- --http
 ```
 
 Supported options are `--install-dir`, `--image`, `--source-dir`, `--http`, `--https`, and `--dry-run`. `--source-dir` builds a fresh test installation from a local Gateway checkout instead of discovering and pulling a release; it cannot update an existing installation. `--dry-run` verifies the selected signed release and renders the planned flow without creating files, building or pulling images, or starting services. Run with `--help` for syntax. The installer has no domain, nginx, Cloudflare, OIDC, SMTP, or ClickHouse prompts.

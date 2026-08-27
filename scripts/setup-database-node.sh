@@ -54,8 +54,7 @@ prompt_choice() {
     echo "${reply:-$default}"
 }
 
-GITLAB_URL="${GATEWAY_GITLAB_URL:-https://gitlab.wiolett.net}"
-GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
+GITHUB_RAW_BASE="${GATEWAY_GITHUB_RAW_BASE:-https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts}"
 STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RUN_USER="root"
 DRY_RUN=0
@@ -78,8 +77,6 @@ Options:
   --storage-root <path>   Existing or creatable local storage root used for the
                           disposable ext4 capability preflight (default:
                           /var/lib/docker-daemon/databases)
-  --gitlab-url <url>      GitLab instance used to fetch setup-docker-node.sh
-  --gitlab-project <proj> GitLab project path
   --user root             Accepted only for compatibility; databases always run as root
   --dry-run               Validate delegated Docker setup without changing the host
   -h, --help              Show this help
@@ -121,18 +118,6 @@ while [[ $# -gt 0 ]]; do
             STORAGE_ROOT="$2"
             shift 2
             ;;
-        --gitlab-url)
-            [[ $# -ge 2 ]] || die "--gitlab-url requires a URL"
-            GITLAB_URL="$2"
-            PASSTHROUGH+=("--gitlab-url" "$2")
-            shift 2
-            ;;
-        --gitlab-project)
-            [[ $# -ge 2 ]] || die "--gitlab-project requires a project path"
-            GITLAB_PROJECT="$2"
-            PASSTHROUGH+=("--gitlab-project" "$2")
-            shift 2
-            ;;
         --user)
             [[ $# -ge 2 ]] || die "--user requires a value"
             [[ "$2" == "root" ]] || die "Database nodes must run docker-daemon as root."
@@ -159,7 +144,7 @@ if [[ -x "$LOCAL_DOCKER_SCRIPT" ]]; then
     DOCKER_SCRIPT="$LOCAL_DOCKER_SCRIPT"
 else
     command_exists curl || die "curl is required to fetch setup-docker-node.sh."
-    url="${GITLAB_URL}/${GITLAB_PROJECT}/-/raw/main/scripts/setup-docker-node.sh"
+    url="${GITHUB_RAW_BASE%/}/setup-docker-node.sh"
     DOWNLOADED_DOCKER_SCRIPT=$(mktemp /tmp/gateway-setup-docker.XXXXXX)
     curl -fsSL "$url" -o "$DOWNLOADED_DOCKER_SCRIPT" || die "Could not download setup-docker-node.sh."
     chmod 700 "$DOWNLOADED_DOCKER_SCRIPT"

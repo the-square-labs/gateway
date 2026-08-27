@@ -55,7 +55,7 @@ export function LicenseStep({
           it, you agree to the{" "}
           <a
             className="underline underline-offset-4 hover:text-foreground"
-            href="https://gitlab.wiolett.net/wiolett/gateway/-/blob/main/COMMERCIAL-LICENSE.md"
+            href="https://github.com/the-square-labs/gateway/blob/main/COMMERCIAL-LICENSE.md"
             target="_blank"
             rel="noopener noreferrer"
           >

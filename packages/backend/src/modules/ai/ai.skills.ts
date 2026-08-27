@@ -261,11 +261,11 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 
 ### Recommended harness setup
 - Prefer the companion manager; it requires no global installation or PATH change:
-  npx -y @wiolett/gateway-inference@latest
+  npx -y @sqgateway/inference@latest
 - The manager asks for the Gateway URL, completes isolated OAuth/PKCE, and offers the harnesses advertised by Gateway. Direct setup is:
-  npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
-  npx -y @wiolett/gateway-inference@latest setup codex
-  npx -y @wiolett/gateway-inference@latest setup claude-code
+  npx -y @sqgateway/inference@latest login https://gateway.example.com
+  npx -y @sqgateway/inference@latest setup codex
+  npx -y @sqgateway/inference@latest setup claude-code
 - Codex setup installs package-managed configuration, a private helper/loopback proxy, and the Gateway model catalog. Codex Desktop must also remain signed in through its normal OpenAI login; fully quit and reopen Codex after setup or login changes.
 - Claude Code setup requires Claude Code 2.1.129 or newer and configures its native Anthropic gateway contract with ANTHROPIC_BASE_URL, model discovery, and a private apiKeyHelper. It applies to the Claude Code CLI, not Claude Desktop or the VS Code extension.
 - If the user asks how to configure a harness but does not name one, ask whether they use Codex or Claude Code before giving harness-specific instructions.

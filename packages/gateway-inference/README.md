@@ -1,6 +1,6 @@
 # Gateway Inference
 
-`@wiolett/gateway-inference` is the interactive inference companion for Good Gateway. It configures supported AI harnesses while keeping dedicated `gwi_` runtime tokens out of their configuration files.
+`@sqgateway/inference` is the interactive inference companion for Good Gateway. It configures supported AI harnesses while keeping dedicated `gwi_` runtime tokens out of their configuration files.
 
 Node.js 22 or newer is required. Run the package through npm exec; a global installation and `PATH` changes are not required. Before setup, an administrator must enable **Inference** under **Settings > General > General settings**. All harness traffic uses the Gateway's single stable `/api/inference/v1` prefix.
 
@@ -9,7 +9,7 @@ Version 0.3 accepts both the previous discovery schema v1 and the current v2 doc
 ## Interactive manager
 
 ```sh
-npx -y @wiolett/gateway-inference@latest
+npx -y @sqgateway/inference@latest
 ```
 
 The manager shows the active Gateway connection plus Codex and Claude Code state. It can log in, set up, diagnose, repair, or remove either package-managed harness integration, refresh the Codex catalog, and log out.
@@ -17,10 +17,10 @@ The manager shows the active Gateway connection plus Codex and Claude Code state
 ## Login and logout
 
 ```sh
-npx -y @wiolett/gateway-inference@latest login
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
-npx -y @wiolett/gateway-inference@latest login https://gateway.example.com --token gwi_...
-npx -y @wiolett/gateway-inference@latest logout
+npx -y @sqgateway/inference@latest login
+npx -y @sqgateway/inference@latest login https://gateway.example.com
+npx -y @sqgateway/inference@latest login https://gateway.example.com --token gwi_...
+npx -y @sqgateway/inference@latest logout
 ```
 
 `login` asks for the Gateway URL when it is omitted in an interactive terminal, then offers **Browser OAuth** or **Existing inference token**. Browser OAuth discovers the Gateway instance, prints the complete authorization URL to the console before attempting to open it, and completes Authorization Code with PKCE through a random loopback callback. The printed URL remains available for manual opening when the browser does not start automatically. OAuth requests only the isolated `inference:setup` resource.
@@ -34,8 +34,8 @@ OAuth and inference runtime credentials are stored in the operating-system crede
 Pass `--home` before or after the command to keep all companion-owned filesystem state in one directory:
 
 ```sh
-npx -y @wiolett/gateway-inference@latest --home /data/inference login https://gateway.example.com --token gwi_...
-npx -y @wiolett/gateway-inference@latest --home /data/inference setup codex
+npx -y @sqgateway/inference@latest --home /data/inference login https://gateway.example.com --token gwi_...
+npx -y @sqgateway/inference@latest --home /data/inference setup codex
 ```
 
 Profiles, the private runtime helper, catalogs, proxy state, and mode-`0600` setup/runtime credentials are stored below `/data/inference`. Generated Codex and Claude Code configuration remains in each harness's native configuration directory so the harness can discover it. `GATEWAY_INFERENCE_HOME=/data/inference` is equivalent to the CLI option. The installed helper, MCP command, credential helper, and detached proxy retain the selected home automatically.
@@ -43,8 +43,8 @@ Profiles, the private runtime helper, catalogs, proxy state, and mode-`0600` set
 ## Configure Codex
 
 ```sh
-npx -y @wiolett/gateway-inference@latest setup
-npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @sqgateway/inference@latest setup
+npx -y @sqgateway/inference@latest setup codex
 ```
 
 `setup` asks which supported harness to configure when the harness is omitted in an interactive terminal. Outside a terminal, the harness is required. The current release supports Codex and Claude Code.
@@ -60,7 +60,7 @@ The installed helper owns the loopback proxy, refreshes the catalog at startup, 
 Codex usage and quota displays are not overridden. View Gateway limits in the Gateway UI; Codex Desktop and CLI continue to show their native account usage. Version 0.3.6 and later remove the experimental usage wrappers from 0.3.4 and 0.3.5. Running `setup codex` cleans up package-owned legacy wrapper artifacts automatically. The offline cleanup command remains available for affected installations:
 
 ```sh
-npx -y @wiolett/gateway-inference@latest uninstall codex-usage
+npx -y @sqgateway/inference@latest uninstall codex-usage
 ```
 
 ## Configure Claude Code
@@ -68,7 +68,7 @@ npx -y @wiolett/gateway-inference@latest uninstall codex-usage
 Claude Code 2.1.129 or newer is required.
 
 ```sh
-npx -y @wiolett/gateway-inference@latest setup claude-code
+npx -y @sqgateway/inference@latest setup claude-code
 ```
 
 Setup issues a separate `gwi_` runtime token, validates Gateway model discovery and native Anthropic streaming, then merges package-owned values into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`). It configures the native `ANTHROPIC_BASE_URL`, enables gateway model discovery, and installs an `apiKeyHelper` that reads the token from the operating-system credential store. The token itself is never written to Claude settings.
@@ -77,7 +77,7 @@ Gateway models are exposed through stable `claude-gateway-*` aliases so Claude C
 
 This integration configures the Claude Code CLI only. Claude Desktop and the Claude Code VS Code extension use separate configuration surfaces and are not modified automatically.
 
-Run `npx -y @wiolett/gateway-inference@latest --help` for the complete public command surface.
+Run `npx -y @sqgateway/inference@latest --help` for the complete public command surface.
 
 ## License
 

@@ -8,20 +8,20 @@ describe('DaemonUpdateService update artifact URLs', () => {
     expect(daemonTypeForNodeType('builder')).toBe('docker');
   });
 
-  it('normalizes a trailing GitLab API slash before building signed artifact URLs', () => {
+  it('builds signed artifact URLs from the GitHub update facade', () => {
     const service = new DaemonUpdateService(
       {} as DrizzleClient,
       {
-        GITLAB_API_URL: 'https://gitlab.wiolett.net/',
-        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
       } as Env
     );
 
     expect(service.getDownloadUrl('nginx', 'v9.9.9-nginx', 'amd64')).toBe(
-      'https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/nginx-daemon/v9.9.9-nginx/nginx-daemon-linux-amd64'
+      'https://updates.thesqlabs.com/gateway/nginx-daemon/v9.9.9-nginx/nginx-daemon-linux-amd64'
     );
     expect(service.getManifestUrl('nginx', 'v9.9.9-nginx', 'amd64')).toBe(
-      'https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/nginx-daemon/v9.9.9-nginx/nginx-daemon-linux-amd64.update.json'
+      'https://updates.thesqlabs.com/gateway/nginx-daemon/v9.9.9-nginx/nginx-daemon-linux-amd64.update.json'
     );
   });
 
@@ -29,16 +29,33 @@ describe('DaemonUpdateService update artifact URLs', () => {
     const service = new DaemonUpdateService(
       {} as DrizzleClient,
       {
-        GITLAB_API_URL: 'https://gitlab.wiolett.net',
-        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
       } as Env
     );
 
     expect(service.getDownloadUrl('relay-worker', 'v2.7.0-relay', 'aarch64')).toBe(
-      'https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/relay-supervisor/v2.7.0-relay/relay-worker-linux-arm64'
+      'https://updates.thesqlabs.com/gateway/relay-supervisor/v2.7.0-relay/relay-worker-linux-arm64'
     );
     expect(service.getManifestUrl('relay-worker', 'v2.7.0-relay', 'arm64')).toBe(
-      'https://gitlab.wiolett.net/api/v4/projects/wiolett%2Fgateway/packages/generic/relay-supervisor/v2.7.0-relay/relay-worker-linux-arm64.update.json'
+      'https://updates.thesqlabs.com/gateway/relay-supervisor/v2.7.0-relay/relay-worker-linux-arm64.update.json'
+    );
+  });
+
+  it('uses the provider-neutral Gateway artifact namespace', () => {
+    const service = new DaemonUpdateService(
+      {} as DrizzleClient,
+      {
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway/',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      } as Env
+    );
+
+    expect(service.getDownloadUrl('docker', 'v2.9.11-docker', 'amd64')).toBe(
+      'https://updates.thesqlabs.com/gateway/docker-daemon/v2.9.11-docker/docker-daemon-linux-amd64'
+    );
+    expect(service.getManifestUrl('docker', 'v2.9.11-docker', 'amd64')).toBe(
+      'https://updates.thesqlabs.com/gateway/docker-daemon/v2.9.11-docker/docker-daemon-linux-amd64.update.json'
     );
   });
 
@@ -58,8 +75,8 @@ describe('DaemonUpdateService update artifact URLs', () => {
       update: vi.fn().mockReturnValue({ set }),
     } as unknown as DrizzleClient;
     const service = new DaemonUpdateService(db, {
-      GITLAB_API_URL: 'https://gitlab.wiolett.net',
-      GITLAB_PROJECT_PATH: 'wiolett/gateway',
+      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
     } as Env);
 
     await expect(service.clearNodeUpdateInProgressOnReconnect('node-1', '2.5.2')).resolves.toBe(false);
@@ -73,8 +90,8 @@ describe('DaemonUpdateService update artifact URLs', () => {
     const service = new DaemonUpdateService(
       {} as DrizzleClient,
       {
-        GITLAB_API_URL: 'https://gitlab.wiolett.net',
-        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
       } as Env
     );
     const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(undefined);
@@ -90,8 +107,8 @@ describe('DaemonUpdateService update artifact URLs', () => {
     const service = new DaemonUpdateService(
       {} as DrizzleClient,
       {
-        GITLAB_API_URL: 'https://gitlab.wiolett.net',
-        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
       } as Env
     );
     const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(undefined);

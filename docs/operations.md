@@ -24,7 +24,7 @@ Manual update:
 
 ```bash
 # Edit .env first, for example:
-# GATEWAY_IMAGE_REF=registry.gitlab.wiolett.net/wiolett/gateway:v2.0.0
+# GATEWAY_IMAGE_REF=ghcr.io/the-square-labs/gateway:v2.0.0
 docker compose pull
 docker compose up -d
 ```
@@ -265,14 +265,14 @@ curl -H "Content-Type: application/json" \
 
 ### TypeScript SDK
 
-Gateway publishes the official TypeScript logging SDK as [`@wiolett/gateway-logger`](https://www.npmjs.com/package/@wiolett/gateway-logger). Install it in Node services that need structured log delivery with batching, retries, fallback handling, and trace/span context:
+Gateway publishes the official TypeScript logging SDK as [`@sqgateway/logger`](https://www.npmjs.com/package/@sqgateway/logger). Install it in Node services that need structured log delivery with batching, retries, fallback handling, and trace/span context:
 
 ```bash
-pnpm add @wiolett/gateway-logger
+pnpm add @sqgateway/logger
 ```
 
 ```ts
-import { GatewayLogger } from "@wiolett/gateway-logger";
+import { GatewayLogger } from "@sqgateway/logger";
 
 const logger = new GatewayLogger({
   endpoint: "https://gw.example.com",

@@ -1,6 +1,6 @@
 {
-  "name": "@wiolett/gateway-inference",
-  "version": "0.3.8",
+  "name": "@sqgateway/inference",
+  "version": "0.3.9",
   "description": "Interactive inference companion for Good Gateway",
   "type": "module",
   "bin": {
@@ -8,13 +8,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://gitlab.wiolett.net/wiolett/gateway.git",
+    "url": "https://github.com/the-square-labs/gateway.git",
     "directory": "packages/gateway-inference"
   },
   "bugs": {
-    "url": "https://gitlab.wiolett.net/wiolett/gateway/-/issues"
+    "url": "https://github.com/the-square-labs/gateway/issues"
   },
-  "homepage": "https://gitlab.wiolett.net/wiolett/gateway",
+  "homepage": "https://github.com/the-square-labs/gateway/tree/main/packages/gateway-inference#readme",
   "license": "PolyForm-Strict-1.0.0",
   "engines": {
     "node": ">=22.0.0"
