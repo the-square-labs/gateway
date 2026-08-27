@@ -120,6 +120,7 @@ jobs:
             echo 'UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 is required' >&2
             exit 1
           }
+          ./scripts/sync-update-trust-anchor.sh
           digest=$(cat gateway-image.digest)
           echo "$digest" | grep -Eq '^sha256:[a-f0-9]{64}$'
           (
