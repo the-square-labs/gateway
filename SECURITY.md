@@ -6,7 +6,7 @@ If you discover a security vulnerability in Gateway, please report it responsibl
 
 **Do not open a public issue.**
 
-Instead, email [contact@wiolett.net](mailto:contact@wiolett.net) with:
+Instead, email [contact@thesqlabs.com](mailto:contact@thesqlabs.com) with:
 
 - Description of the vulnerability
 - Steps to reproduce

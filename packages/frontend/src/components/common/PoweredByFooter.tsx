@@ -3,12 +3,12 @@ export function PoweredByFooter() {
     <p className="text-center text-xs text-muted-foreground">
       Powered by{" "}
       <a
-        href="https://wiolett.net"
+        href="https://thesquarelabs.com"
         target="_blank"
         rel="noopener noreferrer"
         className="text-foreground hover:underline"
       >
-        Wiolett Industries
+        Square Labs
       </a>
     </p>
   );

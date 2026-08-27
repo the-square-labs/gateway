@@ -98,7 +98,7 @@ describe("gateway update version matching", () => {
 
     expect(screen.getByRole("heading", { name: "Updating Relay" })).toBeInTheDocument();
     expect(screen.getByText("Relay is updating to v2.7.0.", { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Square Labs" })).toBeInTheDocument();
   });
 
   it("shows generic restart copy when admission closes", () => {
@@ -114,9 +114,9 @@ describe("gateway update version matching", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Finishing active requests and jobs…")).not.toBeInTheDocument();
     expect(screen.queryByText("This page will reload automatically.")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Square Labs" })).toHaveAttribute(
       "href",
-      "https://wiolett.net"
+      "https://thesquarelabs.com"
     );
   });
 
@@ -200,9 +200,9 @@ describe("gateway update version matching", () => {
     expect(
       screen.queryByText("Checking backend availability automatically.")
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Square Labs" })).toHaveAttribute(
       "href",
-      "https://wiolett.net"
+      "https://thesquarelabs.com"
     );
   });
 

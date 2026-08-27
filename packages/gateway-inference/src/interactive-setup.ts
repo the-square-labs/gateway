@@ -29,7 +29,7 @@ export async function runInteractiveInferenceSetup(input: {
   configure: (harness: string, session: InteractiveSetupSession) => Promise<{ progress: string; summary: string }>;
 }): Promise<number> {
   if (input.showIntro !== false) {
-    input.ui.intro('Wiolett Gateway Inference · Setup');
+    input.ui.intro('Square Gateway Inference · Setup');
   }
   let session: InteractiveSetupSession;
 

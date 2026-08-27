@@ -1,5 +1,5 @@
 {
-  "name": "Wiolett Gateway",
+  "name": "Square Gateway",
   "short_name": "Gateway",
   "description": "Self-hosted infrastructure control plane",
   "start_url": "/",

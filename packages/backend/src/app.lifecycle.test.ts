@@ -67,7 +67,7 @@ describe('Gateway lifecycle admission middleware', () => {
     expect(documentBody).not.toContain('Finishing active requests and jobs');
     expect(documentBody).not.toContain('This page will reload automatically');
     expect(documentBody).toContain(
-      'Powered by <a href="https://wiolett.net" rel="noopener noreferrer">Wiolett Industries</a>'
+      'Powered by <a href="https://thesquarelabs.com" rel="noopener noreferrer">Square Labs</a>'
     );
 
     const scriptResponse = await app.request('/gateway-restarting.js', {

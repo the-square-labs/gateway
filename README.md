@@ -5,7 +5,7 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 AI-first but not AI-dependent self-hosted infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
 > [!NOTE]
-> Primary development happens on [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway). The [GitHub repository](https://github.com/wiolett-industries/gateway) is a public mirror. Issues and feature requests are welcome on [GitHub](https://github.com/wiolett-industries/gateway/issues).
+> Primary development happens on [Square Labs GitLab](https://gitlab.wiolett.net/wiolett/gateway). The [GitHub repository](https://github.com/wiolett-industries/gateway) is a public mirror. Issues and feature requests are welcome on [GitHub](https://github.com/wiolett-industries/gateway/issues).
 
 ## Why Gateway
 
@@ -235,7 +235,7 @@ No. AI Workspace is optional. The Operations Console, REST API, OAuth, and MCP r
 
 Gateway has four product plans. Paid plans apply to one self-hosted installation and do not add per-node, per-user, or per-permission-group charges.
 
-Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Personal, Business, or Enterprise key issued by Wiolett Industries automatically grants the named licensee limited commercial-use rights for one official, unmodified installation under the [Commercial Key License](COMMERCIAL-LICENSE.md), including 30 calendar days after the key expires. Neither license permits modification or redistribution.
+Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Personal, Business, or Enterprise key issued by Square Labs automatically grants the named licensee limited commercial-use rights for one official, unmodified installation under the [Commercial Key License](COMMERCIAL-LICENSE.md), including 30 calendar days after the key expires. Neither license permits modification or redistribution.
 
 > [!NOTE]
 > Pricing is preliminary, does not constitute an offer, and is subject to change. Confirm current pricing and terms before purchase.
@@ -251,4 +251,4 @@ See [Plans and licensing](docs/licensing.md) for the complete feature matrix, av
 
 After a paid key expires, technical entitlements remain active for 24 hours on Personal, 3 days on Business, or 7 days on Enterprise. This product grace is separate from both offline validation and the 30-day commercial-use grant described above.
 
-Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)
+Copyright (c) 2021-2026 [Square Labs](https://thesquarelabs.com)

@@ -103,7 +103,7 @@ describe('canonical Gateway nginx pages', () => {
 
   it('uses the shared minimal error-page layout without the Gateway header', () => {
     for (const page of [GATEWAY_NOT_FOUND_HTML, GATEWAY_MAINTENANCE_HTML]) {
-      expect(page).toContain('Powered by <a href="https://wiolett.net"');
+      expect(page).toContain('Powered by <a href="https://thesquarelabs.com"');
       expect(page).toContain('font-size:clamp(40px,8vw,64px)');
       expect(page).not.toContain('Self-hosted infrastructure control plane');
       expect(page).not.toContain('class="brand"');

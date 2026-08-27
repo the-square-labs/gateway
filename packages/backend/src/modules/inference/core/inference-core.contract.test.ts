@@ -20,7 +20,7 @@ import {
 } from './inference-core.contract.js';
 
 /**
- * These fixtures are duplicated into the Wiolett OpenCodex repository and are
+ * These fixtures are duplicated into the Square Labs OpenCodex repository and are
  * protected by the same pinned hashes there. Changing a fixture without
  * updating both copies and both hash maps breaks the contract test on the side
  * that was not updated.

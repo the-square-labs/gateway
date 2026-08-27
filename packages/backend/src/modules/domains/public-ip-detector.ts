@@ -53,7 +53,7 @@ async function fetchPublicIpAddress(provider: string): Promise<string> {
     headers: {
       Accept: 'text/plain',
       'Cache-Control': 'no-cache',
-      'User-Agent': 'Wiolett-Gateway/public-ip-discovery',
+      'User-Agent': 'Square-Labs-Gateway/public-ip-discovery',
     },
     redirect: 'error',
     signal: AbortSignal.timeout(PUBLIC_IP_REQUEST_TIMEOUT_MS),

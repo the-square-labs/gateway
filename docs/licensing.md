@@ -6,7 +6,7 @@ Gateway is offered in four product plans: Community, Personal, Business, and Ent
 
 The plan limits and feature availability below define the product access granted by each plan.
 
-Community is available only for noncommercial purposes permitted by the [PolyForm Strict License 1.0.0](../LICENSE.md). A Personal, Business, or Enterprise key issued by Wiolett Industries automatically grants the person or organization named in the license record limited commercial-use rights for one official, unmodified Gateway installation under the [Wiolett Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md).
+Community is available only for noncommercial purposes permitted by the [PolyForm Strict License 1.0.0](../LICENSE.md). A Personal, Business, or Enterprise key issued by Square Labs automatically grants the person or organization named in the license record limited commercial-use rights for one official, unmodified Gateway installation under the [Square Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md).
 
 The commercial grant begins when the key is issued, continues through its expiration date, and remains in effect for 30 calendar days afterwards. A key without an expiration date grants commercial use while it remains active. Revocation for breach, fraud, chargeback, or refund ends the grant immediately without grace. Neither license permits modification, derivative works, or redistribution.
 
@@ -100,7 +100,7 @@ AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode rese
 | Business | $189 | $1,890 |
 | Enterprise | On request | On request |
 
-Contact [contact@wiolett.net](mailto:contact@wiolett.net) or [Wiolett Industries on Telegram](https://t.me/WiolettIndustries) for Enterprise terms.
+Contact [contact@thesqlabs.com](mailto:contact@thesqlabs.com) or [Square Labs on Telegram](https://t.me/WiolettIndustries) for Enterprise terms.
 
 ## Product License Verification
 
@@ -172,8 +172,8 @@ License**; the server binding is released before the local key is removed.
 
 ## Legal-use boundary
 
-Wiolett-owned Gateway source is publicly available under the [PolyForm Strict License 1.0.0](../LICENSE.md). It permits noncommercial use, including the personal and qualifying noncommercial-organization purposes stated in that license. It does not permit modification, derivative works, or distribution.
+Square Labs-owned Gateway source is publicly available under the [PolyForm Strict License 1.0.0](../LICENSE.md). It permits noncommercial use, including the personal and qualifying noncommercial-organization purposes stated in that license. It does not permit modification, derivative works, or distribution.
 
-The [Wiolett Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md) is a narrow additional grant attached automatically to a Wiolett-issued Personal, Business, or Enterprise key. It permits commercial use of one official, unmodified installation during the key term and for 30 calendar days after expiration, subject to its revocation rules. It does not permit modifying, redistributing, sublicensing, transferring, or reselling Gateway.
+The [Square Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md) is a narrow additional grant attached automatically to a Square Labs-issued Personal, Business, or Enterprise key. It permits commercial use of one official, unmodified installation during the key term and for 30 calendar days after expiration, subject to its revocation rules. It does not permit modifying, redistributing, sublicensing, transferring, or reselling Gateway.
 
 Third-party components remain governed by their own licenses. Already published Gateway releases remain governed by the terms distributed with those releases.

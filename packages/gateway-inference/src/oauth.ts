@@ -60,7 +60,7 @@ export async function createLoopbackReceiver(): Promise<LoopbackReceiver> {
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     response.end(
-      '<!doctype html><title>Wiolett Gateway</title><p>Authorization received. You can close this window.</p>'
+      '<!doctype html><title>Square Gateway</title><p>Authorization received. You can close this window.</p>'
     );
     if (callback) callback(url);
     else requests.push(url);
@@ -169,7 +169,7 @@ export async function loginWithBrowser(
           token_endpoint_auth_method: 'none',
           grant_types: ['authorization_code', 'refresh_token'],
           response_types: ['code'],
-          client_name: 'Wiolett Gateway CLI',
+          client_name: 'Square Gateway CLI',
           software_id: 'net.wiolett.gateway.inference-cli',
           software_version: CLI_VERSION,
           scope: 'inference:setup',

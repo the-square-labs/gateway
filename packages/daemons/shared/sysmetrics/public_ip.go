@@ -161,7 +161,7 @@ func fetchPublicIPAddress(ctx context.Context, url string) (netip.Addr, error) {
 	}
 	request.Header.Set("Accept", "text/plain")
 	request.Header.Set("Cache-Control", "no-cache")
-	request.Header.Set("User-Agent", "Wiolett-Gateway-Daemon/public-ip-discovery")
+	request.Header.Set("User-Agent", "Square-Labs-Gateway-Daemon/public-ip-discovery")
 
 	transport := &http.Transport{
 		Proxy:             nil,

@@ -224,7 +224,7 @@ describe('@wiolett/gateway-inference CLI', () => {
     interactiveUi.info.mockClear();
     interactiveUi.select.mockReset().mockResolvedValueOnce('sync').mockResolvedValueOnce(null);
     expect(await runCli([], dependencies)).toBe(0);
-    expect(interactiveUi.intro).toHaveBeenCalledWith('Wiolett Gateway Inference');
+    expect(interactiveUi.intro).toHaveBeenCalledWith('Square Gateway Inference');
     expect(interactiveUi.select).not.toHaveBeenCalledWith('Choose a module', expect.anything());
     expect(interactiveUi.info).toHaveBeenCalledWith('Gateway: https://gateway.example.com');
     expect(interactiveUi.info).toHaveBeenCalledWith('Account: user@example.com (User) Administrators');

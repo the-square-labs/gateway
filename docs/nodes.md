@@ -267,7 +267,7 @@ Manual setup is useful for locked-down hosts or custom packaging.
 
 1. Create a node in Gateway and copy the enrollment token plus the Gateway certificate fingerprint.
 2. Download the daemon binary, `checksums.txt`, and the matching `*.update.json` signed manifest from the release package.
-3. Verify the signed manifest with the compiled Wiolett update public key, then verify the SHA256 checksum.
+3. Verify the signed manifest with the compiled Square Labs update public key, then verify the SHA256 checksum.
 4. Install the binary.
 5. Write `/etc/<daemon-name>/config.yaml`.
 6. Create and start a systemd service.

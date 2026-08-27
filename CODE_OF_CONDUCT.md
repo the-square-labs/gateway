@@ -22,7 +22,7 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting [contact@wiolett.net](mailto:contact@wiolett.net). All complaints will be reviewed and investigated.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting [contact@thesqlabs.com](mailto:contact@thesqlabs.com). All complaints will be reviewed and investigated.
 
 ## Attribution
 

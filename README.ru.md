@@ -5,7 +5,7 @@
 AI-first, но не AI-dependent self-hosted платформа управления инфраструктурой для nginx ingress, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
 
 > [!NOTE]
-> Основная разработка ведется в [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway). [GitHub-репозиторий](https://github.com/wiolett-industries/gateway) является публичным зеркалом. Issues и запросы функций можно оставлять на [GitHub](https://github.com/wiolett-industries/gateway/issues).
+> Основная разработка ведется в [Square Labs GitLab](https://gitlab.wiolett.net/wiolett/gateway). [GitHub-репозиторий](https://github.com/wiolett-industries/gateway) является публичным зеркалом. Issues и запросы функций можно оставлять на [GitHub](https://github.com/wiolett-industries/gateway/issues).
 
 ## Зачем нужен Gateway
 
@@ -235,7 +235,7 @@ Managed services продолжают работать. Existing nginx configs �
 
 У Gateway четыре продуктовых плана. Платные планы применяются к одной self-hosted установке без отдельной оплаты за managed nodes, пользователей или custom permission groups.
 
-Community предназначен только для некоммерческого использования по [PolyForm Strict License 1.0.0](LICENSE.md). Ключ Personal, Business или Enterprise, выданный Wiolett Industries, автоматически даёт указанному в лицензии владельцу ограниченное право коммерческого использования одной официальной немодифицированной установки по [Commercial Key License](COMMERCIAL-LICENSE.md), включая 30 календарных дней после истечения ключа. Ни одна из лицензий не разрешает модификацию или распространение.
+Community предназначен только для некоммерческого использования по [PolyForm Strict License 1.0.0](LICENSE.md). Ключ Personal, Business или Enterprise, выданный Square Labs, автоматически даёт указанному в лицензии владельцу ограниченное право коммерческого использования одной официальной немодифицированной установки по [Commercial Key License](COMMERCIAL-LICENSE.md), включая 30 календарных дней после истечения ключа. Ни одна из лицензий не разрешает модификацию или распространение.
 
 > [!NOTE]
 > Цены предварительные, не являются офертой и могут измениться. Перед покупкой уточните актуальные цены и условия.
@@ -251,4 +251,4 @@ Community предназначен только для некоммерческ�
 
 После истечения платного ключа технические entitlements продолжают действовать 24 часа для Personal, 3 дня для Business или 7 дней для Enterprise. Этот продуктовый grace period не связан ни с offline validation, ни с 30-дневным правом коммерческого использования, описанным выше.
 
-Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)
+Copyright (c) 2021-2026 [Square Labs](https://thesquarelabs.com)

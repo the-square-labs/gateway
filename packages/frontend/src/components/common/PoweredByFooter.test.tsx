@@ -5,9 +5,9 @@ import { PoweredByFooter } from "./PoweredByFooter";
 describe("PoweredByFooter", () => {
   it("renders the shared product attribution", () => {
     render(<PoweredByFooter />);
-    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Square Labs" })).toHaveAttribute(
       "href",
-      "https://wiolett.net"
+      "https://thesquarelabs.com"
     );
     expect(screen.getByText(/Powered by/).closest("p")).not.toHaveAttribute("style");
   });

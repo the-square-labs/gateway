@@ -62,7 +62,7 @@ export class InferenceCoreClient {
     return { ready: response.status === 200 && status === 'ready', status, identity };
   }
 
-  /** Wiolett-only extended status (drain state + identity). */
+  /** Square Labs-only extended status (drain state + identity). */
   async wiolettStatus(): Promise<{ draining: boolean } | null> {
     const response = await this.request('GET', '/api/wiolett/status');
     if (!response || response.status !== 200) return null;

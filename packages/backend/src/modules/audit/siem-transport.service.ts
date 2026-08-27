@@ -94,7 +94,7 @@ export class SiemTransportService {
         'Content-Type': 'application/json',
         'X-Gateway-Schema-Version': '1',
         'X-Gateway-Timestamp': timestamp,
-        'User-Agent': 'Wiolett-Gateway-SIEM/1',
+        'User-Agent': 'Square-Labs-Gateway-SIEM/1',
       };
       const secret = this.decryptSecret(destination.encryptedSecret);
       if (destination.authType === 'bearer') {

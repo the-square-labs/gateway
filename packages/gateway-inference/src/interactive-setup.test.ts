@@ -55,7 +55,7 @@ describe('interactive inference setup', () => {
     ]);
     expect(configure).toHaveBeenCalledWith('codex', SESSION);
     expect(ui.events).toEqual([
-      'intro:Wiolett Gateway Inference · Setup',
+      'intro:Square Gateway Inference · Setup',
       'info:Gateway authorization complete',
       'select',
       'spinner:Configuring Codex CLI...',

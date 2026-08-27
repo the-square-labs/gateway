@@ -443,7 +443,7 @@ describe('update artifact trust', () => {
     ).toThrow('OpenCodex update image mismatch');
   });
 
-  it('rejects an OpenCodex manifest whose version is not a Wiolett release', () => {
+  it('rejects an OpenCodex manifest whose version is not a Square Labs release', () => {
     const payload = Buffer.from(
       JSON.stringify({
         kind: 'opencodex-image',
@@ -475,6 +475,6 @@ describe('update artifact trust', () => {
         },
         gatewayPublicKey
       )
-    ).toThrow('OpenCodex update version is not a Wiolett release');
+    ).toThrow('OpenCodex update version is not a Square Labs release');
   });
 });

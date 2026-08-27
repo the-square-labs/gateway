@@ -1058,7 +1058,7 @@ export function AuthProvisioningSection({
           </SettingsControlRow>
           <SettingsControlRow
             title="Hide external branding"
-            description="Hide Wiolett Industries attribution on public status, maintenance, and not-found pages"
+            description="Hide Square Labs attribution on public status, maintenance, and not-found pages"
           >
             <Switch
               checked={hideExternalBranding}

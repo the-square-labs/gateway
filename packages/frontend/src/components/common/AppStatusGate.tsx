@@ -115,12 +115,12 @@ function MaintenanceScreen() {
         <div className="mt-7 text-xs text-[#71717a]">
           Powered by{" "}
           <a
-            href="https://wiolett.net"
+            href="https://thesquarelabs.com"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[#a1a1aa] hover:underline"
           >
-            Wiolett Industries
+            Square Labs
           </a>
         </div>
       </div>
@@ -145,12 +145,12 @@ function UpdateOperationScreen({ title, description }: { title: string; descript
         <div className="mt-7 text-xs text-[#71717a]">
           Powered by{" "}
           <a
-            href="https://wiolett.net"
+            href="https://thesquarelabs.com"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[#a1a1aa] hover:underline"
           >
-            Wiolett Industries
+            Square Labs
           </a>
         </div>
       </div>

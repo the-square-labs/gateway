@@ -5,7 +5,7 @@
 AI-first 但不依赖 AI 的自托管基础设施控制平面，用于 nginx ingress、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
 
 > [!NOTE]
-> 主要开发在 [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway) 进行。[GitHub 仓库](https://github.com/wiolett-industries/gateway) 是公开镜像。Issues 和功能请求可以提交到 [GitHub](https://github.com/wiolett-industries/gateway/issues)。
+> 主要开发在 [Square Labs GitLab](https://gitlab.wiolett.net/wiolett/gateway) 进行。[GitHub 仓库](https://github.com/wiolett-industries/gateway) 是公开镜像。Issues 和功能请求可以提交到 [GitHub](https://github.com/wiolett-industries/gateway/issues)。
 
 ## 为什么需要 Gateway
 
@@ -235,7 +235,7 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 
 Gateway 提供四个产品计划。付费计划适用于一个 self-hosted 实例，不按 managed node、用户或 custom permission group 额外收费。
 
-Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商业目的。由 Wiolett Industries 签发的 Personal、Business 或 Enterprise 密钥，会依据 [Commercial Key License](COMMERCIAL-LICENSE.md) 自动向许可证记录中的被许可方授予一台官方未修改 Gateway 实例的有限商业使用权，并在密钥到期后继续有效 30 个自然日。两种许可证均不允许修改或再分发。
+Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商业目的。由 Square Labs 签发的 Personal、Business 或 Enterprise 密钥，会依据 [Commercial Key License](COMMERCIAL-LICENSE.md) 自动向许可证记录中的被许可方授予一台官方未修改 Gateway 实例的有限商业使用权，并在密钥到期后继续有效 30 个自然日。两种许可证均不允许修改或再分发。
 
 > [!NOTE]
 > 以下价格为初步价格，不构成要约，并可能发生变化。购买前请确认最新价格和条款。
@@ -251,4 +251,4 @@ Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商�
 
 付费密钥到期后，Personal、Business 和 Enterprise 的技术 entitlements 分别继续有效 24 小时、3 天和 7 天。该产品 grace period 与 offline validation 以及上述 30 天商业使用授权相互独立。
 
-Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)
+Copyright (c) 2021-2026 [Square Labs](https://thesquarelabs.com)

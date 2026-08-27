@@ -314,8 +314,8 @@ function StatusPage({ data }: { data: PublicStatusPageDto }) {
         <footer>
           <span>
             Powered by{" "}
-            <a href="https://wiolett.net" target="_blank" rel="noopener noreferrer">
-              Wiolett Industries
+            <a href="https://thesquarelabs.com" target="_blank" rel="noopener noreferrer">
+              Square Labs
             </a>
           </span>
         </footer>

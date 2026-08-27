@@ -187,7 +187,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       if (parsed.command.length > 2) throw new CliError('INVALID_ARGUMENT', 'Usage: login [GATEWAY]');
       let gateway: string | undefined = parsed.command[1];
       if (!gateway && interactive) {
-        input.ui.intro('Wiolett Gateway Inference · Login');
+        input.ui.intro('Square Gateway Inference · Login');
         gateway = (await input.ui.gatewayOrigin()) ?? undefined;
         if (!gateway) {
           input.ui.cancel('Login cancelled.');

@@ -327,7 +327,7 @@ describe("LoginPage email-first sign-in", () => {
     const forgotPassword = await screen.findByRole("button", { name: "Forgot password?" });
     expect(forgotPassword).toHaveAttribute("data-button");
     expect(forgotPassword).toHaveClass("h-auto", "p-0");
-    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Square Labs" })).toBeInTheDocument();
     fireEvent.click(forgotPassword);
     expect(await screen.findByRole("heading", { name: "Reset password?" })).toBeInTheDocument();
     expect(
