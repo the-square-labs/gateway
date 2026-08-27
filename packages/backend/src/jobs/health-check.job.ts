@@ -3,8 +3,8 @@ import type { DrizzleClient } from '@/db/client.js';
 import { proxyHosts } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { formatHostPort } from '@/lib/network-endpoint.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
+import { resolveProxyHealthCheckUrl } from '@/modules/proxy/proxy-health-check.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
@@ -351,13 +351,8 @@ export class HealthCheckJob {
         return { status: 'offline' };
       }
     }
-    if (!host.forwardHost || !host.forwardPort) {
-      return { status: 'offline' };
-    }
-
-    const scheme = host.forwardScheme || 'http';
-    const path = host.healthCheckUrl || '/';
-    const url = `${scheme}://${formatHostPort(host.forwardHost, host.forwardPort)}${path}`;
+    const url = resolveProxyHealthCheckUrl(host);
+    if (!url) return { status: 'offline' };
 
     const start = performance.now();
     try {

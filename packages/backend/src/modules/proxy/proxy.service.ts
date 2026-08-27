@@ -28,6 +28,7 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPoolService } from '@/services/relay-pool.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { AdditionalRouteNodeMigration, AdditionalRouteService } from './additional-route.service.js';
+import { supportsPagesRouteTemplate } from './additional-route-template.js';
 import type { NginxTemplateService } from './nginx-template.service.js';
 import type { CreateProxyHostInput, ProxyHostListQuery, UpdateProxyHostInput } from './proxy.schemas.js';
 import {
@@ -343,6 +344,17 @@ export class ProxyService {
     return this.dockerUpstreams;
   }
 
+  private async assertPagesTemplateCompatible(templateId: string | null | undefined): Promise<void> {
+    if (!templateId) return;
+    const template = await this.nginxTemplateService.getTemplate(templateId);
+    if (template.type === 'proxy' && supportsPagesRouteTemplate(template.content)) return;
+    throw new AppError(
+      400,
+      'PAGES_ROUTE_TEMPLATE_UNSUPPORTED',
+      'Select a proxy template that includes the managed Pages route placeholder'
+    );
+  }
+
   private async prepareCreateUpstream(input: CreateProxyHostInput, options: ProxyValidationInput) {
     const normalized = normalizeProxyValidationOptions(options);
     if (input.type !== 'proxy' || input.rawConfigEnabled) {
@@ -499,6 +511,9 @@ export class ProxyService {
     });
 
     const upstreamData = await this.prepareCreateUpstream(input, options);
+    if (input.type === 'proxy' && input.upstreamKind === 'pages') {
+      await this.assertPagesTemplateCompatible(input.nginxTemplateId);
+    }
 
     // 1. Insert into DB
     let host = await writeWithAllocatedSlug({
@@ -711,15 +726,18 @@ export class ProxyService {
         'Recreate the Route to change its Pages target type'
       );
     }
-    if (
-      existing.upstreamKind === 'pages' &&
-      (input.type === 'raw' ||
-        input.rawConfigEnabled === true ||
-        input.nginxTemplateId != null ||
-        input.websocketSupport === true ||
-        input.healthCheckEnabled === true)
-    ) {
-      throw new AppError(400, 'PAGES_ROUTE_SETTINGS_INVALID', 'Pages Routes require the managed static-site template');
+    if (existing.upstreamKind === 'pages' && (input.type === 'raw' || input.rawConfigEnabled === true)) {
+      throw new AppError(400, 'PAGES_ROUTE_SETTINGS_INVALID', 'Pages Routes do not support Raw Config mode');
+    }
+    if (existing.upstreamKind === 'pages' && input.nginxTemplateId !== undefined) {
+      await this.assertPagesTemplateCompatible(input.nginxTemplateId);
+    }
+    if (existing.upstreamKind === 'pages' && input.websocketSupport === true) {
+      throw new AppError(
+        400,
+        'PAGES_ROUTE_SETTINGS_INVALID',
+        'WebSocket upgrades are not available for static Pages Routes'
+      );
     }
     if (existing.isSystem && !(options.allowSystemNodeMove && Object.keys(input).every((key) => key === 'nodeId'))) {
       throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');

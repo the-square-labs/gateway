@@ -109,6 +109,7 @@ function setup(
   const nginxTemplateService = {
     renderForHost: vi.fn().mockReturnValue('normal config'),
     applyMaintenanceGuard: vi.fn().mockReturnValue('maintenance config'),
+    getTemplate: vi.fn(),
   } as any;
   const auditService = { log: vi.fn().mockResolvedValue(undefined) } as any;
   const configGenerator = {
@@ -460,6 +461,50 @@ describe('ProxyService maintenance lifecycle', () => {
         '33333333-3333-4333-8333-333333333333'
       )
     ).rejects.toMatchObject({ code: 'PAGES_ROUTE_TYPE_CHANGE_UNSUPPORTED', statusCode: 409 });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it.each([{ websocketSupport: true }])('reports the static Pages limitation for %o', async (input) => {
+    const { service, db } = setup(
+      { success: true },
+      { upstreamKind: 'pages', websocketSupport: false, healthCheckEnabled: false }
+    );
+
+    await expect(
+      service.updateProxyHost('11111111-1111-4111-8111-111111111111', input, '33333333-3333-4333-8333-333333333333')
+    ).rejects.toMatchObject({
+      code: 'PAGES_ROUTE_SETTINGS_INVALID',
+      statusCode: 400,
+      message: 'WebSocket upgrades are not available for static Pages Routes',
+    });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a Pages-compatible custom template', async () => {
+    const { service, nginxTemplateService } = setup(
+      { success: true },
+      { upstreamKind: 'pages', websocketSupport: false, healthCheckEnabled: false }
+    );
+    nginxTemplateService.getTemplate.mockResolvedValue({
+      type: 'proxy',
+      content: 'location / {\n  include {{pagesRouteIncludePath}};\n}',
+    });
+
+    await expect(
+      (service as any).assertPagesTemplateCompatible('44444444-4444-4444-8444-444444444444')
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects a custom template that cannot render a Pages target', async () => {
+    const { service, nginxTemplateService, db } = setup(
+      { success: true },
+      { upstreamKind: 'pages', websocketSupport: false, healthCheckEnabled: false }
+    );
+    nginxTemplateService.getTemplate.mockResolvedValue({ type: 'proxy', content: 'location / {}' });
+
+    await expect(
+      (service as any).assertPagesTemplateCompatible('44444444-4444-4444-8444-444444444444')
+    ).rejects.toMatchObject({ code: 'PAGES_ROUTE_TEMPLATE_UNSUPPORTED', statusCode: 400 });
     expect(db.update).not.toHaveBeenCalled();
   });
 });

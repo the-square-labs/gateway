@@ -18,6 +18,25 @@ interface HealthEntry {
   responseMs?: number;
 }
 
+export function resolveProxyHealthCheckUrl(host: {
+  upstreamKind?: string | null;
+  domainNames?: string[] | null;
+  sslEnabled?: boolean | null;
+  healthCheckUrl?: string | null;
+  forwardScheme?: string | null;
+  forwardHost?: string | null;
+  forwardPort?: number | null;
+}): string | null {
+  const path = host.healthCheckUrl || '/';
+  if (host.upstreamKind === 'pages') {
+    const domain = host.domainNames?.find((candidate) => candidate && !candidate.startsWith('*.'));
+    if (!domain) return null;
+    return `${host.sslEnabled ? 'https' : 'http'}://${domain}${path}`;
+  }
+  if (!host.forwardHost || !host.forwardPort) return null;
+  return `${host.forwardScheme || 'http'}://${formatHostPort(host.forwardHost, host.forwardPort)}${path}`;
+}
+
 export function runImmediateProxyHealthCheck({
   db,
   hostId,
@@ -37,20 +56,15 @@ export function runImmediateProxyHealthCheck({
       const host = await db.query.proxyHosts.findFirst({
         where: eq(proxyHosts.id, hostId),
       });
-      if (
-        !host?.enabled ||
-        !host.healthCheckEnabled ||
-        host.maintenanceEnabled ||
-        (host.secureLinkMigratedAt == null && (!host.forwardHost || !host.forwardPort))
-      )
-        return;
+      if (!host?.enabled || !host.healthCheckEnabled || host.maintenanceEnabled) return;
 
       const scheme = host.forwardScheme || 'http';
       const path = host.healthCheckUrl || '/';
-      const url =
-        host.forwardHost && host.forwardPort
-          ? `${scheme}://${formatHostPort(host.forwardHost, host.forwardPort)}${path}`
-          : null;
+      const url = resolveProxyHealthCheckUrl(host);
+      const secureLinkProbe =
+        (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
+        host.secureLinkMigratedAt != null;
+      if (!secureLinkProbe && !url) return;
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -58,10 +72,7 @@ export function runImmediateProxyHealthCheck({
       let status: 'online' | 'offline' | 'degraded' = 'offline';
       let responseMs: number | undefined;
       try {
-        if (
-          (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
-          host.secureLinkMigratedAt != null
-        ) {
+        if (secureLinkProbe) {
           if (!host.nodeId || !nodeDispatch) throw new Error('Secure Link health probe is unavailable');
           const probe = await nodeDispatch.probeProxySecureLink(host.nodeId, {
             linkId: host.id,

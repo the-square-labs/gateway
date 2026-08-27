@@ -23,10 +23,18 @@ describe('Pages Route input contract', () => {
 
   it.each([
     { rawConfigEnabled: true },
-    { nginxTemplateId: '44444444-4444-4444-8444-444444444444' },
     { websocketSupport: true },
-    { healthCheckEnabled: true },
   ])('rejects incompatible managed-route settings: %o', (settings) => {
     expect(CreateProxyHostSchema.safeParse({ ...base, ...settings }).success).toBe(false);
+  });
+
+  it('accepts health checks and a compatible template for service-level validation', () => {
+    expect(
+      CreateProxyHostSchema.safeParse({
+        ...base,
+        healthCheckEnabled: true,
+        nginxTemplateId: '44444444-4444-4444-8444-444444444444',
+      }).success
+    ).toBe(true);
   });
 });

@@ -228,6 +228,7 @@ describe("CreateProxyHostDialog", () => {
     expect(targetRow).toBeTruthy();
     await user.click(within(targetRow as HTMLElement).getByRole("combobox"));
     await user.click(screen.getByRole("option", { name: "Pages" }));
+    expect(screen.queryByText("WebSocket Support")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Page Project" })).not.toBeDisabled()
     );
@@ -248,6 +249,7 @@ describe("CreateProxyHostDialog", () => {
         pageProjectId: "project-1",
         pageTagId: "tag-production",
         nodeId: "node-ready",
+        websocketSupport: false,
       })
     );
   });

@@ -127,4 +127,44 @@ describe('HealthCheckJob maintenance race', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('checks a Pages Route through its published URL on the regular schedule', async () => {
+    const host = {
+      id: 'pages-host',
+      domainNames: ['docs.example.com'],
+      enabled: true,
+      maintenanceEnabled: false,
+      healthCheckEnabled: true,
+      healthStatus: 'unknown',
+      healthHistory: [],
+      healthCheckSlowThreshold: 3,
+      healthCheckExpectedStatus: 200,
+      healthCheckExpectedBody: null,
+      healthCheckUrl: '/health.html',
+      sslEnabled: true,
+      forwardScheme: 'http',
+      forwardHost: null,
+      forwardPort: null,
+      upstreamKind: 'pages',
+      secureLinkMigratedAt: null,
+      nodeId: 'nginx-node',
+    };
+    const db = {
+      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: host.id }]) })),
+        })),
+      })),
+    } as any;
+    const fetchMock = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new HealthCheckJob(db).run();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://docs.example.com/health.html',
+      expect.objectContaining({ method: 'GET', redirect: 'follow' })
+    );
+  });
 });

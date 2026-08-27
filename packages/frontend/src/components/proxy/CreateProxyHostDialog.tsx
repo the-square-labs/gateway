@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { nodeTypeLabel } from "@/lib/node-appearance";
+import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -257,9 +258,21 @@ export function CreateProxyHostDialog({
 
   // Derived: user templates matching current type
   const userTemplates = useMemo(
-    () => nginxTemplateList.filter((t) => !t.isBuiltin && t.type === type),
-    [nginxTemplateList, type]
+    () =>
+      nginxTemplateList.filter(
+        (template) =>
+          !template.isBuiltin &&
+          template.type === type &&
+          (upstream.kind !== "pages" || supportsPagesRouteTemplate(template.content))
+      ),
+    [nginxTemplateList, type, upstream.kind]
   );
+
+  useEffect(() => {
+    if (upstream.kind !== "pages" || !nginxTemplateId) return;
+    const selected = nginxTemplateList.find((template) => template.id === nginxTemplateId);
+    if (!selected || !supportsPagesRouteTemplate(selected.content)) setNginxTemplateId("");
+  }, [nginxTemplateId, nginxTemplateList, upstream.kind]);
 
   const visibleNodes = useMemo(
     () =>
@@ -303,7 +316,7 @@ export function CreateProxyHostDialog({
       type,
       nodeId,
       domainNames: domains,
-      websocketSupport,
+      websocketSupport: upstream.kind === "pages" ? false : websocketSupport,
       sslEnabled,
       sslForced,
       http2Support,
@@ -630,7 +643,7 @@ export function CreateProxyHostDialog({
 
                 {/* SSL card — always visible, inner controls disabled when SSL off */}
                 <div className="border border-border bg-card">
-                  {type === "proxy" && (
+                  {type === "proxy" && upstream.kind !== "pages" && (
                     <SettingsControlRow
                       title="WebSocket Support"
                       description="Enable WebSocket proxying"

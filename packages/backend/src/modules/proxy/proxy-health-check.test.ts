@@ -64,4 +64,49 @@ describe('runImmediateProxyHealthCheck', () => {
       expect.objectContaining({ id: host.id, action: 'health.online', health_status: 'online' })
     );
   });
+
+  it('checks a Pages Route through its published HTTPS URL', async () => {
+    vi.useFakeTimers();
+    const host = {
+      id: 'pages-host',
+      domainNames: ['docs.example.com'],
+      enabled: true,
+      maintenanceEnabled: false,
+      healthCheckEnabled: true,
+      healthHistory: [],
+      healthCheckExpectedStatus: 200,
+      healthCheckExpectedBody: null,
+      healthCheckBodyMatchMode: null,
+      healthCheckUrl: '/health.html',
+      sslEnabled: true,
+      forwardScheme: 'http',
+      forwardHost: null,
+      forwardPort: null,
+      upstreamKind: 'pages',
+      secureLinkMigratedAt: null,
+      nodeId: 'nginx-node',
+    };
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: host.id }]) })),
+        })),
+      })),
+    } as any;
+    const fetchMock = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') });
+    vi.stubGlobal('fetch', fetchMock);
+
+    runImmediateProxyHealthCheck({
+      db,
+      hostId: host.id,
+      logger: { debug: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://docs.example.com/health.html',
+      expect.objectContaining({ method: 'GET', redirect: 'follow' })
+    );
+  });
 });

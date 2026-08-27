@@ -102,6 +102,17 @@ describe("proxy detail SettingsTab", () => {
     expect(screen.getByRole("combobox", { name: "Access List policy" })).toBeEnabled();
   });
 
+  it("hides upstream-only controls for static Pages Routes", () => {
+    render(
+      <SettingsTab
+        {...makeProps({ host: { ...host, type: "proxy", upstreamKind: "pages" } as ProxyHost })}
+      />
+    );
+
+    expect(screen.queryByText("WebSocket Support")).not.toBeInTheDocument();
+    expect(screen.getByText("Health Check")).toBeInTheDocument();
+  });
+
   it("renders cacheEnabled as an Enabled or Disabled dropdown", () => {
     const defaultTemplate = {
       id: "template-default",

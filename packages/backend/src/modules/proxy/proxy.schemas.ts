@@ -196,17 +196,17 @@ export const CreateProxyHostSchema = z
       ] as const) {
         if (value === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [field] });
       }
-      if (data.rawConfigEnabled || data.nginxTemplateId) {
+      if (data.rawConfigEnabled) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'Pages Routes require the managed proxy template',
+          message: 'Pages Routes do not support Raw Config mode',
           path: ['upstreamKind'],
         });
       }
-      if (data.websocketSupport || data.healthCheckEnabled) {
+      if (data.websocketSupport) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'WebSocket and upstream health checks are not available for static Pages Routes',
+          message: 'WebSocket upgrades are not available for static Pages Routes',
           path: ['upstreamKind'],
         });
       }

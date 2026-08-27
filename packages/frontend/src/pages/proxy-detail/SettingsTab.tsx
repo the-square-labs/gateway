@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
 import { cn, formatDateTime } from "@/lib/utils";
 import type {
   AccessList,
@@ -176,6 +177,10 @@ export function SettingsTab({
       : "inherit";
   const showCustomHeaders = canManage || customHeaders.length > 0;
   const showCustomRewrites = canManage || customRewrites.length > 0;
+  const compatibleTemplates =
+    host.upstreamKind === "pages"
+      ? nginxTemplates.filter((template) => supportsPagesRouteTemplate(template.content))
+      : nginxTemplates;
   const tlsDistributionProblem =
     host.sslEnabled &&
     host.tlsDistribution &&
@@ -339,7 +344,7 @@ export function SettingsTab({
         className="grid gap-4"
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 32rem), 1fr))" }}
       >
-        {host.type === "proxy" && (
+        {host.type === "proxy" && host.upstreamKind !== "pages" && (
           <PanelShell title="WebSocket Support" description="Enable WebSocket proxying">
             <SettingsControlRow title="Enabled" description="Allow WebSocket protocol upgrades">
               <Switch
@@ -419,7 +424,7 @@ export function SettingsTab({
             </SelectTrigger>
             <SelectContent className="font-sans">
               <SelectItem value="__none__">Default template</SelectItem>
-              {nginxTemplates.map((template) => (
+              {compatibleTemplates.map((template) => (
                 <SelectItem key={template.id} value={template.id}>
                   {template.name}
                 </SelectItem>
