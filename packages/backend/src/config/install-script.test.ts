@@ -253,6 +253,7 @@ describe('database daemon installer prerequisites', () => {
     expect(source).toContain('github.com/containerd/containerd/releases/download');
     expect(source).toContain('github.com/moby/buildkit/releases/download');
     expect(source).toContain('github.com/opencontainers/runc/releases/download');
+    expect(source).toContain('chmod 0755 "$staging_dir/bin/runc"');
     expect(source).toContain('github.com/anchore/syft/releases/download');
     expect(source).toContain('github.com/anchore/grype/releases/download');
     expect(source).toContain('containerd-shim-runc-v2');

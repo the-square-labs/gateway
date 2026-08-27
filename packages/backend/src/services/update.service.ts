@@ -561,7 +561,12 @@ export class UpdateService {
         `set -eu
 compose() { docker compose --project-name ${composeProject} --project-directory ${composeDir} -f ${composeDir}/docker-compose.yml "$@"; }
 service_exists() { compose config --services | grep -qx "$1"; }
-ensure_registry() { if service_exists registry; then compose up -d registry; fi; }
+ensure_foundation_services() {
+  for service in $(compose config --services); do
+    [ "$service" = app ] && continue
+    compose up -d --no-recreate "$service"
+  done
+}
 registry_ready() {
   if ! service_exists registry; then return 0; fi
   registry_id="$(compose ps -q registry)"
@@ -597,7 +602,7 @@ rollback() {
     [ "$attempt" -lt 10 ]
     sleep 2
   done
-  ensure_registry
+  ensure_foundation_services
   if [ "$rollback_has_relay" -eq 1 ]; then
     compose up -d --no-deps app
   else
@@ -630,7 +635,7 @@ on_exit() {
 }
 trap on_exit EXIT
 sleep 2
-ensure_registry
+ensure_foundation_services
 if service_exists relay; then
   compose up -d --no-deps --force-recreate app
 else

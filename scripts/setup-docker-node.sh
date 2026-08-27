@@ -1358,6 +1358,7 @@ install_builder_runtime() {
     download_builder_component "runc ${runc_version}" \
         "https://github.com/opencontainers/runc/releases/download/v${runc_version}/runc.${ARCH}" \
         "$runc_sha256" "$staging_dir/bin/runc"
+    chmod 0755 "$staging_dir/bin/runc"
 
     tar -xzf "$download_dir/containerd.tar.gz" -C "$download_dir/containerd"
     tar -xzf "$download_dir/buildkit.tar.gz" -C "$download_dir/buildkit"

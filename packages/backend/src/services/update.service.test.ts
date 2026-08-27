@@ -234,11 +234,12 @@ describe('UpdateService foundation migration', () => {
     );
     expect(sidecarCommand).toContain('cp -p "$FOUNDATION_BACKUP_DIR/.env" /srv/gateway/.env');
     expect(sidecarCommand).toContain('service_exists() { compose config --services | grep -qx "$1"; }');
-    expect(sidecarCommand).toContain(
-      'ensure_registry() { if service_exists registry; then compose up -d registry; fi; }'
-    );
+    expect(sidecarCommand).toContain('ensure_foundation_services()');
+    expect(sidecarCommand).toContain('for service in $(compose config --services); do');
+    expect(sidecarCommand).toContain('[ "$service" = app ] && continue');
+    expect(sidecarCommand).toContain('compose up -d --no-recreate "$service"');
     expect(sidecarCommand).toContain('registry_ready()');
-    expect(sidecarCommand).toContain('sleep 2\nensure_registry\nif service_exists relay; then');
+    expect(sidecarCommand).toContain('sleep 2\nensure_foundation_services\nif service_exists relay; then');
     expect(sidecarCommand).toContain('relay_reachable && registry_ready');
     expect(sidecarCommand).toContain('compose stop app');
     expect(sidecarCommand).not.toContain('compose stop app relay');
