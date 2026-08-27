@@ -68,7 +68,7 @@ describe('inference routing policy', () => {
     );
   });
 
-  it('replaces old affinity when the pinned account is below its reserve', async () => {
+  it('replaces old affinity across providers when the pinned account is below its reserve', async () => {
     const connections = [
       {
         id: 'provider-low',
@@ -82,7 +82,7 @@ describe('inference routing policy', () => {
       },
       {
         id: 'provider-high',
-        providerId: 'openai',
+        providerId: 'anthropic',
         enabled: true,
         deletedAt: null,
         routingOrder: 0,
@@ -136,14 +136,13 @@ describe('inference routing policy', () => {
     };
 
     const selected = await new InferenceRoutingService(db as never, redis as never).select({
-      providerId: 'openai',
       allowedConnectionIds: connections.map((connection) => connection.id),
       affinityKey: 'thread-1',
       existingThread: true,
     });
 
-    expect(selected).toMatchObject({ connectionId: 'provider-high', providerId: 'openai' });
-    expect(redis.set).toHaveBeenCalled();
+    expect(selected).toMatchObject({ connectionId: 'provider-high', providerId: 'anthropic' });
+    expect(redis.set).toHaveBeenCalledWith(expect.stringContaining('inference:affinity:'), 'provider-high', 'EX', 86_400);
   });
 
   it('keeps a usable quota-hot affinity for an existing thread', async () => {
