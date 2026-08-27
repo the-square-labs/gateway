@@ -1,6 +1,6 @@
 # Gateway Logging SDK
 
-`@wiolett/gateway-logger` is a Node-first TypeScript SDK for sending application logs into Square Gateway. It handles Gateway ingest tokens, context merging, batching, retries, rate-limit backoff, trace/span identifiers, and graceful shutdown flushing.
+`@wiolett/gateway-logger` is a Node-first TypeScript SDK for sending application logs into Square Labs Gateway. It handles Gateway ingest tokens, context merging, batching, retries, rate-limit backoff, trace/span identifiers, and graceful shutdown flushing.
 
 Use it when an external service, worker, script, or backend needs to write structured logs into Gateway without calling the ingest API manually.
 
