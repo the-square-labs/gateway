@@ -412,6 +412,13 @@ async function connectTurnAttempt(input: {
     if (!terminal && isPreludeEvent(eventType)) {
       if (input.turn.pendingPreludeFrames.length < MAX_PENDING_PRELUDE_FRAMES) {
         input.turn.pendingPreludeFrames.push(text);
+      } else {
+        // Never discard an ordered protocol frame. Once the bounded prelude
+        // buffer is full, expose the buffered prefix plus the current frame
+        // and permanently cross the replay boundary for this turn.
+        flushPreludeFrames(input.ws, input.turn);
+        sendRaw(input.ws, text);
+        input.turn.emittedOutput = true;
       }
       return;
     }
@@ -612,7 +619,16 @@ function hasCompactionTrigger(input: unknown): boolean {
 }
 
 function isPreludeEvent(type: string): boolean {
-  return type === 'response.created' || type === 'response.queued' || type === 'response.in_progress';
+  return (
+    type === 'response.created' ||
+    type === 'response.queued' ||
+    type === 'response.in_progress' ||
+    // Structural allocation does not commit visible output or an executable
+    // tool call. Keep it behind the existing bounded prelude buffer so a
+    // retryable core/provider failure can still rotate connections safely.
+    type === 'response.output_item.added' ||
+    type === 'response.content_part.added'
+  );
 }
 
 function isSubstantiveOutputEvent(type: string): boolean {

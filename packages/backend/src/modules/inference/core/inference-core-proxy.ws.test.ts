@@ -179,7 +179,7 @@ describe('core responses websocket proxy', () => {
     expect(accounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ isCompaction: true }));
   });
 
-  it('fails over after response.created when no substantive output was delivered', async () => {
+  it('fails over after structural response frames when no substantive output was delivered', async () => {
     const { proxy, accounting } = registerCommon(['conn-1', 'conn-2']);
     proxy.resolveTarget
       .mockResolvedValueOnce({
@@ -225,6 +225,21 @@ describe('core responses websocket proxy', () => {
     first.handlers.message?.(
       JSON.stringify({ type: 'response.created', response: { id: 'resp_first', status: 'in_progress' } })
     );
+    first.handlers.message?.(
+      JSON.stringify({
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'msg_first', type: 'message', role: 'assistant', status: 'in_progress', content: [] },
+      })
+    );
+    first.handlers.message?.(
+      JSON.stringify({
+        type: 'response.content_part.added',
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: '', annotations: [] },
+      })
+    );
     expect(ws.send).not.toHaveBeenCalled();
     first.handlers.message?.(
       JSON.stringify({ type: 'error', status: 502, error: { code: 'upstream_server_error', message: 'failed' } })
@@ -252,6 +267,52 @@ describe('core responses websocket proxy', () => {
     expect(frames[0].response.id).toBe('resp_second');
     expect(accounting.retargetCoreRequest).toHaveBeenCalled();
     expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
+  });
+
+  it('flushes a full structural prelude losslessly and forbids failover afterwards', async () => {
+    const { proxy, accounting } = registerCommon(['conn-1', 'conn-2']);
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
+    );
+
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    const structural = [
+      { type: 'response.created', response: { id: 'resp_first', status: 'in_progress' } },
+      { type: 'response.queued', response: { id: 'resp_first', status: 'queued' } },
+      { type: 'response.in_progress', response: { id: 'resp_first', status: 'in_progress' } },
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'msg_first', type: 'message', role: 'assistant', status: 'in_progress', content: [] },
+      },
+      {
+        type: 'response.content_part.added',
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: '', annotations: [] },
+      },
+    ];
+    for (const frame of structural) upstream.handlers.message?.(JSON.stringify(frame));
+
+    expect(ws.send.mock.calls.map((call) => JSON.parse(call[0] as string).type)).toEqual(
+      structural.map((frame) => frame.type)
+    );
+    upstream.handlers.message?.(
+      JSON.stringify({ type: 'error', status: 502, error: { code: 'upstream_server_error', message: 'failed' } })
+    );
+
+    expect(upstreamInstances).toHaveLength(1);
+    expect(proxy.resolveTarget).toHaveBeenCalledTimes(1);
+    expect(accounting.retargetCoreRequest).not.toHaveBeenCalled();
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+      'failed'
+    );
   });
 
   it('does not fail over after substantive output was delivered', async () => {
