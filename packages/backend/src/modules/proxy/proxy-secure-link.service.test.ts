@@ -700,6 +700,61 @@ describe('ProxySecureLinkService migration rollback', () => {
     ]);
   });
 
+  it('releases every connector endpoint from a binding-owned target network before teardown', async () => {
+    const selected = {
+      id: '11111111-1111-4111-8111-111111111111',
+      upstreamKind: 'docker_deployment',
+      dockerNodeId: 'docker-node',
+      dockerContainerPort: 8080,
+      dockerHostPort: 8080,
+      secureLinkGeneration: 1,
+      secureLinkTargetNetwork: 'database-network',
+      secureLinkTargetContainer: 'application',
+      secureLinkTargetHost: null,
+    } as any;
+    const retained = {
+      ...selected,
+      id: '22222222-2222-4222-8222-222222222222',
+      secureLinkTargetNetwork: 'application-network',
+    };
+    const staleReselectable = {
+      ...selected,
+      id: '33333333-3333-4333-8333-333333333333',
+      upstreamKind: 'docker_container',
+      secureLinkTargetNetwork: 'stale-network',
+    };
+    const emptyReselectable = {
+      ...selected,
+      id: '44444444-4444-4444-8444-444444444444',
+      upstreamKind: 'docker_container',
+      secureLinkTargetNetwork: '',
+    };
+    const dispatch = {
+      sendProxySecureLinks: vi.fn().mockResolvedValue({
+        success: true,
+        detail: JSON.stringify({ bindings: [] }),
+      }),
+    } as any;
+    const service = new ProxySecureLinkService(
+      {
+        query: {
+          proxyHosts: {
+            findMany: vi.fn().mockResolvedValue([selected, retained, staleReselectable, emptyReselectable]),
+          },
+        },
+      } as any,
+      dispatch,
+      {} as any,
+      `registry.example/gateway/secure-link-connector@sha256:${'a'.repeat(64)}`
+    );
+
+    await service.releaseTargetNetwork('docker-node', 'database-network');
+
+    expect(dispatch.sendProxySecureLinks).toHaveBeenCalledWith('docker-node', [
+      expect.objectContaining({ linkId: retained.id, targetNetwork: 'application-network' }),
+    ]);
+  });
+
   it('serializes source full-set snapshots per Nginx node', async () => {
     const firstHost = {
       id: '11111111-1111-4111-8111-111111111111',

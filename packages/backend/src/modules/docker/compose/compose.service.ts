@@ -465,6 +465,22 @@ export class DockerComposeService {
         )
         .limit(1);
       if (active) throw new AppError(409, 'COMPOSE_OPERATION_IN_PROGRESS', 'Another Compose operation is running');
+      const bindings = await tx
+        .select({ targetResourceId: managedDatabaseBindings.targetResourceId })
+        .from(managedDatabaseBindings)
+        .where(
+          and(
+            eq(managedDatabaseBindings.targetNodeId, nodeId),
+            eq(managedDatabaseBindings.targetType, 'compose_service')
+          )
+        );
+      if (bindings.some((binding) => decodeComposeServiceTarget(binding.targetResourceId).projectId === project.id)) {
+        throw new AppError(
+          409,
+          'COMPOSE_DATABASE_BINDINGS_EXIST',
+          'Delete managed database links before deleting the Compose project'
+        );
+      }
       await tx
         .delete(dockerContainerFolderAssignments)
         .where(

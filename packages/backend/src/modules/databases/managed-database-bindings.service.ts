@@ -78,10 +78,19 @@ function isMissingContainerError(error: unknown) {
   return /(?:no such container|container not found)/i.test(message);
 }
 
+function isMissingContainerResult(result: { success: boolean; error?: string }) {
+  return !result.success && /(?:no such container|container not found)/i.test(result.error ?? '');
+}
+
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
   private licensePolicy?: LicensePolicyService;
+  private targetRuntimeReconciler?: {
+    reconcileTargetNode(nodeId: string): Promise<void>;
+    releaseTargetNetwork(nodeId: string, networkName: string): Promise<void>;
+  };
   private readonly bindingPrincipalReconciliationNodes = new Set<string>();
+  private readonly bindingRuntimeReconciliationBindings = new Set<string>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -122,6 +131,13 @@ export class ManagedDatabaseBindingService {
     this.licensePolicy = service;
   }
 
+  setTargetRuntimeReconciler(reconciler: {
+    reconcileTargetNode(nodeId: string): Promise<void>;
+    releaseTargetNetwork(nodeId: string, networkName: string): Promise<void>;
+  }): void {
+    this.targetRuntimeReconciler = reconciler;
+  }
+
   async list(managedDatabaseId: string) {
     await this.getReadyDatabase(managedDatabaseId);
     const rows = await this.db
@@ -149,41 +165,60 @@ export class ManagedDatabaseBindingService {
       .innerJoin(managedDatabaseInstances, eq(managedDatabaseInstances.id, managedDatabaseBindings.managedDatabaseId));
     let failures = 0;
     for (const { database, binding } of rows) {
+      const recoveringFailedDelete =
+        binding.status === 'error' && binding.lastError?.startsWith('Binding removal failed') === true;
+      const cleaningFailedProvision =
+        binding.status === 'error' && binding.lastError?.startsWith('Binding preparation failed') === true;
       if (
-        (database.type !== 'clickhouse' && database.type !== 'postgres') ||
         database.status !== 'ready' ||
         database.pendingOperation ||
-        binding.status !== 'ready' ||
-        (nodeId !== undefined && database.nodeId !== nodeId)
+        (binding.status !== 'ready' && !recoveringFailedDelete && !cleaningFailedProvision) ||
+        (nodeId !== undefined && database.nodeId !== nodeId && binding.targetNodeId !== nodeId)
       ) {
         continue;
       }
       try {
-        const credentials = this.bindingCredentials(binding);
-        const owner = this.ownerCredentials(database);
-        if (credentials.username === owner.username) {
-          this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
+        if (cleaningFailedProvision) {
+          await this.relayPolicy?.revokeOwner('managed_database_binding', binding.id);
+          await this.deprovisionBinding(database, binding, 'system', {});
+          await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, binding.id));
+          this.emitBinding(database, binding, 'binding.deleted', { failurePhase: 'reconciliation' });
           continue;
         }
-        if (database.type === 'clickhouse') {
-          await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
-        } else {
-          this.requireSuccess(
-            await this.nodeDispatch.sendDockerDatabaseCommand(
-              database.nodeId,
-              'binding_create',
-              database.id,
-              JSON.stringify({
-                bindingId: binding.id,
-                username: credentials.username,
-                password: credentials.password,
-                databaseName: credentials.databaseName ?? 'app',
-                ownerUsername: owner.username,
-                ownerPassword: owner.password,
-              })
-            )
-          );
+        if (recoveringFailedDelete) {
+          await this.restoreBindingAfterFailedDelete(database, binding, 'system', {});
+          const [ready] = await this.db
+            .update(managedDatabaseBindings)
+            .set({ status: 'ready', lastError: null, updatedAt: new Date() })
+            .where(eq(managedDatabaseBindings.id, binding.id))
+            .returning();
+          this.emitBinding(database, ready!, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
+          continue;
         }
+        const credentials = this.bindingCredentials(binding);
+        const owner = this.ownerCredentials(database);
+        if (credentials.username !== owner.username && database.type !== 'redis') {
+          if (database.type === 'clickhouse') {
+            await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
+          } else {
+            this.requireSuccess(
+              await this.nodeDispatch.sendDockerDatabaseCommand(
+                database.nodeId,
+                'binding_create',
+                database.id,
+                JSON.stringify({
+                  bindingId: binding.id,
+                  username: credentials.username,
+                  password: credentials.password,
+                  databaseName: credentials.databaseName ?? 'app',
+                  ownerUsername: owner.username,
+                  ownerPassword: owner.password,
+                })
+              )
+            );
+          }
+        }
+        await this.reconcileBindingRuntime(database, binding);
         this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
       } catch (error) {
         failures += 1;
@@ -206,6 +241,178 @@ export class ManagedDatabaseBindingService {
     } finally {
       this.bindingPrincipalReconciliationNodes.delete(nodeId);
     }
+  }
+
+  private async reconcileBindingRuntime(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
+    if (!this.relayPolicy) return;
+    if (this.bindingRuntimeReconciliationBindings.has(binding.id)) return;
+    this.bindingRuntimeReconciliationBindings.add(binding.id);
+    try {
+      await this.relayPolicy.ensureBindingRoute(
+        binding.id,
+        binding.managedDatabaseId,
+        binding.targetNodeId,
+        database.nodeId
+      );
+      const targetPrepared = this.requireSuccess(
+        await this.nodeDispatch.sendRelayGrantBundle(
+          binding.targetNodeId,
+          await this.relayPolicy.getNodeGrantBundle(binding.targetNodeId)
+        )
+      );
+      if (database.nodeId !== binding.targetNodeId) {
+        this.requireSuccess(
+          await this.nodeDispatch.sendRelayGrantBundle(
+            database.nodeId,
+            await this.relayPolicy.getNodeGrantBundle(database.nodeId)
+          )
+        );
+      }
+      await this.ensureBindingConnector(database, binding, targetPrepared.detail);
+    } finally {
+      this.bindingRuntimeReconciliationBindings.delete(binding.id);
+    }
+  }
+
+  private async ensureBindingConnector(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    relayGrantDetail: string | undefined
+  ) {
+    const socketMount = this.tunnelSocketMount(relayGrantDetail);
+    await this.ensureBindingNetwork(binding);
+
+    const inspected = await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'inspect', {
+      containerId: binding.connectorName,
+    });
+    if (inspected.success) {
+      const state = this.connectorRuntimeState(database, binding, socketMount, inspected.detail);
+      if (!state.owned) {
+        throw new Error(`container ${binding.connectorName} is not owned by managed database binding ${binding.id}`);
+      }
+      if (state.matches) {
+        this.requireSuccess(
+          await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'restart', {
+            containerId: binding.connectorName,
+          })
+        );
+        return;
+      }
+      this.requireSuccessOrMissing(
+        await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
+          containerId: binding.connectorName,
+          force: true,
+        })
+      );
+    } else if (!isMissingContainerResult(inspected)) {
+      this.requireSuccess(inspected);
+    }
+
+    await this.createBindingConnector(database, binding, socketMount);
+  }
+
+  private async ensureBindingNetwork(binding: ManagedDatabaseBindingRow) {
+    const listed = this.requireSuccess(
+      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'list', {})
+    );
+    let networks: Array<{ Name?: unknown; name?: unknown; Driver?: unknown; driver?: unknown }>;
+    try {
+      const parsed = JSON.parse(listed.detail ?? '');
+      if (!Array.isArray(parsed)) throw new Error('network list is not an array');
+      networks = parsed;
+    } catch {
+      throw new Error('managed database network inventory is unavailable');
+    }
+    const existing = networks.find((network) => (network.Name ?? network.name) === binding.networkName);
+    if (existing) {
+      const driver = existing.Driver ?? existing.driver;
+      if (typeof driver === 'string' && driver !== 'bridge') {
+        throw new Error(`network ${binding.networkName} exists with an unexpected driver`);
+      }
+      return;
+    }
+    this.requireSuccess(
+      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'create', {
+        networkId: binding.networkName,
+        driver: 'bridge',
+      })
+    );
+  }
+
+  private connectorRuntimeState(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    socketMount: { hostDirectory: string; connectorPath: string },
+    detail: string | undefined
+  ) {
+    let inspect: any;
+    try {
+      inspect = JSON.parse(detail ?? '');
+    } catch {
+      throw new Error('managed database connector inspection is unavailable');
+    }
+    const labels = (inspect?.Config?.Labels ?? {}) as Record<string, unknown>;
+    const owned =
+      labels['wiolett.gateway.managed-database.binding'] === binding.id &&
+      labels['wiolett.gateway.managed-database.connector'] === 'true';
+    if (!owned) return { owned: false, matches: false };
+
+    const expectedBind = `${socketMount.hostDirectory}:/run/gateway-db:ro`;
+    const binds = Array.isArray(inspect?.HostConfig?.Binds) ? inspect.HostConfig.Binds : [];
+    const env = new Set(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
+    const aliases = inspect?.NetworkSettings?.Networks?.[binding.networkName]?.Aliases;
+    return {
+      owned: true,
+      matches:
+        inspect?.Config?.Image === this.connectorImage &&
+        binds.includes(expectedBind) &&
+        env.has(`GATEWAY_DB_BINDING_ID=${binding.id}`) &&
+        env.has(`GATEWAY_DB_SOCKET=${socketMount.connectorPath}`) &&
+        env.has(`GATEWAY_DB_LISTEN=:${enginePort(database.type)}`) &&
+        inspect?.HostConfig?.NetworkMode === binding.networkName &&
+        Array.isArray(aliases) &&
+        aliases.includes(binding.connectorAlias) &&
+        inspect?.HostConfig?.RestartPolicy?.Name === 'unless-stopped',
+    };
+  }
+
+  private async createBindingConnector(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    socketMount: { hostDirectory: string; connectorPath: string }
+  ) {
+    this.requireSuccess(
+      await this.nodeDispatch.sendDockerImageCommand(binding.targetNodeId, this.connectorImageAction(), {
+        imageRef: this.connectorImage,
+      })
+    );
+    const connector = this.requireSuccess(
+      await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'create', {
+        configJson: JSON.stringify({
+          name: binding.connectorName,
+          image: this.connectorImage,
+          env: [
+            `GATEWAY_DB_BINDING_ID=${binding.id}`,
+            `GATEWAY_DB_SOCKET=${socketMount.connectorPath}`,
+            `GATEWAY_DB_LISTEN=:${enginePort(database.type)}`,
+          ],
+          binds: [`${socketMount.hostDirectory}:/run/gateway-db:ro`],
+          network_mode: binding.networkName,
+          network_aliases: [binding.connectorAlias],
+          restartPolicy: 'unless-stopped',
+          internal_workload: 'managed-database-connector',
+          labels: {
+            'wiolett.gateway.managed-database.binding': binding.id,
+            'wiolett.gateway.managed-database.connector': 'true',
+          },
+        }),
+      })
+    );
+    this.requireSuccess(
+      await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'start', {
+        containerId: this.containerID(connector.detail),
+      })
+    );
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
@@ -297,16 +504,21 @@ export class ManagedDatabaseBindingService {
     try {
       await this.relayPolicy?.revokeOwner('managed_database_binding', deleting!.id);
     } catch (error) {
-      // Periodic canonical relay reconciliation is the durable fallback. Cleanup
-      // must continue after the committed deleting transition.
-      logger.warn('Direct relay binding revocation failed; reconciliation will retry', {
+      logger.warn('Managed database binding deletion stopped before target mutation because relay revocation failed', {
         bindingId: deleting!.id,
         error: error instanceof Error ? error.message : String(error),
       });
+      return this.markBindingError(database, deleting!, 'delete', error);
     }
     try {
       await this.deprovisionBinding(database, deleting!, userId, options);
     } catch (error) {
+      await this.restoreBindingAfterFailedDelete(database, deleting!, userId, options).catch((restoreError) => {
+        logger.error('Failed to restore managed database binding after deletion error', {
+          bindingId: deleting!.id,
+          error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+        });
+      });
       return this.markBindingError(database, deleting!, 'delete', error);
     }
     await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, bindingId));
@@ -467,14 +679,25 @@ export class ManagedDatabaseBindingService {
       targetApplyAttempted = true;
       await this.applyTargetBinding(database, binding, credentials, userId, options);
     } catch (error) {
-      await this.compensateProvisioning(database, binding, {
-        principalCreated,
-        policyPrepared,
-        networkCreated,
-        connectorCreated,
-        targetApplyAttempted,
-      });
-      return this.markBindingError(database, binding, 'prepare', error);
+      let reportedError = error;
+      try {
+        await this.compensateProvisioning(database, binding, {
+          principalCreated,
+          policyPrepared,
+          networkCreated,
+          connectorCreated,
+          targetApplyAttempted,
+        });
+      } catch (cleanupError) {
+        logger.error('Managed database binding compensation stopped before unsafe cleanup', {
+          bindingId: binding.id,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+        const original = error instanceof Error ? error.message : String(error);
+        const cleanup = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        reportedError = new Error(`${original}; compensation failed safely: ${cleanup}`);
+      }
+      return this.markBindingError(database, binding, 'prepare', reportedError);
     }
 
     const [ready] = await this.db
@@ -516,16 +739,35 @@ export class ManagedDatabaseBindingService {
   ) {
     const credentials = this.bindingCredentials(binding);
     const owner = this.ownerCredentials(database);
+    await this.prepareTargetNetworkRemoval(binding);
     await this.removeTargetBinding(database, binding, userId, options);
+    await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
+    const connectorDisconnected = await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
+      networkId: binding.networkName,
+      containerId: binding.connectorName,
+    });
+    this.requireSuccessOrMissing(connectorDisconnected);
+    try {
+      this.requireSuccessOrMissing(
+        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
+          networkId: binding.networkName,
+        })
+      );
+    } catch (error) {
+      if (connectorDisconnected.success) {
+        await this.nodeDispatch
+          .sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
+            networkId: binding.networkName,
+            containerId: binding.connectorName,
+          })
+          .catch(() => undefined);
+      }
+      throw error;
+    }
     this.requireSuccessOrMissing(
       await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
         containerId: binding.connectorName,
         force: true,
-      })
-    );
-    this.requireSuccessOrMissing(
-      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
-        networkId: binding.networkName,
       })
     );
     if (credentials.username !== owner.username) {
@@ -545,6 +787,26 @@ export class ManagedDatabaseBindingService {
         )
       );
     }
+  }
+
+  private async restoreBindingAfterFailedDelete(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    userId: string,
+    options: { targetEnvironment?: Record<string, string> }
+  ) {
+    await this.reconcileBindingRuntime(database, binding);
+    await this.applyTargetBinding(database, binding, this.bindingCredentials(binding), userId, options);
+    await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
+  }
+
+  private async prepareTargetNetworkRemoval(binding: ManagedDatabaseBindingRow): Promise<void> {
+    if (!this.targetRuntimeReconciler) return;
+    // Remove every managed Secure Link connector endpoint from the
+    // binding-owned network before mutating any target type. Desired links
+    // remain persisted and are reconciled onto a remaining target network
+    // immediately after the target drops this database network.
+    await this.targetRuntimeReconciler.releaseTargetNetwork(binding.targetNodeId, binding.networkName);
   }
 
   private async applyTargetBinding(
@@ -716,19 +978,28 @@ export class ManagedDatabaseBindingService {
       targetApplyAttempted: boolean;
     }
   ) {
-    if (state.targetApplyAttempted) await this.removeTargetBinding(database, binding, 'system').catch(() => undefined);
+    if (state.policyPrepared) {
+      await this.relayPolicy?.revokeOwner('managed_database_binding', binding.id);
+    }
+    if (state.targetApplyAttempted) {
+      await this.prepareTargetNetworkRemoval(binding);
+      await this.removeTargetBinding(database, binding, 'system');
+      await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
+    }
     if (state.connectorCreated) {
-      await this.nodeDispatch
-        .sendDockerContainerCommand(binding.targetNodeId, 'remove', { containerId: binding.connectorName, force: true })
-        .catch(() => undefined);
+      this.requireSuccessOrMissing(
+        await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
+          containerId: binding.connectorName,
+          force: true,
+        })
+      );
     }
     if (state.networkCreated) {
-      await this.nodeDispatch
-        .sendDockerNetworkCommand(binding.targetNodeId, 'remove', { networkId: binding.networkName })
-        .catch(() => undefined);
-    }
-    if (state.policyPrepared) {
-      await this.relayPolicy?.revokeOwner('managed_database_binding', binding.id).catch(() => undefined);
+      this.requireSuccessOrMissing(
+        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
+          networkId: binding.networkName,
+        })
+      );
     }
     if (state.principalCreated) {
       const credentials = this.bindingCredentials(binding);

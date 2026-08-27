@@ -6,6 +6,7 @@ import {
   dockerDeploymentSlots,
   dockerDeployments,
   dockerWebhooks,
+  managedDatabaseBindings,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -305,6 +306,24 @@ export async function remove(
 ) {
   await ctx.validateDockerNode(nodeId);
   await assertDeploymentNotUsedByProxy(ctx.db, deploymentId);
+  const [databaseBinding] = await ctx.db
+    .select({ id: managedDatabaseBindings.id })
+    .from(managedDatabaseBindings)
+    .where(
+      and(
+        eq(managedDatabaseBindings.targetNodeId, nodeId),
+        eq(managedDatabaseBindings.targetType, 'deployment'),
+        eq(managedDatabaseBindings.targetResourceId, deploymentId)
+      )
+    )
+    .limit(1);
+  if (databaseBinding) {
+    throw new AppError(
+      409,
+      'DEPLOYMENT_DATABASE_BINDINGS_EXIST',
+      'Delete managed database links before deleting the deployment'
+    );
+  }
   const deployment = await ctx.loadDeployment(nodeId, deploymentId);
   ctx.requireDeploymentIdle(deployment);
   ctx.setTransition(deployment, 'removing');

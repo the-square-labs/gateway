@@ -1091,6 +1091,10 @@ export class ProxySecureLinkService {
     await this.syncTargetNode(nodeId);
   }
 
+  async releaseTargetNetwork(nodeId: string, networkName: string): Promise<void> {
+    await this.syncTargetNode(nodeId, networkName);
+  }
+
   async reconcileSourceNode(nodeId: string): Promise<void> {
     await this.syncSourceNode(nodeId);
   }
@@ -1276,9 +1280,9 @@ export class ProxySecureLinkService {
     };
   }
 
-  private async syncTargetNode(nodeId: string): Promise<void> {
+  private async syncTargetNode(nodeId: string, excludedNetwork?: string): Promise<void> {
     const previous = this.targetNodeSyncs.get(nodeId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => this.syncTargetNodeLocked(nodeId));
+    const current = previous.catch(() => undefined).then(() => this.syncTargetNodeLocked(nodeId, excludedNetwork));
     this.targetNodeSyncs.set(nodeId, current);
     try {
       await current;
@@ -1287,7 +1291,7 @@ export class ProxySecureLinkService {
     }
   }
 
-  private async syncTargetNodeLocked(nodeId: string): Promise<void> {
+  private async syncTargetNodeLocked(nodeId: string, excludedNetwork?: string): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const hosts = await this.db.query.proxyHosts.findMany({
         where: and(
@@ -1328,7 +1332,11 @@ export class ProxySecureLinkService {
           connectorImage: this.connectorImage,
           allowNetworkReselection: binding.upstreamKind === 'docker_container',
         })),
-      ];
+      ].filter(
+        (binding) =>
+          !excludedNetwork ||
+          (binding.targetNetwork !== excludedNetwork && !binding.allowNetworkReselection)
+      );
       const additionalIds = new Set(additional.map((binding: ProxyAdditionalSecureLinkRow) => binding.id));
       let result = await this.dispatch.sendProxySecureLinks(nodeId, targetBindings);
       if (!result.success) throw new Error(result.error || 'Docker daemon rejected secure-link bindings');

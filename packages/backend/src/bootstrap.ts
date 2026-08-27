@@ -921,6 +921,7 @@ export async function initializeContainer(): Promise<void> {
       )
     : undefined;
   proxySecureLinkService?.setEventBus(eventBus);
+  if (proxySecureLinkService) managedDatabaseBindingService.setTargetRuntimeReconciler(proxySecureLinkService);
   if (proxySecureLinkService) container.registerInstance(ProxySecureLinkService, proxySecureLinkService);
   const proxyMaintenanceAccessService = new ProxyMaintenanceAccessService(
     db,
