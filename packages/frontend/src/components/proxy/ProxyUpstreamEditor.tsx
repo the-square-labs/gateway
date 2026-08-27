@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
@@ -638,6 +639,7 @@ export function ProxyUpstreamPanel({
     host.relaySpreadMode ?? "inherit"
   );
   const [relaySpreadCount, setRelaySpreadCount] = useState(host.relaySpreadCount ?? 2);
+  const [upstreamIpv6Enabled, setUpstreamIpv6Enabled] = useState(host.upstreamIpv6Enabled ?? false);
   const [containers, setContainers] = useState<DockerContainer[]>([]);
   const [saving, setSaving] = useState(false);
   const persistedDraft = useMemo(
@@ -646,6 +648,7 @@ export function ProxyUpstreamPanel({
       selection: proxyUpstreamFromHost(host),
       relaySpreadMode: host.relaySpreadMode ?? ("inherit" as const),
       relaySpreadCount: host.relaySpreadCount ?? 2,
+      upstreamIpv6Enabled: host.upstreamIpv6Enabled ?? false,
     }),
     [host]
   );
@@ -664,14 +667,16 @@ export function ProxyUpstreamPanel({
       JSON.stringify(proxyUpstreamRequest(selection)) !==
         JSON.stringify(proxyUpstreamRequest(previous.selection)) ||
       relaySpreadMode !== previous.relaySpreadMode ||
+      upstreamIpv6Enabled !== previous.upstreamIpv6Enabled ||
       (relaySpreadMode === "fixed" && relaySpreadCount !== previous.relaySpreadCount);
     lastPersistedDraft.current = persistedDraft;
     if (persistedDraft.hostId !== previous.hostId || !hasLocalChanges) {
       setSelection(persistedDraft.selection);
       setRelaySpreadMode(persistedDraft.relaySpreadMode);
       setRelaySpreadCount(persistedDraft.relaySpreadCount);
+      setUpstreamIpv6Enabled(persistedDraft.upstreamIpv6Enabled);
     }
-  }, [persistedDraft, relaySpreadCount, relaySpreadMode, selection]);
+  }, [persistedDraft, relaySpreadCount, relaySpreadMode, selection, upstreamIpv6Enabled]);
   useEffect(loadContainers, [loadContainers]);
   useRealtime("docker.snapshot.changed", loadContainers);
   useRealtime("docker.deployment.changed", loadContainers);
@@ -681,8 +686,9 @@ export function ProxyUpstreamPanel({
       JSON.stringify(proxyUpstreamRequest(selection)) !==
         JSON.stringify(proxyUpstreamRequest(persistedDraft.selection)) ||
       relaySpreadMode !== persistedDraft.relaySpreadMode ||
+      upstreamIpv6Enabled !== persistedDraft.upstreamIpv6Enabled ||
       (relaySpreadMode === "fixed" && relaySpreadCount !== persistedDraft.relaySpreadCount),
-    [persistedDraft, relaySpreadCount, relaySpreadMode, selection]
+    [persistedDraft, relaySpreadCount, relaySpreadMode, selection, upstreamIpv6Enabled]
   );
 
   const relaySpreadValid =
@@ -696,6 +702,7 @@ export function ProxyUpstreamPanel({
         ...proxyUpstreamRequest(selection),
         relaySpreadMode,
         relaySpreadCount: relaySpreadMode === "fixed" ? relaySpreadCount : null,
+        upstreamIpv6Enabled,
       });
       onUpdated(updated);
       toast.success("Upstream updated");
@@ -736,6 +743,19 @@ export function ProxyUpstreamPanel({
         containers={containers}
         disabled={!canManage}
       />
+      {selection.kind === "manual" ? (
+        <SettingsControlRow
+          title="Enable IPv6 support"
+          description="Allow this upstream hostname to resolve and connect over IPv6"
+        >
+          <Switch
+            checked={upstreamIpv6Enabled}
+            onChange={setUpstreamIpv6Enabled}
+            disabled={!canManage || saving}
+            ariaLabel="Enable IPv6 support"
+          />
+        </SettingsControlRow>
+      ) : null}
       <SettingsControlRow
         title="Relay spread"
         description="Relay capacity used by this workload and all its Secure Links; existing connections stay pinned"

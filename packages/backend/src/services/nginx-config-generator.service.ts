@@ -23,6 +23,7 @@ export interface ProxyHostConfig {
   forwardHost: string | null;
   forwardPort: number | null;
   forwardScheme: 'http' | 'https';
+  upstreamIpv6Enabled?: boolean;
   secureLinkUpstream?: boolean;
   secureLinkSocketPath?: string;
   registryAuthRealm?: string;

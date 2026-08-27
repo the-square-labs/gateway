@@ -1,0 +1,1 @@
+ALTER TABLE "proxy_hosts" ADD COLUMN "upstream_ipv6_enabled" boolean DEFAULT false NOT NULL;

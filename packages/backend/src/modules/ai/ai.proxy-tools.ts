@@ -71,6 +71,7 @@ export async function executeProxyTool(
             forwardHost: a.forwardHost,
             forwardPort: a.forwardPort,
             forwardScheme: a.forwardScheme || 'http',
+            upstreamIpv6Enabled: a.upstreamIpv6Enabled ?? false,
             dockerNodeId: a.dockerNodeId,
             dockerContainerName: a.dockerContainerName,
             dockerComposeProjectId: a.dockerComposeProjectId,

@@ -79,6 +79,7 @@ export const proxyHosts = pgTable(
     forwardHost: varchar('forward_host', { length: 255 }),
     forwardPort: integer('forward_port'),
     forwardScheme: forwardSchemeEnum('forward_scheme').default('http'),
+    upstreamIpv6Enabled: boolean('upstream_ipv6_enabled').notNull().default(false),
     dockerNodeId: uuid('docker_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     dockerContainerName: varchar('docker_container_name', { length: 255 }),
     dockerComposeProjectId: uuid('docker_compose_project_id').references(() => dockerComposeProjects.id, {

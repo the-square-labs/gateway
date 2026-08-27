@@ -44,6 +44,7 @@ export interface ProxyHost {
   forwardHost: string | null;
   forwardPort: number | null;
   forwardScheme: ForwardScheme;
+  upstreamIpv6Enabled?: boolean;
   dockerNodeId?: string | null;
   dockerNodeSlug?: string | null;
   dockerContainerName?: string | null;
@@ -351,6 +352,7 @@ export interface CreateProxyHostRequest {
   forwardHost?: string;
   forwardPort?: number;
   forwardScheme?: ForwardScheme;
+  upstreamIpv6Enabled?: boolean;
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
   dockerComposeProjectId?: string | null;

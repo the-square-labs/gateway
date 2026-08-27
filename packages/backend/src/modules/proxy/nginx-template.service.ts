@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { count, eq, inArray } from 'drizzle-orm';
 import Handlebars from 'handlebars';
 import type { DrizzleClient } from '@/db/client.js';
@@ -14,6 +15,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort } from '@/lib/network-endpoint.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { getDnsResolverServers } from '@/modules/domains/dns.utils.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
 import type { ProxyAdditionalRouteConfig, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
@@ -710,8 +712,8 @@ export class NginxTemplateService {
     this.eventBus = bus;
   }
 
-  private emitTemplate(id: string, action: string) {
-    this.eventBus?.publish('nginx.template.changed', { id, action });
+  private emitTemplate(id: string, action: string, extra: Record<string, unknown> = {}) {
+    this.eventBus?.publish('nginx.template.changed', { id, action, ...extra });
   }
 
   // -----------------------------------------------------------------------
@@ -733,11 +735,17 @@ export class NginxTemplateService {
         existing.content !== template.content ||
         JSON.stringify(existing.variables ?? []) !== JSON.stringify(template.variables)
       ) {
-        await this.db
+        const [updated] = await this.db
           .update(nginxTemplates)
           .set({ content: template.content, variables: template.variables, updatedAt: new Date() })
-          .where(eq(nginxTemplates.id, existing.id));
+          .where(eq(nginxTemplates.id, existing.id))
+          .returning();
         logger.info('Updated built-in nginx template', { name: template.name });
+        this.emitTemplate(updated.id, 'updated', {
+          type: updated.type,
+          isBuiltin: true,
+          renderingChanged: true,
+        });
       }
     }
   }
@@ -807,7 +815,11 @@ export class NginxTemplateService {
       details: { changes: Object.keys(input) },
     });
 
-    this.emitTemplate(id, 'updated');
+    this.emitTemplate(id, 'updated', {
+      type: updated.type,
+      isBuiltin: updated.isBuiltin,
+      renderingChanged: input.content !== undefined || input.variables !== undefined,
+    });
     return updated;
   }
 
@@ -909,7 +921,7 @@ export class NginxTemplateService {
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
-    const rendered = this.renderTemplate(content, host).replaceAll(
+    const rendered = this.applyUpstreamIpFamily(this.renderTemplate(content, host), host).replaceAll(
       escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML),
       escapeNginxReturnText(gatewayNotFoundHtml(hideExternalBranding))
     );
@@ -920,6 +932,108 @@ export class NginxTemplateService {
     return supportsAdditionalRoutes
       ? this.ensureManagedAdditionalRouteUpstreams(withSecureLinkUpstreams, host)
       : withSecureLinkUpstreams;
+  }
+
+  private applyUpstreamIpFamily(rendered: string, host: ProxyHostConfig): string {
+    const forwardHost = host.forwardHost?.replace(DANGEROUS_CHARS, '') ?? '';
+    if (
+      host.type !== 'proxy' ||
+      host.upstreamIpv6Enabled === true ||
+      host.secureLinkUpstream ||
+      isIP(forwardHost) !== 0 ||
+      !forwardHost ||
+      !host.forwardPort
+    ) {
+      return rendered;
+    }
+
+    const staticUpstream = `${host.forwardScheme}://${formatHostPort(forwardHost, host.forwardPort)}`;
+    const variableName = `gateway_upstream_host_${host.id.replace(/-/g, '_')}`;
+    const dynamicUpstream = `${host.forwardScheme}://$${variableName}:${host.forwardPort}`;
+    if (!rendered.includes(staticUpstream)) return rendered;
+
+    const ipv4Resolvers = getDnsResolverServers().filter((server) => {
+      const separator = server.lastIndexOf(':');
+      const address = separator > -1 ? server.slice(0, separator) : server;
+      return isIP(address) === 4 || isIP(server) === 4;
+    });
+    if (ipv4Resolvers.length === 0) {
+      throw new AppError(
+        500,
+        'NGINX_IPV4_RESOLVER_REQUIRED',
+        'At least one IPv4 DNS resolver is required when upstream IPv6 support is disabled'
+      );
+    }
+
+    const withDynamicUpstream = rendered.replaceAll(staticUpstream, dynamicUpstream);
+    const resolverDirective = `resolver ${ipv4Resolvers.join(' ')} valid=300s ipv6=off;`;
+    const withResolvers = this.ensureResolverForDynamicUpstream(
+      withDynamicUpstream,
+      dynamicUpstream,
+      resolverDirective
+    );
+    return `map $host $${variableName} {\n    default "${forwardHost}";\n}\n\n${withResolvers}`;
+  }
+
+  private ensureResolverForDynamicUpstream(rendered: string, dynamicUpstream: string, directive: string): string {
+    const serverPattern = /^[\t ]*server[\t ]*\{/gm;
+    const edits: Array<{ start: number; end: number; replacement: string }> = [];
+    let match: RegExpExecArray | null;
+    while ((match = serverPattern.exec(rendered))) {
+      const openingBrace = rendered.indexOf('{', match.index);
+      const closingBrace = this.findMatchingBrace(rendered, openingBrace);
+      if (closingBrace < 0) break;
+      const body = rendered.slice(openingBrace + 1, closingBrace);
+      if (body.includes(dynamicUpstream)) {
+        const existingResolver = /^[\t ]*resolver[\t ]+([^;]+);/m.exec(body);
+        if (!existingResolver) {
+          edits.push({ start: openingBrace + 1, end: openingBrace + 1, replacement: `\n    ${directive}` });
+        } else if (!/(?:^|\s)ipv6=off(?:\s|$)/.test(existingResolver[1]!)) {
+          const start = openingBrace + 1 + existingResolver.index;
+          const options = existingResolver[1]!.replace(/(?:^|\s)ipv6=\S+/g, '').trim();
+          edits.push({
+            start,
+            end: start + existingResolver[0].length,
+            replacement: `    resolver ${options} ipv6=off;`,
+          });
+        }
+      }
+      serverPattern.lastIndex = closingBrace + 1;
+    }
+
+    let result = rendered;
+    for (const edit of edits.reverse()) {
+      result = `${result.slice(0, edit.start)}${edit.replacement}${result.slice(edit.end)}`;
+    }
+    return result;
+  }
+
+  private findMatchingBrace(value: string, openingBrace: number): number {
+    let depth = 0;
+    let quote: '"' | "'" | null = null;
+    let inComment = false;
+    for (let index = openingBrace; index < value.length; index++) {
+      const char = value[index]!;
+      if (inComment) {
+        if (char === '\n') inComment = false;
+        continue;
+      }
+      if (quote) {
+        if (char === quote && value[index - 1] !== '\\') quote = null;
+        continue;
+      }
+      if (char === '#') {
+        inComment = true;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === '{') depth += 1;
+      if (char === '}' && --depth === 0) return index;
+    }
+    return -1;
   }
 
   private ensureManagedAdditionalSecureLinkUpstreams(rendered: string, host: ProxyHostConfig): string {

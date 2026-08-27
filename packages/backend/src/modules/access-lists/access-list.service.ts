@@ -185,6 +185,7 @@ export class AccessListService {
           forwardHost: host.forwardHost,
           forwardPort: host.forwardPort,
           forwardScheme: host.forwardScheme ?? 'http',
+          upstreamIpv6Enabled: host.upstreamIpv6Enabled,
           sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
           sslForced: host.sslForced,
           http2Support: host.http2Support,

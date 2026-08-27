@@ -647,6 +647,10 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         forwardHost: { type: 'string', description: 'Backend host to proxy to (for proxy type)' },
         forwardPort: { type: 'number', description: 'Backend port (for proxy type)' },
         forwardScheme: { type: 'string', enum: ['http', 'https'], description: 'Backend scheme (default: http)' },
+        upstreamIpv6Enabled: {
+          type: 'boolean',
+          description: 'Allow IPv6 DNS answers and connections for the primary upstream (default: false)',
+        },
         dockerNodeId: { type: 'string', description: 'Docker node UUID for a container upstream.' },
         dockerContainerName: { type: 'string', description: 'Stable Docker container name.' },
         dockerComposeProjectId: { type: 'string', description: 'Compose Project UUID for a service upstream.' },
@@ -756,6 +760,10 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         forwardHost: { type: ['string', 'null'], description: 'Backend host; null clears it' },
         forwardPort: { type: ['number', 'null'], description: 'Backend port; null clears it' },
         forwardScheme: { type: 'string', enum: ['http', 'https'] },
+        upstreamIpv6Enabled: {
+          type: 'boolean',
+          description: 'Allow IPv6 DNS answers and connections for the primary upstream',
+        },
         dockerNodeId: { type: ['string', 'null'] },
         dockerContainerName: { type: ['string', 'null'] },
         dockerDeploymentId: { type: ['string', 'null'] },

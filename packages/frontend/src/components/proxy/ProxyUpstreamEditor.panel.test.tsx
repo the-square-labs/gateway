@@ -59,6 +59,29 @@ function proxyHost(overrides: Partial<ProxyHost> = {}): ProxyHost {
 }
 
 describe("ProxyUpstreamPanel Relay spread", () => {
+  it("keeps upstream IPv6 disabled by default and saves an explicit opt-in", async () => {
+    const user = userEvent.setup();
+    const host = proxyHost();
+    vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+    const update = vi
+      .spyOn(api, "updateProxyHost")
+      .mockResolvedValue(proxyHost({ upstreamIpv6Enabled: true }));
+
+    render(<ProxyUpstreamPanel host={host} canManage onUpdated={vi.fn()} />);
+    const toggle = screen.getByRole("button", { name: "Enable IPv6 support" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        host.id,
+        expect.objectContaining({ upstreamIpv6Enabled: true })
+      )
+    );
+  });
+
   it("preserves an unsaved draft across background host refreshes and marks the panel dirty", async () => {
     const user = userEvent.setup();
     const host = proxyHost();

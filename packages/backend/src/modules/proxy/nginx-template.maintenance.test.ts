@@ -49,6 +49,68 @@ function service() {
 }
 
 describe('canonical Gateway nginx pages', () => {
+  it('resolves hostname upstreams over IPv4 by default', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        forwardHost: 'pearl-diver-game-production.pages.dev',
+        forwardPort: 443,
+        forwardScheme: 'https',
+        upstreamIpv6Enabled: false,
+      },
+      null
+    );
+
+    expect(rendered).toContain('map $host $gateway_upstream_host_11111111_1111_4111_8111_111111111111 {');
+    expect(rendered).toContain('default "pearl-diver-game-production.pages.dev";');
+    expect(rendered).toContain('resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;');
+    expect(rendered).toContain('proxy_pass https://$gateway_upstream_host_11111111_1111_4111_8111_111111111111:443;');
+    expect(rendered).not.toContain('proxy_pass https://pearl-diver-game-production.pages.dev:443;');
+  });
+
+  it('keeps native dual-stack resolution when upstream IPv6 support is enabled', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        forwardHost: 'dual-stack.example.com',
+        forwardPort: 443,
+        forwardScheme: 'https',
+        upstreamIpv6Enabled: true,
+      },
+      null
+    );
+
+    expect(rendered).toContain('proxy_pass https://dual-stack.example.com:443;');
+    expect(rendered).not.toContain('gateway_upstream_host_');
+    expect(rendered).not.toContain('ipv6=off');
+  });
+
+  it('forces ipv6=off on an existing server resolver without duplicating it', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        forwardHost: 'origin.example.com',
+        upstreamIpv6Enabled: false,
+        advancedConfig: 'resolver 192.0.2.53 valid=60s;',
+      },
+      null
+    );
+
+    expect(rendered.match(/resolver /g)).toHaveLength(1);
+    expect(rendered).toContain('resolver 192.0.2.53 valid=60s ipv6=off;');
+  });
+
+  it('does not add runtime DNS resolution for an IP-literal upstream', async () => {
+    const rendered = await service().renderForHost(
+      { ...host, forwardHost: '10.0.0.2', upstreamIpv6Enabled: false },
+      null
+    );
+
+    expect(rendered).toContain('proxy_pass http://10.0.0.2:8080;');
+    expect(rendered).not.toContain('gateway_upstream_host_');
+    expect(rendered).not.toContain('ipv6=off');
+  });
+
   it('renders registry ingress through its dedicated Unix socket and rewrites only the token realm', async () => {
     const rendered = await service().renderForHost(
       {

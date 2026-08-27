@@ -16,6 +16,7 @@ vi.mock('@/db/schema/index.js', () => ({
     enabled: 'proxy_hosts.enabled',
     isSystem: 'proxy_hosts.is_system',
     nodeId: 'proxy_hosts.node_id',
+    nginxTemplateId: 'proxy_hosts.nginx_template_id',
     upstreamKind: 'proxy_hosts.upstream_kind',
     secureLinkStatus: 'proxy_hosts.secure_link_status',
     type: 'proxy_hosts.type',
@@ -24,6 +25,64 @@ vi.mock('@/db/schema/index.js', () => ({
     status: 'proxy_additional_secure_links.status',
   },
 }));
+
+describe('ProxyService Nginx template reconciliation', () => {
+  it('regenerates every enabled route using an updated template and isolates failures', async () => {
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 'host-1', nodeId: 'node-1' },
+            { id: 'host-2', nodeId: 'node-2' },
+          ]),
+        },
+      },
+    } as any;
+    const service = new ProxyService(db, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const reconcile = vi
+      .spyOn(service, 'reconcileAdditionalRouteHost')
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('node offline'));
+
+    const result = await service.reconcileTemplateHosts('template-1');
+
+    expect(reconcile).toHaveBeenNthCalledWith(1, 'host-1');
+    expect(reconcile).toHaveBeenNthCalledWith(2, 'host-2');
+    expect(result).toEqual({ total: 2, succeeded: 1, failed: 1 });
+  });
+
+  it('starts route reconciliation when template rendering changes', async () => {
+    const subscriptions = new Map<string, (payload: unknown) => void>();
+    const bus = {
+      subscribe: vi.fn((channel: string, handler: (payload: unknown) => void) => {
+        subscriptions.set(channel, handler);
+        return vi.fn();
+      }),
+    } as any;
+    const service = new ProxyService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    vi.spyOn(service as any, 'queueDockerReconciliation').mockImplementation(() => undefined);
+    vi.spyOn(service as any, 'collectSecureLinkRuntimeSnapshots').mockImplementation(() => undefined);
+    const reconcile = vi.spyOn(service, 'reconcileTemplateHosts').mockResolvedValue({
+      total: 1,
+      succeeded: 1,
+      failed: 0,
+    });
+
+    service.setEventBus(bus);
+    subscriptions.get('nginx.template.changed')?.({
+      id: 'template-1',
+      action: 'updated',
+      renderingChanged: true,
+    });
+
+    await vi.waitFor(() =>
+      expect(reconcile).toHaveBeenCalledWith('template-1', {
+        type: undefined,
+        isBuiltin: false,
+      })
+    );
+  });
+});
 
 function makeActiveSecureHost(overrides: Record<string, unknown> = {}) {
   return {

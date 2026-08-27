@@ -7,8 +7,9 @@ import { discoverPublicIpAddresses } from './public-ip-detector.js';
 const logger = createChildLogger('DnsUtils');
 
 // Configured via initDnsResolver()
+let resolverServers = ['8.8.8.8', '1.1.1.1'];
 let resolver = new Resolver();
-resolver.setServers(['8.8.8.8', '1.1.1.1']);
+resolver.setServers(resolverServers);
 
 function parseConfiguredIPs(value?: string): string[] {
   return (value ?? '')
@@ -20,7 +21,12 @@ function parseConfiguredIPs(value?: string): string[] {
 export function initDnsResolver(servers: string[]): void {
   resolver = new Resolver();
   resolver.setServers(servers);
+  resolverServers = [...servers];
   logger.info(`DNS resolvers set to: ${servers.join(', ')}`);
+}
+
+export function getDnsResolverServers(): string[] {
+  return [...resolverServers];
 }
 
 const DNS_TIMEOUT_MS = 5000;

@@ -11,6 +11,11 @@ const base = {
 };
 
 describe('proxy workload Relay spread schema', () => {
+  it('keeps upstream IPv6 disabled unless explicitly enabled', () => {
+    expect(CreateProxyHostSchema.parse(base).upstreamIpv6Enabled).toBe(false);
+    expect(UpdateProxyHostSchema.parse({ upstreamIpv6Enabled: true }).upstreamIpv6Enabled).toBe(true);
+  });
+
   it('defaults new workloads to the Relay Pool setting', () => {
     expect(CreateProxyHostSchema.parse(base).relaySpreadMode).toBeUndefined();
   });

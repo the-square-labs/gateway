@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { accessLists } from '@/db/schema/access-lists.js';
 import { certificates } from '@/db/schema/certificates.js';
@@ -190,6 +190,26 @@ export class ProxyService {
         });
       }
     });
+    bus.subscribe('nginx.template.changed', (payload) => {
+      const event = payload as {
+        id?: string;
+        action?: string;
+        renderingChanged?: boolean;
+        type?: string;
+        isBuiltin?: boolean;
+      };
+      if (event.id && event.action === 'updated' && event.renderingChanged === true) {
+        void this.reconcileTemplateHosts(event.id, {
+          type: event.type,
+          isBuiltin: event.isBuiltin === true,
+        }).catch((error) => {
+          logger.error('Failed to reconcile routes after Nginx template update', {
+            templateId: event.id,
+            error,
+          });
+        });
+      }
+    });
     this.queueDockerReconciliation(true);
     // Do not wait for the first 10s scheduler tick. If startup reconciliation
     // is still using daemon command capacity, the collection is retained and
@@ -223,6 +243,47 @@ export class ProxyService {
       this.configOwnershipForHost(host),
       host.accessListId
     );
+  }
+
+  async reconcileTemplateHosts(
+    templateId: string,
+    options: { type?: string; isBuiltin?: boolean } = {}
+  ): Promise<{ total: number; succeeded: number; failed: number }> {
+    const templateMatch =
+      options.isBuiltin && options.type
+        ? and(
+            eq(proxyHosts.type, options.type as ProxyHostRow['type']),
+            or(eq(proxyHosts.nginxTemplateId, templateId), isNull(proxyHosts.nginxTemplateId))
+          )
+        : eq(proxyHosts.nginxTemplateId, templateId);
+    const hosts = await this.db.query.proxyHosts.findMany({
+      where: and(templateMatch, eq(proxyHosts.enabled, true)),
+    });
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const host of hosts) {
+      try {
+        await this.reconcileAdditionalRouteHost(host.id);
+        succeeded += 1;
+      } catch (error) {
+        failed += 1;
+        logger.error('Failed to regenerate route after Nginx template update', {
+          templateId,
+          hostId: host.id,
+          nodeId: host.nodeId,
+          error,
+        });
+      }
+    }
+
+    logger.info('Reconciled routes after Nginx template update', {
+      templateId,
+      total: hosts.length,
+      succeeded,
+      failed,
+    });
+    return { total: hosts.length, succeeded, failed };
   }
   private reconcileMaintenanceAlerts(hostId?: string) {
     void this.notificationEvaluator?.reconcileProxyMaintenance(hostId).catch((error) => {
@@ -2851,6 +2912,7 @@ export class ProxyService {
       forwardHost: usesSecureLink || usesRegistryIngress ? '127.0.0.1' : host.forwardHost,
       forwardPort: usesSecureLink ? host.secureLinkListenerPort : host.forwardPort,
       forwardScheme: host.forwardScheme ?? 'http',
+      upstreamIpv6Enabled: host.upstreamIpv6Enabled,
       secureLinkUpstream: usesSecureLink || usesRegistryIngress,
       secureLinkSocketPath: usesSecureLink
         ? `/run/gateway-secure-links/${host.id}.sock`
