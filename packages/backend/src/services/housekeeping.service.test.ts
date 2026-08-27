@@ -23,7 +23,7 @@ describe('HousekeepingService system certificate cleanup', () => {
       dismissedAlerts: { enabled: false, retentionDays: 30 },
       deliveryLog: { enabled: false, retentionDays: 7 },
       structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
-      clickHouseInternals: { enabled: true },
+      clickHouseInternals: { enabled: true, maxSizeBytes: 512 * 1024 ** 2 },
       orphanedAIArtifacts: { enabled: false },
       gatewayLogs: { enabled: false },
       orphanedVolumes: { enabled: false, retentionDays: 30 },
@@ -35,7 +35,10 @@ describe('HousekeepingService system certificate cleanup', () => {
 
     const result = await service.runAll('manual');
 
-    expect(cleanupInternalLogsAndRefresh).toHaveBeenCalledWith(undefined);
+    expect(cleanupInternalLogsAndRefresh).toHaveBeenCalledWith(undefined, {
+      enabled: true,
+      maxSizeBytes: 512 * 1024 ** 2,
+    });
     expect(result.categories).toEqual([
       expect.objectContaining({
         category: 'ClickHouse Internals',
@@ -58,7 +61,7 @@ describe('HousekeepingService system certificate cleanup', () => {
       dismissedAlerts: { enabled: false, retentionDays: 30 },
       deliveryLog: { enabled: false, retentionDays: 7 },
       structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
-      clickHouseInternals: { enabled: false },
+      clickHouseInternals: { enabled: false, maxSizeBytes: 512 * 1024 ** 2 },
       orphanedAIArtifacts: { enabled: false },
       gatewayLogs: { enabled: false },
       orphanedVolumes: { enabled: false, retentionDays: 30 },

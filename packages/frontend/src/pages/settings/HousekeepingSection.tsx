@@ -27,7 +27,10 @@ interface HousekeepingSectionProps {
 function normalizeHousekeepingConfig(config: HousekeepingConfig): HousekeepingConfig {
   return {
     ...config,
-    clickHouseInternals: config.clickHouseInternals ?? { enabled: false },
+    clickHouseInternals: {
+      enabled: config.clickHouseInternals?.enabled ?? false,
+      maxSizeBytes: config.clickHouseInternals?.maxSizeBytes ?? 512 * 1024 ** 2,
+    },
   };
 }
 
@@ -49,7 +52,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             maxRows: 100_000,
             maxSizeBytes: 10 * 1024 ** 3,
           },
-          clickHouseInternals: { enabled: false },
+          clickHouseInternals: { enabled: false, maxSizeBytes: 512 * 1024 ** 2 },
           orphanedAIArtifacts: { enabled: true },
           gatewayLogs: { enabled: false },
           orphanedVolumes: { enabled: false, retentionDays: 30 },
@@ -146,6 +149,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
       hkConfig.structuredLogs.maxRows >= 1_000 &&
       Number.isInteger(hkConfig.structuredLogs.maxSizeBytes) &&
       hkConfig.structuredLogs.maxSizeBytes >= 1024 ** 2);
+  const clickHouseInternalsValid =
+    !hkConfig.clickHouseInternals.enabled ||
+    (Number.isInteger(hkConfig.clickHouseInternals.maxSizeBytes) &&
+      hkConfig.clickHouseInternals.maxSizeBytes >= 1024 ** 2);
   const historyColumns: SimpleTableColumn<HousekeepingRunResult>[] = [
     {
       id: "time",
@@ -211,7 +218,12 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
         actions={
           <Button
             onClick={saveHkConfig}
-            disabled={!hkHasChanges || masterControlsDisabled || !structuredLogsValid}
+            disabled={
+              !hkHasChanges ||
+              masterControlsDisabled ||
+              !structuredLogsValid ||
+              !clickHouseInternalsValid
+            }
           >
             <Save className="h-4 w-4" />
             Save
@@ -360,7 +372,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             />
             <HousekeepingCard
               label="ClickHouse Internals"
-              description="Trim supported ClickHouse system logs when they exceed 256 MiB"
+              description="Trim supported ClickHouse system logs at the configured size limit"
               stat={hkStats ? formatBytes(hkStats.clickHouseInternals.totalSizeBytes) : "..."}
               statDetail={
                 hkStats?.clickHouseInternals.capBytes
@@ -378,6 +390,35 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
                 }))
               }
               disabled={controlsDisabled}
+              inlineControls={
+                <>
+                  <span>&middot;</span>
+                  <span>keep under</span>
+                  <input
+                    type="number"
+                    aria-label="Maximum ClickHouse internal log size in MiB"
+                    min={1}
+                    step={64}
+                    className="w-12 border border-input bg-background px-1 text-center text-xs text-foreground tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    value={
+                      hkConfig.clickHouseInternals.maxSizeBytes > 0
+                        ? Math.round(hkConfig.clickHouseInternals.maxSizeBytes / 1024 ** 2)
+                        : ""
+                    }
+                    disabled={!hkConfig.clickHouseInternals.enabled || controlsDisabled}
+                    onChange={(event) =>
+                      setHkConfig((current) => ({
+                        ...current,
+                        clickHouseInternals: {
+                          ...current.clickHouseInternals,
+                          maxSizeBytes: Math.round(Number(event.target.value) * 1024 ** 2),
+                        },
+                      }))
+                    }
+                  />
+                  <span>MiB</span>
+                </>
+              }
             />
             <HousekeepingCard
               label="Audit Log"

@@ -32,7 +32,17 @@ export const HousekeepingConfigUpdateSchema = z
           .optional(),
       })
       .optional(),
-    clickHouseInternals: z.object({ enabled: z.boolean().optional() }).optional(),
+    clickHouseInternals: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxSizeBytes: z
+          .number()
+          .int()
+          .min(1024 * 1024)
+          .max(Number.MAX_SAFE_INTEGER)
+          .optional(),
+      })
+      .optional(),
     orphanedAIArtifacts: z.object({ enabled: z.boolean().optional() }).optional(),
     gatewayLogs: z.object({ enabled: z.literal(false).optional() }).optional(),
     orphanedVolumes: z

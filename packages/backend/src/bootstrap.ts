@@ -1720,7 +1720,7 @@ export async function initializeContainer(): Promise<void> {
     const config = await housekeepingService.getConfig();
     await loggingMaintenanceService.runGuard(
       config.enabled ? config.structuredLogs : undefined,
-      config.enabled && config.clickHouseInternals.enabled
+      config.enabled ? config.clickHouseInternals : undefined
     );
     await notifEvaluatorService.evaluateLoggingRatios();
   });
@@ -1756,7 +1756,7 @@ export async function initializeContainer(): Promise<void> {
       .then((config) =>
         loggingMaintenanceService.runGuard(
           config.enabled ? config.structuredLogs : undefined,
-          config.enabled && config.clickHouseInternals.enabled
+          config.enabled ? config.clickHouseInternals : undefined
         )
       )
       .catch((error) => logger.warn('Initial ClickHouse health guard failed', { error }));

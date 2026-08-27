@@ -33,7 +33,7 @@ export interface HousekeepingConfig {
   dismissedAlerts: { enabled: boolean; retentionDays: number };
   deliveryLog: { enabled: boolean; retentionDays: number };
   structuredLogs: { enabled: boolean; maxRows: number; maxSizeBytes: number };
-  clickHouseInternals: { enabled: boolean };
+  clickHouseInternals: { enabled: boolean; maxSizeBytes: number };
   orphanedAIArtifacts: { enabled: boolean };
   gatewayLogs: { enabled: false };
   orphanedVolumes: { enabled: boolean; retentionDays: number };
@@ -101,6 +101,7 @@ const KEYS = {
   structuredLogsMaxRows: 'housekeeping:structured_logs:max_rows',
   structuredLogsMaxSizeBytes: 'housekeeping:structured_logs:max_size_bytes',
   clickHouseInternalsEnabled: 'housekeeping:clickhouse_internals:enabled',
+  clickHouseInternalsMaxSizeBytes: 'housekeeping:clickhouse_internals:max_size_bytes',
   orphanedAIArtifactsEnabled: 'housekeeping:orphaned_ai_artifacts:enabled',
   orphanedVolumesEnabled: 'housekeeping:orphaned_volumes:enabled',
   orphanedVolumesRetention: 'housekeeping:orphaned_volumes:retention_days',
@@ -126,6 +127,7 @@ const DEFAULTS: Record<string, unknown> = {
   [KEYS.structuredLogsMaxRows]: 100_000,
   [KEYS.structuredLogsMaxSizeBytes]: 10 * 1024 * 1024 * 1024,
   [KEYS.clickHouseInternalsEnabled]: false,
+  [KEYS.clickHouseInternalsMaxSizeBytes]: 512 * 1024 * 1024,
   [KEYS.orphanedAIArtifactsEnabled]: true,
   [KEYS.orphanedVolumesEnabled]: false,
   [KEYS.orphanedVolumesRetention]: 30,
@@ -201,6 +203,10 @@ export class HousekeepingService {
       },
       clickHouseInternals: {
         enabled: get(KEYS.clickHouseInternalsEnabled, DEFAULTS[KEYS.clickHouseInternalsEnabled] as boolean),
+        maxSizeBytes: get(
+          KEYS.clickHouseInternalsMaxSizeBytes,
+          DEFAULTS[KEYS.clickHouseInternalsMaxSizeBytes] as number
+        ),
       },
       orphanedAIArtifacts: {
         enabled: get(KEYS.orphanedAIArtifactsEnabled, DEFAULTS[KEYS.orphanedAIArtifactsEnabled] as boolean),
@@ -251,6 +257,8 @@ export class HousekeepingService {
       updates.push([KEYS.structuredLogsMaxSizeBytes, partial.structuredLogs.maxSizeBytes]);
     if (partial.clickHouseInternals?.enabled !== undefined)
       updates.push([KEYS.clickHouseInternalsEnabled, partial.clickHouseInternals.enabled]);
+    if (partial.clickHouseInternals?.maxSizeBytes !== undefined)
+      updates.push([KEYS.clickHouseInternalsMaxSizeBytes, partial.clickHouseInternals.maxSizeBytes]);
     if (partial.orphanedAIArtifacts?.enabled !== undefined)
       updates.push([KEYS.orphanedAIArtifactsEnabled, partial.orphanedAIArtifacts.enabled]);
     if (partial.orphanedVolumes?.enabled !== undefined)
@@ -390,13 +398,18 @@ export class HousekeepingService {
       }
       if (config.structuredLogs.enabled) {
         categories.push(
-          await this.runCategory('Structured Logs', () => this.cleanStructuredLogs(config.structuredLogs))
+          await this.runCategory('Structured Logs', () =>
+            this.cleanStructuredLogs(config.structuredLogs, config.clickHouseInternals)
+          )
         );
       }
       if (config.clickHouseInternals.enabled) {
         categories.push(
           await this.runCategory('ClickHouse Internals', () =>
-            this.cleanClickHouseInternals(config.structuredLogs.enabled ? config.structuredLogs : undefined)
+            this.cleanClickHouseInternals(
+              config.structuredLogs.enabled ? config.structuredLogs : undefined,
+              config.clickHouseInternals
+            )
           )
         );
       }
@@ -520,14 +533,20 @@ export class HousekeepingService {
     return { itemsCleaned: count };
   }
 
-  private async cleanStructuredLogs(config: HousekeepingConfig['structuredLogs']) {
+  private async cleanStructuredLogs(
+    config: HousekeepingConfig['structuredLogs'],
+    clickHouseInternals: HousekeepingConfig['clickHouseInternals']
+  ) {
     if (!this.loggingMaintenanceService) return { itemsCleaned: 0, spaceFreedBytes: 0 };
-    return this.loggingMaintenanceService.cleanupStructuredLogsAndRefresh(config);
+    return this.loggingMaintenanceService.cleanupStructuredLogsAndRefresh(config, clickHouseInternals);
   }
 
-  private async cleanClickHouseInternals(config?: HousekeepingConfig['structuredLogs']) {
+  private async cleanClickHouseInternals(
+    config: HousekeepingConfig['structuredLogs'] | undefined,
+    clickHouseInternals: HousekeepingConfig['clickHouseInternals']
+  ) {
     if (!this.loggingMaintenanceService) return { itemsCleaned: 0, spaceFreedBytes: 0 };
-    return this.loggingMaintenanceService.cleanupInternalLogsAndRefresh(config);
+    return this.loggingMaintenanceService.cleanupInternalLogsAndRefresh(config, clickHouseInternals);
   }
 
   private async cleanOrphanedAIArtifacts(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> {

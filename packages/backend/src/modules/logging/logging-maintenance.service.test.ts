@@ -131,7 +131,9 @@ describe('LoggingMaintenanceService', () => {
     });
     const service = new LoggingMaintenanceService(storageService, feature());
 
-    await expect(service.runGuard(undefined, true)).resolves.toMatchObject({ status: 'healthy' });
+    await expect(
+      service.runGuard(undefined, { enabled: true, maxSizeBytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES })
+    ).resolves.toMatchObject({ status: 'healthy' });
     expect(cleanInternalLogTable).toHaveBeenCalledWith('trace_log');
     expect(cleanInternalLogTable).not.toHaveBeenCalledWith('query_log');
   });
@@ -207,8 +209,8 @@ describe('LoggingMaintenanceService', () => {
     const service = new LoggingMaintenanceService(
       storage({
         listInternalLogTables: vi.fn().mockResolvedValue([
-          { table: 'query_log_0', rows: 5, bytes: 50 * 1024 ** 2 },
-          { table: 'trace_log', rows: 20, bytes: 200 * 1024 ** 2 },
+          { table: 'query_log_0', rows: 5, bytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * 0.2 },
+          { table: 'trace_log', rows: 20, bytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * 0.8 },
         ]),
         cleanInternalLogTable,
       }),

@@ -5,7 +5,7 @@ import type { LoggingFeatureService } from './logging-feature.service.js';
 
 const logger = createChildLogger('LoggingMaintenance');
 
-export const CLICKHOUSE_INTERNAL_LOG_CAP_BYTES = 256 * 1024 * 1024;
+export const CLICKHOUSE_INTERNAL_LOG_CAP_BYTES = 512 * 1024 * 1024;
 const CLICKHOUSE_INTERNAL_WARNING_RATIO = 0.8;
 const CLICKHOUSE_INTERNAL_CLEANUP_TARGET_RATIO = 0.5;
 const STRUCTURED_CLEANUP_TARGET_RATIO = 0.8;
@@ -27,6 +27,11 @@ const CLEANABLE_INTERNAL_LOG_TABLES = new Set([
 export interface StructuredLogsPolicy {
   enabled: boolean;
   maxRows: number;
+  maxSizeBytes: number;
+}
+
+export interface ClickHouseInternalsPolicy {
+  enabled: boolean;
   maxSizeBytes: number;
 }
 
@@ -87,26 +92,35 @@ export class LoggingMaintenanceService {
     return structuredClone(this.snapshot);
   }
 
-  async runGuard(policy?: StructuredLogsPolicy, cleanInternalLogs = false): Promise<LoggingMaintenanceSnapshot> {
-    return this.serialize(() => this.refreshSnapshot(policy, cleanInternalLogs));
+  async runGuard(
+    policy?: StructuredLogsPolicy,
+    internalPolicy?: ClickHouseInternalsPolicy
+  ): Promise<LoggingMaintenanceSnapshot> {
+    return this.serialize(() => this.refreshSnapshot(policy, internalPolicy));
   }
 
   async cleanupStructuredLogs(policy: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
     return this.serialize(() => this.cleanupStructuredLogsOnce(policy));
   }
 
-  async cleanupStructuredLogsAndRefresh(policy: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
+  async cleanupStructuredLogsAndRefresh(
+    policy: StructuredLogsPolicy,
+    internalPolicy?: ClickHouseInternalsPolicy
+  ): Promise<LoggingCleanupResult> {
     return this.serialize(async () => {
       const result = await this.cleanupStructuredLogsOnce(policy);
-      await this.refreshSnapshot(policy, false);
+      await this.refreshSnapshot(policy, internalPolicy ? { ...internalPolicy, enabled: false } : undefined);
       return result;
     });
   }
 
-  async cleanupInternalLogsAndRefresh(policy?: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
+  async cleanupInternalLogsAndRefresh(
+    policy?: StructuredLogsPolicy,
+    internalPolicy: ClickHouseInternalsPolicy = { enabled: true, maxSizeBytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES }
+  ): Promise<LoggingCleanupResult> {
     return this.serialize(async () => {
-      const result = await this.cleanupInternalLogs();
-      await this.refreshSnapshot(policy, false);
+      const result = await this.cleanupInternalLogs(internalPolicy.maxSizeBytes);
+      await this.refreshSnapshot(policy, { ...internalPolicy, enabled: false });
       if (result.error) throw new Error(result.error);
       return { itemsCleaned: result.itemsCleaned, spaceFreedBytes: result.spaceFreedBytes };
     });
@@ -114,8 +128,9 @@ export class LoggingMaintenanceService {
 
   private async runGuardOnce(
     policy?: StructuredLogsPolicy,
-    cleanInternalLogs = false
+    internalPolicy?: ClickHouseInternalsPolicy
   ): Promise<LoggingMaintenanceSnapshot> {
+    const internalCapBytes = internalPolicy?.maxSizeBytes ?? CLICKHOUSE_INTERNAL_LOG_CAP_BYTES;
     if (!this.storage.isConfigured()) {
       this.snapshot = emptySnapshot(false);
       return this.getSnapshot();
@@ -141,8 +156,8 @@ export class LoggingMaintenanceService {
 
     let cleanupError: string | null = null;
     let cleaned = false;
-    if (cleanInternalLogs && stats.internalBytes > CLICKHOUSE_INTERNAL_LOG_CAP_BYTES) {
-      const result = await this.cleanupInternalLogs();
+    if (internalPolicy?.enabled && stats.internalBytes > internalCapBytes) {
+      const result = await this.cleanupInternalLogs(internalCapBytes);
       cleaned = result.itemsCleaned > 0;
       cleanupError = result.error;
     }
@@ -162,17 +177,17 @@ export class LoggingMaintenanceService {
         return this.recordMetricsFailure(error);
       }
     }
-    this.snapshot = this.buildSnapshot(stats, policy, cleanupError, cleaned);
+    this.snapshot = this.buildSnapshot(stats, policy, cleanupError, cleaned, internalCapBytes);
     this.updateCapacityGate(this.snapshot);
     return this.getSnapshot();
   }
 
   private async refreshSnapshot(
     policy?: StructuredLogsPolicy,
-    cleanInternalLogs = false
+    internalPolicy?: ClickHouseInternalsPolicy
   ): Promise<LoggingMaintenanceSnapshot> {
     const previous = this.snapshot;
-    const next = await this.runGuardOnce(policy, cleanInternalLogs);
+    const next = await this.runGuardOnce(policy, internalPolicy);
     if (previous.status !== next.status || previous.reason !== next.reason) {
       this.eventBus?.publish('logging.health.changed', { status: next.status, reason: next.reason });
     }
@@ -212,7 +227,7 @@ export class LoggingMaintenanceService {
     return result;
   }
 
-  private async cleanupInternalLogs(): Promise<LoggingCleanupResult & { error: string | null }> {
+  private async cleanupInternalLogs(capBytes: number): Promise<LoggingCleanupResult & { error: string | null }> {
     const errors: string[] = [];
     let itemsCleaned = 0;
     let spaceFreedBytes = 0;
@@ -230,7 +245,7 @@ export class LoggingMaintenanceService {
       const preferred = tables.filter((table) => table.table.replace(/_[0-9]+$/, '') !== 'query_log');
       const fallback = tables.filter((table) => table.table.replace(/_[0-9]+$/, '') === 'query_log');
       let remaining = tables.reduce((sum, table) => sum + table.bytes, 0);
-      const target = CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * CLICKHOUSE_INTERNAL_CLEANUP_TARGET_RATIO;
+      const target = capBytes * CLICKHOUSE_INTERNAL_CLEANUP_TARGET_RATIO;
       for (const table of [...preferred, ...fallback]) {
         if (remaining <= target) break;
         try {
@@ -255,7 +270,8 @@ export class LoggingMaintenanceService {
     stats: ClickHouseStorageStats,
     policy: StructuredLogsPolicy | undefined,
     cleanupError: string | null,
-    cleaned: boolean
+    cleaned: boolean,
+    internalCapBytes: number
   ): LoggingMaintenanceSnapshot {
     const diskFreeRatio = stats.diskTotalBytes > 0 ? stats.diskFreeBytes / stats.diskTotalBytes : 1;
     const structuredUsageRatio = maxRatio(
@@ -266,8 +282,7 @@ export class LoggingMaintenanceService {
       stats.diskTotalBytes > 0 &&
       (diskFreeRatio <= DISK_EXHAUSTED_FREE_RATIO || stats.diskFreeBytes <= DISK_EXHAUSTED_FREE_BYTES);
     const structuredExhausted = Boolean(policy?.enabled && exceedsStructuredLimits(stats, policy));
-    const internalPressure =
-      stats.internalBytes >= CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * CLICKHOUSE_INTERNAL_WARNING_RATIO;
+    const internalPressure = stats.internalBytes >= internalCapBytes * CLICKHOUSE_INTERNAL_WARNING_RATIO;
     const pressure =
       internalPressure ||
       structuredUsageRatio >= CLICKHOUSE_INTERNAL_WARNING_RATIO ||
@@ -287,7 +302,7 @@ export class LoggingMaintenanceService {
     } else if (pressure) {
       status = 'pressure';
       reason = internalPressure
-        ? 'ClickHouse internal logs are approaching their 256 MiB maintenance cap'
+        ? `ClickHouse internal logs are approaching their ${Math.round(internalCapBytes / 1024 / 1024)} MiB maintenance cap`
         : structuredUsageRatio >= CLICKHOUSE_INTERNAL_WARNING_RATIO
           ? 'Structured log storage is approaching its configured limit'
           : 'ClickHouse disk free space is running low';
@@ -308,8 +323,8 @@ export class LoggingMaintenanceService {
       internal: {
         rows: stats.internalRows,
         bytes: stats.internalBytes,
-        capBytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES,
-        warningBytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * CLICKHOUSE_INTERNAL_WARNING_RATIO,
+        capBytes: internalCapBytes,
+        warningBytes: internalCapBytes * CLICKHOUSE_INTERNAL_WARNING_RATIO,
       },
       disk: {
         totalBytes: stats.diskTotalBytes,

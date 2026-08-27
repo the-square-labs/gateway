@@ -7,7 +7,7 @@ export interface HousekeepingConfig {
   dismissedAlerts: { enabled: boolean; retentionDays: number };
   deliveryLog: { enabled: boolean; retentionDays: number };
   structuredLogs: { enabled: boolean; maxRows: number; maxSizeBytes: number };
-  clickHouseInternals: { enabled: boolean };
+  clickHouseInternals: { enabled: boolean; maxSizeBytes: number };
   orphanedAIArtifacts: { enabled: boolean };
   gatewayLogs: { enabled: false };
   orphanedVolumes: { enabled: boolean; retentionDays: number };
