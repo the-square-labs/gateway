@@ -347,6 +347,39 @@ describe('UpdateService foundation migration', () => {
     expect(relayRuntime.probeNow).toHaveBeenCalled();
   });
 
+  it('allows a signed Relay migration from the running registry to an allow-listed GHCR repository', async () => {
+    const dockerService = makeDockerService();
+    const service = makeUpdateService(dockerService, undefined, {
+      GATEWAY_UPDATE_IMAGE_REPOSITORIES: 'ghcr.io/the-square-labs/gateway',
+    });
+    const relay = makeRelayArtifact();
+    const relayImage = 'ghcr.io/the-square-labs/gateway/relay';
+    relay.imageRef = `${relayImage}@${relay.digest}`;
+    relay.payload.image = relayImage;
+    relay.payload.imageRef = relay.imageRef;
+
+    await service.performRelayUpdate('v2.4.3', relay);
+
+    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(1, relay.imageRef);
+  });
+
+  it('rejects a signed Relay artifact outside the configured repository allowlist', async () => {
+    const dockerService = makeDockerService();
+    const service = makeUpdateService(dockerService, undefined, {
+      GATEWAY_UPDATE_IMAGE_REPOSITORIES: 'ghcr.io/the-square-labs/gateway',
+    });
+    const relay = makeRelayArtifact();
+    const relayImage = 'ghcr.io/untrusted/gateway/relay';
+    relay.imageRef = `${relayImage}@${relay.digest}`;
+    relay.payload.image = relayImage;
+    relay.payload.imageRef = relay.imageRef;
+
+    await expect(service.performRelayUpdate('v2.4.3', relay)).rejects.toThrow(
+      'Signed relay artifact does not match the requested release'
+    );
+    expect(dockerService.pullImageRef).not.toHaveBeenCalled();
+  });
+
   it('keeps the Relay update operation on the server', () => {
     const service = makeUpdateService(makeDockerService());
 

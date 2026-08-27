@@ -791,8 +791,10 @@ exit 1`,
     const composeProject = labels['com.docker.compose.project'];
     if (!composeDir || !/^\/[a-zA-Z0-9/_.-]+$/.test(composeDir)) throw new Error('Invalid Compose directory');
     if (!composeProject || !/^[a-zA-Z0-9_-]+$/.test(composeProject)) throw new Error('Invalid Compose project');
-    const relayImage = `${imageRepositoryFromRef(selfInfo.Config.Image)}/relay`;
-    if (artifact.payload.version !== version || artifact.payload.image !== relayImage) {
+    const relayImageRepositories = this.gatewayImageRepositories(imageRepositoryFromRef(selfInfo.Config.Image)).map(
+      (gatewayImage) => `${gatewayImage}/relay`
+    );
+    if (artifact.payload.version !== version || !relayImageRepositories.includes(artifact.payload.image)) {
       throw new Error('Signed relay artifact does not match the requested release');
     }
 
