@@ -1,0 +1,25 @@
+{
+  "file_name": "z36pcfh4_inference_failover_routes",
+  "edges": [
+    {
+      "from_id": "z36pcfh4",
+      "to_id": "dcfkgqwx",
+      "relation": "same_workflow",
+      "weight": 0.94,
+      "reason": "Defines the Gateway Inference bounded context and its provider/runtime availability contract.",
+      "source": "auto",
+      "created_at": 1787837335002,
+      "updated_at": 1787837335002
+    },
+    {
+      "from_id": "z36pcfh4",
+      "to_id": "ifp3c48s",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "Documents the OpenCodex core migration and proxy architecture underlying runtime candidate routing.",
+      "source": "auto",
+      "created_at": 1787837335002,
+      "updated_at": 1787837335002
+    }
+  ]
+}
