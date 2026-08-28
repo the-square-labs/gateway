@@ -452,8 +452,6 @@ export function DockerGitSourcePanel({
     }
     setBuildVariables((current) => ({ ...current, [name]: variableValue }));
     setVariableDialogOpen(false);
-    setVariableName("");
-    setVariableValue("");
   };
 
   const removeBuildVariable = (name: string) => {
@@ -493,8 +491,6 @@ export function DockerGitSourcePanel({
           : current
       );
       setSecretDialogOpen(false);
-      setSecretName("");
-      setSecretValue("");
       toast.success("Build Secret saved");
     } catch (error) {
       if (!handleLicenseApiError(error, "Git push-to-deploy")) {
@@ -940,6 +936,7 @@ export function DockerGitSourcePanel({
         <SettingsControlRow
           title="Repository"
           description="Allowlisted project selected from the connected Git provider."
+          help="The repository Gateway checks out when it builds this Pages Project. Access is provided by the selected Git integration."
         >
           <span className="flex min-w-0 items-center gap-2 text-sm">
             <GitBranch className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -949,12 +946,14 @@ export function DockerGitSourcePanel({
         <SettingsControlRow
           title="Git integration"
           description="Connection and credentials used for unattended checkout."
+          help="The saved Git provider connection Gateway uses to read the repository, resolve commits, receive webhooks, and download source code without an interactive login."
         >
           <Badge variant="secondary">{source.provider} integration</Badge>
         </SettingsControlRow>
         <SettingsControlRow
           title="Branch"
           description="New commits on this branch are eligible for build and deployment."
+          help="Gateway watches this branch for new commits. Automatic builds use its latest accepted commit; manual builds also start from this branch."
         >
           <Input
             value={branch}
@@ -982,6 +981,7 @@ export function DockerGitSourcePanel({
             <SettingsControlRow
               title="Application root"
               description="Repository-relative directory containing package.json."
+              help="The builder changes into this directory before installing dependencies and running the build script. Use a repository-relative path such as . or apps/web."
             >
               <Input
                 value={applicationRoot}
@@ -994,6 +994,7 @@ export function DockerGitSourcePanel({
             <SettingsControlRow
               title="Package manager"
               description="Dependency installer and package.json script executor."
+              help="Gateway uses this tool for dependency installation and to run the selected package.json build script inside the isolated builder."
             >
               <Select
                 value={packageManager}
@@ -1013,6 +1014,7 @@ export function DockerGitSourcePanel({
             <SettingsControlRow
               title="Node.js"
               description="Managed Node.js runtime used by the isolated builder."
+              help="The Node.js major version available while dependencies are installed and the Pages application is built. It does not control the browser runtime."
             >
               <Select
                 value={nodeVersion}
@@ -1032,6 +1034,7 @@ export function DockerGitSourcePanel({
             <SettingsControlRow
               title="Build script"
               description="package.json script executed after dependency installation."
+              help="The script name from package.json scripts, without the package-manager command. For example, enter build for npm run build."
             >
               <Input
                 value={buildScript}
@@ -1044,6 +1047,7 @@ export function DockerGitSourcePanel({
             <SettingsControlRow
               title="Artifact directory"
               description="Directory published relative to the Application root."
+              help="The build output Gateway packages and serves as the Pages deployment. Typical values are dist, build, or out."
             >
               <Input
                 value={artifactDirectory}
@@ -1056,6 +1060,7 @@ export function DockerGitSourcePanel({
             <SettingsControlRow
               title="Publish Tag"
               description="Successful builds move this existing Pages Tag."
+              help="After a successful build, Gateway publishes the new immutable deployment to this Tag. Routes and runtime configuration can target the Tag by name."
             >
               <Input
                 value={publishTag}
@@ -1097,6 +1102,7 @@ export function DockerGitSourcePanel({
         <SettingsControlRow
           title="Automatic builds"
           description="Queue a build when a new commit is detected by webhook or polling."
+          help="When enabled, Gateway queues a build after the configured branch advances. Disabling it keeps the repository connected but requires manual builds."
         >
           <Switch
             checked={autoBuild}

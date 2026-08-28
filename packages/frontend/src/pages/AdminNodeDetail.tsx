@@ -278,7 +278,7 @@ export function AdminNodeDetail({
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeLogs ? ["nginx-logs"] : []),
       ...(isCompatibleNode && canReadNodeFiles ? ["files"] : []),
       ...(isCompatibleNode && node.type === "docker"
-        ? ["containers", "images", "volumes", "networks"]
+        ? ["containers", "images", "volumes", "networks", "compose"]
         : []),
       ...(node?.type === "builder" ? ["jobs"] : []),
       ...(canShowNodeConsole ? ["console"] : []),

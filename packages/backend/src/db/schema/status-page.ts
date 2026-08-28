@@ -7,6 +7,8 @@ export const statusPageSourceTypeEnum = pgEnum('status_page_source_type', [
   'database',
   'docker_container',
   'docker_deployment',
+  'docker_compose_project',
+  'pages_project',
 ]);
 export const statusPageIncidentSeverityEnum = pgEnum('status_page_incident_severity', ['info', 'warning', 'critical']);
 export const statusPageIncidentStatusEnum = pgEnum('status_page_incident_status', ['active', 'resolved']);

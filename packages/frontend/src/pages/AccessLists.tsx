@@ -1,6 +1,8 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { Minus, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -40,9 +42,22 @@ import { useAuthStore } from "@/stores/auth";
 import type { AccessList, IPRule } from "@/types";
 
 interface BasicAuthInput {
+  _key: string;
   username: string;
   password: string;
 }
+
+type IPRuleInput = IPRule & { _key: string };
+
+const ROW_ANIMATION = {
+  initial: { opacity: 0, y: 6 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -4 },
+  transition: { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] as const },
+};
+
+let accessListRowSequence = 0;
+const nextRowKey = (prefix: string) => `${prefix}-${++accessListRowSequence}`;
 
 export function AccessLists() {
   const { hasScope } = useAuthStore();
@@ -60,7 +75,7 @@ export function AccessLists() {
   // Form state
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [ipRules, setIpRules] = useState<IPRule[]>([]);
+  const [ipRules, setIpRules] = useState<IPRuleInput[]>([]);
   const [basicAuthEnabled, setBasicAuthEnabled] = useState(false);
   const [basicAuthUsers, setBasicAuthUsers] = useState<BasicAuthInput[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -102,16 +117,21 @@ export function AccessLists() {
     setEditing(al);
     setName(al.name);
     setDescription(al.description || "");
-    setIpRules(al.ipRules || []);
+    setIpRules((al.ipRules || []).map((rule) => ({ ...rule, _key: nextRowKey("ip") })));
     setBasicAuthEnabled(al.basicAuthEnabled);
     // Don't pre-fill passwords for edit
     setBasicAuthUsers(
-      (al.basicAuthUsers || []).map((u) => ({ username: u.username, password: "" }))
+      (al.basicAuthUsers || []).map((u) => ({
+        _key: nextRowKey("auth"),
+        username: u.username,
+        password: "",
+      }))
     );
     setDialogOpen(true);
   };
 
-  const addIpRule = () => setIpRules((prev) => [...prev, { type: "allow", value: "" }]);
+  const addIpRule = () =>
+    setIpRules((prev) => [...prev, { _key: nextRowKey("ip"), type: "allow", value: "" }]);
   const updateIpRule = (index: number, field: keyof IPRule, value: string) => {
     setIpRules((prev) =>
       prev.map((rule, candidateIndex) =>
@@ -123,7 +143,10 @@ export function AccessLists() {
     setIpRules((prev) => prev.filter((_, candidateIndex) => candidateIndex !== index));
   };
   const addBasicAuthUser = () => {
-    setBasicAuthUsers((prev) => [...prev, { username: "", password: "" }]);
+    setBasicAuthUsers((prev) => [
+      ...prev,
+      { _key: nextRowKey("auth"), username: "", password: "" },
+    ]);
   };
   const updateBasicAuthUser = (index: number, field: keyof BasicAuthInput, value: string) => {
     setBasicAuthUsers((prev) =>
@@ -152,7 +175,9 @@ export function AccessLists() {
       const data = {
         name,
         description: description || undefined,
-        ipRules: ipRules.filter((r) => r.value.trim() !== ""),
+        ipRules: ipRules
+          .filter((r) => r.value.trim() !== "")
+          .map(({ _key: _discarded, ...rule }) => rule),
         basicAuthEnabled,
         basicAuthUsers: nextBasicAuthUsers,
       };
@@ -327,7 +352,7 @@ export function AccessLists() {
 
         {/* Create/Edit Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="sm:max-w-2xl">
+          <DialogContent className="sm:max-w-xl">
             <DialogHeader>
               <DialogTitle>{editing ? "Edit Access List" : "Create Access List"}</DialogTitle>
               <DialogDescription>
@@ -337,172 +362,198 @@ export function AccessLists() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-6">
-              {/* Basic info */}
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Name</label>
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g., Office Only"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Description</label>
-                  <Input
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Optional description"
-                  />
-                </div>
-              </div>
-
-              {/* IP Rules */}
-              <div className="space-y-3">
-                <h3 className="text-sm font-semibold">IP Rules</h3>
-                <div className="overflow-hidden border border-border">
-                  <div className="grid grid-cols-[9rem_minmax(0,1fr)_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    <div className="px-3 py-2">Type</div>
-                    <div className="border-l border-border px-3 py-2">Address / CIDR</div>
-                    <div />
+            <AnimatedHeight>
+              <div className="space-y-6">
+                {/* Basic info */}
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Name</label>
+                    <Input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g., Office Only"
+                    />
                   </div>
-                  <div>
-                    {ipRules.map((rule, index) => (
-                      <div
-                        key={index}
-                        className="grid grid-cols-[9rem_minmax(0,1fr)_2.25rem] border-b border-border last:border-b-0"
-                      >
-                        <Select
-                          value={rule.type}
-                          onValueChange={(value) =>
-                            updateIpRule(index, "type", value as IPRule["type"])
-                          }
-                        >
-                          <SelectTrigger className="h-9 rounded-none border-0 shadow-none focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="allow">Allow</SelectItem>
-                            <SelectItem value="deny">Deny</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Input
-                          value={rule.value}
-                          onChange={(event) => updateIpRule(index, "value", event.target.value)}
-                          className="h-9 rounded-none border-0 border-l border-border shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          placeholder="192.168.1.0/24 or IP address"
-                        />
-                        <div className="flex border-l border-border">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 shrink-0 rounded-none"
-                            onClick={() => removeIpRule(index)}
-                          >
-                            <Minus className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                    <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
-                      <button
-                        type="button"
-                        className="h-9 min-w-0 cursor-pointer"
-                        aria-label="Add IP rule"
-                        onClick={addIpRule}
-                      />
-                      <div className="flex border-l border-border">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 shrink-0 rounded-none"
-                          onClick={addIpRule}
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Description</label>
+                    <Input
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="Optional description"
+                    />
+                  </div>
+                </div>
+
+                {/* IP Rules */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold">IP Rules</h3>
+                  <div className="overflow-hidden border border-border">
+                    <div className="grid grid-cols-[9rem_minmax(0,1fr)_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <div className="px-3 py-2">Type</div>
+                      <div className="border-l border-border px-3 py-2">Address / CIDR</div>
+                      <div />
                     </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Basic Auth */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Switch checked={basicAuthEnabled} onChange={setBasicAuthEnabled} />
-                  <span className="text-sm font-semibold">Basic Authentication</span>
-                </div>
-
-                {basicAuthEnabled && (
-                  <div className="space-y-3">
-                    <div className="overflow-hidden border border-border">
-                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        <div className="px-3 py-2">Username</div>
-                        <div className="border-l border-border px-3 py-2">Password</div>
-                        <div />
-                      </div>
-                      <div>
-                        {basicAuthUsers.map((user, index) => (
-                          <div
-                            key={index}
-                            className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.25rem] border-b border-border last:border-b-0"
+                    <div>
+                      <AnimatePresence initial={false} mode="popLayout">
+                        {ipRules.map((rule, index) => (
+                          <motion.div
+                            key={rule._key}
+                            layout
+                            {...ROW_ANIMATION}
+                            className="grid grid-cols-[9rem_minmax(0,1fr)_2.25rem] border-b border-border last:border-b-0"
                           >
+                            <Select
+                              value={rule.type}
+                              onValueChange={(value) =>
+                                updateIpRule(index, "type", value as IPRule["type"])
+                              }
+                            >
+                              <SelectTrigger className="h-9 rounded-none border-0 shadow-none focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="allow">Allow</SelectItem>
+                                <SelectItem value="deny">Deny</SelectItem>
+                              </SelectContent>
+                            </Select>
                             <Input
-                              placeholder="Username"
-                              value={user.username}
-                              onChange={(event) =>
-                                updateBasicAuthUser(index, "username", event.target.value)
-                              }
-                              className="h-9 rounded-none border-0 shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                            />
-                            <Input
-                              type="password"
-                              placeholder={
-                                editing ? "New password (leave blank to keep)" : "Password"
-                              }
-                              value={user.password}
-                              onChange={(event) =>
-                                updateBasicAuthUser(index, "password", event.target.value)
-                              }
+                              value={rule.value}
+                              onChange={(event) => updateIpRule(index, "value", event.target.value)}
                               className="h-9 rounded-none border-0 border-l border-border shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                              placeholder="192.168.1.0/24 or IP address"
                             />
                             <div className="flex border-l border-border">
                               <Button
                                 variant="ghost"
                                 size="icon"
                                 className="h-9 w-9 shrink-0 rounded-none"
-                                onClick={() => removeBasicAuthUser(index)}
+                                onClick={() => removeIpRule(index)}
                               >
                                 <Minus className="h-3.5 w-3.5" />
                               </Button>
                             </div>
-                          </div>
+                          </motion.div>
                         ))}
-                        <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
-                          <button
-                            type="button"
-                            className="h-9 min-w-0 cursor-pointer"
-                            aria-label="Add auth user"
-                            onClick={addBasicAuthUser}
-                          />
-                          <div className="flex border-l border-border">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 shrink-0 rounded-none"
-                              onClick={addBasicAuthUser}
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
+                      </AnimatePresence>
+                      <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
+                        <button
+                          type="button"
+                          className="h-9 min-w-0 cursor-pointer"
+                          aria-label="Add IP rule"
+                          onClick={addIpRule}
+                        />
+                        <div className="flex border-l border-border">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 shrink-0 rounded-none"
+                            onClick={addIpRule}
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
                       </div>
                     </div>
                   </div>
-                )}
+                </div>
+
+                {/* Basic Auth */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
+                    <div>
+                      <p className="text-sm font-medium">Basic Authentication</p>
+                      <p className="text-xs text-muted-foreground">
+                        Require a username and password in addition to the configured IP rules.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={basicAuthEnabled}
+                      onChange={setBasicAuthEnabled}
+                      ariaLabel="Basic Authentication"
+                    />
+                  </div>
+
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {basicAuthEnabled && (
+                      <motion.div
+                        key="basic-auth-users"
+                        layout
+                        {...ROW_ANIMATION}
+                        className="space-y-3"
+                      >
+                        <div className="overflow-hidden border border-border">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                            <div className="px-3 py-2">Username</div>
+                            <div className="border-l border-border px-3 py-2">Password</div>
+                            <div />
+                          </div>
+                          <div>
+                            <AnimatePresence initial={false} mode="popLayout">
+                              {basicAuthUsers.map((user, index) => (
+                                <motion.div
+                                  key={user._key}
+                                  layout
+                                  {...ROW_ANIMATION}
+                                  className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.25rem] border-b border-border last:border-b-0"
+                                >
+                                  <Input
+                                    placeholder="Username"
+                                    value={user.username}
+                                    onChange={(event) =>
+                                      updateBasicAuthUser(index, "username", event.target.value)
+                                    }
+                                    className="h-9 rounded-none border-0 shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                                  />
+                                  <Input
+                                    type="password"
+                                    placeholder={
+                                      editing ? "New password (leave blank to keep)" : "Password"
+                                    }
+                                    value={user.password}
+                                    onChange={(event) =>
+                                      updateBasicAuthUser(index, "password", event.target.value)
+                                    }
+                                    className="h-9 rounded-none border-0 border-l border-border shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                                  />
+                                  <div className="flex border-l border-border">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-9 w-9 shrink-0 rounded-none"
+                                      onClick={() => removeBasicAuthUser(index)}
+                                    >
+                                      <Minus className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </motion.div>
+                              ))}
+                            </AnimatePresence>
+                            <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
+                              <button
+                                type="button"
+                                className="h-9 min-w-0 cursor-pointer"
+                                aria-label="Add auth user"
+                                onClick={addBasicAuthUser}
+                              />
+                              <div className="flex border-l border-border">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-9 w-9 shrink-0 rounded-none"
+                                  onClick={addBasicAuthUser}
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
-            </div>
+            </AnimatedHeight>
 
             <DialogFooter className="shrink-0">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>

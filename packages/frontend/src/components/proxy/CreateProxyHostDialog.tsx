@@ -564,20 +564,18 @@ export function CreateProxyHostDialog({
 
                 {/* Raw mode toggle — only when editing */}
                 {isEditing && (
-                  <div className="border border-border bg-card">
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div>
-                        <p className="text-sm font-medium">Raw Config Mode</p>
-                        <p className="text-xs text-muted-foreground">
-                          Bypass template rendering and edit nginx config directly
-                        </p>
-                      </div>
-                      <Switch
-                        checked={rawConfigEnabled}
-                        onChange={setRawConfigEnabled}
-                        disabled={maintenanceLocked}
-                      />
+                  <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
+                    <div>
+                      <p className="text-sm font-medium">Raw Config Mode</p>
+                      <p className="text-xs text-muted-foreground">
+                        Bypass template rendering and edit nginx config directly
+                      </p>
                     </div>
+                    <Switch
+                      checked={rawConfigEnabled}
+                      onChange={setRawConfigEnabled}
+                      disabled={maintenanceLocked}
+                    />
                   </div>
                 )}
               </motion.div>

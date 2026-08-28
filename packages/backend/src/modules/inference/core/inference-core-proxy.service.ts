@@ -91,6 +91,8 @@ type ProxyRequestBody = string | ArrayBuffer | FormData;
 const MAX_DECOMPRESSED_JSON_BODY_BYTES = 256 * 1024 * 1024;
 const MAX_CORE_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_CORE_IMAGE_BODY_BYTES = 100 * 1024 * 1024;
+const MAX_CODEX_IMAGE_EDIT_IMAGES = 5;
+const MAX_CODEX_IMAGE_EDIT_FILE_BYTES = 50 * 1024 * 1024;
 
 function requireAuth(c: Context<AppEnv>): { user: User; tokenId: string } {
   const user = c.get('user');
@@ -563,13 +565,24 @@ export class InferenceCoreProxyService {
   }> {
     if (operation === 'images/edits') {
       let form: FormData;
-      try {
-        form = await c.req.formData();
-      } catch {
-        throw new InferenceProtocolError(400, 'invalid_request_error', 'Image edits require multipart form data');
+      let units: number;
+      if (isJsonContentType(c.req.header('content-type'))) {
+        const converted = codexImageEditForm(await readJsonObject(c));
+        form = converted.form;
+        units = converted.units;
+      } else {
+        try {
+          form = await c.req.formData();
+        } catch {
+          throw new InferenceProtocolError(
+            400,
+            'invalid_request_error',
+            'Image edits require multipart form data or a Codex JSON image edit body'
+          );
+        }
+        units = positiveUnits(Number(form.get('n') ?? 1));
       }
       const model = requiredModel(form.get('model'));
-      const units = positiveUnits(Number(form.get('n') ?? 1));
       return {
         publicModelId: model,
         units,
@@ -695,6 +708,96 @@ async function readJsonObject(c: Context<AppEnv>): Promise<Record<string, unknow
   } catch {
     throw new InferenceProtocolError(400, 'invalid_request_error', 'Request body must be a JSON object');
   }
+}
+
+function isJsonContentType(contentType: string | undefined): boolean {
+  const mediaType = (contentType ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  return mediaType === 'application/json' || mediaType.endsWith('+json');
+}
+
+function codexImageEditForm(body: Record<string, unknown>): { form: FormData; units: number } {
+  const images = body.images;
+  if (!Array.isArray(images) || images.length < 1 || images.length > MAX_CODEX_IMAGE_EDIT_IMAGES) {
+    throw new InferenceProtocolError(
+      400,
+      'invalid_request_error',
+      `images must contain between 1 and ${MAX_CODEX_IMAGE_EDIT_IMAGES} items`
+    );
+  }
+
+  const form = new FormData();
+  images.forEach((image, index) => {
+    if (!image || typeof image !== 'object' || Array.isArray(image)) {
+      throw new InferenceProtocolError(400, 'invalid_request_error', `images[${index}] must be an object`);
+    }
+    const imageUrl = (image as Record<string, unknown>).image_url;
+    if (typeof imageUrl !== 'string') {
+      throw new InferenceProtocolError(400, 'invalid_request_error', `images[${index}].image_url is required`);
+    }
+    const decoded = decodeCodexImageDataUrl(imageUrl, index);
+    form.append(
+      'image[]',
+      new Blob([decoded.bytes], { type: decoded.mimeType }),
+      `image-${index + 1}.${decoded.extension}`
+    );
+  });
+
+  form.set('model', requiredModel(body.model));
+  form.set('prompt', requiredImageEditString(body.prompt, 'prompt'));
+  for (const field of ['background', 'quality', 'size'] as const) {
+    if (body[field] !== undefined) form.set(field, requiredImageEditString(body[field], field));
+  }
+  const units = positiveUnits(Number(body.n ?? 1));
+  if (body.n !== undefined) form.set('n', String(units));
+  return { form, units };
+}
+
+function requiredImageEditString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new InferenceProtocolError(400, 'invalid_request_error', `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function decodeCodexImageDataUrl(
+  value: string,
+  index: number
+): { bytes: Uint8Array<ArrayBuffer>; extension: 'jpg' | 'png' | 'webp'; mimeType: string } {
+  const match = /^data:(image\/(?:jpeg|jpg|png|webp));base64,([a-z0-9+/]*={0,2})$/i.exec(value);
+  if (!match) {
+    throw new InferenceProtocolError(
+      400,
+      'invalid_request_error',
+      `images[${index}].image_url must be a base64 PNG, JPEG, or WebP data URL`
+    );
+  }
+
+  const mimeType = match[1]!.toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1]!.toLowerCase();
+  const encoded = match[2]!;
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  const decodedBytes = Math.floor((encoded.length * 3) / 4) - padding;
+  if (decodedBytes < 1 || decodedBytes > MAX_CODEX_IMAGE_EDIT_FILE_BYTES) {
+    throw new InferenceProtocolError(
+      400,
+      'invalid_request_error',
+      `images[${index}] must be between 1 byte and ${MAX_CODEX_IMAGE_EDIT_FILE_BYTES} bytes`
+    );
+  }
+
+  const buffer = Buffer.from(encoded, 'base64');
+  if (
+    buffer.byteLength !== decodedBytes ||
+    buffer.toString('base64').replace(/=+$/, '') !== encoded.replace(/=+$/, '')
+  ) {
+    throw new InferenceProtocolError(
+      400,
+      'invalid_request_error',
+      `images[${index}].image_url contains invalid base64`
+    );
+  }
+  const bytes = Uint8Array.from(buffer);
+  const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+  return { bytes, extension, mimeType };
 }
 
 function decodeRequestBody(raw: Uint8Array, contentEncoding: string | undefined): Uint8Array {

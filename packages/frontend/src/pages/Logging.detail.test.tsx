@@ -117,4 +117,36 @@ describe("Logging detail views", () => {
       );
     });
   });
+
+  it("shows animated SDK and API connection instructions from the environment header", async () => {
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <LoggingEnvironmentDetail
+        environment={makeEnvironment()}
+        schemas={[makeSchema()]}
+        loggingEnabled={true}
+        loading={false}
+        activeTab="logs"
+        canEdit={false}
+        canDelete={false}
+        canCreateToken={false}
+        canDeleteToken={false}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+      { path: "/logging/environments/:id/:tab", route: "/logging/environments/env-1/logs" }
+    );
+
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Connect to this environment")).toBeInTheDocument();
+    expect(screen.getByText("pnpm add @sqgateway/logger")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "API" }));
+
+    expect(screen.getByText("/api/logging/ingest/batch")).toBeInTheDocument();
+    expect(screen.getByText(/curl -X POST/)).toBeInTheDocument();
+  });
 });

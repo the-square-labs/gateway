@@ -7,15 +7,6 @@ export const DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE = 'gateway-secure-link-conn
 export const BUILT_IN_GITHUB_OAUTH_CLIENT_ID = 'Ov23likbDL1gM8asWzfC';
 const IMMUTABLE_CONNECTOR_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/i;
 
-const rateLimitWindowSchema = z.coerce.number().int().positive();
-const rateLimitMaxSchema = z.coerce.number().int().positive();
-const optionalClickHouseUrlSchema = z
-  .string()
-  .optional()
-  .default('')
-  .refine((value) => value === '' || z.string().url().safeParse(value).success, {
-    message: 'CLICKHOUSE_URL must be a URL when provided',
-  });
 const optionalNonEmptyString = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
   z.string().optional()
@@ -37,70 +28,9 @@ const envSchema = z.object({
   // Redis
   REDIS_URL: z.string().url(),
 
-  // Optional external logging storage
-  CLICKHOUSE_URL: optionalClickHouseUrlSchema,
-  CLICKHOUSE_USERNAME: z.string().default('default'),
-  CLICKHOUSE_PASSWORD: z.string().default(''),
-  CLICKHOUSE_DATABASE: z.string().default('gateway_logs'),
-  CLICKHOUSE_LOGS_TABLE: z.string().default('logs'),
-  CLICKHOUSE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
-
-  // External logging ingest guardrails
-  LOGGING_INGEST_MAX_BODY_BYTES: z.coerce.number().int().positive().default(1_048_576),
-  LOGGING_INGEST_MAX_BATCH_SIZE: z.coerce.number().int().positive().default(500),
-  LOGGING_INGEST_MAX_MESSAGE_BYTES: z.coerce.number().int().positive().default(16_384),
-  LOGGING_INGEST_MAX_LABELS: z.coerce.number().int().positive().default(32),
-  LOGGING_INGEST_MAX_FIELDS: z.coerce.number().int().positive().default(64),
-  LOGGING_INGEST_MAX_KEY_LENGTH: z.coerce.number().int().positive().default(100),
-  LOGGING_INGEST_MAX_VALUE_BYTES: z.coerce.number().int().positive().default(8192),
-  LOGGING_INGEST_MAX_JSON_DEPTH: z.coerce.number().int().positive().default(5),
-  LOGGING_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
-  LOGGING_GLOBAL_REQUESTS_PER_WINDOW: z.coerce.number().int().positive().default(600),
-  LOGGING_GLOBAL_EVENTS_PER_WINDOW: z.coerce.number().int().positive().default(60_000),
-  LOGGING_TOKEN_REQUESTS_PER_WINDOW: z.coerce.number().int().positive().default(300),
-  LOGGING_TOKEN_EVENTS_PER_WINDOW: z.coerce.number().int().positive().default(10_000),
-
-  // OIDC
-  OIDC_ISSUER: optionalNonEmptyString.refine((value) => !value || z.string().url().safeParse(value).success, {
-    message: 'OIDC_ISSUER must be a URL when provided',
-  }),
-  OIDC_CLIENT_ID: optionalNonEmptyString,
-  OIDC_CLIENT_SECRET: optionalNonEmptyString,
-  OIDC_REDIRECT_URI: optionalNonEmptyString.refine((value) => !value || z.string().url().safeParse(value).success, {
-    message: 'OIDC_REDIRECT_URI must be a URL when provided',
-  }),
-  OIDC_SCOPES: z.string().default('openid email profile'),
-
   // Optional override for the built-in public OAuth App client used by GitHub Device Flow.
   // Device Flow does not use a client secret or a per-instance callback URL.
   GITHUB_OAUTH_CLIENT_ID: nonEmptyStringWithDefault(BUILT_IN_GITHUB_OAUTH_CLIENT_ID),
-
-  // Rate limiting
-  RATE_LIMIT_WINDOW_MS: rateLimitWindowSchema.default(60000),
-  RATE_LIMIT_MAX_REQUESTS: rateLimitMaxSchema.default(1200),
-  RATE_LIMIT_AUTH_MAX_REQUESTS: rateLimitMaxSchema.default(120),
-  RATE_LIMIT_AUTH_LOGIN_MAX_REQUESTS: rateLimitMaxSchema.default(20),
-  RATE_LIMIT_AUTH_CALLBACK_MAX_REQUESTS: rateLimitMaxSchema.default(60),
-  RATE_LIMIT_SETUP_MAX_REQUESTS: rateLimitMaxSchema.default(20),
-  RATE_LIMIT_PUBLIC_STATUS_MAX_REQUESTS: rateLimitMaxSchema.default(600),
-  RATE_LIMIT_PUBLIC_WEBHOOK_MAX_REQUESTS: rateLimitMaxSchema.default(60),
-  RATE_LIMIT_PKI_MAX_REQUESTS: rateLimitMaxSchema.default(600),
-  RATE_LIMIT_STREAM_MAX_REQUESTS: rateLimitMaxSchema.default(120),
-  RATE_LIMIT_AI_WS_MAX_REQUESTS: rateLimitMaxSchema.default(120),
-  RATE_LIMIT_INFERENCE_MAX_REQUESTS: rateLimitMaxSchema.default(1800),
-
-  // Request body limits
-  REQUEST_BODY_MAX_BYTES: z.coerce.number().int().positive().default(2_097_152),
-  OAUTH_BODY_MAX_BYTES: z.coerce.number().int().positive().default(32_768),
-  DOCKER_FILE_WRITE_MAX_BODY_BYTES: z.coerce.number().int().positive().default(150_000_000),
-  INFERENCE_BODY_MAX_BYTES: z.coerce.number().int().positive().default(33_554_432),
-  INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN: z.coerce.number().int().positive().default(32),
-  INFERENCE_CONCURRENCY_LEASE_SECONDS: z.coerce.number().int().positive().default(600),
-  INFERENCE_CONTINUATION_MAX_BYTES: z.coerce.number().int().positive().default(2_097_152),
-  INFERENCE_CONTINUATION_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
-
-  // Session
-  SESSION_EXPIRY: z.coerce.number().default(2592000), // 30 days
 
   // App
   APP_URL: z.string().url().default('http://localhost:3000'),
@@ -137,19 +67,6 @@ const envSchema = z.object({
     .string()
     .length(64)
     .regex(/^[0-9a-fA-F]+$/),
-
-  // PKI defaults
-  DEFAULT_CRL_VALIDITY_HOURS: z.coerce.number().default(24),
-  DEFAULT_OCSP_VALIDITY_MINUTES: z.coerce.number().default(60),
-  EXPIRY_WARNING_DAYS: z.coerce.number().default(30),
-  EXPIRY_CRITICAL_DAYS: z.coerce.number().default(7),
-
-  // ACME
-  ACME_EMAIL: z.string().email().optional(),
-  ACME_STAGING: z
-    .string()
-    .default('false')
-    .transform((v) => v === 'true' || v === '1'),
 
   // DNS / Domains
   PUBLIC_IPV4: z.string().optional(),

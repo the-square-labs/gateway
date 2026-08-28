@@ -13,6 +13,23 @@ describe('sanitizeAuditPath', () => {
       '/api/nodes/:id/config'
     );
   });
+
+  it('keeps long lowercase kebab-case route segments', () => {
+    expect(
+      __testOnly.sanitizeAuditPath('/api/docker/nodes/123e4567-e89b-12d3-a456-426614174000/compose-projects/validate')
+    ).toBe('/api/docker/nodes/:id/compose-projects/validate');
+  });
+});
+
+describe('shouldSkipFallbackAudit', () => {
+  it('skips read-only Compose validation requests', () => {
+    expect(
+      __testOnly.shouldSkipFallbackAudit(
+        'POST',
+        '/api/docker/nodes/123e4567-e89b-12d3-a456-426614174000/compose-projects/validate'
+      )
+    ).toBe(true);
+  });
 });
 
 describe('resolveFallbackAuditTarget', () => {
@@ -50,6 +67,56 @@ describe('resolveFallbackAuditTarget', () => {
       resourceType: 'daemon-update',
       resourceId: '11111111-1111-4111-8111-111111111111',
     });
+  });
+
+  it.each([
+    ['POST', '/api/inference/core/install', 'inference.core.install', 'inference-core'],
+    ['POST', '/api/inference/core/update', 'inference.core.update', 'inference-core'],
+    ['POST', '/api/inference/core/repair', 'inference.core.repair', 'inference-core'],
+    ['POST', '/api/system/license/activate', 'license.activate', 'license'],
+    ['DELETE', '/api/system/license/key', 'license.clear', 'license'],
+    ['PUT', '/api/housekeeping/config', 'housekeeping.config.update', 'housekeeping-config'],
+    ['POST', '/api/housekeeping/run', 'housekeeping.run', 'housekeeping-run'],
+    ['PATCH', '/api/settings/environment', 'settings.environment.update', 'environment-settings'],
+    ['POST', '/api/system/relay-update', 'system.relay_update.perform', 'relay-update'],
+    ['POST', '/api/system/relay/recovery', 'system.relay.recovery', 'relay'],
+    ['POST', '/api/system/relay/rebalance', 'system.relay.rebalance', 'relay'],
+    ['POST', '/api/setup/wizard/apply', 'setup.wizard.apply', 'system-setup'],
+    ['POST', '/api/setup/wizard/license/community', 'setup.license.community', 'system-setup'],
+    ['POST', '/api/setup/wizard/license/activate', 'setup.license.activate', 'system-setup'],
+    ['POST', '/api/setup/wizard/complete', 'setup.wizard.complete', 'system-setup'],
+    ['POST', '/api/audit/export', 'audit.export', 'audit-log'],
+  ])('maps %s %s to %s', (method, path, action, resourceType) => {
+    expect(__testOnly.resolveFallbackAuditTarget(method, path)).toEqual({
+      action,
+      resourceType,
+      resourceId: undefined,
+    });
+  });
+
+  it.each([
+    ['POST', '/api/alerts/alert-1/dismiss', 'alert.dismiss', 'alert', 'alert-1'],
+    ['POST', '/api/audit/siem/deliveries/delivery-1/requeue', 'siem.delivery.requeue', 'siem-delivery', 'delivery-1'],
+    ['POST', '/api/docker/nodes/node-1/runtime/runsc/install', 'docker.runtime.runsc.install', 'docker-node', 'node-1'],
+    ['POST', '/api/docker/tasks/task-1/force-cancel', 'docker.task.force_cancel', 'docker-task', 'task-1'],
+    ['POST', '/api/system/relay/instances/relay-1/drain', 'system.relay.instance.drain', 'relay-instance', 'relay-1'],
+    ['POST', '/api/system/relay/instances/relay-1/resume', 'system.relay.instance.resume', 'relay-instance', 'relay-1'],
+    [
+      'POST',
+      '/api/docker/registries/internal/maintenance/run-1/resume',
+      'docker.internal_registry.maintenance.resume',
+      'docker-registry-maintenance',
+      'run-1',
+    ],
+    [
+      'POST',
+      '/api/notifications/webhooks/webhook-1/test',
+      'notification.webhook.test',
+      'notification-webhook',
+      'webhook-1',
+    ],
+  ])('maps %s %s with its resource id', (method, path, action, resourceType, resourceId) => {
+    expect(__testOnly.resolveFallbackAuditTarget(method, path)).toEqual({ action, resourceType, resourceId });
   });
 
   it('maps AI routes away from generic route audit actions', () => {
@@ -130,11 +197,29 @@ describe('shouldSkipFallbackAudit', () => {
       '/api/audit/siem/destinations/11111111-1111-4111-8111-111111111111/test',
       '/api/docker/nodes/node-1/containers/app/health-check/test',
       '/api/docker/nodes/node-1/deployments/app/health-check/test',
+      '/api/docker/nodes/node-1/compose-projects/validate',
+      '/api/docker/migrations/preflight',
+      '/api/docker/nodes/node-1/runtime/runsc/preflight',
+      '/api/docker/nodes/node-1/containers/archive/plan',
+      '/api/docker/registries/test',
+      '/api/docker/registries/registry-1/test',
+      '/api/domains/domain-1/ingress-migration/preview',
+      '/api/inference/core/check-updates',
+      '/api/inference/v1/responses',
+      '/api/pages/projects/project-1/source/discovery',
+      '/pki/ocsp/ca-1',
+      '/api/setup/unlock',
+      '/api/setup/wizard/session',
     ];
 
     for (const path of paths) {
       expect(__testOnly.shouldSkipFallbackAudit('POST', path), path).toBe(true);
     }
+  });
+
+  it('skips personal onboarding progress updates', () => {
+    expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/finalize-setup/mfa-reminder/hide')).toBe(true);
+    expect(__testOnly.shouldSkipFallbackAudit('PUT', '/api/finalize-setup/steps/profile')).toBe(true);
   });
 
   it('skips Docker folder read and ordering routes that only affect list layout', () => {

@@ -4,6 +4,7 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
+import { getClientIpForContext } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
@@ -276,7 +277,7 @@ setupRoutes.post('/wizard/session', async (c) => {
     purpose: 'setup',
     setupSessionId,
     expiresAt: Date.parse(expiresAt),
-    ipAddress: c.req.header('x-forwarded-for')?.split(',')[0]?.trim(),
+    ipAddress: await getClientIpForContext(c),
     userAgent: c.req.header('user-agent'),
   });
   const forwardedProto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim();

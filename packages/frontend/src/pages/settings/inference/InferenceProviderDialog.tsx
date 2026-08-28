@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Gauge, Link2, Loader2, RefreshCw, Trash2, WalletCards } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -191,6 +191,7 @@ export function InferenceProviderDialog({
           <PanelShell
             title="Subscription limits"
             description="Latest synchronized quota windows for this account"
+            icon={<Gauge className="h-4 w-4" />}
           >
             {reportedQuotaWindows.map(({ dimension, label, quota }) => (
               <SettingsControlRow key={dimension} title={label}>
@@ -204,6 +205,7 @@ export function InferenceProviderDialog({
           <PanelShell
             title="Provider balance"
             description="Latest synchronized credit balance reported by the provider"
+            icon={<WalletCards className="h-4 w-4" />}
           >
             <SettingsControlRow title="Available credits">
               <ProviderBalanceValue quota={providerBalance} />
@@ -214,6 +216,7 @@ export function InferenceProviderDialog({
         <PanelShell
           title="Connection"
           description="Health, routing availability, and synchronization"
+          icon={<Link2 className="h-4 w-4" />}
         >
           <SettingsControlRow title="Connection name">
             <Input
@@ -237,6 +240,7 @@ export function InferenceProviderDialog({
           <SettingsControlRow
             title="Routing strategy"
             description={`Applies to all ${displayedProvider?.label ?? displayedConnection.providerId} connections`}
+            help="Sequential prefers higher-priority connections and falls through when needed. Balanced distributes requests more evenly across available connections."
           >
             <Select
               value={routingStrategy}
@@ -286,6 +290,7 @@ export function InferenceProviderDialog({
             <SettingsControlRow
               title="Minimum remaining"
               description="Stop routing when any quota window reaches this reserve"
+              help="Keeps a percentage of the provider's reported quota unused. Gateway stops selecting this connection when any synchronized quota window falls to the reserve."
             >
               <div className="flex items-center gap-2">
                 <Input
@@ -307,6 +312,7 @@ export function InferenceProviderDialog({
             <SettingsControlRow
               title="Monthly API limit"
               description={`Used this UTC month: ${formatUsd(displayedConnection.apiMonthlySpentMicrodollars)}. Leave empty for unlimited.`}
+              help="Gateway stops routing paid API traffic to this connection after its tracked spend reaches the limit for the current UTC calendar month."
             >
               <div className="flex items-center gap-2">
                 <Input

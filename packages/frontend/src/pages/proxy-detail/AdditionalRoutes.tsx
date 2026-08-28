@@ -6,6 +6,7 @@ import {
   Plus,
   Power,
   RefreshCw,
+  Route,
   Save,
   Trash2,
 } from "lucide-react";
@@ -619,6 +620,7 @@ export function AdditionalRoutesPanel({
 
   return (
     <PanelShell
+      icon={<Route className="h-4 w-4" />}
       title="Additional Routes"
       description="Route literal path prefixes to managed upstream targets"
       className="overflow-visible"

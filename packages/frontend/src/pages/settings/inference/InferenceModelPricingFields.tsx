@@ -1,3 +1,4 @@
+import { BadgeDollarSign } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -20,6 +21,7 @@ export function ModelPricingFields({
   return (
     <PanelShell
       title="API pricing"
+      icon={<BadgeDollarSign className="h-4 w-4" />}
       description={
         managed
           ? `Managed provider pricing · ${managed.version}`

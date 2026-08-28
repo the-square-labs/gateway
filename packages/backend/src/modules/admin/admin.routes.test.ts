@@ -161,6 +161,30 @@ describe('admin user identity validation', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
+
+  it("allows an administrator to reset a manageable user's avatar", async () => {
+    registerSession(['admin:users', 'nodes:details:node-1']);
+    const target = { ...TARGET_USER, avatarUrl: 'data:image/png;base64,cG5n' };
+    const updated = { ...target, avatarUrl: null };
+    const updateUserAvatar = vi.fn().mockResolvedValue(updated);
+    const auditLog = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AuthService, {
+      getUserById: vi.fn().mockResolvedValue(target),
+      updateUserAvatar,
+    } as unknown as AuthService);
+    container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+
+    const response = await createApp().request(`/api/admin/users/${target.id}/avatar`, {
+      method: 'DELETE',
+      headers: sessionHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateUserAvatar).toHaveBeenCalledWith(target.id, null);
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.avatar_reset', resourceId: target.id })
+    );
+  });
 });
 
 describe('admin user email onboarding', () => {

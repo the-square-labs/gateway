@@ -25,6 +25,10 @@ import type {
   InferenceSystemUsage,
   InferenceUsageWindow,
 } from "@/types/inference";
+import {
+  InferenceEndpointRow,
+  InferenceHarnessDialog,
+} from "../settings/inference/InferenceEndpointSettingsPanel";
 
 const COMPACT_USAGE_OPEN_KEY = "gateway:account-menu:ai-usage-open";
 
@@ -42,6 +46,7 @@ function initialCompactUsageOpen() {
 }
 
 function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   const subscriptionWindows: Array<{
     label: string;
     value: InferenceUsageWindow;
@@ -68,24 +73,33 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
   if (cardCount === 0) return null;
 
   return (
-    <PanelShell
-      icon={<Gauge className="h-4 w-4" />}
-      title="Inference usage"
-      description="Usage limits for the AI models available to you. Limits recover automatically."
-    >
-      <div
-        className={cn(
-          "grid grid-cols-1 gap-px bg-border sm:grid-cols-2",
-          cardCount === 4 && "xl:grid-cols-4",
-          cardCount === 3 && "xl:grid-cols-3",
-          cardCount === 2 && "xl:grid-cols-2"
-        )}
+    <>
+      <PanelShell
+        icon={<Gauge className="h-4 w-4" />}
+        title="Inference usage"
+        description="Usage limits for the AI models available to you. Limits recover automatically."
+        actions={
+          <Button variant="ghost" onClick={() => setInstructionsOpen(true)}>
+            Set up a harness
+          </Button>
+        }
       >
-        {cards.map(({ label, value, icon }) => (
-          <UsageStatCard key={label} label={label} value={value} icon={icon} />
-        ))}
-      </div>
-    </PanelShell>
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-px bg-border sm:grid-cols-2",
+            cardCount === 4 && "xl:grid-cols-4",
+            cardCount === 3 && "xl:grid-cols-3",
+            cardCount === 2 && "xl:grid-cols-2"
+          )}
+        >
+          {cards.map(({ label, value, icon }) => (
+            <UsageStatCard key={label} label={label} value={value} icon={icon} />
+          ))}
+        </div>
+        <InferenceEndpointRow />
+      </PanelShell>
+      <InferenceHarnessDialog open={instructionsOpen} onOpenChange={setInstructionsOpen} />
+    </>
   );
 }
 
@@ -118,7 +132,7 @@ function UsageStatCard({
 }
 
 export function InferenceUsage() {
-  const { usage, loading, error, load } = useInferenceSelfUsage();
+  const { usage, loading, error } = useInferenceSelfUsage();
 
   if (loading) {
     return (
@@ -140,21 +154,7 @@ export function InferenceUsage() {
       </PanelShell>
     );
   }
-  if (error || !usage) {
-    return (
-      <PanelShell
-        icon={<Gauge className="h-4 w-4" />}
-        title="Inference usage"
-        actions={
-          <Button variant="outline" onClick={() => void load()}>
-            Retry
-          </Button>
-        }
-      >
-        <div className="px-4 py-6 text-sm text-destructive">{error ?? "Usage is unavailable"}</div>
-      </PanelShell>
-    );
-  }
+  if (error || !usage?.enabled) return null;
 
   return <InferenceUsagePanel usage={usage} />;
 }

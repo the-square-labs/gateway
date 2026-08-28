@@ -129,7 +129,7 @@ describe("PagesSettingsSection", () => {
     const panel = screen.getByText("Pages").closest("div.border") as HTMLElement;
 
     expect(screen.queryByText("Personal+")).not.toBeInTheDocument();
-    expect(screen.getByText("BETA")).toBeInTheDocument();
+    expect(screen.queryByText("BETA")).not.toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(save).toBeDisabled();
 

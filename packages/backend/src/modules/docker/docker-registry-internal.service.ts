@@ -9,6 +9,7 @@ import type { DockerInternalRegistrySettingsInput } from './docker-build.schemas
 import {
   createDockerRegistryMaintenanceStore,
   DEFAULT_REGISTRY_MAINTENANCE_LEASE_MS,
+  DEFAULT_REGISTRY_RETENTION_COUNT,
   type DockerRegistryMaintenanceExecutor,
   type DockerRegistryMaintenanceStore,
   MAX_REGISTRY_WRITE_TOKEN_TTL_SECONDS,
@@ -287,15 +288,29 @@ export class DockerInternalRegistryService {
     });
   }
 
-  async runGarbageCollection(input: { dryRun?: boolean; requestedById?: string | null; leaseOwner?: string }) {
+  async runGarbageCollection(input: {
+    dryRun?: boolean;
+    requestedById?: string | null;
+    leaseOwner?: string;
+    retentionCount?: number;
+  }) {
     const owner = input.leaseOwner ?? `registry-gc:${randomUUID()}`;
-    const result = await this.executeMaintenance({ owner, dryRun: input.dryRun === true });
+    const result = await this.executeMaintenance({
+      owner,
+      dryRun: input.dryRun === true,
+      retentionCount: input.retentionCount,
+    });
     await this.auditService.log({
       action: 'docker.internal-registry.gc',
       userId: input.requestedById ?? null,
       resourceType: 'docker-registry',
       resourceId: INTERNAL_DOCKER_REGISTRY_ID,
-      details: { runId: result.id, dryRun: result.dryRun, status: result.status },
+      details: {
+        runId: result.id,
+        dryRun: result.dryRun,
+        status: result.status,
+        retentionCount: result.progress?.retentionCount,
+      },
     });
     return result;
   }
@@ -310,6 +325,7 @@ export class DockerInternalRegistryService {
     owner: string;
     dryRun: boolean;
     run?: MaintenanceRun;
+    retentionCount?: number;
   }): Promise<MaintenanceRun> {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + DEFAULT_REGISTRY_MAINTENANCE_LEASE_MS);
@@ -324,6 +340,12 @@ export class DockerInternalRegistryService {
         })
       : await this.store.createRun(input.owner, leaseExpiresAt, input.dryRun);
     let progress = (run.progress ?? {}) as Record<string, unknown>;
+    const persistedRetentionCount = progress.retentionCount;
+    const retentionCount =
+      input.retentionCount ??
+      (typeof persistedRetentionCount === 'number' ? persistedRetentionCount : DEFAULT_REGISTRY_RETENTION_COUNT);
+    progress = { ...progress, retentionCount };
+    run = await this.store.updateRun(run.id, { progress });
     let currentPhase: DockerRegistryMaintenancePhase = 'acquiring_lease';
     let writesRestored = input.dryRun;
 
@@ -345,7 +367,7 @@ export class DockerInternalRegistryService {
 
       await phase('computing_pins');
       const artifacts = await this.store.listRetentionArtifacts(now);
-      const retention = selectRegistryRetentionCandidates(artifacts);
+      const retention = selectRegistryRetentionCandidates(artifacts, retentionCount);
       progress = {
         ...progress,
         retainedArtifactIds: retention.retained.map((artifact) => artifact.id),

@@ -227,8 +227,6 @@ export function AdminNodes() {
       setEnrollmentTransport("curl");
       setEnrollDialogOpen(false);
       setEnrollResultDialogOpen(true);
-      setEnrollType("nginx");
-      setEnrollDisplayName("");
       fetchNodes();
     } catch (err) {
       if (!handleLicenseApiError(err, "Managed nodes")) {

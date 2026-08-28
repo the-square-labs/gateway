@@ -2,7 +2,9 @@ import { Activity, Save } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,8 +32,10 @@ import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-p
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   DatabaseConnection,
+  DockerComposeProjectSummary,
   DockerContainer,
   Node,
+  PageProject,
   ProxyHost,
   SSLCertificate,
   StatusPageConfig,
@@ -265,6 +269,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         <SettingsRow
           label="Gateway upstream URL"
           description="Internal Gateway URL used by the generated proxy host"
+          help="Address the selected ingress node uses to reach Gateway. Use an internal address that is reachable from that node, not necessarily the public browser URL."
         >
           <Input
             value={config.upstreamUrl ?? ""}
@@ -278,6 +283,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         <SettingsRow
           label="Ingress node"
           description="Online Ingress node that serves the public status page"
+          help="The selected Nginx node owns the public virtual host, terminates TLS, and proxies status-page requests back to Gateway."
         >
           <Select
             value={config.nodeId ?? ""}
@@ -299,6 +305,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         <SettingsRow
           label="SSL certificate"
           description="Certificate presented by the public status page endpoint"
+          help="Certificate browsers receive for the status-page domain. It must be active and cover the configured hostname."
         >
           <Select
             value={config.sslCertificateId ?? "__none__"}
@@ -328,6 +335,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         <SettingsRow
           label="Proxy template"
           description="Optional nginx template override for the generated proxy host"
+          help="Uses a custom Nginx configuration template instead of Gateway's default status-page proxy. Leave it on Default unless the route requires specialized proxy behavior."
         >
           <Select
             value={config.proxyTemplateId ?? "__default__"}
@@ -360,12 +368,14 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
 function SettingsRow({
   label,
   description,
+  help,
   children,
   controlClassName = "w-full md:w-[28rem]",
   preserveRow = false,
 }: {
   label: string;
   description: string;
+  help?: string;
   children: React.ReactNode;
   controlClassName?: string;
   /** Keep compact controls, such as a switch, aligned with their description at every width. */
@@ -380,7 +390,9 @@ function SettingsRow({
       }
     >
       <span className="min-w-0">
-        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-sm font-medium">
+          <SettingsHelpTitle label={label} help={help} />
+        </span>
         <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span>
       </span>
       <span className={`min-w-0 shrink-0 ${controlClassName}`}>{children}</span>
@@ -399,7 +411,7 @@ export function Field({
 }) {
   return (
     <label className={`block space-y-1.5 ${className}`}>
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="text-sm font-medium">{label}</span>
       {children}
     </label>
   );
@@ -414,6 +426,8 @@ export function ServiceDialog({
   proxies,
   databases,
   dockerTargets = [],
+  composeProjects = [],
+  pageProjects = [],
   sourceOptionsLoading = false,
   onSaved,
 }: {
@@ -425,6 +439,8 @@ export function ServiceDialog({
   proxies: ProxyHost[];
   databases: DatabaseConnection[];
   dockerTargets?: DockerContainer[];
+  composeProjects?: DockerComposeProjectSummary[];
+  pageProjects?: PageProject[];
   sourceOptionsLoading?: boolean;
   onSaved: () => void;
 }) {
@@ -473,10 +489,43 @@ export function ServiceDialog({
         return [{ id: `docker_container:${item.healthCheckId}`, label: `Container: ${item.name}` }];
       });
     }
+    if (sourceType === "docker_compose_project") {
+      return composeProjects
+        .filter((project) => !exposed.has(project.id))
+        .map((project) => ({ id: project.id, label: project.name }));
+    }
+    if (sourceType === "pages_project") {
+      return pageProjects
+        .filter((project) => !exposed.has(project.id))
+        .map((project) => ({ id: project.id, label: project.name }));
+    }
     return proxies
       .filter((proxy) => proxy.healthCheckEnabled && !proxy.isSystem && !exposed.has(proxy.id))
       .map((proxy) => ({ id: proxy.id, label: proxy.domainNames[0] || proxy.id }));
-  }, [databases, dockerTargets, nodes, proxies, service?.id, services, sourceType]);
+  }, [
+    composeProjects,
+    databases,
+    dockerTargets,
+    nodes,
+    pageProjects,
+    proxies,
+    service?.id,
+    services,
+    sourceType,
+  ]);
+  const groupOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          services
+            .map((item) => item.publicGroup?.trim())
+            .filter((value): value is string => Boolean(value))
+        )
+      )
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value })),
+    [services]
+  );
 
   const save = async () => {
     try {
@@ -530,44 +579,65 @@ export function ServiceDialog({
                     <SelectItem value="node">Node</SelectItem>
                     <SelectItem value="proxy_host">Proxy Host</SelectItem>
                     <SelectItem value="database">Database</SelectItem>
-                    <SelectItem value="docker">Docker</SelectItem>
+                    <SelectItem value="docker">Docker Container or Deployment</SelectItem>
+                    <SelectItem value="docker_compose_project">Docker Compose Project</SelectItem>
+                    <SelectItem value="pages_project">Pages Project</SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
               <Field label="Source">
-                <Select
+                <Combobox
                   value={sourceId}
                   onValueChange={setSourceId}
+                  options={sourceOptions.map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                  }))}
                   disabled={sourceOptionsLoading}
-                >
-                  <SelectTrigger>
-                    <SelectValue
-                      placeholder={sourceOptionsLoading ? "Loading sources..." : "Select source"}
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sourceOptions.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  showAllOptionsOnFocus
+                  ariaLabel="Source"
+                  placeholder={sourceOptionsLoading ? "Loading sources..." : "Select source"}
+                  searchPlaceholder="Search sources..."
+                  emptyMessage="No available sources found."
+                />
               </Field>
             </div>
           )}
           <Field label="Public name">
-            <Input value={name} onChange={(event) => setName(event.target.value)} />
+            <Input
+              value={name}
+              placeholder="Customer-facing service name"
+              onChange={(event) => setName(event.target.value)}
+            />
           </Field>
           <Field label="Public description">
-            <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+            <Input
+              value={description}
+              placeholder="Optional description shown on the public page"
+              onChange={(event) => setDescription(event.target.value)}
+            />
           </Field>
           <Field label="Group">
-            <Input value={group} onChange={(event) => setGroup(event.target.value)} />
+            <Combobox
+              freeText
+              showAllOptionsOnFocus
+              value={group}
+              options={groupOptions}
+              onValueChange={setGroup}
+              ariaLabel="Group"
+              placeholder="e.g. Core Infrastructure"
+              searchPlaceholder="Search or enter a group..."
+              emptyMessage="Enter a new group name."
+            />
           </Field>
-          <div className="flex items-center justify-between border border-border p-3">
-            <span className="text-sm font-medium">Visible on public page</span>
-            <Switch checked={enabled} onChange={setEnabled} />
+          <div className="flex items-center justify-between gap-4 px-1 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Visible on public page</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Hidden services remain configured but are not shown to visitors.
+              </p>
+            </div>
+            <Switch checked={enabled} onChange={setEnabled} ariaLabel="Visible on public page" />
           </div>
         </div>
         <DialogFooter>

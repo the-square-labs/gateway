@@ -1,4 +1,4 @@
-import { Bot, Cpu, Download, Eye, Gauge, Server, Trash2 } from "lucide-react";
+import { Archive, Bot, Container, Cpu, Download, Eye, Gauge, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -290,6 +290,7 @@ function SandboxJobsPanel() {
       <PanelShell
         title="Running Sandbox Jobs"
         description="Low-priority Docker sandboxes. Workspace reservations are soft; new jobs stop at 80% host-disk use."
+        icon={<Container className="h-4 w-4" />}
         actions={<RefreshButton minDurationMs={1400} onClick={() => loadJobs({ silent: true })} />}
       >
         <SimpleTable
@@ -638,6 +639,7 @@ function SandboxArtifactsPanel() {
       <PanelShell
         title="Stored Artifacts"
         description="The 10 most recently retained files from assistant sandbox runs"
+        icon={<Archive className="h-4 w-4" />}
         actions={
           <div className="flex items-center gap-3">
             <Button
@@ -957,6 +959,7 @@ export function AIConfigSection() {
                   ? `${aiConfig.disabledTools.length} tool${aiConfig.disabledTools.length !== 1 ? "s" : ""} disabled`
                   : "All tools enabled"
               }
+              help="Controls which Gateway operations the assistant is allowed to invoke. Disabling a tool removes that capability from every AI Workspace conversation."
               controlsClassName="sm:min-w-0"
             >
               <Button
@@ -1086,6 +1089,7 @@ export function AIConfigSection() {
                 )}
               </>
             }
+            help="Gateway Inference uses the centrally managed provider and model catalog. OAI-compatible connects AI Workspace directly to one configured API endpoint."
           >
             <Select
               value={aiConfig.providerType || "openai_compatible"}
@@ -1167,6 +1171,7 @@ export function AIConfigSection() {
               <SettingsControlRow
                 title="Endpoint"
                 description="Provider endpoint family used for tool-capable requests."
+                help="Auto uses the Responses API for OpenAI hosts and Chat Completions for other OpenAI-compatible hosts. Force a mode only when the provider requires it."
               >
                 <Select
                   value={aiConfig.endpointMode || "auto"}
@@ -1207,6 +1212,7 @@ export function AIConfigSection() {
               <SettingsControlRow
                 title="Default reasoning effort"
                 description="Reasoning effort used unless a user selects another value."
+                help="Reasoning effort controls how much internal computation a compatible model may use before answering. Higher levels can improve difficult work but increase latency and usage."
                 controlsClassName="sm:max-w-none"
               >
                 <Tabs
@@ -1271,6 +1277,7 @@ export function AIConfigSection() {
             <SettingsControlRow
               title="Requests and window"
               description="Maximum Workspace requests allowed per time window."
+              help="The first value is the maximum request count; the second is the window duration in seconds."
               controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
             >
               <Input
@@ -1296,6 +1303,7 @@ export function AIConfigSection() {
             <SettingsControlRow
               title="Tool rounds and context size"
               description="Maximum sequential tool calls and context budget."
+              help="The first value caps sequential tool-call rounds in one run; the second is the conversation-builder token budget."
               controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
             >
               <Input
@@ -1320,6 +1328,7 @@ export function AIConfigSection() {
             <SettingsControlRow
               title="Response tokens"
               description="Maximum generated tokens returned by the provider."
+              help="Caps the length of the model's generated answer. It does not include the input conversation or tool results already present in context."
             >
               <Input
                 aria-label="Max response tokens"
@@ -1334,6 +1343,7 @@ export function AIConfigSection() {
             <SettingsControlRow
               title="Token field"
               description="Provider request field used for max response tokens."
+              help="Use max_completion_tokens for providers supporting the newer field; select max_tokens when a compatible provider rejects it."
             >
               <Select
                 value={aiConfig.maxTokensField || "max_completion_tokens"}
@@ -1378,6 +1388,7 @@ export function AIConfigSection() {
         <SettingsControlRow
           title="Default tier"
           description="Default resource tier used when the agent does not request one."
+          help="The tier sets the default CPU, memory, maximum lifetime, and disk allowance for newly created assistant sandboxes."
           controlsClassName="sm:max-w-[28rem]"
         >
           <Select
@@ -1402,6 +1413,7 @@ export function AIConfigSection() {
         <SettingsControlRow
           title="Runtime"
           description="Sandbox runner process status."
+          help="Shows whether Gateway's sandbox worker is available to start isolated command-execution jobs for AI Workspace."
           controlsClassName="flex justify-end justify-self-end !w-auto !min-w-0 !max-w-none"
         >
           <SandboxStatusBadge status={sandboxStatus} />

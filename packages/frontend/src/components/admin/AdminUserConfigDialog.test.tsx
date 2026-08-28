@@ -1,9 +1,12 @@
 import { fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdminUserConfigDialog } from "@/components/admin/AdminUserConfigDialog";
+import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
 import { renderWithRouter } from "@/test/render";
 import type { User } from "@/types";
+
+vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn() }));
 
 const passwordUser: User = {
   id: "user-1",
@@ -75,5 +78,32 @@ describe("AdminUserConfigDialog", () => {
 
     expect(await screen.findByText("Test Browser")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+  });
+
+  it("lets an administrator reset the current avatar", async () => {
+    vi.spyOn(api, "listAdminUserSessions").mockResolvedValue([]);
+    const userWithAvatar = { ...passwordUser, avatarUrl: "data:image/png;base64,cG5n" };
+    const resetAvatar = vi.spyOn(api, "resetUserAvatar").mockResolvedValue({
+      ...userWithAvatar,
+      avatarUrl: null,
+    });
+    const onUserUpdated = vi.fn();
+    vi.mocked(confirm).mockResolvedValue(true);
+
+    renderWithRouter(
+      <AdminUserConfigDialog
+        open
+        user={userWithAvatar}
+        canResetMfa
+        onOpenChange={vi.fn()}
+        onUserUpdated={onUserUpdated}
+        onUserDeleted={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset avatar" }));
+
+    await vi.waitFor(() => expect(resetAvatar).toHaveBeenCalledWith(userWithAvatar.id));
+    expect(onUserUpdated).toHaveBeenCalledWith(expect.objectContaining({ avatarUrl: null }));
   });
 });

@@ -9,7 +9,7 @@ export interface HousekeepingConfig {
   structuredLogs: { enabled: boolean; maxRows: number; maxSizeBytes: number };
   clickHouseInternals: { enabled: boolean; maxSizeBytes: number };
   orphanedAIArtifacts: { enabled: boolean };
-  gatewayLogs: { enabled: false };
+  internalRegistry: { enabled: true; retentionSuccessfulArtifacts: number };
   orphanedVolumes: { enabled: boolean; retentionDays: number };
   dockerPrune: { enabled: boolean };
   orphanedCerts: { enabled: boolean };
@@ -48,7 +48,12 @@ export interface HousekeepingStats {
     capBytes: number;
   };
   orphanedAIArtifacts: { count: number; totalSizeBytes: number };
-  gatewayLogs: { totalSizeBytes: number; fileCount: number; available: false };
+  internalRegistry: {
+    totalSizeBytes: number;
+    capacityBytes: number | null;
+    status: string;
+    lastGcAt: string | null;
+  };
   orphanedVolumes: { count: number; reclaimableBytes: number };
   orphanedCerts: {
     count: number;

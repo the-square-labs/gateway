@@ -94,6 +94,7 @@ export function CertificateDetail() {
   const handleDownload = async (format: CertificateExportFormat, passphrase?: string) => {
     if (!cert) return;
     if (format === "pkcs12" && !passphrase?.trim()) {
+      setPkcs12Passphrase("");
       setPkcs12DialogOpen(true);
       return;
     }
@@ -118,7 +119,6 @@ export function CertificateDetail() {
       URL.revokeObjectURL(url);
       if (format === "pkcs12") {
         setPkcs12DialogOpen(false);
-        setPkcs12Passphrase("");
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to download certificate");
@@ -432,7 +432,6 @@ export function CertificateDetail() {
           onOpenChange={(open) => {
             if (downloadingFormat === "pkcs12") return;
             setPkcs12DialogOpen(open);
-            if (!open) setPkcs12Passphrase("");
           }}
         >
           <DialogContent className="sm:max-w-md">
@@ -459,7 +458,6 @@ export function CertificateDetail() {
                 variant="outline"
                 onClick={() => {
                   setPkcs12DialogOpen(false);
-                  setPkcs12Passphrase("");
                 }}
                 disabled={downloadingFormat === "pkcs12"}
               >

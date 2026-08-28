@@ -45,7 +45,7 @@ Existing daemons from before signed-manifest support can perform one transition 
 
 ## Configuration Reference
 
-The installer writes infrastructure/bootstrap values to `.env`. Product settings are stored in Gateway: canonical public URL and internal web TLS are edited in **Settings > General**, while OIDC, SMTP, authentication methods, and ClickHouse are edited in **Settings > Advanced**.
+The installer writes infrastructure/bootstrap values to `.env`. Product settings are stored in Gateway: canonical public URL and internal web TLS are edited in **Settings > General**; OIDC, SMTP, authentication methods, and ClickHouse are edited in **Settings > Advanced**; request limits, logging ingest guardrails, sessions, rate limiting, and PKI defaults are edited in **Settings > Environment**. ACME uses the acting user's email and the provider selected in the certificate form.
 
 | Variable | Purpose |
 |----------|---------|
@@ -59,23 +59,20 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `SETUP_BOOTSTRAP` | Installer-only flag that permits a fresh empty database to enter first-run setup. |
 | `WEB_TLS_BOOTSTRAP_MODE` | Seeds `http` or `https` only when no persisted web-transport choice exists. |
 | `WEB_TLS_AUTO_DIR` | Persistent directory for the native web TLS leaf and private key. |
-| `SESSION_EXPIRY` | Browser session lifetime in seconds. Browser sessions are opaque Redis-backed session IDs. |
 | `GITHUB_OAUTH_CLIENT_ID` | Optional override for the built-in product-wide GitHub OAuth App client ID used for connector Device Flow. Gateway does not use a client secret or redirect users through the app's callback URL. |
 | `PKI_MASTER_KEY` | 64-character hex key for encrypted PKI material. |
-| `RATE_LIMIT_WINDOW_MS` | Default rate-limit window. |
-| `RATE_LIMIT_MAX_REQUESTS` | Default request limit. |
 | `GRPC_PORT` | TLS-only gRPC port for daemon connections. |
 | `GRPC_TLS_AUTO_DIR` | Directory for Gateway's auto-issued internal gRPC TLS certificate and key. |
 | `GRPC_TLS_EXTRA_SANS` | Extra comma-separated DNS names or IP addresses for the auto-issued gRPC server certificate. Gateway also includes the persisted canonical public host and discovered host IP addresses automatically. |
 | `GRPC_TLS_CERT` | Optional custom gRPC TLS certificate issued by Gateway's system CA. |
 | `GRPC_TLS_KEY` | Optional custom gRPC TLS private key paired with `GRPC_TLS_CERT`. |
-| `ACME_EMAIL` | Let's Encrypt account email. |
-| `ACME_STAGING` | Use Let's Encrypt staging. |
 | `HEALTH_CHECK_INTERVAL_SECONDS` | Proxy health check interval. |
 | `ACME_RENEWAL_CRON` | ACME renewal schedule. |
 | `EXPIRY_CHECK_CRON` | Certificate expiry check schedule. |
 
-See [.env.example](../.env.example) for the full development reference.
+Legacy product-setting variables are imported into PostgreSQL by the target image before an update replaces the app container. The migration preserves explicit legacy values, fills missing fields from the target release defaults, and removes the migrated keys from both host `.env` and the app service's Compose environment only after the database import succeeds.
+
+See [.env.example](../.env.example) for the common development values. Runtime-only and installer-managed image, registry, relay, storage, DNS, and update variables retain their schema defaults when omitted.
 
 Redis is required infrastructure. Gateway uses it for sessions, cache, and rate limiting; if Redis is unavailable, `/health` returns `503` and Redis-backed rate-limited API/auth/public surfaces fail closed with `RATE_LIMIT_UNAVAILABLE`.
 

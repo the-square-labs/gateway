@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
+import { errorHandler } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
@@ -68,6 +69,82 @@ afterEach(() => {
 });
 
 describe('browser-session routes', () => {
+  it('allows the current user to upload a custom avatar as multipart data', async () => {
+    const { auditLog } = registerDependencies();
+    const avatar = new File(
+      [Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x49, 0x45, 0x4e, 0x44])],
+      'avatar.png',
+      { type: 'image/png' }
+    );
+    const updatedUser = { ...USER, avatarUrl: '/auth/avatars/avatar.png' };
+    const uploadUserAvatar = vi.fn().mockResolvedValue(updatedUser);
+    container.registerInstance(AuthService, { uploadUserAvatar } as unknown as AuthService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+    const body = new FormData();
+    body.append('avatar', avatar);
+
+    const response = await app.request('/auth/me/avatar', {
+      method: 'PUT',
+      headers: {
+        Cookie: 'session_id=current-session-id',
+        'X-CSRF-Token': 'csrf-token',
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(uploadUserAvatar).toHaveBeenCalledWith(USER.id, expect.any(File));
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.avatar_update', resourceId: USER.id })
+    );
+  });
+
+  it('requires an avatar file in the multipart request', async () => {
+    registerDependencies();
+    container.registerInstance(AuthService, { uploadUserAvatar: vi.fn() } as unknown as AuthService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+    const body = new FormData();
+    body.append('avatar', 'not-a-file');
+
+    const response = await app.request('/auth/me/avatar', {
+      method: 'PUT',
+      headers: {
+        Cookie: 'session_id=current-session-id',
+        'X-CSRF-Token': 'csrf-token',
+      },
+      body,
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('removes the current custom avatar without an upload body', async () => {
+    const { auditLog } = registerDependencies();
+    const updateUserAvatar = vi.fn().mockResolvedValue(USER);
+    container.registerInstance(AuthService, { updateUserAvatar } as unknown as AuthService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+
+    const response = await app.request('/auth/me/avatar', {
+      method: 'DELETE',
+      headers: {
+        Cookie: 'session_id=current-session-id',
+        'X-CSRF-Token': 'csrf-token',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateUserAvatar).toHaveBeenCalledWith(USER.id, null);
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.avatar_remove', resourceId: USER.id })
+    );
+  });
+
   it('authenticates DELETE /me/sessions/:id before accessing the current user', async () => {
     const { revokeUserSessionByPublicId, auditLog } = registerDependencies();
     const app = new Hono<AppEnv>();

@@ -49,7 +49,15 @@ STUB_STATUS_URL="http://127.0.0.1/nginx_status"
 INTEGRATED_STUB_STATUS_PORT="8081"
 NGINX_SITES_DIR="/etc/nginx/gateway/conf.d"
 NGINX_HTPASSWD_DIR="/etc/nginx/gateway/htpasswd"
+NGINX_GLOBAL_CONF="/etc/nginx/nginx.conf"
+NGINX_SYSTEMD_DROPIN_DIR="/etc/systemd/system/nginx.service.d"
+NGINX_OPENRC_CONF_DIR="/etc/conf.d"
+NGINX_PID_FILE="/run/nginx.pid"
 NGINX_MIN_VERSION="1.25.1"
+NGINX_WORKER_NOFILE_MIN=65535
+NGINX_SERVICE_NOFILE_MIN=65536
+NGINX_WORKER_CONNECTIONS_MIN=8192
+NGINX_SERVICE_RESTART_REQUIRED=0
 RESOLVED_DAEMON_VERSION=""
 EXISTING_INSTALL=0
 EXISTING_VERSION=""
@@ -875,6 +883,203 @@ ensure_http_include() {
     return 0
 }
 
+ensure_nginx_worker_limits() {
+    local global_conf="$NGINX_GLOBAL_CONF"
+    local tmp_file
+    local nofile_present=0
+    local connections_present=0
+
+    grep -Eq '^[[:space:]]*worker_rlimit_nofile[[:space:]]+[0-9]+[[:space:]]*;' "$global_conf" && nofile_present=1
+    grep -Eq '^[[:space:]]*worker_connections[[:space:]]+[0-9]+[[:space:]]*;' "$global_conf" && connections_present=1
+
+    tmp_file=$(mktemp /tmp/nginx-limits-XXXXXX)
+    if ! awk \
+        -v nofile_min="$NGINX_WORKER_NOFILE_MIN" \
+        -v connections_min="$NGINX_WORKER_CONNECTIONS_MIN" \
+        -v nofile_present="$nofile_present" \
+        -v connections_present="$connections_present" '
+        function leading_space(line) {
+            match(line, /^[[:space:]]*/)
+            return substr(line, 1, RLENGTH)
+        }
+        function numeric_value(line) {
+            match(line, /[0-9]+/)
+            return substr(line, RSTART, RLENGTH) + 0
+        }
+        BEGIN {
+            nofile_seen = nofile_present
+            events_seen = 0
+            in_events = 0
+            connections_seen = connections_present
+        }
+        /^[[:space:]]*worker_rlimit_nofile[[:space:]]+[0-9]+[[:space:]]*;/ {
+            nofile_seen = 1
+            if (numeric_value($0) < nofile_min) {
+                print leading_space($0) "worker_rlimit_nofile " nofile_min ";"
+            } else {
+                print
+            }
+            next
+        }
+        /^[[:space:]]*events[[:space:]]*\{/ {
+            if (!nofile_seen) {
+                print "worker_rlimit_nofile " nofile_min ";"
+                print ""
+                nofile_seen = 1
+            }
+            events_seen = 1
+            in_events = 1
+            print
+            next
+        }
+        in_events && /^[[:space:]]*worker_connections[[:space:]]+[0-9]+[[:space:]]*;/ {
+            connections_seen = 1
+            if (numeric_value($0) < connections_min) {
+                print leading_space($0) "worker_connections " connections_min ";"
+            } else {
+                print
+            }
+            next
+        }
+        in_events && /^[[:space:]]*}/ {
+            if (!connections_seen) {
+                print "    worker_connections " connections_min ";"
+                connections_seen = 1
+            }
+            in_events = 0
+            print
+            next
+        }
+        { print }
+        END {
+            if (!nofile_seen || !events_seen || !connections_seen) exit 1
+        }
+    ' "$global_conf" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        die "Failed to ensure nginx worker file-descriptor limits in ${global_conf}"
+    fi
+
+    if ! cmp -s "$tmp_file" "$global_conf"; then
+        backup_if_exists "$global_conf"
+        cat "$tmp_file" > "$global_conf"
+        log "Raised nginx worker limits to safe minimums"
+    fi
+    rm -f "$tmp_file"
+}
+
+current_nginx_master_nofile_limit() {
+    local master_pid
+
+    [[ -r "$NGINX_PID_FILE" ]] || return 0
+    master_pid=$(cat "$NGINX_PID_FILE")
+    [[ "$master_pid" =~ ^[0-9]+$ && -r "/proc/${master_pid}/limits" ]] || return 0
+    awk '$1 == "Max" && $2 == "open" && $3 == "files" { print $4; exit }' "/proc/${master_pid}/limits"
+}
+
+ensure_nginx_service_limit() {
+    local running_nofile=""
+
+    running_nofile=$(current_nginx_master_nofile_limit)
+    if [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_SERVICE_NOFILE_MIN )); then
+        NGINX_SERVICE_RESTART_REQUIRED=1
+    fi
+
+    if has_systemd; then
+        local dropin_dir="$NGINX_SYSTEMD_DROPIN_DIR"
+        local dropin_file="${dropin_dir}/gateway-limits.conf"
+        local desired
+        local effective
+
+        systemctl daemon-reload >> "$LOG_FILE" 2>&1
+        effective=$(systemctl show nginx.service -p LimitNOFILE --value 2>/dev/null || true)
+        if [[ "$effective" != "infinity" ]] && \
+            { [[ ! "$effective" =~ ^[0-9]+$ ]] || (( effective < NGINX_SERVICE_NOFILE_MIN )); }; then
+            desired=$(mktemp /tmp/nginx-systemd-limits-XXXXXX)
+            cat > "$desired" <<EOF
+[Service]
+LimitNOFILE=${NGINX_SERVICE_NOFILE_MIN}
+EOF
+            mkdir -p "$dropin_dir"
+            if [[ ! -f "$dropin_file" ]] || ! cmp -s "$desired" "$dropin_file"; then
+                cat "$desired" > "$dropin_file"
+                chmod 0644 "$dropin_file"
+                log "Configured systemd nginx file-descriptor limit"
+            fi
+            rm -f "$desired"
+            NGINX_SERVICE_RESTART_REQUIRED=1
+            systemctl daemon-reload >> "$LOG_FILE" 2>&1
+        fi
+
+        effective=$(systemctl show nginx.service -p LimitNOFILE --value 2>/dev/null || true)
+        if [[ "$effective" =~ ^[0-9]+$ ]] && (( effective < NGINX_SERVICE_NOFILE_MIN )); then
+            NGINX_SERVICE_RESTART_REQUIRED=1
+        fi
+        return 0
+    fi
+
+    if has_openrc; then
+        local conf_dir="$NGINX_OPENRC_CONF_DIR"
+        local conf_file="${conf_dir}/nginx"
+        local marker="# Managed by Gateway: nginx file-descriptor limit"
+        local current=""
+
+        mkdir -p "$conf_dir"
+        touch "$conf_file"
+        current=$(grep -E '^[[:space:]]*rc_ulimit=.*-n[[:space:]]+[0-9]+' "$conf_file" | tail -n 1 | sed -E 's/.*-n[[:space:]]+([0-9]+).*/\1/' || true)
+        if [[ ! "$current" =~ ^[0-9]+$ ]] || (( current < NGINX_SERVICE_NOFILE_MIN )); then
+            if grep -Fq "$marker" "$conf_file"; then
+                sed -i "/^${marker}$/,+1c\\${marker}\nrc_ulimit=\"\${rc_ulimit:-} -n ${NGINX_SERVICE_NOFILE_MIN}\"" "$conf_file"
+            else
+                printf '\n%s\nrc_ulimit="${rc_ulimit:-} -n %s"\n' "$marker" "$NGINX_SERVICE_NOFILE_MIN" >> "$conf_file"
+            fi
+            NGINX_SERVICE_RESTART_REQUIRED=1
+            log "Configured OpenRC nginx file-descriptor limit"
+        fi
+        return 0
+    fi
+
+    warn "No supported service manager found; verify nginx has a nofile limit of at least ${NGINX_SERVICE_NOFILE_MIN}"
+}
+
+verify_nginx_fd_limits() {
+    local rendered
+    local worker_nofile
+    local worker_connections
+    local service_nofile=""
+    local master_pid=""
+    local process_nofile=""
+
+    rendered=$(nginx -T 2>&1) || die "Failed to inspect the effective nginx configuration"
+    worker_nofile=$(printf '%s\n' "$rendered" | awk '/^[[:space:]]*worker_rlimit_nofile[[:space:]]+[0-9]+[[:space:]]*;/ { value=$2; gsub(/;/, "", value); print value; exit }')
+    worker_connections=$(printf '%s\n' "$rendered" | awk '/^[[:space:]]*worker_connections[[:space:]]+[0-9]+[[:space:]]*;/ { value=$2; gsub(/;/, "", value); print value; exit }')
+
+    [[ "$worker_nofile" =~ ^[0-9]+$ ]] && (( worker_nofile >= NGINX_WORKER_NOFILE_MIN )) || \
+        die "Effective nginx worker_rlimit_nofile is below ${NGINX_WORKER_NOFILE_MIN}"
+    [[ "$worker_connections" =~ ^[0-9]+$ ]] && (( worker_connections >= NGINX_WORKER_CONNECTIONS_MIN )) || \
+        die "Effective nginx worker_connections is below ${NGINX_WORKER_CONNECTIONS_MIN}"
+
+    if has_systemd; then
+        service_nofile=$(systemctl show nginx.service -p LimitNOFILE --value 2>/dev/null || true)
+        if [[ "$service_nofile" != "infinity" ]]; then
+            [[ "$service_nofile" =~ ^[0-9]+$ ]] && (( service_nofile >= NGINX_SERVICE_NOFILE_MIN )) || \
+                die "Effective nginx systemd LimitNOFILE is below ${NGINX_SERVICE_NOFILE_MIN}"
+        fi
+    fi
+
+    if [[ -r "$NGINX_PID_FILE" ]]; then
+        master_pid=$(cat "$NGINX_PID_FILE")
+        if [[ "$master_pid" =~ ^[0-9]+$ && -r "/proc/${master_pid}/limits" ]]; then
+            process_nofile=$(awk '$1 == "Max" && $2 == "open" && $3 == "files" { print $4; exit }' "/proc/${master_pid}/limits")
+            if [[ "$process_nofile" != "unlimited" ]]; then
+                [[ "$process_nofile" =~ ^[0-9]+$ ]] && (( process_nofile >= NGINX_SERVICE_NOFILE_MIN )) || \
+                    die "Running nginx master process still has a nofile limit below ${NGINX_SERVICE_NOFILE_MIN}"
+            fi
+        fi
+    fi
+
+    ok "nginx file-descriptor limits verified"
+}
+
 configure_nginx_managed() {
     log "Configuring nginx in managed mode..."
     backup_if_exists "/etc/nginx/nginx.conf"
@@ -883,10 +1088,11 @@ configure_nginx_managed() {
 
     cat > /etc/nginx/nginx.conf << 'EOF'
 worker_processes auto;
+worker_rlimit_nofile 65535;
 pid /run/nginx.pid;
 
 events {
-    worker_connections 1024;
+    worker_connections 8192;
 }
 
 http {
@@ -987,17 +1193,31 @@ configure_nginx() {
         configure_nginx_integrated
     fi
 
+    ensure_nginx_worker_limits
+    ensure_nginx_service_limit
+
     if nginx -t >> "$LOG_FILE" 2>&1; then
         if has_systemd; then
-            systemctl reload nginx >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || true
+            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]]; then
+                systemctl restart nginx >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
+            else
+                systemctl reload nginx >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \
+                    die "Failed to reload nginx"
+            fi
         elif has_openrc; then
-            rc-service nginx reload >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || true
+            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]]; then
+                rc-service nginx restart >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
+            else
+                rc-service nginx reload >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \
+                    die "Failed to reload nginx"
+            fi
         else
-            nginx -s reload >> "$LOG_FILE" 2>&1 || true
+            nginx -s reload >> "$LOG_FILE" 2>&1 || die "Failed to reload nginx"
         fi
+        verify_nginx_fd_limits
         ok "nginx configuration updated (${NGINX_MODE} mode)"
     else
-        warn "nginx config test failed after configuration changes — check $LOG_FILE"
+        die "nginx config test failed after configuration changes — check $LOG_FILE"
     fi
 }
 

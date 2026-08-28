@@ -90,6 +90,10 @@ export function DockerNetworks({
   const [createNodeId, setCreateNodeId] = useState<string>("");
   const openCreate = useCallback(() => {
     setCreateNodeId(selectedNodeId || "");
+    setCreateName("");
+    setCreateDriver("bridge");
+    setCreateSubnet("");
+    setCreateGateway("");
     setCreateOpen(true);
   }, [selectedNodeId]);
   useEffect(() => {
@@ -284,10 +288,6 @@ export function DockerNetworks({
 
   const closeCreate = () => {
     setCreateOpen(false);
-    setCreateName("");
-    setCreateDriver("bridge");
-    setCreateSubnet("");
-    setCreateGateway("");
   };
 
   const selectedNode = dockerNodes.find((n) => n.id === selectedNodeId);

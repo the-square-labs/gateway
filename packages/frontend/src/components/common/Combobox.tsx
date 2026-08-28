@@ -115,6 +115,12 @@ export function Combobox({
               setShowAllOptions(showAllOptionsOnFocus);
               setOpen(true);
             }}
+            onClick={() => {
+              if (open || disabled) return;
+              setQuery(freeText ? value : "");
+              setShowAllOptions(showAllOptionsOnFocus);
+              setOpen(true);
+            }}
             onChange={(event) => {
               const nextValue = event.target.value;
               setQuery(nextValue);

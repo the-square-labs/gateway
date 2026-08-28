@@ -47,6 +47,7 @@ import {
   requireActiveUser,
 } from '@/modules/auth/auth.middleware.js';
 import { authRoutes } from '@/modules/auth/auth.routes.js';
+import { AVATAR_UPLOAD_BODY_MAX_BYTES } from '@/modules/auth/avatar-storage.service.js';
 import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
@@ -94,7 +95,13 @@ import { folderRoutes } from '@/modules/proxy/folder.routes.js';
 import { nginxTemplateRoutes } from '@/modules/proxy/nginx-template.routes.js';
 import { proxyRoutes } from '@/modules/proxy/proxy.routes.js';
 import { resourceSearchRoutes } from '@/modules/resource-search/resource-search.routes.js';
-import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
+import { environmentSettingsRoutes } from '@/modules/settings/environment-settings.routes.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
+import {
+  FILE_UPLOAD_DEFAULT_BYTES,
+  fileUploadBodyLimitBytes,
+  GeneralSettingsService,
+} from '@/modules/settings/general-settings.service.js';
 import { setupApiDisabledMiddleware, setupRoutes } from '@/modules/setup/setup.routes.js';
 import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { sslRoutes } from '@/modules/ssl/ssl.routes.js';
@@ -167,22 +174,24 @@ function requestBodyLimitDynamic(resolveMaxSize: () => Promise<number>): Middlew
   };
 }
 
-function requestBodyLimitExcept(maxSize: number, except: (path: string) => boolean): MiddlewareHandler<AppEnv> {
-  const limit = requestBodyLimit(maxSize);
+function requestBodyLimitDynamicExcept(
+  resolveMaxSize: () => Promise<number> | number,
+  except: (path: string) => boolean
+): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (except(c.req.path)) {
       await next();
       return;
     }
-    await limit(c, next);
+    return requestBodyLimit(await resolveMaxSize())(c, next);
   };
 }
 
-async function getFileUploadMaxBodyBytes(fallback: number): Promise<number> {
+async function getFileUploadMaxBodyBytes(): Promise<number> {
   try {
     return await container.resolve(GeneralSettingsService).getFileUploadMaxBodyBytes();
   } catch {
-    return fallback;
+    return fileUploadBodyLimitBytes(FILE_UPLOAD_DEFAULT_BYTES);
   }
 }
 
@@ -388,11 +397,10 @@ export interface GatewayAppRuntime {
 
 export function createApp(): GatewayAppRuntime {
   const app = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
-  const env = getEnv();
 
   // WebSocket support for AI assistant
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app: app as any });
-  wss.options.maxPayload = env.INFERENCE_BODY_MAX_BYTES;
+  wss.options.maxPayload = 256 * 1024 * 1024;
 
   // Global middleware
   app.use('*', requestId());
@@ -509,55 +517,71 @@ export function createApp(): GatewayAppRuntime {
     await next();
   });
 
-  app.use('/api/oauth/token', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
-  app.use('/api/oauth/revoke', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
-  app.use('/api/inference/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
+  const environmentSettings = getEnvironmentSettingsSnapshot;
+  app.use(
+    '/api/oauth/token',
+    requestBodyLimitDynamic(async () => environmentSettings().requestLimits.oauthBodyMaxBytes)
+  );
+  app.use(
+    '/api/oauth/revoke',
+    requestBodyLimitDynamic(async () => environmentSettings().requestLimits.oauthBodyMaxBytes)
+  );
+  app.use(
+    '/api/inference/v1/*',
+    requestBodyLimitDynamic(async () => environmentSettings().requestLimits.inferenceHttpBodyMaxBytes)
+  );
   app.use('/api/inference', inferenceFeatureGuard());
   app.use('/api/inference/*', inferenceFeatureGuard());
-  app.use('/api/logging/ingest', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
-  app.use('/api/logging/ingest/batch', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
+  app.use(
+    '/api/logging/ingest',
+    requestBodyLimitDynamic(async () => environmentSettings().loggingIngest.maxBodyBytes)
+  );
+  app.use(
+    '/api/logging/ingest/batch',
+    requestBodyLimitDynamic(async () => environmentSettings().loggingIngest.maxBodyBytes)
+  );
   app.use(
     '/api/docker/nodes/:nodeId/containers/:containerId/files/write',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/docker/nodes/:nodeId/containers/:containerId/files/create',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/docker/nodes/:nodeId/containers/:containerId/files/uploads/:uploadId/chunks',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/docker/nodes/:nodeId/volumes/:name/files/write',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/docker/nodes/:nodeId/volumes/:name/files/create',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/docker/nodes/:nodeId/volumes/:name/files/uploads/:uploadId/chunks',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/nodes/:id/files/write',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/nodes/:id/files/create',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use(
     '/api/nodes/:id/files/uploads/:uploadId/chunks',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes(env.DOCKER_FILE_WRITE_MAX_BODY_BYTES))
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use('/api/pages-deploy/uploads/:id/chunks', requestBodyLimit(PAGE_UPLOAD_CHUNK_MAX_BYTES));
   app.use('/api/setup/*', setupApiDisabledMiddleware);
   app.use(
     '/api/*',
-    requestBodyLimitExcept(
-      env.REQUEST_BODY_MAX_BYTES,
+    requestBodyLimitDynamicExcept(
+      () => environmentSettings().requestLimits.requestBodyMaxBytes,
       (path) =>
         DOCKER_FILE_BODY_LIMIT_PATH.test(path) ||
         NODE_FILE_BODY_LIMIT_PATH.test(path) ||
@@ -577,7 +601,14 @@ export function createApp(): GatewayAppRuntime {
   });
   // Public local-auth and passkey endpoints parse JSON before their route
   // schemas run, so give them the same conservative bound as OAuth bodies.
-  app.use('/auth/*', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
+  app.use('/auth/me/avatar', requestBodyLimit(AVATAR_UPLOAD_BODY_MAX_BYTES));
+  app.use(
+    '/auth/*',
+    requestBodyLimitDynamicExcept(
+      async () => environmentSettings().requestLimits.oauthBodyMaxBytes,
+      (path) => path === '/auth/me/avatar'
+    )
+  );
   app.use('/pki/*', rateLimitMiddleware);
   app.use('/auth/*', authRateLimitMiddleware);
   app.use('/auth/login', authLoginRateLimitMiddleware);
@@ -684,7 +715,7 @@ export function createApp(): GatewayAppRuntime {
       const auth = c.get('inferenceAuth');
       return createCoreResponsesWSHandlers(
         user && auth ? { user, tokenId: auth.tokenId, tokenPrefix: auth.tokenPrefix, rawToken: auth.rawToken } : null,
-        env.INFERENCE_BODY_MAX_BYTES
+        () => getEnvironmentSettingsSnapshot().requestLimits.inferenceWebSocketMaxPayloadBytes
       );
     })
   );
@@ -726,6 +757,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/system', systemRoutes);
   app.route('/api/ui', uiBootstrapRoutes);
   app.route('/api/housekeeping', housekeepingRoutes);
+  app.route('/api/settings/environment', environmentSettingsRoutes);
   app.route('/api/integrations', integrationsRoutes);
   app.route('/api/notifications', notificationRoutes);
   app.route('/api/logging', loggingRoutes);

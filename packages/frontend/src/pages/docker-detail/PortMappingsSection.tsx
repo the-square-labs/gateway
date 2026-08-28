@@ -1,6 +1,7 @@
 import { Minus, Plus } from "lucide-react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -69,7 +70,12 @@ export function PortMappingsSection({
 
   return (
     <PanelShell
-      title="Port Mappings"
+      title={
+        <SettingsHelpTitle
+          label="Port Mappings"
+          help="Publishes a container port on the Docker node. Host Port is reached by clients; Container Port is where the application listens inside the container."
+        />
+      }
       description="Requires container recreation"
       dirty={portsChanged}
       actions={

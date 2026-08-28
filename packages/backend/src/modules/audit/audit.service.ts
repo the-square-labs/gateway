@@ -80,6 +80,7 @@ interface AuditLogRow {
   createdAt: Date;
   userName: string | null;
   userEmail: string | null;
+  userAvatarUrl: string | null;
 }
 
 @injectable()
@@ -247,6 +248,7 @@ export class AuditService {
           createdAt: auditLog.createdAt,
           userName: users.name,
           userEmail: users.email,
+          userAvatarUrl: users.avatarUrl,
         })
         .from(auditLog)
         .leftJoin(users, eq(auditLog.userId, users.id))

@@ -1,5 +1,4 @@
 import { type ClickHouseClient, createClient } from '@clickhouse/client';
-import type { Env } from '@/config/env.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
@@ -57,18 +56,6 @@ export class LoggingClickHouseService {
   private maintenanceClient: ClickHouseClient | null = null;
   private database = 'gateway_logs';
   private table = 'logs';
-
-  constructor(env: Env) {
-    this.applyConfig({
-      mode: env.CLICKHOUSE_URL ? 'external' : 'disabled',
-      url: env.CLICKHOUSE_URL,
-      username: env.CLICKHOUSE_USERNAME,
-      password: env.CLICKHOUSE_PASSWORD,
-      database: env.CLICKHOUSE_DATABASE,
-      table: env.CLICKHOUSE_LOGS_TABLE,
-      requestTimeoutMs: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
-    });
-  }
 
   async configure(config: LoggingRuntimeSettings): Promise<void> {
     await Promise.all([this.client?.close(), this.maintenanceClient?.close()]);

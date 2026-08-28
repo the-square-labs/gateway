@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -224,7 +225,12 @@ export function WebhookSection(props: WebhookSectionProps) {
       <>
         {allowWebhook && (
           <PanelShell
-            title="Webhook"
+            title={
+              <SettingsHelpTitle
+                label="Webhook"
+                help={`Creates a secret URL that CI can call to trigger a managed ${isDeployment ? "deployment" : "container"} image update. Treat the URL as a credential.`}
+              />
+            }
             description={`Trigger ${isDeployment ? "deployment" : "container"} updates from CI pipelines`}
           >
             <div className="space-y-3 px-4 py-3" aria-busy="true" aria-label="Loading webhook">
@@ -235,7 +241,12 @@ export function WebhookSection(props: WebhookSectionProps) {
         )}
         {allowCleanup && (
           <PanelShell
-            title="Image Cleanup"
+            title={
+              <SettingsHelpTitle
+                label="Image Cleanup"
+                help="Removes older image versions after successful managed updates while retaining the configured number of previous versions for rollback and inspection."
+              />
+            }
             description="Remove old image versions after manual or webhook updates"
           >
             <div className="flex items-center justify-between gap-4 px-4 py-3" aria-busy="true">
@@ -263,7 +274,12 @@ export function WebhookSection(props: WebhookSectionProps) {
     <>
       {allowWebhook && (
         <PanelShell
-          title="Webhook"
+          title={
+            <SettingsHelpTitle
+              label="Webhook"
+              help={`Creates a secret URL that CI can call to trigger a managed ${isDeployment ? "deployment" : "container"} image update. Treat the URL as a credential.`}
+            />
+          }
           description={`Trigger ${isDeployment ? "deployment" : "container"} updates from CI pipelines`}
           headerBorder={webhookEnabled}
           actions={
@@ -300,7 +316,12 @@ export function WebhookSection(props: WebhookSectionProps) {
 
       {allowCleanup && (
         <PanelShell
-          title="Image Cleanup"
+          title={
+            <SettingsHelpTitle
+              label="Image Cleanup"
+              help="Removes older image versions after successful managed updates while retaining the configured number of previous versions for rollback and inspection."
+            />
+          }
           description="Remove old image versions after manual or webhook updates"
           actions={
             <Switch

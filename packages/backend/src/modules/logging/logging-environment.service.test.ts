@@ -42,7 +42,7 @@ function createService(storage = { deleteEnvironmentLogs: vi.fn().mockResolvedVa
     db,
     auditService,
     storage,
-    service: new LoggingEnvironmentService(db as any, auditService as any, { requests: 100, events: 100 }, storage),
+    service: new LoggingEnvironmentService(db as any, auditService as any, storage),
     setUpdate,
     whereUpdate,
     whereDelete,

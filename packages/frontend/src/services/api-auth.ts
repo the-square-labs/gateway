@@ -38,6 +38,19 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       return preferences;
     }
 
+    async updateCurrentUserAvatar(avatar: Blob | null): Promise<User> {
+      if (!avatar) {
+        return this.request<User>("/auth/me/avatar", { method: "DELETE" });
+      }
+      const body = new FormData();
+      body.append(
+        "avatar",
+        avatar,
+        `avatar.${avatar.type === "image/png" ? "png" : avatar.type === "image/jpeg" ? "jpg" : "webp"}`
+      );
+      return this.request<User>("/auth/me/avatar", { method: "PUT", body });
+    }
+
     async listCurrentUserSessions(): Promise<BrowserSession[]> {
       return this.request<BrowserSession[]>("/auth/me/sessions");
     }

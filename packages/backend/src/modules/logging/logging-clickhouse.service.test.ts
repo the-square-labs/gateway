@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Env } from '@/config/env.js';
 
 const clickhouse = vi.hoisted(() => ({ createClient: vi.fn() }));
 
@@ -22,14 +21,16 @@ describe('LoggingClickHouseService maintenance requests', () => {
     const maintenance = client();
     clickhouse.createClient.mockReturnValueOnce(primary).mockReturnValueOnce(maintenance);
 
-    const service = new LoggingClickHouseService({
-      CLICKHOUSE_URL: 'http://clickhouse:8123',
-      CLICKHOUSE_USERNAME: 'default',
-      CLICKHOUSE_PASSWORD: '',
-      CLICKHOUSE_DATABASE: 'gateway_logs',
-      CLICKHOUSE_LOGS_TABLE: 'logs',
-      CLICKHOUSE_REQUEST_TIMEOUT_MS: 5_000,
-    } as Env);
+    const service = new LoggingClickHouseService();
+    await service.configure({
+      mode: 'external',
+      url: 'http://clickhouse:8123',
+      username: 'default',
+      password: '',
+      database: 'gateway_logs',
+      table: 'logs',
+      requestTimeoutMs: 5_000,
+    });
 
     expect(clickhouse.createClient).toHaveBeenNthCalledWith(1, expect.objectContaining({ request_timeout: 5_000 }));
     expect(clickhouse.createClient).toHaveBeenNthCalledWith(2, expect.objectContaining({ request_timeout: 60_000 }));

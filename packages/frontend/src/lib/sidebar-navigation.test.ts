@@ -9,12 +9,15 @@ describe("sidebar navigation matching", () => {
     ["/docker/containers/node/container/settings", "/docker"],
     ["/nodes/node-a/overview", "/nodes"],
     ["/profile/authorizations", "/profile"],
+    ["/dashboard", "/"],
+    ["/dashboard/activity", "/"],
   ])("marks %s as a child of %s", (pathname, href) => {
     expect(isSidebarNavigationActive(pathname, href)).toBe(true);
   });
 
   it("keeps Dashboard and sibling prefixes boundary-safe", () => {
     expect(isSidebarNavigationActive("/settings", "/")).toBe(false);
+    expect(isSidebarNavigationActive("/dashboard-old", "/")).toBe(false);
     expect(isSidebarNavigationActive("/nodes-old", "/nodes")).toBe(false);
   });
 });

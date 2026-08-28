@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Env } from '@/config/env.js';
 import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
 import { LoggingFeatureService } from './logging-feature.service.js';
 import { CLICKHOUSE_INTERNAL_LOG_CAP_BYTES, LoggingMaintenanceService } from './logging-maintenance.service.js';
 
 function feature() {
-  return new LoggingFeatureService({ CLICKHOUSE_URL: 'http://clickhouse:8123' } as Env);
+  return new LoggingFeatureService({ isConfigured: () => true });
 }
 
 function storage(overrides: Record<string, unknown> = {}) {

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
-import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { RedisClient } from '@/services/cache.service.js';
 import type { AppEnv } from '@/types.js';
 import { inferenceErrorResponse } from './inference-error.js';
@@ -39,26 +39,26 @@ interface InferenceLimitAuth {
 export async function consumeInferenceRateLimit(
   auth: InferenceLimitAuth
 ): Promise<{ limit: number; remaining: number }> {
-  const env = getEnv();
+  const settings = getEnvironmentSettingsSnapshot();
   const redis = container.resolve<RedisClient>(TOKENS.RedisClient);
   const now = Date.now();
-  const windowStart = now - env.RATE_LIMIT_WINDOW_MS;
+  const windowStart = now - settings.rateLimits.windowMs;
   const key = `ratelimit:inference:${auth.tokenId}`;
   try {
     const pipeline = redis.pipeline();
     pipeline.zremrangebyscore(key, 0, windowStart);
     pipeline.zcard(key);
     pipeline.zadd(key, now, `${now}-${randomUUID()}`);
-    pipeline.expire(key, Math.ceil(env.RATE_LIMIT_WINDOW_MS / 1000));
+    pipeline.expire(key, Math.ceil(settings.rateLimits.windowMs / 1000));
     const results = await withRateLimitRedisTimeout(pipeline.exec());
     const count = Array.isArray(results) && Array.isArray(results[1]) ? results[1][1] : null;
     if (typeof count !== 'number') throw new Error('Invalid Redis rate limit response');
-    if (count >= env.RATE_LIMIT_INFERENCE_MAX_REQUESTS) {
+    if (count >= settings.rateLimits.inferenceMaxRequests) {
       throw new InferenceProtocolError(429, 'rate_limit_exceeded', 'Inference request rate limit exceeded');
     }
     return {
-      limit: env.RATE_LIMIT_INFERENCE_MAX_REQUESTS,
-      remaining: Math.max(0, env.RATE_LIMIT_INFERENCE_MAX_REQUESTS - count - 1),
+      limit: settings.rateLimits.inferenceMaxRequests,
+      remaining: Math.max(0, settings.rateLimits.inferenceMaxRequests - count - 1),
     };
   } catch (error) {
     if (error instanceof InferenceProtocolError) throw error;
@@ -69,10 +69,10 @@ export async function consumeInferenceRateLimit(
 
 export async function acquireInferenceConcurrency(auth: InferenceLimitAuth): Promise<() => Promise<void>> {
   const redis = container.resolve<RedisClient>(TOKENS.RedisClient);
-  const env = getEnv();
+  const settings = getEnvironmentSettingsSnapshot();
   const key = `concurrency:inference:${auth.tokenId}`;
   const leaseId = randomUUID();
-  const leaseMs = env.INFERENCE_CONCURRENCY_LEASE_SECONDS * 1000;
+  const leaseMs = settings.requestLimits.inferenceConcurrencyLeaseSeconds * 1000;
   try {
     const acquired = await redis.eval(
       ACQUIRE_CONCURRENCY_SCRIPT,
@@ -81,7 +81,7 @@ export async function acquireInferenceConcurrency(auth: InferenceLimitAuth): Pro
       Date.now(),
       Date.now() + leaseMs,
       leaseId,
-      env.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN
+      settings.requestLimits.inferenceMaxConcurrentRequestsPerToken
     );
     if (Number(acquired) !== 1) {
       throw new InferenceProtocolError(429, 'rate_limit_exceeded', 'Too many concurrent inference requests');

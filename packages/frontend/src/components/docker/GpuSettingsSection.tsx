@@ -2,6 +2,7 @@ import { Minus, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -145,7 +146,12 @@ export function GpuSettingsSection({
   return (
     <>
       <PanelShell
-        title="GPU"
+        title={
+          <SettingsHelpTitle
+            label="GPU"
+            help="Assigns specific host GPU devices to the container. The container image must include compatible drivers and libraries, and changes require recreation."
+          />
+        }
         description="Requires container recreation"
         dirty={dirty}
         actions={
@@ -290,7 +296,6 @@ export function GpuSettingsSection({
                 if (!gpuCandidateId) return;
                 onDeviceIdsChange(normalizeGpuDeviceIds([...deviceIds, gpuCandidateId]));
                 setGpuAddOpen(false);
-                setGpuCandidateId("");
               }}
             >
               <Plus className="h-3.5 w-3.5" />

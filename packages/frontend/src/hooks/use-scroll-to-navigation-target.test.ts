@@ -1,28 +1,25 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { InitialPageReadyContext } from "@/components/common/PageTransition";
 import { useScrollToNavigationTarget } from "./use-scroll-to-navigation-target";
 
 describe("useScrollToNavigationTarget", () => {
   afterEach(() => {
+    vi.useRealTimers();
+    document.documentElement.style.removeProperty("--color-border");
     document.body.innerHTML = "";
+    window.history.replaceState(null, "", "/");
     vi.restoreAllMocks();
   });
 
-  it("waits for both the target and the surrounding page content before scrolling", () => {
+  it("waits for rendered content, then starts scrolling after the short post-render delay", () => {
+    vi.useFakeTimers();
     const scrollIntoView = vi.fn();
     const target = document.createElement("div");
     target.id = "housekeeping";
     target.scrollIntoView = scrollIntoView;
     document.body.append(target);
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 1;
-    });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-    let pageReady = false;
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(
         MemoryRouter,
@@ -34,7 +31,7 @@ describe("useScrollToNavigationTarget", () => {
             },
           ],
         },
-        createElement(InitialPageReadyContext.Provider, { value: pageReady }, children)
+        children
       );
 
     const { rerender } = renderHook(
@@ -47,15 +44,87 @@ describe("useScrollToNavigationTarget", () => {
 
     expect(scrollIntoView).not.toHaveBeenCalled();
     rerender({ ready: true });
+    act(() => vi.advanceTimersByTime(119));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  });
+
+  it("scrolls as soon as a late-mounted target appears", async () => {
+    const scrollIntoView = vi.fn();
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        MemoryRouter,
+        {
+          initialEntries: [
+            {
+              pathname: "/settings/features",
+              state: { scrollTarget: "housekeeping" },
+            },
+          ],
+        },
+        children
+      );
+
+    renderHook(() => useScrollToNavigationTarget("housekeeping", true, { delayMs: 0 }), {
+      wrapper,
+    });
     expect(scrollIntoView).not.toHaveBeenCalled();
 
-    pageReady = true;
-    rerender({ ready: true });
+    const target = document.createElement("div");
+    target.id = "housekeeping";
+    target.scrollIntoView = scrollIntoView;
+    act(() => document.body.append(target));
 
-    expect(scrollIntoView).toHaveBeenCalledWith({
-      behavior: "smooth",
-      block: "start",
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+  });
+
+  it("scrolls the route container directly even while the page is not visible", () => {
+    const scrollTo = vi.fn();
+    const scroller = document.createElement("div");
+    scroller.className = "overflow-y-auto";
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 600 },
+      scrollHeight: { value: 2400 },
+      scrollTop: { value: 100, writable: true },
     });
+    scroller.scrollTo = scrollTo;
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600, height: 600 }) as DOMRect;
+    const target = document.createElement("div");
+    target.id = "pages";
+    target.getBoundingClientRect = () => ({ top: 900, bottom: 1100, height: 200 }) as DOMRect;
+    target.scrollIntoView = vi.fn();
+    scroller.append(target);
+    document.body.append(scroller);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element) =>
+        ({
+          overflowY: element === scroller ? "auto" : "visible",
+          borderTopColor: "",
+          borderTopStyle: "none",
+          borderTopWidth: "0px",
+        }) as CSSStyleDeclaration
+    );
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        MemoryRouter,
+        {
+          initialEntries: [
+            {
+              pathname: "/settings/features",
+              state: { scrollTarget: "pages" },
+            },
+          ],
+        },
+        children
+      );
+
+    renderHook(() => useScrollToNavigationTarget("pages", true, { block: "center", delayMs: 0 }), {
+      wrapper,
+    });
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 800, behavior: "smooth" });
+    expect(target.scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("reacts on an already mounted settings tab without changing the URL", () => {
@@ -64,17 +133,12 @@ describe("useScrollToNavigationTarget", () => {
     target.id = "system-updates";
     target.scrollIntoView = scrollIntoView;
     document.body.append(target);
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 1;
-    });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(MemoryRouter, { initialEntries: ["/settings/general"] }, children);
 
     const { result } = renderHook(
       () => {
-        useScrollToNavigationTarget("system-updates");
+        useScrollToNavigationTarget("system-updates", true, { delayMs: 0 });
         return { location: useLocation(), navigate: useNavigate() };
       },
       { wrapper }
@@ -89,6 +153,36 @@ describe("useScrollToNavigationTarget", () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(result.current.location.pathname).toBe("/settings/general");
     expect(result.current.location.hash).toBe("");
+    expect(result.current.location.state).toEqual({});
+  });
+
+  it("removes the consumed target from browser history so reload cannot replay it", () => {
+    const target = document.createElement("div");
+    target.id = "pages";
+    target.scrollIntoView = vi.fn();
+    document.body.append(target);
+    window.history.replaceState(
+      { idx: 1, usr: { scrollTarget: "pages", returnTo: "/pages" } },
+      "",
+      "/settings/features"
+    );
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        MemoryRouter,
+        {
+          initialEntries: [
+            {
+              pathname: "/settings/features",
+              state: { scrollTarget: "pages", returnTo: "/pages" },
+            },
+          ],
+        },
+        children
+      );
+
+    renderHook(() => useScrollToNavigationTarget("pages", true, { delayMs: 0 }), { wrapper });
+
+    expect(window.history.state).toEqual({ idx: 1, usr: { returnTo: "/pages" } });
   });
 
   it("scrolls on every repeated transition from another page", () => {
@@ -97,17 +191,12 @@ describe("useScrollToNavigationTarget", () => {
     target.id = "system-updates";
     target.scrollIntoView = scrollIntoView;
     document.body.append(target);
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 1;
-    });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(MemoryRouter, { initialEntries: ["/docker"] }, children);
 
     const { result } = renderHook(
       () => {
-        useScrollToNavigationTarget("system-updates");
+        useScrollToNavigationTarget("system-updates", true, { delayMs: 0 });
         return { location: useLocation(), navigate: useNavigate() };
       },
       { wrapper }
@@ -131,7 +220,6 @@ describe("useScrollToNavigationTarget", () => {
     target.id = "housekeeping";
     target.scrollIntoView = scrollIntoView;
     document.body.append(target);
-    vi.spyOn(window, "requestAnimationFrame");
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(
         MemoryRouter,
@@ -146,9 +234,86 @@ describe("useScrollToNavigationTarget", () => {
         children
       );
 
-    renderHook(() => useScrollToNavigationTarget("housekeeping"), { wrapper });
+    renderHook(() => useScrollToNavigationTarget("housekeeping", true, { delayMs: 0 }), {
+      wrapper,
+    });
 
-    expect(window.requestAnimationFrame).not.toHaveBeenCalled();
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("can center and temporarily highlight a navigation target", () => {
+    vi.useFakeTimers();
+    const scrollIntoView = vi.fn();
+    const target = document.createElement("div");
+    target.id = "pages";
+    target.scrollIntoView = scrollIntoView;
+    target.style.border = "1px solid rgb(234, 179, 8)";
+    document.body.append(target);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        MemoryRouter,
+        {
+          initialEntries: [
+            {
+              pathname: "/settings/features",
+              state: { scrollTarget: "pages" },
+            },
+          ],
+        },
+        children
+      );
+
+    const { result } = renderHook(
+      () =>
+        useScrollToNavigationTarget("pages", true, {
+          block: "center",
+          delayMs: 0,
+          highlightDurationMs: 1500,
+        }),
+      { wrapper }
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(result.current).toBe(true);
+    expect(target.style.getPropertyValue("--navigation-target-ripple-color")).toBe(
+      "rgb(234, 179, 8)"
+    );
+    act(() => vi.advanceTimersByTime(1500));
+    expect(result.current).toBe(false);
+    expect(target.style.getPropertyValue("--navigation-target-ripple-color")).toBe("");
+  });
+
+  it("uses white ripple color for the standard gray border", () => {
+    document.documentElement.style.setProperty("--color-border", "#2a2a2a");
+    const target = document.createElement("div");
+    target.id = "pages";
+    target.scrollIntoView = vi.fn();
+    target.style.border = "1px solid rgb(42, 42, 42)";
+    document.body.append(target);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        MemoryRouter,
+        {
+          initialEntries: [
+            {
+              pathname: "/settings/features",
+              state: { scrollTarget: "pages" },
+            },
+          ],
+        },
+        children
+      );
+
+    const { result } = renderHook(
+      () =>
+        useScrollToNavigationTarget("pages", true, {
+          delayMs: 0,
+          highlightDurationMs: 2000,
+        }),
+      { wrapper }
+    );
+
+    expect(result.current).toBe(true);
+    expect(target.style.getPropertyValue("--navigation-target-ripple-color")).toBe("#fff");
   });
 });

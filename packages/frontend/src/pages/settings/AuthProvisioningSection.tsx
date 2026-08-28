@@ -3,16 +3,18 @@ import {
   KeyRound,
   Loader2,
   Mail,
+  Network,
   Save,
   ShieldCheck,
   SlidersHorizontal,
   UserCog,
+  Webhook,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
@@ -1044,6 +1046,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow
             title="Public URL"
             description="Canonical browser-facing origin used for redirects and links. It is never inferred from the current browser."
+            help="This is the address users and external clients use to reach Gateway. A wrong value can break sign-in redirects, callback URLs, and links generated in emails."
           >
             <Input
               type="url"
@@ -1069,7 +1072,12 @@ export function AuthProvisioningSection({
           </SettingsControlRow>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Relay grant lifetime</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Relay grant lifetime"
+                  help="A relay grant authorizes an endpoint or connection for a limited time. New grants use this lifetime; existing grants keep their current expiry."
+                />
+              </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Lifetime of newly issued endpoint and connection grants, in hours (1–48)
               </p>
@@ -1091,7 +1099,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Internal HTTPS on port 3000</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Internal HTTPS on port 3000"
+                  help="Encrypts direct traffic to Gateway's internal web port with a certificate from the System CA. Changing it restarts the Gateway container."
+                />
+              </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Uses a dedicated certificate issued by the existing Gateway System CA. Changing it
                 restarts Gateway.
@@ -1106,7 +1119,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">File upload limit</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="File upload limit"
+                  help="Maximum size of one file accepted by Gateway file managers. This is separate from the HTTP and inference request limits on the Environment tab."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Maximum file size accepted by Gateway file managers, in MB
               </p>
@@ -1129,7 +1147,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">File open limit</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="File open limit"
+                  help="Maximum file size Gateway will load or copy through the browser interface. Larger files may still exist on the node but cannot be opened in-browser."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Maximum file size opened or copied in the browser, in MB
               </p>
@@ -1152,7 +1175,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">gRPC public target</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="gRPC public target"
+                  help="Host and port written into public node-enrollment commands. Nodes must be able to reach this address to establish their control connection."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Public host or IP used in public node enrollment commands
               </p>
@@ -1172,7 +1200,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">gRPC local IP</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="gRPC local IP"
+                  help="Optional private address used in enrollment commands for nodes on the local network. When empty, Gateway uses the public target above."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Optional private IP override for local node enrollment commands
               </p>
@@ -1193,7 +1226,10 @@ export function AuthProvisioningSection({
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
               <p className="flex items-center gap-2 text-sm font-medium">
-                <span>PKI</span>
+                <SettingsHelpTitle
+                  label="PKI"
+                  help="PKI enables Gateway-managed certificate authorities, certificates, revocation, and reusable issuance templates."
+                />
                 {!pkiEntitled && <LicensePlanBadge plan="enterprise" />}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1213,7 +1249,10 @@ export function AuthProvisioningSection({
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
               <p className="flex items-center gap-2 text-sm font-medium">
-                <span>SIEM audit export</span>
+                <SettingsHelpTitle
+                  label="SIEM audit export"
+                  help="Sends privacy-reduced Gateway audit events to configured security monitoring collectors for centralized investigation and retention."
+                />
                 {!siemEntitled && <LicensePlanBadge plan="enterprise" />}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1232,7 +1271,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Inference</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Inference"
+                  help="Enables Gateway's model proxy, provider connections, API tokens, model catalog, usage accounting, and per-user limits."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Enable the inference proxy, user tokens, usage, and provider administration
               </p>
@@ -1279,6 +1323,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow
             title="Issuer URL"
             description="OpenID Connect issuer used for discovery."
+            help="The issuer is the identity provider's canonical URL. Gateway reads its discovery document from this address to find authorization, token, and key endpoints."
           >
             <Input
               type="url"
@@ -1293,6 +1338,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow
             title="Client ID"
             description="OAuth client identifier registered at the provider."
+            help="Public identifier assigned to the Gateway application by the identity provider. It is not a secret."
           >
             <Input
               value={oidcDraft.clientId}
@@ -1310,6 +1356,7 @@ export function AuthProvisioningSection({
                 ? `Stored secret ends in ${settings.oidc.clientSecretLast4}`
                 : "Required for the initial configuration."
             }
+            help="Secret assigned to the Gateway application by the identity provider. Leave the field empty when editing to keep the encrypted value already stored."
           >
             <Input
               type="password"
@@ -1326,6 +1373,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow
             title="Redirect URI"
             description="Must exactly match the callback registered at the provider."
+            help="After sign-in, the identity provider sends the browser back to this URL. Scheme, hostname, port, and path must exactly match the provider configuration."
           >
             <Input
               type="url"
@@ -1340,6 +1388,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow
             title="Scopes"
             description="Space-separated scopes; openid is required."
+            help="Scopes request identity claims from the provider. openid enables OIDC; profile and email commonly provide the user's name and email address."
           >
             <Input
               value={oidcDraft.scopes}
@@ -1373,6 +1422,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow
             title="Storage mode"
             description="Disabling managed local storage stops its container but preserves the Docker volume."
+            help="Disabled stores no structured logs. Managed local runs Gateway's ClickHouse container. External sends logs to a ClickHouse instance you operate."
           >
             <Select
               value={loggingDraft.mode}
@@ -1407,6 +1457,7 @@ export function AuthProvisioningSection({
               <SettingsControlRow
                 title="ClickHouse URL"
                 description="HTTP(S) endpoint for the external ClickHouse instance."
+                help="Gateway uses ClickHouse's HTTP interface at this address to insert and query structured logs. Include the correct scheme and port."
               >
                 <Input
                   type="url"
@@ -1479,6 +1530,7 @@ export function AuthProvisioningSection({
               <SettingsControlRow
                 title="Request timeout"
                 description="ClickHouse request timeout in milliseconds."
+                help="Maximum time Gateway waits for one ClickHouse operation before treating it as failed. Increasing it tolerates slow storage but delays failure recovery."
               >
                 <Input
                   type="number"
@@ -1508,7 +1560,12 @@ export function AuthProvisioningSection({
         <div className="divide-y divide-border">
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Auto-create users on OIDC sign-in</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Auto-create users on OIDC sign-in"
+                  help="Creates a Gateway account the first time a valid identity-provider user signs in. Disable it when every allowed user must be provisioned manually first."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 If disabled, only pre-created users can sign in through OIDC
               </p>
@@ -1521,7 +1578,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Require verified OIDC email</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Require verified OIDC email"
+                  help="Accepts the provider's email claim only when it explicitly marks the address as verified. This prevents unverified addresses from being trusted as account identity."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Require email_verified=true for future auto-created users and pre-created user
                 claims
@@ -1535,7 +1597,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">Default group for new OIDC users</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Default group for new OIDC users"
+                  help="Newly auto-created users receive this group's permissions. Changing it does not move users who were already created."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Applied to newly auto-created users after the first real administrator signs in
               </p>
@@ -1630,6 +1697,7 @@ export function AuthProvisioningSection({
         <SettingsControlRow
           title="Existing-session MFA grace period"
           description="Days existing local browser sessions may continue after group MFA is enabled. New sign-ins require MFA immediately. 0 applies immediately."
+          help="This affects sessions that were already signed in when MFA became required. It does not delay MFA for new sign-ins, and zero revokes the grace period immediately."
         >
           <div className="flex w-full items-center gap-2 sm:w-40">
             <NumericInput
@@ -1736,6 +1804,7 @@ export function AuthProvisioningSection({
               <SettingsControlRow
                 title="Transport security"
                 description="Use STARTTLS for explicit TLS or TLS for implicit TLS."
+                help="STARTTLS begins as a normal SMTP connection and upgrades to encryption, commonly on port 587. TLS is encrypted from the first byte, commonly on port 465."
               >
                 <Select
                   value={smtpDraft.tlsMode}
@@ -1899,11 +1968,17 @@ export function AuthProvisioningSection({
         hidden={section !== "all" && section !== "features"}
         title="OAuth and MCP access"
         description="Remote client compatibility and tool access"
+        icon={<ShieldCheck className="h-4 w-4" />}
       >
         <div className="divide-y divide-border">
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Enable MCP server</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Enable MCP server"
+                  help="Exposes Gateway tools through the remote Model Context Protocol endpoint. MCP clients complete OAuth authorization and connect through /api/mcp; users still need the required account scopes."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Allow MCP-enabled user accounts to access the remote MCP endpoint with OAuth
               </p>
@@ -1916,7 +1991,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Extended MCP compatibility</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Extended MCP compatibility"
+                  help="Uses Gateway's broader compatibility behavior for clients that discover tools incrementally. Disable only for a client that cannot handle the expanded tool catalog."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Keep this enabled unless your harness loads every tool into its context at once and
                 exhausts it. Turning it off can prevent that harness from using some Gateway tools.
@@ -1931,7 +2011,12 @@ export function AuthProvisioningSection({
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">OAuth extended callback compatibility</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="OAuth extended callback compatibility"
+                  help="Allows unverified OAuth clients to use external HTTPS callback addresses instead of loopback-only callbacks. This broadens compatibility and the callback trust boundary."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Allow unverified OAuth clients to register external HTTPS callback URLs. Leave
                 disabled for loopback-only CLI and MCP clients.
@@ -1950,11 +2035,17 @@ export function AuthProvisioningSection({
         hidden={section !== "all" && section !== "advanced"}
         title="Network trust"
         description="Client address detection for rate limits and audit records"
+        icon={<Network className="h-4 w-4" />}
       >
         <div className="divide-y divide-border">
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">Client IP source</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Client IP source"
+                  help="Selects which network address Gateway treats as the real client. This affects rate limiting and audit records, so it must match your reverse-proxy topology."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Controls which address Gateway uses for rate limits and audit records
               </p>
@@ -2014,7 +2105,12 @@ export function AuthProvisioningSection({
 
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">Trusted proxy CIDRs</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Trusted proxy CIDRs"
+                  help="Only connections from these network ranges may supply forwarded client-IP headers. CIDR is a network range notation such as 10.0.0.0/8."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Comma-separated proxy ranges allowed to provide forwarded client headers. Empty
                 trusts all peers in reverse proxy mode.
@@ -2047,7 +2143,12 @@ export function AuthProvisioningSection({
 
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Trust Cloudflare headers without edge IP check</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Trust Cloudflare headers without edge IP check"
+                  help="Accepts Cloudflare client-IP headers without verifying that the direct peer is a known Cloudflare edge. Enable only when the origin cannot be reached outside Cloudflare."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Enable only when direct origin access is blocked outside Cloudflare
               </p>
@@ -2067,11 +2168,17 @@ export function AuthProvisioningSection({
         hidden={section !== "all" && section !== "advanced"}
         title="Outbound webhook policy"
         description="Private-network delivery rules for notification webhooks"
+        icon={<Webhook className="h-4 w-4" />}
       >
         <div className="divide-y divide-border">
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
-              <p className="text-sm font-medium">Allow private network webhooks</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Allow private network webhooks"
+                  help="Permits notification delivery to selected private network ranges. Localhost, link-local, multicast, metadata, and Gateway-local destinations remain blocked."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Notification webhooks may call the private CIDRs below. Local Gateway addresses,
                 localhost, link-local, multicast, and metadata endpoints stay blocked.
@@ -2088,7 +2195,12 @@ export function AuthProvisioningSection({
 
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
-              <p className="text-sm font-medium">Allowed private webhook CIDRs</p>
+              <p className="text-sm font-medium">
+                <SettingsHelpTitle
+                  label="Allowed private webhook CIDRs"
+                  help="Private network ranges that notification webhooks may call. Keep the list as narrow as possible because these destinations are not publicly reachable."
+                />
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Comma-separated private ranges for notification webhook delivery. Defaults allow
                 common enterprise networks.

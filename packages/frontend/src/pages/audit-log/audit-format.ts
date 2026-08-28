@@ -2,6 +2,24 @@ import type { AuditLogEntry } from "@/types";
 
 export type AuditExportFormat = "csv" | "tsv" | "txt" | "html";
 
+export interface AuditFilterUserOption {
+  id: string;
+  label: string;
+}
+
+export function mergeAuditFilterValues(current: string[], incoming: string[]): string[] {
+  return [...new Set([...current, ...incoming].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+export function mergeAuditFilterUsers(
+  current: AuditFilterUserOption[],
+  incoming: AuditFilterUserOption[]
+): AuditFilterUserOption[] {
+  const merged = new Map(current.map((option) => [option.id, option]));
+  for (const option of incoming) merged.set(option.id, option);
+  return [...merged.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
 export function formatAuditToken(value: string): string {
   return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }

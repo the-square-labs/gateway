@@ -1,4 +1,4 @@
-import { ExternalLink, Globe, Save } from "lucide-react";
+import { ExternalLink, Globe, Save, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -26,6 +26,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { requireLicenseFeature } from "@/stores/license-paywall";
@@ -90,7 +91,10 @@ export function PagesSettingsSection() {
     invalidateUIBootstrap();
     void load();
   });
-  useScrollToNavigationTarget("pages", !loading);
+  const navigationHighlighted = useScrollToNavigationTarget("pages", !loading, {
+    block: "center",
+    highlightDurationMs: 2200,
+  });
 
   const selectedDomain = options.domains.find((domain) => domain.id === domainId) ?? null;
   const selectedCertificate =
@@ -185,7 +189,10 @@ export function PagesSettingsSection() {
   };
 
   return (
-    <div id="pages" className="space-y-4 scroll-mt-6">
+    <div
+      id="pages"
+      className={cn("space-y-4 scroll-mt-6", navigationHighlighted && "navigation-target-ripple")}
+    >
       {loading && !profile ? (
         <PanelShell
           icon={<Globe className="h-4 w-4" />}
@@ -193,9 +200,6 @@ export function PagesSettingsSection() {
             <span className="inline-flex items-center gap-2">
               <span>Pages</span>
               {!entitled && <LicensePlanBadge plan="personal" label="Personal+" />}
-              <Badge size="inline" variant="warning">
-                BETA
-              </Badge>
             </span>
           }
           description="Loading wildcard deployment preview settings…"
@@ -208,9 +212,6 @@ export function PagesSettingsSection() {
               <span className="inline-flex items-center gap-2">
                 <span>Pages</span>
                 {!entitled && <LicensePlanBadge plan="personal" label="Personal+" />}
-                <Badge size="inline" variant="warning">
-                  BETA
-                </Badge>
               </span>
             }
             description="Each immutable Deployment gets one hostname label under this wildcard Domain."
@@ -239,6 +240,7 @@ export function PagesSettingsSection() {
             </SettingsControlRow>
             <SettingsControlRow
               title="Base wildcard Domain"
+              help="Pages uses this wildcard domain to create a unique hostname for every immutable deployment. The selected Domain must already be registered and managed by Gateway."
               description={
                 <span>
                   Choose a registered wildcard Domain.{" "}
@@ -274,6 +276,7 @@ export function PagesSettingsSection() {
             <SettingsControlRow
               title="Wildcard certificate"
               description="The certificate must cover the exact *.base.domain name."
+              help="This certificate secures every generated Pages hostname below the wildcard domain. A certificate for only the bare domain does not cover its deployment subdomains."
             >
               <Select
                 value={certificateId || undefined}
@@ -301,6 +304,7 @@ export function PagesSettingsSection() {
             <SettingsControlRow
               title="Hostname label template"
               description="Exactly one DNS label is editable; dots are forbidden and {hash} is required."
+              help="{hash} is the immutable deployment hash; {project} is optional. The rendered result must be one lowercase DNS label of at most 63 characters."
             >
               <div className="flex w-full flex-col gap-2">
                 <Input
@@ -320,6 +324,7 @@ export function PagesSettingsSection() {
               <SettingsControlRow
                 title="Isolation override acknowledged"
                 description={`Acknowledged ${profile.overrideAcknowledgedAt ? new Date(profile.overrideAcknowledgedAt).toLocaleString() : "previously"}. Re-evaluate it after changing the Domain.`}
+                help="This acknowledgement allows Pages and Gateway to share a registrable parent domain even though deployed JavaScript may then affect parent-domain cookies."
               >
                 <Badge variant="warning">Cookie isolation warning accepted</Badge>
               </SettingsControlRow>
@@ -330,6 +335,7 @@ export function PagesSettingsSection() {
             <PanelShell
               title="Separate registrable domain recommended"
               description="Deployed JavaScript can affect parent-domain cookies when Gateway and Pages share a registrable domain. Saving requires explicit acknowledgement."
+              icon={<TriangleAlert className="h-4 w-4" />}
               actions={<Badge variant="warning">Review required</Badge>}
             />
           )}
@@ -345,6 +351,7 @@ export function PagesSettingsSection() {
               <PanelShell
                 title="Why confirmation is required"
                 description="Pages should use a separate registrable domain. Deployed JavaScript may affect Gateway cookies on the shared parent domain."
+                icon={<TriangleAlert className="h-4 w-4" />}
               />
               <DialogFooter>
                 <Button variant="outline" onClick={() => setWarningOpen(false)}>

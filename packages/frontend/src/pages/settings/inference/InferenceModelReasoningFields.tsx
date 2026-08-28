@@ -14,7 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { motion } from "framer-motion";
-import { GripVertical, Minus, Plus } from "lucide-react";
+import { GripVertical, Minus, Plus, Route } from "lucide-react";
 import { useRef } from "react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -106,6 +106,7 @@ export function ModelReasoningFields({
     <PanelShell
       title="Client-to-provider mapping"
       description={`Map client efforts to values accepted by ${selected?.providerLabel ?? "the provider"}`}
+      icon={<Route className="h-4 w-4" />}
       actions={
         <Button
           variant="ghost"
@@ -123,6 +124,7 @@ export function ModelReasoningFields({
       <SettingsControlRow
         title="Default reasoning effort"
         description="Used when the client does not provide an effort"
+        help="The effort Gateway sends upstream when a client omits it. The selected value must be exposed by the client-to-provider mapping above."
       >
         <Select value={defaultEffort} onValueChange={setDefaultEffort} disabled={!exposed.length}>
           <SelectTrigger aria-label="Default reasoning effort" className="w-full">

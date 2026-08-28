@@ -14,6 +14,30 @@ function capNewestLogs(logs: string[]): string[] {
   return logs.length > MAX_LOG_LINES ? logs.slice(-MAX_LOG_LINES) : logs;
 }
 
+export function mergeReconnectLogLines(existing: string[], incoming: string[]): string[] {
+  if (existing.length === 0) return capNewestLogs(incoming);
+  if (incoming.length === 0) return existing;
+
+  const maxOverlap = Math.min(existing.length, incoming.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    const existingStart = existing.length - overlap;
+    for (let incomingStart = 0; incomingStart + overlap <= incoming.length; incomingStart += 1) {
+      let matches = true;
+      for (let index = 0; index < overlap; index += 1) {
+        if (existing[existingStart + index] !== incoming[incomingStart + index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return capNewestLogs([...existing, ...incoming.slice(incomingStart + overlap)]);
+      }
+    }
+  }
+
+  return capNewestLogs([...existing, ...incoming]);
+}
+
 function isTerminalLogError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
@@ -176,93 +200,103 @@ export function LogsTab(props: LogsTabProps) {
     [processLine]
   );
 
-  const connectWs = useCallback(() => {
-    // Don't connect if popout is handling logs
-    if (isPopoutRef.current) return;
-
-    // Close any existing connection
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    setIsConnecting(true);
-    setWsConnected(false);
-    setLines([]);
-    setHistoryPrependVersion(0);
-    setHasMore(true);
-    setLoadingMore(false);
-    terminalErrorRef.current = false;
-
-    const ws = sourceRef.current.createWebSocket(200);
-    wsRef.current = ws;
-
-    ws.onmessage = (evt) => {
-      if (!mountedRef.current) return;
-      try {
-        const msg = JSON.parse(evt.data);
-        if (msg.type === "initial") {
-          setLines(capNewestLogs(processLogs(msg.lines ?? [])));
-          setHasMore(msg.hasMore ?? false);
-          setIsConnecting(false);
-        } else if (msg.type === "history") {
-          const historyLines = processLogs(msg.lines ?? []);
-          setLines((prev) => {
-            const updated = [...historyLines, ...prev];
-            return capNewestLogs(updated);
-          });
-          if (historyLines.length > 0) {
-            setHistoryPrependVersion((version) => version + 1);
-          }
-          setHasMore(msg.hasMore ?? false);
-          setLoadingMore(false);
-        } else if (msg.type === "new") {
-          setLines((prev) => {
-            const updated = [...prev, ...processLogs(msg.lines ?? [])];
-            return capNewestLogs(updated);
-          });
-        } else if (msg.type === "connected") {
-          setWsConnected(true);
-        } else if (msg.type === "logs_ended") {
-          // A container restart ends Docker's follow stream while the browser
-          // socket can otherwise remain open forever. Closing it activates the
-          // normal reconnect path and fetches the new runtime's initial logs.
-          ws.close(1012, "Log stream ended");
-        } else if (msg.type === "error" || msg.type === "auth_error") {
-          const message = msg.message || "Log stream error";
-          terminalErrorRef.current = msg.type === "auth_error" || isTerminalLogError(message);
-          toast.error(message);
-          setWsConnected(false);
-          setIsConnecting(false);
-          if (terminalErrorRef.current) {
-            setHasMore(false);
-          }
-        }
-      } catch {
-        // ignore non-JSON messages
-      }
-    };
-
-    ws.onclose = () => {
-      if (wsRef.current !== ws) return;
-      wsRef.current = null;
-      if (!mountedRef.current) return;
-      setWsConnected(false);
-      if (terminalErrorRef.current) return;
-      // Don't auto-reconnect if popout is active — the popout-closes effect handles it
+  const connectWs = useCallback(
+    (resetForSourceChange = false) => {
+      // Don't connect if popout is handling logs
       if (isPopoutRef.current) return;
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current && !isPopoutRef.current) connectWs();
-      }, 3000);
-    };
 
-    ws.onerror = () => {
-      if (!mountedRef.current) return;
+      // Close any existing connection
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
+      setIsConnecting(true);
       setWsConnected(false);
-      setIsConnecting(false);
-    };
-  }, [processLogs]);
+      if (resetForSourceChange) {
+        setLines([]);
+        setHistoryPrependVersion(0);
+        setHasMore(true);
+      }
+      setLoadingMore(false);
+      terminalErrorRef.current = false;
+
+      const ws = sourceRef.current.createWebSocket(200);
+      wsRef.current = ws;
+
+      ws.onmessage = (evt) => {
+        if (!mountedRef.current) return;
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === "initial") {
+            const initialLines = processLogs(msg.lines ?? []);
+            setLines((current) =>
+              resetForSourceChange
+                ? capNewestLogs(initialLines)
+                : mergeReconnectLogLines(current, initialLines)
+            );
+            setHasMore(msg.hasMore ?? false);
+            setIsConnecting(false);
+          } else if (msg.type === "history") {
+            const historyLines = processLogs(msg.lines ?? []);
+            setLines((prev) => {
+              const updated = [...historyLines, ...prev];
+              return capNewestLogs(updated);
+            });
+            if (historyLines.length > 0) {
+              setHistoryPrependVersion((version) => version + 1);
+            }
+            setHasMore(msg.hasMore ?? false);
+            setLoadingMore(false);
+          } else if (msg.type === "new") {
+            setLines((prev) => {
+              const updated = [...prev, ...processLogs(msg.lines ?? [])];
+              return capNewestLogs(updated);
+            });
+          } else if (msg.type === "connected") {
+            setWsConnected(true);
+          } else if (msg.type === "logs_ended") {
+            // A container restart ends Docker's follow stream while the browser
+            // socket can otherwise remain open forever. Closing it activates the
+            // normal reconnect path and fetches the new runtime's initial logs.
+            ws.close(1012, "Log stream ended");
+          } else if (msg.type === "error" || msg.type === "auth_error") {
+            const message = msg.message || "Log stream error";
+            terminalErrorRef.current = msg.type === "auth_error" || isTerminalLogError(message);
+            toast.error(message);
+            setWsConnected(false);
+            setIsConnecting(false);
+            if (terminalErrorRef.current) {
+              setHasMore(false);
+            }
+          }
+        } catch {
+          // ignore non-JSON messages
+        }
+      };
+
+      ws.onclose = () => {
+        if (wsRef.current !== ws) return;
+        wsRef.current = null;
+        if (!mountedRef.current) return;
+        setWsConnected(false);
+        if (terminalErrorRef.current) return;
+        // Don't auto-reconnect if popout is active — the popout-closes effect handles it
+        if (isPopoutRef.current) return;
+        if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = setTimeout(() => {
+          if (mountedRef.current && !isPopoutRef.current) connectWs();
+        }, 3000);
+      };
+
+      ws.onerror = () => {
+        if (!mountedRef.current) return;
+        setWsConnected(false);
+        setIsConnecting(false);
+      };
+    },
+    [processLogs]
+  );
 
   const isRunning = source.state === "running";
 
@@ -287,7 +321,7 @@ export function LogsTab(props: LogsTabProps) {
     const connectTimeout = setTimeout(() => {
       if (mountedRef.current && !isPopoutRef.current && sourceRef.current.channelId === channelId) {
         if (isRunning) {
-          connectWs();
+          connectWs(false);
         } else {
           fetchStaticLogs();
         }
@@ -323,7 +357,7 @@ export function LogsTab(props: LogsTabProps) {
       wasPopout.current = true;
     } else if (wasPopout.current) {
       wasPopout.current = false;
-      connectWs();
+      connectWs(true);
     }
   }, [isPopout, connectWs]);
 

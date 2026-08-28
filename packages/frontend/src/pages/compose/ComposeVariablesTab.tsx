@@ -1,14 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { createClientUuid } from "@/lib/client-id";
 import { api } from "@/services/api";
 import type { DockerComposeProject } from "@/types";
@@ -29,14 +21,6 @@ export function ComposeVariablesTab({
     () => Object.keys(activeRevision?.normalizedModel.services ?? {}),
     [activeRevision]
   );
-  const [selectedServiceName, setSelectedServiceName] = useState(serviceNames[0] ?? "");
-  useEffect(() => {
-    if (!serviceNames.includes(selectedServiceName)) setSelectedServiceName(serviceNames[0] ?? "");
-  }, [selectedServiceName, serviceNames]);
-  const selectedService = activeRevision?.normalizedModel.services[selectedServiceName];
-  const targetResourceId = selectedServiceName
-    ? `${project.id}:${encodeURIComponent(selectedServiceName)}`
-    : project.id;
   const recreatesRunningProject = project.status === "running" || project.status === "degraded";
   const secretApi = useMemo(
     () => ({
@@ -73,32 +57,17 @@ export function ComposeVariablesTab({
   return (
     <div className="space-y-4 pb-6">
       <ManagedDatabaseLinksSection
-        key={targetResourceId}
         nodeId={project.nodeId}
         targetType="compose_service"
-        targetResourceId={targetResourceId}
-        containerName={`${project.name} / ${selectedServiceName}`}
-        disabled={!selectedServiceName || !canManage}
-        existingVariableNames={Object.keys(selectedService?.environment ?? {})}
-        targetSelector={
-          <SettingsControlRow
-            title="Compose service"
-            description="Database variables and the private connector network are attached to this service"
-          >
-            <Select value={selectedServiceName} onValueChange={setSelectedServiceName}>
-              <SelectTrigger aria-label="Compose service">
-                <SelectValue placeholder="Select service" />
-              </SelectTrigger>
-              <SelectContent>
-                {serviceNames.map((serviceName) => (
-                  <SelectItem key={serviceName} value={serviceName}>
-                    {serviceName}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingsControlRow>
-        }
+        targetResourceId={project.id}
+        containerName={project.name}
+        disabled={serviceNames.length === 0 || !canManage}
+        composeServices={serviceNames.map((name) => ({
+          name,
+          existingVariableNames: Object.keys(
+            activeRevision?.normalizedModel.services[name]?.environment ?? {}
+          ),
+        }))}
       />
 
       {activeRevision ? (

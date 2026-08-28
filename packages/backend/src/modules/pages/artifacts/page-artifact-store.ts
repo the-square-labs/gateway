@@ -2,10 +2,21 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { mkdir, open, rename, rm, stat, truncate } from 'node:fs/promises';
+import os from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { AppError } from '@/middleware/error-handler.js';
 
 const OPAQUE_ID = /^[0-9a-f-]{8,64}$/i;
+const PRODUCTION_STORAGE_DIR = '/var/lib/gateway/pages';
+
+export function resolvePageStorageDir(
+  configuredDirectory: string,
+  nodeEnvironment: string | undefined,
+  temporaryDirectory = os.tmpdir()
+): string {
+  if (nodeEnvironment === 'production' || configuredDirectory !== PRODUCTION_STORAGE_DIR) return configuredDirectory;
+  return join(temporaryDirectory, 'gateway-pages');
+}
 
 function assertOpaqueId(value: string, label: string): void {
   if (!OPAQUE_ID.test(value)) throw new AppError(400, 'PAGES_INVALID_STORAGE_ID', `Invalid ${label}`);

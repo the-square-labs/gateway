@@ -1,5 +1,5 @@
 import { startRegistration } from "@simplewebauthn/browser";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,9 +16,6 @@ vi.mock("@/pages/inference/InferenceUsagePanels", () => ({
 }));
 vi.mock("@/pages/inference/InferenceTokensSection", () => ({
   InferenceTokensSection: () => <section>Inference token authorizations</section>,
-}));
-vi.mock("@/pages/settings/inference/InferenceEndpointSettingsPanel", () => ({
-  InferenceEndpointSettingsPanel: () => <section>Inference endpoints panel</section>,
 }));
 vi.mock("@/pages/settings/ApiTokensSection", () => ({
   ApiTokensSection: () => <section>Gateway API authorizations</section>,
@@ -72,24 +69,71 @@ describe("Profile", () => {
 
     expect(screen.getByRole("heading", { name: "Profile", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Alex Gateway")).toBeInTheDocument();
-    expect(screen.getByText("Inference endpoints panel")).toBeInTheDocument();
     expect(screen.getByText("Inference usage panel")).toBeInTheDocument();
     expect(screen.queryByText("Gateway API authorizations")).not.toBeInTheDocument();
 
     const profile = screen.getByText("Alex Gateway");
-    const endpoints = screen.getByText("Inference endpoints panel");
     const usage = screen.getByText("Inference usage panel");
     const theme = screen.getByText("Theme");
-    expect(
-      profile.compareDocumentPosition(endpoints) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      endpoints.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    expect(profile.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(usage.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("hides inference endpoints when the user cannot use inference", () => {
+  it("explains security-sensitive preferences with shared help tooltips", () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["ai:workspace:use", "admin:details:certificates"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderProfile("/profile");
+
+    expect(screen.getByRole("button", { name: "About AI approval mode" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "About Show system certificates" })
+    ).toBeInTheDocument();
+  });
+
+  it("lets the current user upload a custom avatar", async () => {
+    const updatedUser = makeUser({
+      name: "Alex Gateway",
+      avatarUrl: "/auth/avatars/11111111-1111-4111-8111-111111111111.webp",
+      scopes: ["ai:workspace:use"],
+    });
+    const updateAvatar = vi.spyOn(api, "updateCurrentUserAvatar").mockResolvedValue(updatedUser);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
+      callback(new Blob(["webp"], { type: "image/webp" }));
+    });
+    renderProfile("/profile");
+
+    expect(screen.getByRole("button", { name: "Change avatar" })).toBeInTheDocument();
+    expect(screen.queryByText("Change avatar")).not.toBeInTheDocument();
+    const file = new File(["png"], "avatar.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText("Choose avatar image"), file);
+
+    expect(await screen.findByRole("dialog", { name: "Adjust avatar" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Zoom" })).toBeInTheDocument();
+    const preview = screen.getByAltText("Avatar crop preview");
+    Object.defineProperties(preview, {
+      naturalWidth: { configurable: true, value: 800 },
+      naturalHeight: { configurable: true, value: 600 },
+    });
+    fireEvent.load(preview);
+    await userEvent.click(screen.getByRole("button", { name: "Upload" }));
+
+    await waitFor(() => expect(updateAvatar).toHaveBeenCalledWith(expect.any(Blob)));
+    expect(useAuthStore.getState().user?.avatarUrl).toBe(updatedUser.avatarUrl);
+  });
+
+  it("hides inference usage when the user cannot use inference", () => {
     useAuthStore.setState({
       user: makeUser({ scopes: [] }),
       isAuthenticated: true,
@@ -98,7 +142,7 @@ describe("Profile", () => {
 
     renderProfile("/profile");
 
-    expect(screen.queryByText("Inference endpoints panel")).not.toBeInTheDocument();
+    expect(screen.queryByText("Inference usage panel")).not.toBeInTheDocument();
   });
 
   it("keeps inference preferences but hides AI Workspace controls without Workspace access", () => {
@@ -110,7 +154,6 @@ describe("Profile", () => {
 
     renderProfile("/profile");
 
-    expect(screen.getByText("Inference endpoints panel")).toBeInTheDocument();
     expect(screen.getByText("Inference usage panel")).toBeInTheDocument();
     expect(screen.queryByText("AI approval mode")).not.toBeInTheDocument();
   });

@@ -297,7 +297,9 @@ function removeLegacyAppEnvironment(lines: string[]): string[] {
   if (!environment) return lines;
   return lines.filter((line, index) => {
     if (index <= environment.start || index >= environment.end) return true;
-    return !/^\s*(?:-\s*)?(?:OIDC_|CLICKHOUSE_|APP_URL\s*[:=]|SETUP_TOKEN\s*[:=])/.test(line);
+    return !/^\s*(?:-\s*)?(?:OIDC_|CLICKHOUSE_|RATE_LIMIT_|LOGGING_(?:INGEST|RATE_LIMIT|GLOBAL|TOKEN)_|REQUEST_BODY_MAX_BYTES\s*[:=]|OAUTH_BODY_MAX_BYTES\s*[:=]|DOCKER_FILE_WRITE_MAX_BODY_BYTES\s*[:=]|INFERENCE_(?:BODY_MAX_BYTES|MAX_CONCURRENT_REQUESTS_PER_TOKEN|CONCURRENCY_LEASE_SECONDS|CONTINUATION_MAX_BYTES|CONTINUATION_TTL_SECONDS)\s*[:=]|SESSION_EXPIRY\s*[:=]|DEFAULT_CRL_VALIDITY_HOURS\s*[:=]|DEFAULT_OCSP_VALIDITY_MINUTES\s*[:=]|EXPIRY_WARNING_DAYS\s*[:=]|EXPIRY_CRITICAL_DAYS\s*[:=]|ACME_EMAIL\s*[:=]|ACME_STAGING\s*[:=]|APP_URL\s*[:=]|SETUP_TOKEN\s*[:=])/.test(
+      line
+    );
   });
 }
 

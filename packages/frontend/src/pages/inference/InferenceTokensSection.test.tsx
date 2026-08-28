@@ -22,6 +22,9 @@ describe("InferenceTokensSection", () => {
     render(<InferenceTokensSection canManage={false} />);
     await waitFor(() => expect(api.listInferenceTokens).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: /create token/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Inference API Tokens").parentElement?.querySelector("svg")
+    ).not.toBeNull();
   });
 
   it("shows only active inference tokens", async () => {

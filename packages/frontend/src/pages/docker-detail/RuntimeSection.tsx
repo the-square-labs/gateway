@@ -1,6 +1,10 @@
 import { Save } from "lucide-react";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
+import {
+  SettingsControlRow,
+  SettingsHelpTitle,
+  SettingsInlineControl,
+} from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -80,7 +84,12 @@ export function RuntimeSection({
 
   return (
     <PanelShell
-      title="Runtime Settings"
+      title={
+        <SettingsHelpTitle
+          label="Runtime Settings"
+          help="Resource limits and restart behavior enforced by Docker. These values can be applied live to a running standalone container when supported."
+        />
+      }
       description={
         appliesLive ? "Applied instantly without restart" : "Saved with container configuration"
       }
@@ -97,7 +106,11 @@ export function RuntimeSection({
       }
       bodyClassName="divide-y divide-border"
     >
-      <SettingsControlRow title="Restart Policy" description="Container restart behavior">
+      <SettingsControlRow
+        title="Restart Policy"
+        description="Container restart behavior"
+        help="Controls whether Docker restarts the container after a crash, daemon restart, or manual stop. Max Retries applies only to On Failure."
+      >
         <div className="grid w-full gap-2 sm:grid-cols-2">
           <SettingsInlineControl label="Policy">
             <Select value={restartPolicy} onValueChange={setRestartPolicy} disabled={!canEdit}>
@@ -124,7 +137,11 @@ export function RuntimeSection({
           </SettingsInlineControl>
         </div>
       </SettingsControlRow>
-      <SettingsControlRow title="PID Limits" description="Maximum processes inside the container">
+      <SettingsControlRow
+        title="PID Limits"
+        description="Maximum processes inside the container"
+        help="Caps the total number of processes and threads the container may create. Leave empty for no explicit Docker PID limit."
+      >
         <SettingsInlineControl label="PIDs Limit">
           <Input
             type="number"
@@ -139,6 +156,7 @@ export function RuntimeSection({
       <SettingsControlRow
         title="Memory Limit"
         description={`Max: ${maxMemoryBytes && maxMemoryBytes > 0 ? formatBytes(maxMemoryBytes) : "detecting"}`}
+        help="Hard memory ceiling for the container. Reaching it can trigger an out-of-memory termination, so leave headroom for short usage spikes."
       >
         <SettingsInlineControl label="Memory (MB)">
           <Input
@@ -156,6 +174,7 @@ export function RuntimeSection({
         <SettingsControlRow
           title="Memory Reservation"
           description="Soft memory reservation from the Compose service configuration"
+          help="A soft scheduling target inherited from Compose. Docker may allow the container to exceed it until the hard Memory Limit is reached."
         >
           <SettingsInlineControl label="Reservation (MB)">
             <Input value={memoryReservationMB} placeholder="Not set" disabled />
@@ -165,6 +184,7 @@ export function RuntimeSection({
       <SettingsControlRow
         title="Swap Limit"
         description={`Max: ${maxSwapBytes !== null && maxSwapBytes >= 0 ? formatBytes(maxSwapBytes) : "detecting"}`}
+        help="Controls memory plus swap available to the container. Zero disables swap and -1 allows unlimited swap within host policy."
       >
         <SettingsInlineControl label="Swap (MB)">
           <Input
@@ -181,6 +201,7 @@ export function RuntimeSection({
       <SettingsControlRow
         title="CPU Limit and Shares"
         description={maxCpuCount && maxCpuCount > 0 ? `Max: ${maxCpuCount} cores` : undefined}
+        help="CPU Limit caps usable CPU cores. CPU Shares only set relative priority during contention; 1024 is Docker's default weight."
       >
         <div className="grid w-full gap-2 sm:grid-cols-2">
           <SettingsInlineControl label="CPU Limit">

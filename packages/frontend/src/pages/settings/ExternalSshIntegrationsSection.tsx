@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { cn, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -37,6 +38,10 @@ export function ExternalSshIntegrationsSection() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<ExternalSshConnector | null>(null);
+  const displayedEditingConnector = useRetainedDialogValue(
+    editingConnector,
+    editingConnector !== null
+  );
   const [editName, setEditName] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -193,8 +198,12 @@ export function ExternalSshIntegrationsSection() {
               Rename this connector. Connection and credential details stay unchanged.
             </DialogDescription>
           </DialogHeader>
-          {editingConnector ? (
-            <PanelShell title="Connector" description="Display name used across Gateway.">
+          {displayedEditingConnector ? (
+            <PanelShell
+              title="Connector"
+              description="Display name used across Gateway."
+              icon={<KeyRound className="h-4 w-4" />}
+            >
               <SettingsControlRow title="Connector name">
                 <Input
                   value={editName}
@@ -204,7 +213,8 @@ export function ExternalSshIntegrationsSection() {
               </SettingsControlRow>
               <SettingsControlRow title="Connection">
                 <span className="text-sm text-muted-foreground">
-                  {editingConnector.username}@{editingConnector.host}:{editingConnector.port}
+                  {displayedEditingConnector.username}@{displayedEditingConnector.host}:
+                  {displayedEditingConnector.port}
                 </span>
               </SettingsControlRow>
             </PanelShell>

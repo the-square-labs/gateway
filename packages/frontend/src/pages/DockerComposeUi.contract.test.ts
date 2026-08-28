@@ -64,9 +64,36 @@ describe("Compose UI contract", () => {
 
   it("creates Compose projects from repositories with the shared repository controls", () => {
     const editor = source("pages/compose/ComposeProjectEditor.tsx");
+    const repositoryFields = source("pages/docker-deploy/RepositorySourceFields.tsx");
     const api = source("services/api-docker.ts");
     expect(editor).toContain('from "../docker-deploy/RepositorySourceFields"');
-    expect(editor).toContain('<TabsTrigger value="repository">Repository</TabsTrigger>');
+    expect(editor).toContain('value="repository" className="h-full px-3 py-0"');
+    expect(editor).toContain('import { PanelShell } from "@/components/common/PanelShell"');
+    expect(editor).toContain('import { AnimatedHeight } from "@/components/common/AnimatedHeight"');
+    expect(editor).toContain('title="Compose YAML"');
+    expect(editor).toContain('bodyClassName="h-[min(48dvh,440px)] min-h-72 overflow-hidden"');
+    expect(editor).toContain("<AnimatePresence initial={false}>");
+    expect(editor).not.toContain('mode="wait"');
+    expect(editor).toContain(
+      'className="grid gap-4 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]"'
+    );
+    const controls = editor.slice(
+      editor.indexOf("md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]"),
+      editor.indexOf("<AnimatedHeight>")
+    );
+    expect(controls.indexOf("Source type")).toBeLessThan(controls.indexOf("Project name"));
+    expect(editor).toContain('className="grid h-9 w-full grid-cols-2"');
+    expect(editor).not.toContain("Compose runtime is unavailable on this node.");
+    expect(editor).not.toContain('className="mt-3 text-xs text-destructive"');
+    expect(editor).toContain("nodes.filter((node) => nodeSupportsCompose(node))");
+    expect(editor).toContain(
+      'throw new Error(sourceAdmission.message || "Build capacity is unavailable")'
+    );
+    expect(editor).not.toContain("sourceAdmission?.ready === false))");
+    const list = source("pages/DockerComposeProjects.tsx");
+    expect(list.match(/clipOverflow className="sm:max-w-2xl"/g)).toHaveLength(2);
+    expect(editor).not.toContain("<TabsContent");
+    expect(repositoryFields.match(/border border-border bg-muted\/30 p-3/g)).toHaveLength(2);
     expect(editor).toContain("createDockerComposeSourceProject");
     expect(editor).toContain("composeFilePath={sourceComposeFilePath}");
     expect(editor).toContain('"Create and build"');
@@ -162,6 +189,23 @@ describe("Compose UI contract", () => {
     ).toHaveLength(1);
     expect(detail).not.toContain("End of activity history");
     expect(api).toContain("input: { cursor?: string; limit?: number } = {}");
+  });
+
+  it("keeps Compose overview headers and external project identity consistent", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    const projects = source("pages/DockerComposeProjects.tsx");
+    const externalBadge = source("components/docker/ExternalComposeBadge.tsx");
+    expect(detail).toContain('title="Project"');
+    expect(detail).toContain('icon={<Boxes className="h-4 w-4" />}');
+    expect(detail).toContain('title="Runtime"');
+    expect(detail).toContain('icon={<Activity className="h-4 w-4" />}');
+    expect(detail).toContain('title="Recent activity"');
+    expect(detail).toContain('icon={<History className="h-4 w-4" />}');
+    expect(projects).toContain("<ExternalComposeBadge />");
+    expect(projects).toContain("useRetainedDialogValue(");
+    expect(projects).toContain("retainedAdoptEditorProject &&");
+    expect(externalBadge).toContain('size="inline"');
+    expect(externalBadge).toContain("Discovered on the Docker node but not managed by Gateway");
   });
 
   it("hides Compose folders and their containers from the general Containers tree", () => {

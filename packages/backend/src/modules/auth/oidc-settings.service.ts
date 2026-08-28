@@ -1,5 +1,4 @@
 import { eq } from 'drizzle-orm';
-import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
 import type { CryptoService } from '@/services/crypto.service.js';
@@ -33,6 +32,14 @@ export interface OidcRuntimeConfig {
   clientSecret: string;
   redirectUri: string;
   scopes: string;
+}
+
+export interface LegacyOidcEnvironment {
+  OIDC_ISSUER?: string;
+  OIDC_CLIENT_ID?: string;
+  OIDC_CLIENT_SECRET?: string;
+  OIDC_REDIRECT_URI?: string;
+  OIDC_SCOPES: string;
 }
 
 export interface OidcPublicConfig {
@@ -94,7 +101,7 @@ export class OidcSettingsService {
     return this.getPublicConfig();
   }
 
-  async importLegacyEnv(env: Env): Promise<boolean> {
+  async importLegacyEnv(env: LegacyOidcEnvironment): Promise<boolean> {
     if (await this.getStoredConfig()) return false;
     if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.OIDC_REDIRECT_URI) return false;
     await this.saveConfig({

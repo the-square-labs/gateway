@@ -73,6 +73,7 @@ import {
   reorderAdminUserFoldersRoute,
   reorderAdminUsersRoute,
   resetAdminUserMfaRoute,
+  resetUserAvatarRoute,
   restoreAdminUserRoute,
   revokeAdminUserSessionRoute,
   revokeAllAdminUserSessionsRoute,
@@ -606,6 +607,28 @@ adminRoutes.openapi({ ...updateUserNameRoute, middleware: requireScope('admin:us
     resourceType: 'user',
     resourceId: updated.id,
     details: { targetUserId: updated.id, previousName: targetUser.name, name: updated.name },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json(updated);
+});
+
+adminRoutes.openapi({ ...resetUserAvatarRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const userId = c.req.param('id')!;
+  const targetUser = await authService.getUserById(userId);
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+  const updated = await authService.updateUserAvatar(userId, null);
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.avatar_reset',
+    resourceType: 'user',
+    resourceId: updated.id,
+    details: { targetUserId: updated.id, hadAvatar: Boolean(targetUser.avatarUrl) },
     userAgent: c.req.header('user-agent'),
   });
   return c.json(updated);

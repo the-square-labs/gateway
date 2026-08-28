@@ -52,6 +52,11 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
     onReconnect: load,
   });
 
+  const openCreate = () => {
+    setName("");
+    setCreateOpen(true);
+  };
+
   const create = async () => {
     if (!name.trim()) return;
     setCreating(true);
@@ -60,7 +65,6 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
       setSecret(result.token);
       setSecretOpen(true);
       setCreateOpen(false);
-      setName("");
       await load();
       toast.success("Inference token created");
     } catch (error) {
@@ -91,9 +95,10 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
       <PanelShell
         title="Inference API Tokens"
         description="Use the Gateway inference base URL with a dedicated gwi_ credential."
+        icon={<KeyRound className="h-4 w-4" />}
         actions={
           canManage ? (
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button onClick={openCreate}>
               <Plus className="h-4 w-4" />
               Create Token
             </Button>
@@ -109,9 +114,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
                 ? "No inference API tokens created yet."
                 : "No inference API tokens available."
             }
-            {...(canManage
-              ? { actionLabel: "Create one", onAction: () => setCreateOpen(true) }
-              : {})}
+            {...(canManage ? { actionLabel: "Create one", onAction: openCreate } : {})}
             embedded
           />
         ) : (

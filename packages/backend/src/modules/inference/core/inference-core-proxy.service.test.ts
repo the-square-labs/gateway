@@ -421,6 +421,73 @@ describe('inference core proxy', () => {
     );
   });
 
+  it('converts Codex JSON image edits to the multipart core contract', async () => {
+    const { service, fetchStub, coreAccounting } = createService();
+    const c = createContext(
+      JSON.stringify({
+        images: [{ image_url: 'data:image/png;base64,cG5n' }, { image_url: 'data:image/jpeg;base64,anBn' }],
+        prompt: 'change only the background',
+        background: 'auto',
+        model: 'gpt-image-2',
+        n: 2,
+        quality: 'auto',
+        size: 'auto',
+      }),
+      { 'content-type': 'application/json; charset=utf-8' }
+    );
+
+    await service.proxy(c, 'images/edits');
+
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    expect(form.get('model')).toBe('gpt-image-2');
+    expect(form.get('prompt')).toBe('change only the background');
+    expect(form.get('background')).toBe('auto');
+    expect(form.get('quality')).toBe('auto');
+    expect(form.get('size')).toBe('auto');
+    expect(form.get('n')).toBe('2');
+    const images = form.getAll('image[]');
+    expect(images).toHaveLength(2);
+    expect(images[0]).toBeInstanceOf(File);
+    expect(images[1]).toBeInstanceOf(File);
+    expect((images[0] as File).name).toBe('image-1.png');
+    expect((images[0] as File).type).toBe('image/png');
+    expect(await (images[0] as File).text()).toBe('png');
+    expect((images[1] as File).name).toBe('image-2.jpg');
+    expect((images[1] as File).type).toBe('image/jpeg');
+    expect(await (images[1] as File).text()).toBe('jpg');
+    expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ fixedApiMicrodollars: 80_000 })
+    );
+  });
+
+  it.each([
+    {
+      name: 'remote image URLs',
+      images: [{ image_url: 'https://example.com/image.png' }],
+      message: 'must be a base64 PNG, JPEG, or WebP data URL',
+    },
+    {
+      name: 'more than five images',
+      images: Array.from({ length: 6 }, () => ({ image_url: 'data:image/png;base64,cG5n' })),
+      message: 'images must contain between 1 and 5 items',
+    },
+  ])('rejects Codex JSON image edits with $name', async ({ images, message }) => {
+    const { service, fetchStub, coreAccounting } = createService();
+    const c = createContext(JSON.stringify({ images, prompt: 'edit', model: 'gpt-image-2' }), {
+      'content-type': 'application/json',
+    });
+
+    await expect(service.proxy(c, 'images/edits')).rejects.toMatchObject({
+      status: 400,
+      code: 'invalid_request_error',
+      message: expect.stringContaining(message),
+    });
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(coreAccounting.createCoreRequest).not.toHaveBeenCalled();
+  });
+
   it('routes Codex image models through an eligible OpenAI carrier without rewriting the image model', async () => {
     const { service, fetchStub, models, coreAccounting } = createService();
     const c = createContext(JSON.stringify({ model: 'gpt-image-2', prompt: 'draw a cat', n: 2 }), {

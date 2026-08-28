@@ -8,6 +8,7 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
 import type { LoggingEnvironment, LoggingSchema } from "@/types";
+import { LoggingEnvironmentDialog } from "./LoggingEnvironmentDialog";
 import { LoggingExplorer } from "./LoggingExplorer";
 import { LoggingSchemaEditor } from "./LoggingSchemaEditor";
 import { LoggingTokenPanel } from "./LoggingTokenPanel";
@@ -139,6 +140,8 @@ describe("Logging UI", () => {
       />
     );
 
+    expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-md");
+    expect(screen.getByPlaceholderText("Production collector")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "demo" } });
     fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
 
@@ -188,6 +191,7 @@ describe("Logging UI", () => {
 
     expect(await screen.findByText("Production")).toBeInTheDocument();
     expect(screen.getByText("Staging")).toBeInTheDocument();
+    expect(screen.queryByText("Business")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("Search environments..."), {
       target: { value: "prod" },
@@ -195,6 +199,17 @@ describe("Logging UI", () => {
 
     expect(screen.getByText("Production")).toBeInTheDocument();
     expect(screen.queryByText("Staging")).not.toBeInTheDocument();
+  });
+
+  it("shows useful placeholders when creating a logging environment", () => {
+    renderWithRouter(
+      <LoggingEnvironmentDialog open environment={null} onOpenChange={vi.fn()} onSave={vi.fn()} />
+    );
+
+    expect(screen.getByPlaceholderText("Production")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("Application logs from production services")
+    ).toBeInTheDocument();
   });
 
   it("renders and filters logging schema rows on the main page", async () => {
@@ -227,5 +242,23 @@ describe("Logging UI", () => {
 
     expect(screen.getByText("Audit Events")).toBeInTheDocument();
     expect(screen.queryByText("Payments")).not.toBeInTheDocument();
+  });
+
+  it("omits the no-op settings tab and labels new schema fields", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["logs:environments:view", "logs:schemas:view", "logs:schemas:create"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderWithRouter(<Logging />, { path: "/logging/:section?", route: "/logging/schemas" });
+
+    await screen.findByText("Schemas");
+    expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Create Schema" })[0]!);
+    expect(screen.getByPlaceholderText("Audit Events")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Optional description")).toBeInTheDocument();
   });
 });

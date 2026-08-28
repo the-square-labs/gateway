@@ -145,5 +145,6 @@ describe("PageProjectDetail deletion", () => {
 
     expect(await screen.findByText("Latest immutable preview")).toBeInTheDocument();
     expect(screen.getByText("preview-slug.pages.example.test")).toBeInTheDocument();
+    expect(screen.queryByText("Pages Project")).not.toBeInTheDocument();
   });
 });

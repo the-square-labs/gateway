@@ -2,9 +2,11 @@ import { Link } from "react-router-dom";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate } from "@/lib/utils";
+import { getAuditEntryUserLabel } from "@/pages/audit-log/audit-format";
 import type { AuditLogEntry } from "@/types";
 
 interface RecentActivityCardProps {
@@ -20,11 +22,33 @@ export function RecentActivityCard({
 }: RecentActivityCardProps) {
   if (!hasScope("admin:audit")) return null;
 
+  const getInitials = (entry: AuditLogEntry) =>
+    getAuditEntryUserLabel(entry)
+      .split(/[\s@._-]+/)
+      .map((part) => part[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+
   const activityColumns: SimpleTableColumn<AuditLogEntry>[] = [
     {
       id: "user",
       header: "User",
-      render: (entry) => entry.userName || entry.userEmail || "System",
+      render: (entry) => {
+        const label = getAuditEntryUserLabel(entry);
+        return (
+          <span className="flex min-w-0 items-center gap-2">
+            <Avatar className="h-7 w-7">
+              {entry.userId && <AvatarImage src={entry.userAvatarUrl ?? undefined} />}
+              <AvatarFallback className="text-[10px]">
+                {entry.userId ? getInitials(entry) : "SY"}
+              </AvatarFallback>
+            </Avatar>
+            <span className="truncate">{label}</span>
+          </span>
+        );
+      },
     },
     {
       id: "action",

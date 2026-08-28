@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PageArtifactStore } from './page-artifact-store.js';
+import { PageArtifactStore, resolvePageStorageDir } from './page-artifact-store.js';
 
 const tempDirs: string[] = [];
 
@@ -11,6 +11,16 @@ afterEach(async () => {
 });
 
 describe('PageArtifactStore', () => {
+  it('uses writable temporary storage for the production default outside production', () => {
+    expect(resolvePageStorageDir('/var/lib/gateway/pages', 'development', '/tmp/test-runtime')).toBe(
+      '/tmp/test-runtime/gateway-pages'
+    );
+    expect(resolvePageStorageDir('/var/lib/gateway/pages', 'production', '/tmp/test-runtime')).toBe(
+      '/var/lib/gateway/pages'
+    );
+    expect(resolvePageStorageDir('/custom/pages', 'development', '/tmp/test-runtime')).toBe('/custom/pages');
+  });
+
   it('appends resumable chunks without allowing offset replay or root escape', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gateway-pages-store-'));
     tempDirs.push(root);

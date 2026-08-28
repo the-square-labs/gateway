@@ -275,7 +275,17 @@ export function DatabaseConnectionForm({
       <div className={`grid gap-3 ${metadataOnly ? "md:grid-cols-1" : "md:grid-cols-2"}`}>
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Name</label>
-          <Input value={draft.name} onChange={(e) => set("name", e.target.value)} />
+          <Input
+            value={draft.name}
+            onChange={(e) => set("name", e.target.value)}
+            placeholder={
+              draft.type === "postgres"
+                ? "Primary Postgres"
+                : draft.type === "clickhouse"
+                  ? "Analytics ClickHouse"
+                  : "Application Redis"
+            }
+          />
         </div>
         {!metadataOnly && (
           <div className="space-y-1.5">
@@ -315,7 +325,11 @@ export function DatabaseConnectionForm({
 
       <div className="space-y-1.5">
         <label className="text-sm font-medium">Description</label>
-        <Input value={draft.description} onChange={(e) => set("description", e.target.value)} />
+        <Input
+          value={draft.description}
+          onChange={(e) => set("description", e.target.value)}
+          placeholder="Optional description"
+        />
       </div>
 
       <div className="space-y-1.5">
@@ -424,7 +438,17 @@ export function DatabaseConnectionForm({
                   <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),140px]">
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Host</label>
-                      <Input value={draft.host} onChange={(e) => set("host", e.target.value)} />
+                      <Input
+                        value={draft.host}
+                        onChange={(e) => set("host", e.target.value)}
+                        placeholder={
+                          draft.type === "postgres"
+                            ? "db.example.com"
+                            : draft.type === "clickhouse"
+                              ? "clickhouse.example.com"
+                              : "redis.example.com"
+                        }
+                      />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Port</label>
@@ -440,6 +464,7 @@ export function DatabaseConnectionForm({
                           <Input
                             value={draft.database}
                             onChange={(e) => set("database", e.target.value)}
+                            placeholder={draft.type === "postgres" ? "app" : "analytics"}
                           />
                         </div>
                         <div className="space-y-1.5">
@@ -447,6 +472,7 @@ export function DatabaseConnectionForm({
                           <Input
                             value={draft.username}
                             onChange={(e) => set("username", e.target.value)}
+                            placeholder={draft.type === "postgres" ? "gateway" : "default"}
                           />
                         </div>
                       </div>
@@ -456,7 +482,9 @@ export function DatabaseConnectionForm({
                         <Input
                           type="password"
                           placeholder={
-                            draft.hasStoredPassword ? "Leave blank to keep current password" : ""
+                            draft.hasStoredPassword
+                              ? "Leave blank to keep current password"
+                              : "Enter password"
                           }
                           value={draft.password}
                           onChange={(e) => set("password", e.target.value)}
@@ -466,7 +494,7 @@ export function DatabaseConnectionForm({
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
                         <div>
                           <p className="text-sm font-medium">TLS / SSL</p>
                           <p className="text-xs text-muted-foreground">
@@ -493,11 +521,16 @@ export function DatabaseConnectionForm({
                           <Input
                             value={draft.username}
                             onChange={(e) => set("username", e.target.value)}
+                            placeholder="default (optional)"
                           />
                         </div>
                         <div className="space-y-1.5">
                           <label className="text-sm font-medium">Redis DB</label>
-                          <Input value={draft.db} onChange={(e) => set("db", e.target.value)} />
+                          <Input
+                            value={draft.db}
+                            onChange={(e) => set("db", e.target.value)}
+                            placeholder="0"
+                          />
                         </div>
                       </div>
 
@@ -506,7 +539,9 @@ export function DatabaseConnectionForm({
                         <Input
                           type="password"
                           placeholder={
-                            draft.hasStoredPassword ? "Leave blank to keep current password" : ""
+                            draft.hasStoredPassword
+                              ? "Leave blank to keep current password"
+                              : "Enter password"
                           }
                           value={draft.password}
                           onChange={(e) => set("password", e.target.value)}
@@ -516,7 +551,7 @@ export function DatabaseConnectionForm({
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
                         <div>
                           <p className="text-sm font-medium">TLS</p>
                           <p className="text-xs text-muted-foreground">

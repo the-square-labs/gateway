@@ -62,7 +62,7 @@ describe('Business entitlement service boundaries', () => {
   });
 
   it('gates new structured logging environments', async () => {
-    const service = new LoggingEnvironmentService({} as never, {} as never, { requests: 1, events: 1 });
+    const service = new LoggingEnvironmentService({} as never, {} as never);
     const policy = deniedPolicy();
     service.setLicensePolicyService(policy as never);
 

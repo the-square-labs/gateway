@@ -1,5 +1,8 @@
-import type { Env } from '@/config/env.js';
 import { AppError } from '@/middleware/error-handler.js';
+
+interface LoggingConfigurationSource {
+  isConfigured(): boolean;
+}
 
 export class LoggingFeatureService {
   private available = false;
@@ -7,10 +10,10 @@ export class LoggingFeatureService {
   private capacityExhausted = false;
   private capacityReason: string | null = null;
 
-  constructor(private readonly source: Pick<Env, 'CLICKHOUSE_URL'> | { isConfigured(): boolean }) {}
+  constructor(private readonly source: LoggingConfigurationSource) {}
 
   isEnabled(): boolean {
-    return 'isConfigured' in this.source ? this.source.isConfigured() : this.source.CLICKHOUSE_URL.trim().length > 0;
+    return this.source.isConfigured();
   }
 
   isAvailable(): boolean {

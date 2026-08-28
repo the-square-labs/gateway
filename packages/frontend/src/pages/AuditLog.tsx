@@ -2,11 +2,12 @@ import { Download, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
@@ -17,22 +18,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { formatRelativeDate } from "@/lib/utils";
 import {
   type AuditExportFormat,
+  type AuditFilterUserOption,
   buildAuditExportFilename,
   downloadTextFile,
   formatAuditExport,
   formatAuditToken,
   getAuditEntryUserKey,
   getAuditEntryUserLabel,
+  mergeAuditFilterUsers,
+  mergeAuditFilterValues,
 } from "@/pages/audit-log/audit-format";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
@@ -46,11 +43,6 @@ const SYSTEM_USER_FILTER = "system";
 interface AuditViewConfig {
   excludedActions: string[];
   excludedResourceTypes: string[];
-}
-
-interface AuditUserOption {
-  id: string;
-  label: string;
 }
 
 const DEFAULT_AUDIT_VIEW_CONFIG: AuditViewConfig = {
@@ -326,6 +318,7 @@ const columns: DataTableColumn<AuditLogEntry>[] = [
       return (
         <span className="flex min-w-0 items-center gap-2">
           <Avatar className="h-7 w-7">
+            {!isSystem && <AvatarImage src={entry.userAvatarUrl ?? undefined} />}
             <AvatarFallback className="text-[10px]">
               {isSystem ? <Settings className="h-3.5 w-3.5" /> : getAuditUserInitials(entry)}
             </AvatarFallback>
@@ -413,7 +406,19 @@ export function AuditLog({
   const [actionFilter, setActionFilter] = useState("all");
   const [resourceFilter, setResourceFilter] = useState("all");
   const [userFilter, setUserFilter] = useState("all");
-  const [knownUsers, setKnownUsers] = useState<AuditUserOption[]>([]);
+  const [knownActions, setKnownActions] = useState<string[]>(() =>
+    mergeAuditFilterValues(
+      [...AUDIT_ACTION_OPTIONS],
+      [...initialViewConfig.excludedActions, ...entries.map((entry) => entry.action)]
+    )
+  );
+  const [knownResources, setKnownResources] = useState<string[]>(() =>
+    mergeAuditFilterValues(
+      [...AUDIT_RESOURCE_OPTIONS],
+      [...initialViewConfig.excludedResourceTypes, ...entries.map((entry) => entry.resourceType)]
+    )
+  );
+  const [knownUsers, setKnownUsers] = useState<AuditFilterUserOption[]>([]);
   const [viewConfig, setViewConfig] = useState<AuditViewConfig>(initialViewConfig);
   const [draftViewConfig, setDraftViewConfig] = useState<AuditViewConfig>(viewConfig);
   const [configOpen, setConfigOpen] = useState(false);
@@ -436,28 +441,47 @@ export function AuditLog({
 
   const actionOptions = useMemo(
     () =>
-      Array.from(
-        new Set([
-          ...AUDIT_ACTION_OPTIONS,
-          ...viewConfig.excludedActions,
-          ...entries.map((entry) => entry.action),
-        ])
-      ).sort(),
-    [entries, viewConfig.excludedActions]
+      mergeAuditFilterValues(knownActions, [
+        ...viewConfig.excludedActions,
+        ...(actionFilter === "all" ? [] : [actionFilter]),
+      ]),
+    [actionFilter, knownActions, viewConfig.excludedActions]
   );
   const resourceOptions = useMemo(
     () =>
-      Array.from(
-        new Set([
-          ...AUDIT_RESOURCE_OPTIONS,
-          ...viewConfig.excludedResourceTypes,
-          ...entries.map((entry) => entry.resourceType),
-        ])
-      ).sort(),
-    [entries, viewConfig.excludedResourceTypes]
+      mergeAuditFilterValues(knownResources, [
+        ...viewConfig.excludedResourceTypes,
+        ...(resourceFilter === "all" ? [] : [resourceFilter]),
+      ]),
+    [knownResources, resourceFilter, viewConfig.excludedResourceTypes]
   );
-  const userOptions = useMemo(
-    () => [...knownUsers].sort((a, b) => a.label.localeCompare(b.label)),
+  const actionComboboxOptions = useMemo<ComboboxOption[]>(
+    () => [
+      { value: "all", label: "All actions" },
+      ...actionOptions.map((action) => ({
+        value: action,
+        label: formatAuditToken(action),
+        keywords: action,
+      })),
+    ],
+    [actionOptions]
+  );
+  const resourceComboboxOptions = useMemo<ComboboxOption[]>(
+    () => [
+      { value: "all", label: "All resources" },
+      ...resourceOptions.map((resourceType) => ({
+        value: resourceType,
+        label: formatAuditToken(resourceType),
+        keywords: resourceType,
+      })),
+    ],
+    [resourceOptions]
+  );
+  const userComboboxOptions = useMemo<ComboboxOption[]>(
+    () => [
+      { value: "all", label: "All users" },
+      ...knownUsers.map((user) => ({ value: user.id, label: user.label })),
+    ],
     [knownUsers]
   );
   const hiddenFilterCount =
@@ -469,14 +493,27 @@ export function AuditLog({
   );
 
   const rememberUsers = useCallback((items: AuditLogEntry[]) => {
-    setKnownUsers((prev) => {
-      const next = new Map(prev.map((user) => [user.id, user]));
-      for (const entry of items) {
-        const id = getAuditEntryUserKey(entry);
-        next.set(id, { id, label: getAuditEntryUserLabel(entry) });
-      }
-      return [...next.values()];
-    });
+    setKnownUsers((prev) =>
+      mergeAuditFilterUsers(
+        prev,
+        items.map((entry) => ({
+          id: getAuditEntryUserKey(entry),
+          label: getAuditEntryUserLabel(entry),
+        }))
+      )
+    );
+    setKnownActions((prev) =>
+      mergeAuditFilterValues(
+        prev,
+        items.map((entry) => entry.action)
+      )
+    );
+    setKnownResources((prev) =>
+      mergeAuditFilterValues(
+        prev,
+        items.map((entry) => entry.resourceType)
+      )
+    );
   }, []);
 
   const fetchPage = useCallback(
@@ -673,11 +710,14 @@ export function AuditLog({
     api
       .getAuditUsers()
       .then((users) => {
-        setKnownUsers(
-          users.map((user) => ({
-            id: user.userId ?? SYSTEM_USER_FILTER,
-            label: user.userName || user.userEmail || (user.userId ? user.userId : "System"),
-          }))
+        setKnownUsers((current) =>
+          mergeAuditFilterUsers(
+            current,
+            users.map((user) => ({
+              id: user.userId ?? SYSTEM_USER_FILTER,
+              label: user.userName || user.userEmail || (user.userId ? user.userId : "System"),
+            }))
+          )
         );
       })
       .catch(() => {});
@@ -776,49 +816,40 @@ export function AuditLog({
         {/* Filters */}
         <div className="flex flex-wrap gap-3">
           <div className="w-48">
-            <Select value={actionFilter} onValueChange={setActionFilter}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All actions</SelectItem>
-                {actionOptions.map((action) => (
-                  <SelectItem key={action} value={action}>
-                    {formatAuditToken(action)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox
+              value={actionFilter}
+              options={actionComboboxOptions}
+              onValueChange={setActionFilter}
+              showAllOptionsOnFocus
+              placeholder="All actions"
+              searchPlaceholder="Search actions..."
+              emptyMessage="No matching actions."
+              ariaLabel="Filter audit actions"
+            />
           </div>
           <div className="w-48">
-            <Select value={resourceFilter} onValueChange={setResourceFilter}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All resources</SelectItem>
-                {resourceOptions.map((resourceType) => (
-                  <SelectItem key={resourceType} value={resourceType}>
-                    {formatAuditToken(resourceType)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox
+              value={resourceFilter}
+              options={resourceComboboxOptions}
+              onValueChange={setResourceFilter}
+              showAllOptionsOnFocus
+              placeholder="All resources"
+              searchPlaceholder="Search resources..."
+              emptyMessage="No matching resources."
+              ariaLabel="Filter audit resources"
+            />
           </div>
           <div className="w-56">
-            <Select value={userFilter} onValueChange={setUserFilter}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All users</SelectItem>
-                {userOptions.map((user) => (
-                  <SelectItem key={user.id} value={user.id}>
-                    {user.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox
+              value={userFilter}
+              options={userComboboxOptions}
+              onValueChange={setUserFilter}
+              showAllOptionsOnFocus
+              placeholder="All users"
+              searchPlaceholder="Search users..."
+              emptyMessage="No matching users."
+              ariaLabel="Filter audit users"
+            />
           </div>
         </div>
 
@@ -834,9 +865,7 @@ export function AuditLog({
             minWidth="1000px"
             emptyMessage="No audit log entries found"
             footer={
-              <div ref={sentinelRef} className="py-4 text-center text-xs text-muted-foreground">
-                {loadingMore ? "Loading more…" : !hasMore && entries.length > 0 ? "End of log" : ""}
-              </div>
+              hasMore ? <div ref={sentinelRef} className="h-px" aria-hidden="true" /> : undefined
             }
           />
         </div>
@@ -938,7 +967,7 @@ export function AuditLog({
               <AuditOptionChecklist
                 title="Users"
                 description="Leave empty to export all users."
-                options={userOptions.map((user) => ({ value: user.id, label: user.label }))}
+                options={knownUsers.map((user) => ({ value: user.id, label: user.label }))}
                 selected={exportUserIds}
                 onToggle={(value) => setExportUserIds((values) => toggleValue(values, value))}
                 emptyMessage="Load audit entries to populate users."

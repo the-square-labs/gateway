@@ -1,4 +1,4 @@
-import { Database, FileJson, FolderPlus, Plus, Settings } from "lucide-react";
+import { Database, FileJson, FolderPlus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -6,7 +6,6 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
-import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -34,18 +33,13 @@ import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { LoggingEnvironment, LoggingSchema, LoggingSchemaMode } from "@/types";
-import {
-  LoggingEnvironmentDetail,
-  LoggingGlobalSettings,
-  LoggingSchemaDetail,
-} from "./logging/LoggingDetails";
+import { LoggingEnvironmentDetail, LoggingSchemaDetail } from "./logging/LoggingDetails";
 import { LoggingEnvironmentDialog } from "./logging/LoggingEnvironmentDialog";
 import { LoggingEnvironmentsTab, LoggingSchemasTab } from "./logging/LoggingTabs";
 
 const TOP_TABS = [
   { value: "environments", label: "Environments", icon: Database },
   { value: "schemas", label: "Schemas", icon: FileJson },
-  { value: "settings", label: "Settings", icon: Settings },
 ] as const;
 
 const ENV_TABS = ["logs", "tokens", "settings"] as const;
@@ -91,7 +85,6 @@ export function Logging({
     !!id &&
     (hasAnyScope("logs:schemas:view", "logs:manage") ||
       scopeMatches(userScopes, `logs:schemas:view:${id}`));
-  const canAccessLoggingSettings = canAccessEnvironments || canAccessSchemas;
   const [environments, setEnvironments] = useState<LoggingEnvironment[]>(() =>
     canAccessEnvironments ? (api.getCached<LoggingEnvironment[]>("logging:environments") ?? []) : []
   );
@@ -133,16 +126,11 @@ export function Logging({
     () =>
       TOP_TABS.filter((item) => {
         if (item.value === "environments") return canAccessEnvironments;
-        if (item.value === "schemas") return canAccessSchemas;
-        return canAccessLoggingSettings;
+        return canAccessSchemas;
       }),
-    [canAccessEnvironments, canAccessLoggingSettings, canAccessSchemas]
+    [canAccessEnvironments, canAccessSchemas]
   );
-  const defaultTopTab = canAccessEnvironments
-    ? "environments"
-    : canAccessSchemas
-      ? "schemas"
-      : "settings";
+  const defaultTopTab = canAccessEnvironments ? "environments" : "schemas";
   const requestedTopTab =
     TOP_TABS.some((item) => item.value === section) && !isEnvironmentDetail && !isSchemaDetail
       ? section!
@@ -397,10 +385,7 @@ export function Logging({
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <LiteModeBackButton />
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">Logging</h1>
-                <LicensePlanBadge plan="business" />
-              </div>
+              <h1 className="text-2xl font-bold">Logging</h1>
               <p className="text-sm text-muted-foreground">
                 Manage external log environments and reusable schemas
               </p>
@@ -532,14 +517,6 @@ export function Logging({
               onCreateFolderRef={(fn) => setCreateSchemaFolderAction(() => fn)}
             />
           </TabsContent>
-
-          <TabsContent value="settings">
-            <LoggingGlobalSettings
-              loggingEnabled={loggingEnabled}
-              environmentCount={environments.length}
-              schemaCount={schemas.length}
-            />
-          </TabsContent>
         </Tabs>
 
         <LoggingEnvironmentDialog
@@ -609,11 +586,19 @@ function LoggingSchemaDialog({
         <div className="space-y-4">
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Name</span>
-            <Input value={name} onChange={(event) => setName(event.target.value)} />
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Audit Events"
+            />
           </label>
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Description</span>
-            <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+            <Input
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Optional description"
+            />
           </label>
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Mode</span>

@@ -1,6 +1,6 @@
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LogsTab, type LogsTabSource } from "./LogsTab";
+import { LogsTab, type LogsTabSource, mergeReconnectLogLines } from "./LogsTab";
 
 class FakeLogSocket {
   static instances: FakeLogSocket[] = [];
@@ -65,5 +65,11 @@ describe("LogsTab reconnect lifecycle", () => {
     expect(FakeLogSocket.instances).toHaveLength(2);
 
     view.unmount();
+  });
+
+  it("merges reconnect tails without replacing the existing viewport history", () => {
+    expect(
+      mergeReconnectLogLines(["one", "two", "three"], ["older", "two", "three", "four", "five"])
+    ).toEqual(["one", "two", "three", "four", "five"]);
   });
 });

@@ -5,6 +5,8 @@ import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
+import type { EnvironmentSettings } from '@/modules/settings/environment-settings.schemas.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CreateLoggingEnvironmentInput, UpdateLoggingEnvironmentInput } from './logging.schemas.js';
 import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
@@ -17,8 +19,9 @@ export class LoggingEnvironmentService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService,
-    private readonly hardCeilings: { requests: number; events: number },
-    private readonly storage?: Pick<LoggingClickHouseService, 'deleteEnvironmentLogs'>
+    private readonly storage?: Pick<LoggingClickHouseService, 'deleteEnvironmentLogs'>,
+    private readonly getLimits: () => EnvironmentSettings['loggingIngest'] = () =>
+      getEnvironmentSettingsSnapshot().loggingIngest
   ) {}
 
   setEventBus(eventBus: EventBusService): void {
@@ -192,10 +195,11 @@ export class LoggingEnvironmentService {
   }
 
   private validateLimits(input: Partial<CreateLoggingEnvironmentInput>): void {
-    if (input.rateLimitRequestsPerWindow != null && input.rateLimitRequestsPerWindow > this.hardCeilings.requests) {
+    const limits = this.getLimits();
+    if (input.rateLimitRequestsPerWindow != null && input.rateLimitRequestsPerWindow > limits.globalRequestsPerWindow) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Environment request limit exceeds the global ceiling');
     }
-    if (input.rateLimitEventsPerWindow != null && input.rateLimitEventsPerWindow > this.hardCeilings.events) {
+    if (input.rateLimitEventsPerWindow != null && input.rateLimitEventsPerWindow > limits.globalEventsPerWindow) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Environment event limit exceeds the global ceiling');
     }
   }

@@ -136,6 +136,8 @@ export function DockerImages({
   const [pullNodeId, setPullNodeId] = useState<string>("");
   const openPull = useCallback(() => {
     setPullNodeId(selectedNodeId || "");
+    setPullRef("");
+    setPullRegistryId("");
     setPullOpen(true);
   }, [selectedNodeId]);
   useEffect(() => {
@@ -317,8 +319,6 @@ export function DockerImages({
 
   const closePull = useCallback(() => {
     setPullOpen(false);
-    setPullRef("");
-    setPullRegistryId("");
   }, []);
 
   const handlePull = useCallback(async () => {

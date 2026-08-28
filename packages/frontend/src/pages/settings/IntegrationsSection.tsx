@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  GitFork,
   Gitlab,
   Loader2,
   Plus,
@@ -194,7 +195,6 @@ function GitLabIntegrationsSection() {
   >([]);
   const [searching, setSearching] = useState(false);
   const [dialogStep, setDialogStep] = useState(1);
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstDialogStep = editingConnector ? 2 : 1;
   const lastDialogStep = editingConnector ? 3 : CONNECTOR_STEP_COUNT;
   const visibleDialogStep = editingConnector ? dialogStep - 1 : dialogStep;
@@ -255,12 +255,6 @@ function GitLabIntegrationsSection() {
   });
 
   useEffect(() => {
-    return () => {
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
     if (editingConnector || dialogStep !== 2 || !canSearchAllowlist || search.trim().length < 2) {
       setSearchResults([]);
       return;
@@ -293,7 +287,6 @@ function GitLabIntegrationsSection() {
   }, [canSearchAllowlist, dialogStep, editingConnector, form.baseUrl, form.token, search]);
 
   const openCreateDialog = () => {
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     setEditingConnector(null);
     setForm(emptyForm());
     setRefreshingAllowlist(false);
@@ -306,7 +299,6 @@ function GitLabIntegrationsSection() {
   };
 
   const openEditDialog = async (connector: GitLabConnector) => {
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     setDialogOpen(true);
     setEditingConnector(connector);
     setLoadingDetail(true);
@@ -348,18 +340,6 @@ function GitLabIntegrationsSection() {
 
   const closeDialog = () => {
     setDialogOpen(false);
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    resetTimerRef.current = setTimeout(() => {
-      setEditingConnector(null);
-      setForm(emptyForm());
-      setRefreshingAllowlist(false);
-      setSearch("");
-      setAllowlistFilter("all");
-      setSearchResults([]);
-      setAvailableAllowlistEntries([]);
-      setDialogStep(1);
-      resetTimerRef.current = null;
-    }, 220);
   };
 
   const refreshAllowlistOptions = async () => {
@@ -830,6 +810,7 @@ function GitLabIntegrationsSection() {
                       <PanelShell
                         title="Sync & Clone"
                         description="Project discovery schedule and sandbox clone limits."
+                        icon={<GitFork className="h-4 w-4" />}
                       >
                         <SettingsControlRow
                           title="Auto Sync"
@@ -884,6 +865,7 @@ function GitLabIntegrationsSection() {
                         <SettingsControlRow
                           title="Max Size"
                           description="Maximum repository size allowed for sandbox clones."
+                          help="Value is MiB and limits the downloaded repository archive. A clone is aborted when the archive exceeds this size."
                         >
                           <Input
                             type="number"
@@ -899,6 +881,7 @@ function GitLabIntegrationsSection() {
                         <SettingsControlRow
                           title="Clone Timeout"
                           description="Maximum time allowed for Git clone operations."
+                          help="Value is seconds. Gateway aborts the repository download when this duration is exceeded."
                         >
                           <Input
                             type="number"

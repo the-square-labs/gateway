@@ -1,5 +1,10 @@
 import 'reflect-metadata';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { container } from '@/container.js';
+import {
+  DEFAULT_ENVIRONMENT_SETTINGS,
+  EnvironmentSettingsService,
+} from '@/modules/settings/environment-settings.service.js';
 import { createApp } from './app.js';
 
 beforeAll(() => {
@@ -12,7 +17,10 @@ beforeAll(() => {
   process.env.OIDC_REDIRECT_URI ||= 'http://localhost/auth/callback';
   process.env.APP_URL = 'http://gateway.test';
   process.env.PKI_MASTER_KEY ||= '0000000000000000000000000000000000000000000000000000000000000000';
-  process.env.DOCKER_FILE_WRITE_MAX_BODY_BYTES ||= '3000000';
+});
+
+afterEach(() => {
+  container.reset();
 });
 
 describe('request body limits', () => {
@@ -60,6 +68,14 @@ describe('request body limits', () => {
     const body = JSON.stringify({ response: 'x'.repeat(40_000) });
     await expectPayloadTooLarge('/auth/password/login', 'POST', body);
     await expectPayloadTooLarge('/auth/passkeys/verify', 'POST', body);
+  });
+
+  it('uses the avatar upload limit instead of the smaller OAuth body limit', async () => {
+    await expectNotPayloadTooLarge('/auth/me/avatar', 'PUT', 'x'.repeat(200_000));
+  });
+
+  it('rejects avatar upload bodies above the dedicated upload limit', async () => {
+    await expectPayloadTooLarge('/auth/me/avatar', 'PUT', 'x'.repeat(1_400_000), 'multipart/form-data');
   });
 
   it('does not apply the global API body limit to Docker file write bodies', async () => {
@@ -146,7 +162,21 @@ describe('request body limits', () => {
     await expectNotPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(3_000_000));
   });
 
-  it('still rejects inference requests above the inference-specific limit', async () => {
-    await expectPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(34_000_000));
+  it('accepts inference requests above the removed legacy 32 MiB ceiling', async () => {
+    await expectNotPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(34_000_000));
+  });
+
+  it('applies a changed inference limit without restarting the app', async () => {
+    container.registerInstance(EnvironmentSettingsService, {
+      getSnapshot: () => ({
+        ...DEFAULT_ENVIRONMENT_SETTINGS,
+        requestLimits: {
+          ...DEFAULT_ENVIRONMENT_SETTINGS.requestLimits,
+          inferenceHttpBodyMaxBytes: 4 * 1024 * 1024,
+        },
+      }),
+    } as never);
+
+    await expectPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(5 * 1024 * 1024));
   });
 });

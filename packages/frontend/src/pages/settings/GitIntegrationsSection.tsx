@@ -557,6 +557,7 @@ function GitConnectorPanel({
           ) : (
             <AnimatedHeight>
               <PanelShell
+                icon={<KeyRound className="h-4 w-4" />}
                 title={
                   provider === "github"
                     ? authMode === "oauth"

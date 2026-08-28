@@ -47,6 +47,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -104,6 +105,7 @@ export function AdminUsers({
   const [deletedUsersOpen, setDeletedUsersOpen] = useState(false);
   const [deletedUsersSearch, setDeletedUsersSearch] = useState("");
   const [restoreUser, setRestoreUser] = useState<DeletedUser | null>(null);
+  const displayedRestoreUser = useRetainedDialogValue(restoreUser, restoreUser !== null);
   const [restoreGroupId, setRestoreGroupId] = useState("");
   const [restoring, setRestoring] = useState(false);
   const [impersonatingUserId, setImpersonatingUserId] = useState<string | null>(null);
@@ -271,8 +273,7 @@ export function AdminUsers({
     }
   };
 
-  const resetCreateDialog = () => {
-    setCreateOpen(false);
+  const openCreateDialog = useCallback(() => {
     setCreateEmail("");
     setCreateName("");
     setCreateAuthMethod("oidc");
@@ -281,7 +282,10 @@ export function AdminUsers({
       groups.find((group) => !group.isBuiltin) ??
       groups[0];
     setCreateGroupId(preferred?.id ?? "");
-  };
+    setCreateOpen(true);
+  }, [groups]);
+
+  const closeCreateDialog = () => setCreateOpen(false);
 
   const handleCreateUser = async () => {
     if (!createEmail.trim() || !createName.trim() || !createGroupId) {
@@ -298,7 +302,7 @@ export function AdminUsers({
         authMethod: createAuthMethod,
       });
       toast.success("User created");
-      resetCreateDialog();
+      closeCreateDialog();
       reloadUsers();
     } catch (err) {
       if (!handleLicenseApiError(err, "Users")) {
@@ -312,8 +316,8 @@ export function AdminUsers({
   useEffect(() => {
     if (!embedded || createRequest === 0 || createRequest === lastCreateRequest.current) return;
     lastCreateRequest.current = createRequest;
-    setCreateOpen(true);
-  }, [createRequest, embedded]);
+    openCreateDialog();
+  }, [createRequest, embedded, openCreateDialog]);
 
   const canManageFolders = hasAnyScope("admin:users:folders:manage", "admin:system");
   const canImpersonateUsers = hasScope("admin:users:impersonate");
@@ -546,7 +550,7 @@ export function AdminUsers({
               {
                 label: "Create User",
                 icon: <Plus className="h-4 w-4" />,
-                onClick: () => setCreateOpen(true),
+                onClick: openCreateDialog,
               },
             ]}
           >
@@ -562,7 +566,7 @@ export function AdminUsers({
                 Deleted Users
               </Button>
             )}
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button onClick={openCreateDialog}>
               <Plus className="h-4 w-4" />
               Create User
             </Button>
@@ -671,7 +675,7 @@ export function AdminUsers({
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={resetCreateDialog} disabled={creating}>
+            <Button variant="outline" onClick={closeCreateDialog} disabled={creating}>
               Cancel
             </Button>
             <Button
@@ -745,16 +749,24 @@ export function AdminUsers({
               <div className="max-h-[min(25rem,48dvh)] divide-y divide-border overflow-y-auto overscroll-contain">
                 {filteredDeletedUsers.map((user) => (
                   <div key={user.id} className="flex items-center justify-between gap-3 p-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{user.name || user.email}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
-                      </p>
-                      {!user.originalGroupExists && (
-                        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                          Original group was deleted
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Avatar className="h-9 w-9 shrink-0">
+                        <AvatarImage src={user.avatarUrl ?? undefined} />
+                        <AvatarFallback className="text-xs">
+                          {getInitials(user.name, user.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{user.name || user.email}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
                         </p>
-                      )}
+                        {!user.originalGroupExists && (
+                          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                            Original group was deleted
+                          </p>
+                        )}
+                      </div>
                     </div>
                     <Button
                       variant="ghost"
@@ -786,10 +798,10 @@ export function AdminUsers({
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Restore {restoreUser?.name || restoreUser?.email}? The account will remain blocked
-              until explicitly unblocked.
+              Restore {displayedRestoreUser?.name || displayedRestoreUser?.email}? The account will
+              remain blocked until explicitly unblocked.
             </p>
-            {restoreUser && !restoreUser.originalGroupExists && (
+            {displayedRestoreUser && !displayedRestoreUser.originalGroupExists && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">New group</label>
                 <Select value={restoreGroupId} onValueChange={setRestoreGroupId}>
@@ -813,7 +825,9 @@ export function AdminUsers({
             </Button>
             <Button
               onClick={handleRestore}
-              disabled={restoring || (!restoreUser?.originalGroupExists && !restoreGroupId)}
+              disabled={
+                restoring || (!displayedRestoreUser?.originalGroupExists && !restoreGroupId)
+              }
             >
               Restore blocked user
             </Button>

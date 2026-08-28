@@ -1,15 +1,28 @@
 import crypto, { createPrivateKey, createSign, randomUUID, X509Certificate } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { x509 } from '@/lib/x509.js';
 import { AppError } from '@/middleware/error-handler.js';
 
 const TOKEN_ISSUER = 'gateway-internal-registry';
 const TOKEN_SERVICE = 'gateway-internal-registry';
-const DEFAULT_AUTH_DIR = '/var/lib/gateway-registry-auth';
+const PRODUCTION_AUTH_DIR = '/var/lib/gateway-registry-auth';
 const TOKEN_CERT_FILE = 'token-cert.pem';
 const TOKEN_KEY_FILE = 'token-key.pem';
 const MAX_TOKEN_TTL_SECONDS = 300;
+
+export function resolveDockerRegistryAuthDir(
+  environment: NodeJS.ProcessEnv = process.env,
+  temporaryDirectory = os.tmpdir()
+): string {
+  return (
+    environment.GATEWAY_REGISTRY_AUTH_DIR ||
+    (environment.NODE_ENV === 'production'
+      ? PRODUCTION_AUTH_DIR
+      : path.join(temporaryDirectory, 'gateway-registry-auth'))
+  );
+}
 
 export interface DockerRegistryGrant {
   repository: string;
@@ -42,7 +55,7 @@ export class DockerRegistryTokenService {
   private privateKeyPem: string | null = null;
   private certificatePem: string | null = null;
 
-  constructor(private readonly authDir = process.env.GATEWAY_REGISTRY_AUTH_DIR || DEFAULT_AUTH_DIR) {}
+  constructor(private readonly authDir = resolveDockerRegistryAuthDir()) {}
 
   async initialize(): Promise<void> {
     await mkdir(this.authDir, { recursive: true, mode: 0o700 });
@@ -162,7 +175,7 @@ export class DockerRegistryTokenService {
 export const dockerRegistryTokenContract = {
   issuer: TOKEN_ISSUER,
   service: TOKEN_SERVICE,
-  authDir: DEFAULT_AUTH_DIR,
-  certificatePath: `${DEFAULT_AUTH_DIR}/${TOKEN_CERT_FILE}`,
+  authDir: PRODUCTION_AUTH_DIR,
+  certificatePath: `${PRODUCTION_AUTH_DIR}/${TOKEN_CERT_FILE}`,
   maxTtlSeconds: MAX_TOKEN_TTL_SECONDS,
 };

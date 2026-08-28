@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { Boxes, Network } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useInferenceCoreStatus } from "@/hooks/use-inference-core-status";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -24,10 +25,12 @@ function CorePrerequisiteNotice({
   title,
   description,
   status,
+  icon,
 }: {
   title: string;
   description: string;
   status: InferenceCoreStatus | null;
+  icon: ReactNode;
 }) {
   const reason =
     inferenceCoreBlockedReason(status) ??
@@ -36,7 +39,7 @@ function CorePrerequisiteNotice({
       : null);
   if (!reason) return null;
   return (
-    <PanelShell title={title} description={description}>
+    <PanelShell title={title} description={description} icon={icon}>
       <p className="px-4 py-3 text-sm text-muted-foreground">{reason}</p>
     </PanelShell>
   );
@@ -97,6 +100,7 @@ export function InferenceSettingsSection() {
             title="Providers"
             description="Connected accounts and API credentials. Higher connections are used first by Sequential routing; Balanced distributes evenly."
             status={core.status}
+            icon={<Network className="h-4 w-4" />}
           />
         ))}
       {canManageModels &&
@@ -106,6 +110,7 @@ export function InferenceSettingsSection() {
             title="Models"
             description="Models exposed to users and the provider account group serving each model"
             status={core.status}
+            icon={<Boxes className="h-4 w-4" />}
           />
         ) : (
           <InferenceModelsPanel refreshToken={catalogRevision + providerRevision} />

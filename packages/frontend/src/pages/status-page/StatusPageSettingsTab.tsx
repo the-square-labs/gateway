@@ -1,5 +1,8 @@
-import { Save } from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
+import { Save, Settings2, Siren } from "lucide-react";
+import { type Dispatch, type SetStateAction, useState } from "react";
+import { PanelShell } from "@/components/common/PanelShell";
+import { SectionHeader } from "@/components/common/SectionHeader";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,232 +14,305 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Field } from "@/pages/settings/StatusPageSection";
 import type { StatusPageConfig, StatusPageIncidentSeverity } from "@/types";
 
 interface StatusPageSettingsTabProps {
   config: StatusPageConfig;
+  savedConfig: StatusPageConfig;
   canManage: boolean;
   saving: boolean;
   onConfigChange: Dispatch<SetStateAction<StatusPageConfig>>;
-  onSave: (patch: Partial<StatusPageConfig>) => void;
+  onSave: (patch: Partial<StatusPageConfig>) => Promise<void>;
 }
 
 export function StatusPageSettingsTab({
   config,
+  savedConfig,
   canManage,
   saving,
   onConfigChange,
   onSave,
 }: StatusPageSettingsTabProps) {
+  const [savingSection, setSavingSection] = useState<"general" | "auto" | null>(null);
   const disabled = !canManage || saving;
+  const generalDirty =
+    config.title !== savedConfig.title ||
+    config.description !== savedConfig.description ||
+    config.recentIncidentDays !== savedConfig.recentIncidentDays ||
+    config.publicIncidentLimit !== savedConfig.publicIncidentLimit;
+  const autoIncidentDirty =
+    config.autoDegradedEnabled !== savedConfig.autoDegradedEnabled ||
+    config.autoOutageEnabled !== savedConfig.autoOutageEnabled ||
+    config.autoDegradedSeverity !== savedConfig.autoDegradedSeverity ||
+    config.autoOutageSeverity !== savedConfig.autoOutageSeverity ||
+    config.autoCreateThresholdSeconds !== savedConfig.autoCreateThresholdSeconds ||
+    config.autoResolveThresholdSeconds !== savedConfig.autoResolveThresholdSeconds;
   const setSeverity = (key: "autoDegradedSeverity" | "autoOutageSeverity") => (value: string) => {
     const severity = value as StatusPageIncidentSeverity;
     onConfigChange((prev) => ({ ...prev, [key]: severity }));
   };
 
-  const saveSettings = () => {
-    onSave({
-      title: config.title,
-      description: config.description,
-      recentIncidentDays: config.recentIncidentDays,
-      publicIncidentLimit: config.publicIncidentLimit,
-      autoDegradedEnabled: config.autoDegradedEnabled,
-      autoOutageEnabled: config.autoOutageEnabled,
-      autoDegradedSeverity: config.autoDegradedSeverity,
-      autoOutageSeverity: config.autoOutageSeverity,
-      autoCreateThresholdSeconds: config.autoCreateThresholdSeconds,
-      autoResolveThresholdSeconds: config.autoResolveThresholdSeconds,
-    });
+  const saveGeneralSettings = async () => {
+    setSavingSection("general");
+    try {
+      await onSave({
+        title: config.title,
+        description: config.description,
+        recentIncidentDays: config.recentIncidentDays,
+        publicIncidentLimit: config.publicIncidentLimit,
+      });
+    } finally {
+      setSavingSection(null);
+    }
+  };
+
+  const saveAutoIncidentSettings = async () => {
+    setSavingSection("auto");
+    try {
+      await onSave({
+        autoDegradedEnabled: config.autoDegradedEnabled,
+        autoOutageEnabled: config.autoOutageEnabled,
+        autoDegradedSeverity: config.autoDegradedSeverity,
+        autoOutageSeverity: config.autoOutageSeverity,
+        autoCreateThresholdSeconds: config.autoCreateThresholdSeconds,
+        autoResolveThresholdSeconds: config.autoResolveThresholdSeconds,
+      });
+    } finally {
+      setSavingSection(null);
+    }
   };
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
-      <div className="border border-border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
-          <div>
-            <h2 className="text-sm font-semibold">General Settings</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Configure public copy and recent incident visibility.
-            </p>
-          </div>
-          {canManage && (
-            <Button onClick={saveSettings} disabled={saving}>
+      <PanelShell
+        title="General Settings"
+        icon={<Settings2 className="h-4 w-4" />}
+        description="Configure public copy and recent incident visibility."
+        dirty={generalDirty}
+        className="flex h-full flex-col"
+        bodyClassName="flex flex-1 flex-col"
+        actions={
+          canManage ? (
+            <Button onClick={() => void saveGeneralSettings()} disabled={disabled || !generalDirty}>
               <Save className="h-4 w-4" />
-              Save
+              {savingSection === "general" ? "Saving…" : "Save"}
             </Button>
-          )}
-        </div>
-        <div className="grid gap-4 p-4">
-          <Field label="Public title">
-            <Input
-              value={config.title}
-              disabled={disabled}
-              onChange={(event) =>
-                onConfigChange((prev) => ({ ...prev, title: event.target.value }))
-              }
-            />
-          </Field>
-          <Field label="Public description">
+          ) : null
+        }
+      >
+        <SettingsControlRow
+          title="Public title"
+          description="Heading shown at the top of the public status page."
+          controlsClassName="sm:min-w-0"
+        >
+          <Input
+            aria-label="Public title"
+            value={config.title}
+            placeholder="e.g. Acme Status"
+            disabled={disabled}
+            className="w-full sm:w-72"
+            onChange={(event) => onConfigChange((prev) => ({ ...prev, title: event.target.value }))}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Recent resolved incidents"
+          description="Number of days resolved incidents remain visible on the public page."
+          help="Controls public visibility only. Older resolved incidents remain stored in Gateway but are omitted from the public status page."
+          controlsClassName="sm:min-w-0"
+        >
+          <Input
+            aria-label="Recent resolved incident days"
+            className="w-32"
+            type="number"
+            min={1}
+            max={365}
+            value={config.recentIncidentDays}
+            disabled={disabled}
+            onChange={(event) =>
+              onConfigChange((prev) => ({
+                ...prev,
+                recentIncidentDays: Number(event.target.value),
+              }))
+            }
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Public incident limit"
+          description="Maximum number of recent incidents included on the public page."
+          help="Caps how many incidents the public page returns at once after applying the visibility period above. It does not delete incidents or limit incident creation."
+          controlsClassName="sm:min-w-0"
+        >
+          <Input
+            aria-label="Public incident limit"
+            className="w-32"
+            type="number"
+            min={1}
+            max={100}
+            value={config.publicIncidentLimit}
+            disabled={disabled}
+            onChange={(event) =>
+              onConfigChange((prev) => ({
+                ...prev,
+                publicIncidentLimit: Number(event.target.value),
+              }))
+            }
+          />
+        </SettingsControlRow>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <SectionHeader
+            title="Public description"
+            description="Short context displayed beneath the public title."
+            className="px-4 py-3"
+          />
+          <div className="flex min-h-0 flex-1">
             <Textarea
+              aria-label="Public description"
               value={config.description}
+              placeholder="Short description shown beneath the public status page title"
               disabled={disabled}
+              className="min-h-0 flex-1 resize-none rounded-none border-0 p-4 shadow-none focus-visible:ring-1 focus-visible:ring-inset"
               onChange={(event) =>
                 onConfigChange((prev) => ({ ...prev, description: event.target.value }))
               }
             />
-          </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Recent resolved incident days">
-              <Input
-                type="number"
-                min={1}
-                max={365}
-                value={config.recentIncidentDays}
-                disabled={disabled}
-                onChange={(event) =>
-                  onConfigChange((prev) => ({
-                    ...prev,
-                    recentIncidentDays: Number(event.target.value),
-                  }))
-                }
-              />
-            </Field>
-            <Field label="Public incident limit">
-              <Input
-                type="number"
-                min={1}
-                max={100}
-                value={config.publicIncidentLimit}
-                disabled={disabled}
-                onChange={(event) =>
-                  onConfigChange((prev) => ({
-                    ...prev,
-                    publicIncidentLimit: Number(event.target.value),
-                  }))
-                }
-              />
-            </Field>
           </div>
         </div>
-      </div>
+      </PanelShell>
 
-      <div className="border border-border bg-card">
-        <div className="border-b border-border p-4">
-          <h2 className="text-sm font-semibold">Auto-Incident Settings</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Configure automatic incident creation and severity defaults.
-          </p>
-        </div>
-        <div className="divide-y divide-border">
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Auto incidents for degraded services</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Create an automatic incident when an exposed service is degraded.
-              </p>
-            </div>
-            <Switch
-              checked={config.autoDegradedEnabled}
-              disabled={disabled}
-              onChange={(autoDegradedEnabled) =>
-                onConfigChange((prev) => ({ ...prev, autoDegradedEnabled }))
-              }
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Degraded incident severity</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Severity used for automatic degraded-service incidents.
-              </p>
-            </div>
-            <Select
-              value={config.autoDegradedSeverity}
-              disabled={disabled || !config.autoDegradedEnabled}
-              onValueChange={setSeverity("autoDegradedSeverity")}
+      <PanelShell
+        title="Auto-Incident Settings"
+        icon={<Siren className="h-4 w-4" />}
+        description="Configure automatic incident creation and severity defaults."
+        dirty={autoIncidentDirty}
+        actions={
+          canManage ? (
+            <Button
+              onClick={() => void saveAutoIncidentSettings()}
+              disabled={disabled || !autoIncidentDirty}
             >
-              <SelectTrigger className="w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="info">Info</SelectItem>
-                <SelectItem value="warning">Warning</SelectItem>
-                <SelectItem value="critical">Critical</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Auto incidents for outages</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Create an automatic incident when an exposed service is offline.
-              </p>
-            </div>
-            <Switch
-              checked={config.autoOutageEnabled}
-              disabled={disabled}
-              onChange={(autoOutageEnabled) =>
-                onConfigChange((prev) => ({ ...prev, autoOutageEnabled }))
-              }
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3 xl:border-b xl:border-border">
-            <div>
-              <p className="text-sm font-medium">Outage incident severity</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Severity used for automatic outage incidents.
-              </p>
-            </div>
-            <Select
-              value={config.autoOutageSeverity}
-              disabled={disabled || !config.autoOutageEnabled}
-              onValueChange={setSeverity("autoOutageSeverity")}
-            >
-              <SelectTrigger className="w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="info">Info</SelectItem>
-                <SelectItem value="warning">Warning</SelectItem>
-                <SelectItem value="critical">Critical</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-4 px-4 py-3 sm:grid-cols-2">
-            <Field label="Create incident after seconds">
-              <Input
-                type="number"
-                min={30}
-                max={86400}
-                value={config.autoCreateThresholdSeconds}
-                disabled={disabled}
-                onChange={(event) =>
-                  onConfigChange((prev) => ({
-                    ...prev,
-                    autoCreateThresholdSeconds: Number(event.target.value),
-                  }))
-                }
-              />
-            </Field>
-            <Field label="Resolve incident after seconds">
-              <Input
-                type="number"
-                min={30}
-                max={86400}
-                value={config.autoResolveThresholdSeconds}
-                disabled={disabled}
-                onChange={(event) =>
-                  onConfigChange((prev) => ({
-                    ...prev,
-                    autoResolveThresholdSeconds: Number(event.target.value),
-                  }))
-                }
-              />
-            </Field>
-          </div>
-        </div>
-      </div>
+              <Save className="h-4 w-4" />
+              {savingSection === "auto" ? "Saving…" : "Save"}
+            </Button>
+          ) : null
+        }
+      >
+        <SettingsControlRow
+          title="Auto incidents for degraded services"
+          description="Create an automatic incident when an exposed service is degraded."
+          help="Applies only to services exposed on this Status Page. Gateway opens and later resolves the incident automatically from observed service health."
+          controlsClassName="sm:min-w-0"
+        >
+          <Switch
+            checked={config.autoDegradedEnabled}
+            disabled={disabled}
+            ariaLabel="Auto incidents for degraded services"
+            onChange={(autoDegradedEnabled) =>
+              onConfigChange((prev) => ({ ...prev, autoDegradedEnabled }))
+            }
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Degraded incident severity"
+          description="Severity used for automatic degraded-service incidents."
+          help="Sets the public severity and notification priority of incidents created for degraded services. It does not change how Gateway determines that a service is degraded."
+          controlsClassName="sm:min-w-0"
+        >
+          <Select
+            value={config.autoDegradedSeverity}
+            disabled={disabled || !config.autoDegradedEnabled}
+            onValueChange={setSeverity("autoDegradedSeverity")}
+          >
+            <SelectTrigger className="w-40" aria-label="Degraded incident severity">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="info">Info</SelectItem>
+              <SelectItem value="warning">Warning</SelectItem>
+              <SelectItem value="critical">Critical</SelectItem>
+            </SelectContent>
+          </Select>
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Auto incidents for outages"
+          description="Create an automatic incident when an exposed service is offline."
+          help="Applies only to services exposed on this Status Page. An outage incident is created after the configured delay when Gateway observes the service as offline."
+          controlsClassName="sm:min-w-0"
+        >
+          <Switch
+            checked={config.autoOutageEnabled}
+            disabled={disabled}
+            ariaLabel="Auto incidents for outages"
+            onChange={(autoOutageEnabled) =>
+              onConfigChange((prev) => ({ ...prev, autoOutageEnabled }))
+            }
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Outage incident severity"
+          description="Severity used for automatic outage incidents."
+          help="Sets the public severity and notification priority of incidents created for offline services. It does not change the service health check itself."
+          controlsClassName="sm:min-w-0"
+        >
+          <Select
+            value={config.autoOutageSeverity}
+            disabled={disabled || !config.autoOutageEnabled}
+            onValueChange={setSeverity("autoOutageSeverity")}
+          >
+            <SelectTrigger className="w-40" aria-label="Outage incident severity">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="info">Info</SelectItem>
+              <SelectItem value="warning">Warning</SelectItem>
+              <SelectItem value="critical">Critical</SelectItem>
+            </SelectContent>
+          </Select>
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Create incident delay"
+          description="Seconds a degraded or offline state must persist before creating an incident."
+          help="Prevents brief health-check failures from immediately becoming public incidents. The timer resets if the service recovers before this delay expires."
+          controlsClassName="sm:min-w-0"
+        >
+          <Input
+            aria-label="Create incident after seconds"
+            className="w-32"
+            type="number"
+            min={30}
+            max={86400}
+            value={config.autoCreateThresholdSeconds}
+            disabled={disabled}
+            onChange={(event) =>
+              onConfigChange((prev) => ({
+                ...prev,
+                autoCreateThresholdSeconds: Number(event.target.value),
+              }))
+            }
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Resolve incident delay"
+          description="Seconds a service must remain healthy before resolving its automatic incident."
+          help="Prevents a briefly recovered service from closing an incident too early. The service must remain healthy continuously for this entire delay."
+          controlsClassName="sm:min-w-0"
+        >
+          <Input
+            aria-label="Resolve incident after seconds"
+            className="w-32"
+            type="number"
+            min={30}
+            max={86400}
+            value={config.autoResolveThresholdSeconds}
+            disabled={disabled}
+            onChange={(event) =>
+              onConfigChange((prev) => ({
+                ...prev,
+                autoResolveThresholdSeconds: Number(event.target.value),
+              }))
+            }
+          />
+        </SettingsControlRow>
+      </PanelShell>
     </div>
   );
 }

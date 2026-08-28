@@ -81,6 +81,9 @@ export function DockerVolumes({
   const [createNodeId, setCreateNodeId] = useState<string>("");
   const openCreate = useCallback(() => {
     setCreateNodeId(fixedNodeId || selectedNodeId || "");
+    setCreateName("");
+    setCreateStorageKind("regular");
+    setCreateCapacityGb("10");
     setCreateOpen(true);
   }, [fixedNodeId, selectedNodeId]);
   useEffect(() => {
@@ -205,9 +208,6 @@ export function DockerVolumes({
 
   const closeCreate = () => {
     setCreateOpen(false);
-    setCreateName("");
-    setCreateStorageKind("regular");
-    setCreateCapacityGb("10");
   };
 
   const handleAdopt = useCallback(

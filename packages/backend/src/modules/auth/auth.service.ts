@@ -29,6 +29,7 @@ import type { CacheService } from '@/services/cache.service.js';
 import type { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
 import type { AuthSettingsService } from './auth.settings.service.js';
+import { type AvatarStorageService, isStoredAvatarUrl } from './avatar-storage.service.js';
 import {
   computeEffectiveGroupAccess,
   computeEffectiveUserAccess,
@@ -36,7 +37,7 @@ import {
   resolveEffectiveUserAccess,
 } from './live-session-user.js';
 import { mfaRequiredChannel } from './mfa-events.js';
-import type { OidcRuntimeConfig, OidcSettingsService } from './oidc-settings.service.js';
+import type { OidcSettingsService } from './oidc-settings.service.js';
 
 const logger = createChildLogger('AuthService');
 
@@ -96,16 +97,8 @@ function normalizeDisplayName(name: string | null | undefined, fallbackEmail: st
   return name?.trim() || fallbackEmail;
 }
 
-function legacyOidcRuntimeConfig(): OidcRuntimeConfig | null {
-  const env = getEnv();
-  if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.OIDC_REDIRECT_URI) return null;
-  return {
-    issuer: env.OIDC_ISSUER,
-    clientId: env.OIDC_CLIENT_ID,
-    clientSecret: env.OIDC_CLIENT_SECRET,
-    redirectUri: env.OIDC_REDIRECT_URI,
-    scopes: env.OIDC_SCOPES,
-  };
+function isCustomAvatarUrl(value: string | null | undefined): boolean {
+  return value?.startsWith('data:image/') === true || isStoredAvatarUrl(value);
 }
 
 interface OIDCState {
@@ -117,6 +110,7 @@ interface OIDCState {
 @injectable()
 export class AuthService {
   private licenseQuota?: LicenseQuotaService;
+  private avatarStorageService?: AvatarStorageService;
 
   private oidcConfig: client.Configuration | null = null;
 
@@ -132,6 +126,10 @@ export class AuthService {
 
   setLicenseQuotaService(service: LicenseQuotaService): void {
     this.licenseQuota = service;
+  }
+
+  setAvatarStorageService(service: AvatarStorageService): void {
+    this.avatarStorageService = service;
   }
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
@@ -157,9 +155,7 @@ export class AuthService {
       return this.oidcConfig;
     }
 
-    const runtime = this.oidcSettingsService
-      ? await this.oidcSettingsService.getRuntimeConfig()
-      : legacyOidcRuntimeConfig();
+    const runtime = (await this.oidcSettingsService?.getRuntimeConfig()) ?? null;
     if (!runtime) {
       throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
     }
@@ -180,9 +176,7 @@ export class AuthService {
 
   async getAuthorizationUrl(returnTo?: string): Promise<string> {
     await this.assertAuthMethodEnabled('oidc');
-    const runtime = this.oidcSettingsService
-      ? await this.oidcSettingsService.getRuntimeConfig()
-      : legacyOidcRuntimeConfig();
+    const runtime = (await this.oidcSettingsService?.getRuntimeConfig()) ?? null;
     const config = await this.getOIDCConfig();
     if (!runtime) throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
 
@@ -282,18 +276,19 @@ export class AuthService {
         (!authSettings.oidcRequireVerifiedEmail || data.emailVerified || existingUser.email === normalizedEmail);
       const nextEmail = canSyncEmail ? normalizedEmail : existingUser.email;
       const nextName = normalizeDisplayName(data.name, existingUser.name?.trim() || nextEmail);
+      const nextAvatarUrl = isCustomAvatarUrl(existingUser.avatarUrl) ? existingUser.avatarUrl : data.avatarUrl;
 
       if (
         existingUser.email !== nextEmail ||
         existingUser.name !== nextName ||
-        existingUser.avatarUrl !== data.avatarUrl
+        existingUser.avatarUrl !== nextAvatarUrl
       ) {
         const [updatedUser] = await this.db
           .update(users)
           .set({
             email: nextEmail,
             name: nextName,
-            avatarUrl: data.avatarUrl,
+            avatarUrl: nextAvatarUrl,
             updatedAt: new Date(),
           })
           .where(eq(users.id, existingUser.id))
@@ -312,7 +307,7 @@ export class AuthService {
             emailClaimMissing: normalizedEmail === null,
             emailVerified: data.emailVerified,
             nameChanged: existingUser.name !== nextName,
-            avatarChanged: existingUser.avatarUrl !== data.avatarUrl,
+            avatarChanged: existingUser.avatarUrl !== nextAvatarUrl,
           },
         });
 
@@ -544,6 +539,38 @@ export class AuthService {
       .returning();
     this.emitUser(userId, 'updated');
     return this.mapDbUserToUser(updated);
+  }
+
+  async updateUserAvatar(userId: string, avatarUrl: string | null): Promise<User> {
+    const previous = this.avatarStorageService
+      ? await this.db.query.users.findFirst({ where: eq(users.id, userId), columns: { avatarUrl: true } })
+      : null;
+    const [updated] = await this.db
+      .update(users)
+      .set({ avatarUrl, updatedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .returning();
+    if (!updated) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    if (previous?.avatarUrl && previous.avatarUrl !== avatarUrl) {
+      await this.avatarStorageService?.removeByUrl(previous.avatarUrl).catch((error) => {
+        logger.warn('Failed to remove replaced avatar file', { userId, error });
+      });
+    }
+    this.emitUser(userId, 'updated');
+    return this.mapDbUserToUser(updated);
+  }
+
+  async uploadUserAvatar(userId: string, file: File): Promise<User> {
+    if (!this.avatarStorageService) {
+      throw new AppError(503, 'AVATAR_STORAGE_UNAVAILABLE', 'Avatar storage is unavailable');
+    }
+    const avatarUrl = await this.avatarStorageService.store(file);
+    try {
+      return await this.updateUserAvatar(userId, avatarUrl);
+    } catch (error) {
+      await this.avatarStorageService.removeByUrl(avatarUrl).catch(() => {});
+      throw error;
+    }
   }
 
   async hasCompletedSignIn(userId: string): Promise<boolean> {

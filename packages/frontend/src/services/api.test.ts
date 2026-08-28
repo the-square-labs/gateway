@@ -42,6 +42,31 @@ describe("api client contract", () => {
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "POST", credentials: "include" });
   });
 
+  it("uploads avatars as multipart files and removes them without a JSON body", async () => {
+    const user = { id: "user-1", avatarUrl: "/auth/avatars/avatar.webp" };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse(user))
+      .mockResolvedValueOnce(jsonResponse({ ...user, avatarUrl: null }));
+    const avatar = new Blob(["webp"], { type: "image/webp" });
+
+    await api.updateCurrentUserAvatar(avatar);
+    await api.updateCurrentUserAvatar(null);
+
+    const uploadInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/auth/me/avatar");
+    expect(uploadInit.method).toBe("PUT");
+    expect(uploadInit.body).toBeInstanceOf(FormData);
+    expect((uploadInit.body as FormData).get("avatar")).toBeInstanceOf(File);
+    expect(new Headers(uploadInit.headers).has("Content-Type")).toBe(false);
+
+    const removeInit = fetchMock.mock.calls[2]?.[1] as RequestInit;
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/auth/me/avatar");
+    expect(removeInit.method).toBe("DELETE");
+    expect(removeInit.body).toBeUndefined();
+  });
+
   it("uses the Pages project runtime-config routes", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

@@ -7,6 +7,14 @@ const Select = SelectPrimitive.Root;
 const SelectGroup = SelectPrimitive.Group;
 const SelectValue = SelectPrimitive.Value;
 
+function hasRenderableSelectChildren(children: React.ReactNode): boolean {
+  return React.Children.toArray(children).some((child) => {
+    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) return true;
+    if (child.type !== React.Fragment) return true;
+    return hasRenderableSelectChildren(child.props.children);
+  });
+}
+
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
@@ -89,6 +97,14 @@ const SelectContent = React.forwardRef<
     };
   }, [updateScrollControls]);
 
+  const content = hasRenderableSelectChildren(children) ? (
+    children
+  ) : (
+    <SelectItem value="__empty__" disabled>
+      No options available
+    </SelectItem>
+  );
+
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -118,7 +134,7 @@ const SelectContent = React.forwardRef<
             position === "popper" && "h-[var(--radix-select-trigger-height)] w-full"
           )}
         >
-          {children}
+          {content}
         </SelectPrimitive.Viewport>
         <SelectScrollDownButton
           className={cn(
@@ -172,6 +188,8 @@ const SelectItem = React.forwardRef<
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;
+
+export const __selectTestOnly = { hasRenderableSelectChildren };
 
 const SelectSeparator = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Separator>,

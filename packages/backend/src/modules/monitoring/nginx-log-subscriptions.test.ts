@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
-import { logRelay, NGINX_LOG_SUBSCRIBE_ACK_EVENT, type RelayedLogEntry } from './log-relay.service.js';
+import {
+  getNginxLogHistory,
+  logRelay,
+  NGINX_LOG_SUBSCRIBE_ACK_EVENT,
+  type RelayedLogEntry,
+  resetNginxLogHistoryForTest,
+} from './log-relay.service.js';
 import {
   requestNginxHostLogHistory,
   resetNginxLogSubscriptionsForTest,
@@ -16,6 +22,7 @@ function createRegistry(node: unknown): NodeRegistryService {
 describe('subscribeNginxHostLogs', () => {
   beforeEach(() => {
     resetNginxLogSubscriptionsForTest();
+    resetNginxLogHistoryForTest();
   });
 
   it('subscribes and unsubscribes nginx log stream', () => {
@@ -116,5 +123,34 @@ describe('subscribeNginxHostLogs', () => {
     logRelay.emit(NGINX_LOG_SUBSCRIBE_ACK_EVENT, { nodeId: 'node-2', hostId: 'host-1' });
 
     await expect(resultPromise).resolves.toEqual({ ok: false, message: 'Timed out while loading nginx log history' });
+  });
+
+  it('retains a bounded server-side host buffer for reconnect replay', () => {
+    const baseEntry: RelayedLogEntry = {
+      nodeId: 'node-1',
+      hostId: 'host-1',
+      timestamp: '2026-08-28T00:00:00.000Z',
+      remoteAddr: '127.0.0.1',
+      method: 'GET',
+      path: '/',
+      status: 200,
+      bodyBytesSent: '0',
+      raw: 'log',
+      logType: 'access',
+      level: '',
+    };
+
+    for (let index = 0; index < 305; index += 1) {
+      logRelay.emit('log', {
+        ...baseEntry,
+        timestamp: `2026-08-28T00:00:${String(index).padStart(3, '0')}Z`,
+      });
+    }
+
+    const replay = getNginxLogHistory('host-1');
+    expect(replay).toHaveLength(300);
+    expect(replay[0]?.timestamp).toContain('005Z');
+    replay.length = 0;
+    expect(getNginxLogHistory('host-1')).toHaveLength(300);
   });
 });

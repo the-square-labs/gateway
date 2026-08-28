@@ -6,6 +6,7 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { getClientIpForContext } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv } from '@/types.js';
@@ -19,14 +20,17 @@ import {
   listCurrentUserSessionsRoute,
   logoutRoute,
   regenerateCurrentUserRecoveryCodesRoute,
+  removeCurrentUserAvatarRoute,
   resetCurrentUserTotpRoute,
   revokeCurrentUserSessionRoute,
   revokeOtherCurrentUserSessionsRoute,
   stopImpersonationRoute,
+  updateCurrentUserAvatarRoute,
   updateCurrentUserPreferencesRoute,
 } from './auth.docs.js';
 import { authMiddleware, CSRF_HEADER_NAME, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
+import { AvatarStorageService } from './avatar-storage.service.js';
 import { requiresSessionMfaReauthentication } from './live-session-user.js';
 import { LocalAuthService } from './local-auth.service.js';
 import { MfaService } from './mfa.service.js';
@@ -89,14 +93,13 @@ async function setLocalSession(
     ...(mfaSatisfied ? { mfaSatisfiedAt: Date.now() } : {}),
   });
   await container.resolve(AuthService).recordSuccessfulSignIn(user.id);
-  const env = getEnv();
   const publicUrl = await getPublicUrl();
   const publicUrlObject = new URL(publicUrl);
   const cookieOptions = {
     httpOnly: true,
     secure: publicUrlObject.protocol === 'https:',
     sameSite: 'Lax' as const,
-    maxAge: env.SESSION_EXPIRY,
+    maxAge: getEnvironmentSettingsSnapshot().sessions.expirySeconds,
     path: '/',
   };
   setCookie(c, getSessionCookieNameForUrl(publicUrl), sessionId, cookieOptions);
@@ -210,7 +213,6 @@ const callbackRoute = createRoute({
 authRoutes.openapi(callbackRoute, async (c) => {
   const authService = container.resolve(AuthService);
   const auditService = container.resolve(AuditService);
-  const env = getEnv();
   const { state, error, error_description } = c.req.valid('query');
 
   if (error) {
@@ -248,7 +250,7 @@ authRoutes.openapi(callbackRoute, async (c) => {
       httpOnly: true,
       secure: new URL(publicUrl).protocol === 'https:',
       sameSite: 'Lax',
-      maxAge: env.SESSION_EXPIRY,
+      maxAge: getEnvironmentSettingsSnapshot().sessions.expirySeconds,
       path: '/',
     });
 
@@ -611,6 +613,46 @@ authRoutes.openapi(updateCurrentUserPreferencesRoute, async (c) => {
   const authService = container.resolve(AuthService);
   const preferences = await authService.updateUserPreferences(sessionUser.id, c.req.valid('json'));
   return c.json(preferences);
+});
+
+authRoutes.use('/me/avatar', authMiddleware);
+authRoutes.use('/me/avatar', sessionOnly);
+authRoutes.openapi(updateCurrentUserAvatarRoute, async (c) => {
+  const sessionUser = c.get('user')!;
+  const { avatar } = c.req.valid('form');
+  if (!(avatar instanceof File)) {
+    throw new AppError(400, 'AVATAR_REQUIRED', 'Avatar image is required');
+  }
+  const updated = await container.resolve(AuthService).uploadUserAvatar(sessionUser.id, avatar);
+  await container.resolve(AuditService).log({
+    userId: sessionUser.id,
+    action: 'user.avatar_update',
+    resourceType: 'user',
+    resourceId: sessionUser.id,
+    details: { customAvatar: true, sizeBytes: avatar.size, mediaType: avatar.type },
+  });
+  return c.json(updated);
+});
+
+authRoutes.openapi(removeCurrentUserAvatarRoute, async (c) => {
+  const sessionUser = c.get('user')!;
+  const updated = await container.resolve(AuthService).updateUserAvatar(sessionUser.id, null);
+  await container.resolve(AuditService).log({
+    userId: sessionUser.id,
+    action: 'user.avatar_remove',
+    resourceType: 'user',
+    resourceId: sessionUser.id,
+    details: { customAvatar: false },
+  });
+  return c.json(updated);
+});
+
+authRoutes.get('/avatars/:filename', async (c) => {
+  const asset = await container.resolve(AvatarStorageService).read(c.req.param('filename'));
+  c.header('Cache-Control', 'public, max-age=31536000, immutable');
+  c.header('Content-Type', asset.mediaType);
+  c.header('X-Content-Type-Options', 'nosniff');
+  return c.body(Uint8Array.from(asset.bytes).buffer);
 });
 
 authRoutes.use('/me/mfa', authMiddleware);

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDateTime } from "@/lib/utils";
@@ -62,7 +62,14 @@ describe("InferenceUsage", () => {
     expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
     expect(screen.getByText("90%")).not.toHaveClass("text-warning");
     expect(screen.getByText("96%")).not.toHaveClass("text-warning");
-    const text = document.body.textContent ?? "";
+    const panel = screen.getByText("Inference usage").closest(".border.border-border.bg-card");
+    expect(panel).toBeInTheDocument();
+    expect(within(panel as HTMLElement).getByText("Base URL")).toBeInTheDocument();
+    expect(within(panel as HTMLElement).getByText(/\/api\/inference\/v1/)).toBeInTheDocument();
+    expect(
+      within(panel as HTMLElement).getByRole("button", { name: "Set up a harness" })
+    ).toBeInTheDocument();
+    const text = usageCard?.parentElement?.textContent ?? "";
     expect(text).not.toMatch(/\$|credits|tokens|openai|anthropic|kimi/i);
   });
 
@@ -123,6 +130,8 @@ describe("InferenceUsage", () => {
 
     await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
     expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("Base URL")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set up a harness" })).not.toBeInTheDocument();
   });
 
   it("shows dashboard usage only below 20 percent remaining", async () => {
@@ -273,12 +282,11 @@ describe("InferenceUsage", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("keeps a retryable inline error instead of replacing the page", async () => {
+  it("hides the profile panel when inference usage is unavailable", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockRejectedValue(new Error("Usage unavailable"));
-    render(<InferenceUsage />);
-    expect(await screen.findByText("Usage unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    const { container } = render(<InferenceUsage />);
     await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders system totals without duplicating the provider health table", async () => {

@@ -1,6 +1,7 @@
 import { Minus, Plus } from "lucide-react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -30,7 +31,12 @@ export function LabelsSection({
 
   return (
     <PanelShell
-      title="Labels"
+      title={
+        <SettingsHelpTitle
+          label="Labels"
+          help="Docker metadata used by automation, discovery, routing, and management tools. Changing labels recreates the container."
+        />
+      }
       description={description}
       dirty={labelsChanged}
       actions={

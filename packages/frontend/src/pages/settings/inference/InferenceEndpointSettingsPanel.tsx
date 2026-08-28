@@ -15,13 +15,25 @@ import {
 
 const CLI_COMMAND = "npx -y @sqgateway/inference@latest";
 
-export function InferenceEndpointSettingsPanel() {
-  const [instructionsOpen, setInstructionsOpen] = useState(false);
-
+export function InferenceEndpointRow() {
   const gatewayUrl = window.location.origin;
   const baseUrl = `${gatewayUrl}/api/inference/v1`;
-  const codexSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup codex`;
-  const claudeCodeSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup claude-code`;
+
+  return (
+    <SettingsControlRow
+      title="Base URL"
+      description="OpenAI-compatible inference API root."
+      help="Use this address as the provider base URL in OpenAI-compatible clients. Authentication still uses a Gateway inference API token."
+    >
+      <CopyValueField label="Base URL" showLabel={false} value={baseUrl} className="w-full" />
+    </SettingsControlRow>
+  );
+}
+
+export function InferenceEndpointSettingsPanel() {
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const gatewayUrl = window.location.origin;
+  const baseUrl = `${gatewayUrl}/api/inference/v1`;
 
   return (
     <>
@@ -45,73 +57,87 @@ export function InferenceEndpointSettingsPanel() {
           <CopyValueField label="Base URL" showLabel={false} value={baseUrl} className="w-full" />
         </SettingsControlRow>
       </PanelShell>
+      <InferenceHarnessDialog open={instructionsOpen} onOpenChange={setInstructionsOpen} />
+    </>
+  );
+}
 
-      <Dialog open={instructionsOpen} onOpenChange={setInstructionsOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Set up an inference harness</DialogTitle>
-          </DialogHeader>
-          <DialogDescription>
-            Run the companion CLI on the device where the harness is installed.
-          </DialogDescription>
+export function InferenceHarnessDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const gatewayUrl = window.location.origin;
+  const codexSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup codex`;
+  const claudeCodeSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup claude-code`;
 
-          <div className="space-y-4">
-            <CopyCodeBlock label="Interactive setup" value={CLI_COMMAND} codeClassName="min-h-0" />
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Set up an inference harness</DialogTitle>
+        </DialogHeader>
+        <DialogDescription>
+          Run the companion CLI on the device where the harness is installed.
+        </DialogDescription>
 
-            <div className="space-y-2">
-              <div>
-                <p className="text-sm font-medium">Codex</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Configures Codex CLI and Desktop through a managed local proxy and Gateway model
-                  catalog.
-                </p>
-              </div>
-              <CopyCodeBlock
-                label="Direct Codex setup"
-                value={codexSetupCommands}
-                codeClassName="min-h-0"
-              />
-              <div className="border border-border p-3">
-                <p className="text-sm font-medium">Codex Desktop requires extra setup</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Sign in to an OpenAI account through Codex’s normal login flow first. Codex
-                  Desktop does not show custom model catalogs without that account session. After
-                  Gateway setup or login changes, fully quit and reopen Codex so it reloads the
-                  catalog.
-                </p>
-              </div>
+        <div className="space-y-4">
+          <CopyCodeBlock label="Interactive setup" value={CLI_COMMAND} codeClassName="min-h-0" />
+
+          <div className="space-y-2">
+            <div>
+              <p className="text-sm font-medium">Codex</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Configures Codex CLI and Desktop through a managed local proxy and Gateway model
+                catalog.
+              </p>
             </div>
-
-            <div className="space-y-2">
-              <div>
-                <p className="text-sm font-medium">Claude Code</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Requires Claude Code 2.1.129 or newer and configures its native Anthropic gateway
-                  connection.
-                </p>
-              </div>
-              <CopyCodeBlock
-                label="Direct Claude Code setup"
-                value={claudeCodeSetupCommands}
-                codeClassName="min-h-0"
-              />
-              <div className="border border-border p-3">
-                <p className="text-sm font-medium">Claude Code CLI only</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Claude Desktop and the Claude Code VS Code extension use separate configuration
-                  surfaces and are not modified automatically.
-                </p>
-              </div>
+            <CopyCodeBlock
+              label="Direct Codex setup"
+              value={codexSetupCommands}
+              codeClassName="min-h-0"
+            />
+            <div className="border border-border p-3">
+              <p className="text-sm font-medium">Codex Desktop requires extra setup</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Sign in to an OpenAI account through Codex’s normal login flow first. Codex Desktop
+                does not show custom model catalogs without that account session. After Gateway
+                setup or login changes, fully quit and reopen Codex so it reloads the catalog.
+              </p>
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setInstructionsOpen(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+          <div className="space-y-2">
+            <div>
+              <p className="text-sm font-medium">Claude Code</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Requires Claude Code 2.1.129 or newer and configures its native Anthropic gateway
+                connection.
+              </p>
+            </div>
+            <CopyCodeBlock
+              label="Direct Claude Code setup"
+              value={claudeCodeSetupCommands}
+              codeClassName="min-h-0"
+            />
+            <div className="border border-border p-3">
+              <p className="text-sm font-medium">Claude Code CLI only</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Claude Desktop and the Claude Code VS Code extension use separate configuration
+                surfaces and are not modified automatically.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

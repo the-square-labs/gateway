@@ -149,7 +149,6 @@ export function ApiTokensSection({
       toast.success("Token updated");
       setCreateDialogOpen(false);
       loadTokens();
-      setTimeout(() => setEditingToken(null), 200);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update token");
     }
@@ -227,6 +226,7 @@ export function ApiTokensSection({
       <PanelShell
         title="API Tokens"
         description="Granular tokens for programmatic access. AI is available to users only."
+        icon={<Key className="h-4 w-4" />}
         actions={
           <Button onClick={openTokenCreate}>
             <Plus className="h-4 w-4" />
@@ -292,10 +292,6 @@ export function ApiTokensSection({
         open={createDialogOpen}
         onOpenChange={(open) => {
           setCreateDialogOpen(open);
-          if (!open) {
-            setInitialResourceLimitedScopes([]);
-            setTimeout(() => setEditingToken(null), 200);
-          }
         }}
       >
         <DialogContent className="sm:max-w-2xl">

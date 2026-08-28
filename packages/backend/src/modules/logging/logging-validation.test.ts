@@ -1,23 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { Env } from '@/config/env.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { DEFAULT_ENVIRONMENT_SETTINGS } from '@/modules/settings/environment-settings.service.js';
 import { buildSearchQuery } from './logging-query-builder.js';
 import { LoggingValidationService } from './logging-validation.service.js';
 
-const env = {
-  LOGGING_INGEST_MAX_BODY_BYTES: 1_048_576,
-  LOGGING_INGEST_MAX_BATCH_SIZE: 500,
-  LOGGING_INGEST_MAX_MESSAGE_BYTES: 64,
-  LOGGING_INGEST_MAX_LABELS: 4,
-  LOGGING_INGEST_MAX_FIELDS: 4,
-  LOGGING_INGEST_MAX_KEY_LENGTH: 100,
-  LOGGING_INGEST_MAX_VALUE_BYTES: 8192,
-  LOGGING_INGEST_MAX_JSON_DEPTH: 2,
-} as Env;
+const limits = {
+  ...DEFAULT_ENVIRONMENT_SETTINGS.loggingIngest,
+  maxMessageBytes: 64,
+  maxLabels: 4,
+  maxFields: 4,
+  maxJsonDepth: 2,
+};
 
 describe('LoggingValidationService', () => {
   it('defaults missing timestamp and keeps valid loose unknown fields', () => {
-    const service = new LoggingValidationService(env);
+    const service = new LoggingValidationService(() => limits);
     const result = service.validateBatch({
       environmentId: '018f0000-0000-7000-8000-000000000001',
       retentionDays: 30,
@@ -40,7 +37,7 @@ describe('LoggingValidationService', () => {
   });
 
   it('rejects invalid severities and future timestamps per entry', () => {
-    const service = new LoggingValidationService(env);
+    const service = new LoggingValidationService(() => limits);
     const result = service.validateBatch({
       environmentId: '018f0000-0000-7000-8000-000000000001',
       retentionDays: 30,
@@ -62,7 +59,7 @@ describe('LoggingValidationService', () => {
   });
 
   it('strips unknown fields in strip mode and rejects unknown fields in reject mode', () => {
-    const service = new LoggingValidationService(env);
+    const service = new LoggingValidationService(() => limits);
     const strip = service.validateBatch({
       environmentId: '018f0000-0000-7000-8000-000000000001',
       retentionDays: 30,
@@ -84,7 +81,7 @@ describe('LoggingValidationService', () => {
   });
 
   it('rejects unsafe keys and overly deep json', () => {
-    const service = new LoggingValidationService(env);
+    const service = new LoggingValidationService(() => limits);
     const result = service.validateBatch({
       environmentId: '018f0000-0000-7000-8000-000000000001',
       retentionDays: 30,

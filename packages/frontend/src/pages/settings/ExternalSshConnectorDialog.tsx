@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, KeyRound, Loader2, Plus } from "lucide-react";
+import { ArrowLeft, KeyRound, Loader2, Plus, Server, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -355,6 +355,7 @@ export function ExternalSshConnectorDialog({
     return (
       <PanelShell
         title={isTarget ? "Connection" : "Jump server connection"}
+        icon={<Server className="h-4 w-4" />}
         description={
           isTarget
             ? "External target, account, and optional jump server."
@@ -447,6 +448,7 @@ export function ExternalSshConnectorDialog({
       <PanelShell
         title={purpose === "target" ? "Authentication" : "Jump server authentication"}
         description="Gateway encrypts the credential and never displays it again."
+        icon={<KeyRound className="h-4 w-4" />}
       >
         <SettingsControlRow title="Credential type">
           <Select
@@ -565,6 +567,7 @@ export function ExternalSshConnectorDialog({
       <PanelShell
         title="Review & host identity"
         description="No connector is created until you use the final action below."
+        icon={<ShieldCheck className="h-4 w-4" />}
       >
         <SettingsControlRow title="Target">
           <span className="text-sm text-muted-foreground">
@@ -632,6 +635,7 @@ export function ExternalSshConnectorDialog({
                 <PanelShell
                   title="Install public key"
                   description="Add this key to authorized_keys for every account listed below."
+                  icon={<KeyRound className="h-4 w-4" />}
                 >
                   <SettingsControlRow title="Install on">
                     <div className="space-y-1 text-right text-sm text-muted-foreground">

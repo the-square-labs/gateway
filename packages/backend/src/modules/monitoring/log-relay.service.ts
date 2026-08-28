@@ -72,7 +72,11 @@ logRelay.on('log', (entry: RelayedLogEntry) => {
 
 /** Get buffered nginx logs for a proxy host. */
 export function getNginxLogHistory(hostId: string): RelayedLogEntry[] {
-  return nginxLogBuffers.get(hostId) ?? [];
+  return [...(nginxLogBuffers.get(hostId) ?? [])];
+}
+
+export function resetNginxLogHistoryForTest(): void {
+  nginxLogBuffers.clear();
 }
 
 /**

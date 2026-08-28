@@ -287,6 +287,7 @@ export function OAuthApplicationsSection({
       <PanelShell
         title="OAuth Applications"
         description="Applications you authorized to access Gateway with your account"
+        icon={<ShieldCheck className="h-4 w-4" />}
       >
         {loading ? (
           <OAuthApplicationRowsSkeleton />

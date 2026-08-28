@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
-import { type Env, getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
 import { getClientIpForContext } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { EnvironmentSettings } from '@/modules/settings/environment-settings.schemas.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { RedisClient } from '@/services/cache.service.js';
 import type { AppEnv } from '@/types.js';
 
@@ -18,7 +19,7 @@ interface RateLimitConfig {
   keyPrefix?: string;
 }
 
-type RateLimitSelector = (env: Env) => number;
+type RateLimitSelector = (settings: EnvironmentSettings['rateLimits']) => number;
 
 function rateLimitUnavailable(error?: unknown): AppError {
   logger.warn('Rate limiter unavailable', {
@@ -92,62 +93,56 @@ export function createRateLimiter(config: RateLimitConfig): MiddlewareHandler<Ap
   };
 }
 
-function createEnvRateLimiter(keyPrefix: string, maxRequests: RateLimitSelector): MiddlewareHandler<AppEnv> {
-  let cachedLimiter: MiddlewareHandler<AppEnv> | null = null;
-
+function createEnvironmentRateLimiter(keyPrefix: string, maxRequests: RateLimitSelector): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    if (!cachedLimiter) {
-      const env = getEnv();
-      cachedLimiter = createRateLimiter({
-        windowMs: env.RATE_LIMIT_WINDOW_MS,
-        maxRequests: maxRequests(env),
-        keyPrefix,
-      });
-    }
-    return cachedLimiter(c, next);
+    const settings = getEnvironmentSettingsSnapshot().rateLimits;
+    return createRateLimiter({ windowMs: settings.windowMs, maxRequests: maxRequests(settings), keyPrefix })(c, next);
   };
 }
 
-export const rateLimitMiddleware = createEnvRateLimiter('ratelimit:api', (env) => env.RATE_LIMIT_MAX_REQUESTS);
+export const rateLimitMiddleware = createEnvironmentRateLimiter('ratelimit:api', (settings) => settings.maxRequests);
 
-export const authRateLimitMiddleware = createEnvRateLimiter(
+export const authRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:auth',
-  (env) => env.RATE_LIMIT_AUTH_MAX_REQUESTS
+  (settings) => settings.authMaxRequests
 );
 
-export const authLoginRateLimitMiddleware = createEnvRateLimiter(
+export const authLoginRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:auth:login',
-  (env) => env.RATE_LIMIT_AUTH_LOGIN_MAX_REQUESTS
+  (settings) => settings.authLoginMaxRequests
 );
 
-export const authCallbackRateLimitMiddleware = createEnvRateLimiter(
+export const authCallbackRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:auth:callback',
-  (env) => env.RATE_LIMIT_AUTH_CALLBACK_MAX_REQUESTS
+  (settings) => settings.authCallbackMaxRequests
 );
 
-export const setupRateLimitMiddleware = createEnvRateLimiter(
+export const setupRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:setup',
-  (env) => env.RATE_LIMIT_SETUP_MAX_REQUESTS
+  (settings) => settings.setupMaxRequests
 );
 
-export const publicStatusRateLimitMiddleware = createEnvRateLimiter(
+export const publicStatusRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:public:status-page',
-  (env) => env.RATE_LIMIT_PUBLIC_STATUS_MAX_REQUESTS
+  (settings) => settings.publicStatusMaxRequests
 );
 
-export const publicWebhookRateLimitMiddleware = createEnvRateLimiter(
+export const publicWebhookRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:public:webhook',
-  (env) => env.RATE_LIMIT_PUBLIC_WEBHOOK_MAX_REQUESTS
+  (settings) => settings.publicWebhookMaxRequests
 );
 
-export const pkiRateLimitMiddleware = createEnvRateLimiter('ratelimit:pki', (env) => env.RATE_LIMIT_PKI_MAX_REQUESTS);
+export const pkiRateLimitMiddleware = createEnvironmentRateLimiter(
+  'ratelimit:pki',
+  (settings) => settings.pkiMaxRequests
+);
 
-export const streamRateLimitMiddleware = createEnvRateLimiter(
+export const streamRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:stream',
-  (env) => env.RATE_LIMIT_STREAM_MAX_REQUESTS
+  (settings) => settings.streamMaxRequests
 );
 
-export const aiWebSocketRateLimitMiddleware = createEnvRateLimiter(
+export const aiWebSocketRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:ai:ws',
-  (env) => env.RATE_LIMIT_AI_WS_MAX_REQUESTS
+  (settings) => settings.aiWebSocketMaxRequests
 );

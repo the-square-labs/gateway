@@ -124,7 +124,11 @@ describe('AIService status page tool routing', () => {
       result: { data: [] },
       invalidateStores: [],
     });
-    expect(statusPageService.listIncidents).toHaveBeenCalledWith({ status: 'active', limit: 10 });
+    expect(statusPageService.listIncidents).toHaveBeenCalledWith({
+      status: 'active',
+      limit: 10,
+      offset: 0,
+    });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['status-page:incidents:update'] }, 'manage_status_page', {

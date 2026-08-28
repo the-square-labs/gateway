@@ -130,7 +130,7 @@ describe('foundation migrator patches', () => {
     expect(patched).not.toContain('      dockerfile: Dockerfile');
   });
 
-  it('removes legacy OIDC and ClickHouse wiring without disturbing unrelated configuration', () => {
+  it('removes migrated browser-owned settings wiring without disturbing unrelated configuration', () => {
     const compose = `${OLD_COMPOSE.replace(
       '    env_file: .env',
       `    env_file: .env
@@ -138,6 +138,13 @@ describe('foundation migrator patches', () => {
       OIDC_ISSUER_URL: \${OIDC_ISSUER_URL}
       - OIDC_CLIENT_SECRET=\${OIDC_CLIENT_SECRET}
       CLICKHOUSE_URL: http://clickhouse:8123
+      RATE_LIMIT_MAX_REQUESTS: 1200
+      - LOGGING_INGEST_MAX_BODY_BYTES=1048576
+      INFERENCE_BODY_MAX_BYTES: 33554432
+      SESSION_EXPIRY: 2592000
+      DEFAULT_CRL_VALIDITY_HOURS: 24
+      ACME_EMAIL: admin@example.com
+      ACME_STAGING: false
       APP_URL: \${APP_URL}
       SETUP_TOKEN: \${SETUP_TOKEN}
       OTHER_SETTING: keep-me`
@@ -158,7 +165,9 @@ volumes:
 
     const patched = patchCompose(compose);
 
-    expect(patched).not.toMatch(/OIDC_|CLICKHOUSE_|APP_URL|SETUP_TOKEN/);
+    expect(patched).not.toMatch(
+      /OIDC_|CLICKHOUSE_|RATE_LIMIT_|LOGGING_INGEST_|INFERENCE_BODY_MAX_BYTES|SESSION_EXPIRY|DEFAULT_CRL_VALIDITY_HOURS|ACME_EMAIL|ACME_STAGING|APP_URL|SETUP_TOKEN/
+    );
     expect(patched).not.toContain('\n  clickhouse:');
     expect(patched).not.toContain('clickhouse_data:');
     expect(patched).toContain('OTHER_SETTING: keep-me');

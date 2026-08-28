@@ -1,4 +1,14 @@
-import { Check, Loader2, Lock, Mail, Save, ShieldAlert, Trash2, Unlock } from "lucide-react";
+import {
+  Check,
+  Loader2,
+  Lock,
+  Mail,
+  RotateCcw,
+  Save,
+  ShieldAlert,
+  Trash2,
+  Unlock,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -199,6 +209,21 @@ export function AdminUserConfigDialog({
     });
   };
 
+  const resetAvatar = async () => {
+    const accepted = await confirm({
+      title: "Reset Avatar",
+      description: `Remove the current avatar for "${user.name || user.email}"? An identity provider may restore its avatar the next time the user signs in.`,
+      confirmLabel: "Reset",
+      variant: "destructive",
+    });
+    if (!accepted) return;
+    await run(async () => {
+      const updated = await api.resetUserAvatar(user.id);
+      onUserUpdated(updated);
+      toast.success("Avatar reset");
+    });
+  };
+
   return (
     <>
       <Dialog
@@ -235,6 +260,24 @@ export function AdminUserConfigDialog({
                 <Badge variant="secondary" size="inline" className="shrink-0">
                   {user.groupName}
                 </Badge>
+              </section>
+
+              <section className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                <div>
+                  <p className="text-sm font-medium">Avatar</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Remove the current image. OIDC may restore the provider avatar at next sign-in.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void resetAvatar()}
+                  disabled={saving || !user.avatarUrl}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Reset avatar
+                </Button>
               </section>
 
               {!isOidc && (

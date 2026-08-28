@@ -25,7 +25,6 @@ const MfaStatusSchema = z.object({
   recoveryCodeCount: z.number().int(),
   required: z.boolean(),
 });
-
 export const csrfTokenRoute = appRoute({
   method: 'get',
   path: '/csrf',
@@ -88,6 +87,33 @@ export const updateCurrentUserPreferencesRoute = createRoute({
     },
   },
   responses: { ...okJson(UserPreferencesSchema), ...commonErrorResponses },
+});
+
+export const updateCurrentUserAvatarRoute = createRoute({
+  method: 'put',
+  path: '/me/avatar',
+  tags: ['Authentication'],
+  summary: "Update or remove the current user's custom avatar",
+  request: {
+    body: {
+      content: {
+        'multipart/form-data': {
+          schema: z.object({
+            avatar: z.any().openapi({ type: 'string', format: 'binary' }),
+          }),
+        },
+      },
+    },
+  },
+  responses: { ...okJson(UnknownDataResponseSchema), ...commonErrorResponses },
+});
+
+export const removeCurrentUserAvatarRoute = createRoute({
+  method: 'delete',
+  path: '/me/avatar',
+  tags: ['Authentication'],
+  summary: "Remove the current user's custom avatar",
+  responses: { ...okJson(UnknownDataResponseSchema), ...commonErrorResponses },
 });
 
 export const listCurrentUserSessionsRoute = appRoute({

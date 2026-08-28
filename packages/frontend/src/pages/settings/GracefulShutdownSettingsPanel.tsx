@@ -1,4 +1,4 @@
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Power, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -84,6 +84,7 @@ export function GracefulShutdownSettingsPanel({
       hidden={hidden}
       title="Graceful shutdown"
       description="Controls how long Gateway drains user traffic, structured logs, and final cleanup before restart"
+      icon={<Power className="h-4 w-4" />}
       actions={
         <Button
           aria-label="Save graceful shutdown settings"
@@ -100,6 +101,7 @@ export function GracefulShutdownSettingsPanel({
         <SettingsControlRow
           title="User request drain"
           description="Time in seconds for requests and short jobs already in progress to finish. New user requests are rejected immediately."
+          help="When Gateway begins shutting down, it stops accepting new user work but waits up to this long for requests and short-running jobs that already started."
         >
           <div className="w-full sm:w-40">
             <NumericInput
@@ -119,6 +121,7 @@ export function GracefulShutdownSettingsPanel({
         <SettingsControlRow
           title="Structured log drain"
           description="Additional time in seconds for accepted log batches to reach storage after user traffic has drained."
+          help="After user traffic finishes draining, Gateway reserves this additional period for accepted structured-log batches to be written to storage."
         >
           <div className="w-full sm:w-40">
             <NumericInput
@@ -138,6 +141,7 @@ export function GracefulShutdownSettingsPanel({
         <SettingsControlRow
           title="Finalization timeout"
           description="Time in seconds reserved for closing transports, workers, and dependency clients."
+          help="Final cleanup window for closing WebSockets, background workers, database clients, and other runtime resources before the process exits."
         >
           <div className="w-full sm:w-40">
             <NumericInput
@@ -164,6 +168,7 @@ export function GracefulShutdownSettingsPanel({
               ? "The combined deadline must not exceed 50 seconds."
               : "Docker keeps an additional safety margin before forcing the container to stop."
           }
+          help="The three shutdown phases share a maximum 50-second budget. Docker keeps an additional margin before it forcibly terminates the container."
         >
           <span
             className={

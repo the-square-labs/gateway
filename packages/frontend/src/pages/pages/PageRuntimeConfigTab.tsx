@@ -383,6 +383,7 @@ export function PageRuntimeConfigTab({ projectId }: { projectId: string }) {
       <SettingsControlRow
         title="Configuration"
         description="Default applies to previews and Tags without an override."
+        help="This public JSON is injected into the deployed Pages application and can be read in browser code from window.runtime.config. Tag overrides replace the Default value only for deployments published to that Tag. Never store secrets here."
         controlsClassName="sm:min-w-56"
       >
         <div className="flex w-full items-center gap-2">

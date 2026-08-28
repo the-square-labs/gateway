@@ -44,6 +44,46 @@ export function shouldRefreshDatabaseDetailForEvent(action?: string) {
   );
 }
 
+interface DatabaseMonitoringCache {
+  history: DatabaseMetricSnapshot[];
+  healthHistory: DatabaseConnection["healthHistory"];
+  healthStatus: DatabaseConnection["healthStatus"];
+}
+
+export function databaseMonitoringCacheKey(databaseId: string) {
+  return `database:monitoring:${databaseId}`;
+}
+
+export function appendDatabaseMetricSnapshot(
+  history: DatabaseMetricSnapshot[],
+  snapshot: DatabaseMetricSnapshot
+) {
+  return [...history, snapshot].slice(-60);
+}
+
+function readDatabaseMonitoringCache(databaseId: string | undefined) {
+  return databaseId
+    ? api.getCached<DatabaseMonitoringCache>(
+        databaseMonitoringCacheKey(databaseId),
+        Number.POSITIVE_INFINITY
+      )
+    : undefined;
+}
+
+function updateDatabaseMonitoringCache(
+  databaseId: string,
+  update: Partial<DatabaseMonitoringCache>
+) {
+  const current = readDatabaseMonitoringCache(databaseId);
+  api.setCache(databaseMonitoringCacheKey(databaseId), {
+    history: [],
+    healthHistory: [],
+    healthStatus: "unknown",
+    ...current,
+    ...update,
+  } satisfies DatabaseMonitoringCache);
+}
+
 export function DatabaseDetail({
   resolvedDatabaseId,
   resolvedDatabaseSlug,
@@ -54,17 +94,23 @@ export function DatabaseDetail({
   const params = useParams<{ id?: string; databaseSlug?: string; tab?: string }>();
   const id = resolvedDatabaseId ?? params.id;
   const routeSlug = resolvedDatabaseSlug ?? params.databaseSlug ?? params.id ?? "";
+  const initialMonitoringCache = readDatabaseMonitoringCache(id);
   const navigate = useStableNavigate();
   const { hasScope } = useAuthStore();
   const [database, setDatabase] = useState<DatabaseConnection | null>(null);
   const [loading, setLoading] = useState(true);
   const [liveHealthHistory, setLiveHealthHistory] = useState<DatabaseConnection["healthHistory"]>(
-    []
+    initialMonitoringCache?.healthHistory ?? []
   );
-  const [liveHealthStatus, setLiveHealthStatus] =
-    useState<DatabaseConnection["healthStatus"]>("unknown");
-  const [monitoringHistory, setMonitoringHistory] = useState<DatabaseMetricSnapshot[]>([]);
-  const [monitoringLoading, setMonitoringLoading] = useState(true);
+  const [liveHealthStatus, setLiveHealthStatus] = useState<DatabaseConnection["healthStatus"]>(
+    initialMonitoringCache?.healthStatus ?? "unknown"
+  );
+  const [monitoringHistory, setMonitoringHistory] = useState<DatabaseMetricSnapshot[]>(
+    initialMonitoringCache?.history ?? []
+  );
+  const [monitoringLoading, setMonitoringLoading] = useState(
+    (initialMonitoringCache?.history.length ?? 0) === 0
+  );
   const [pinOpen, setPinOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [privateManagedInfoOpen, setPrivateManagedInfoOpen] = useState(false);
@@ -253,12 +299,15 @@ export function DatabaseDetail({
 
   useEffect(() => {
     if (!database) return;
-    setLiveHealthStatus(database.healthStatus);
-    setMonitoringHistory([]);
+    const cached = readDatabaseMonitoringCache(database.id);
+    setLiveHealthStatus(cached?.healthStatus ?? database.healthStatus);
+    setLiveHealthHistory(cached?.healthHistory ?? database.healthHistory ?? []);
+    setMonitoringHistory(cached?.history ?? []);
     setMonitoringLoading(
       canViewMonitoring &&
         database.healthStatus !== "offline" &&
-        database.managed?.status !== "paused"
+        database.managed?.status !== "paused" &&
+        (cached?.history.length ?? 0) === 0
     );
   }, [canViewMonitoring, database]);
 
@@ -270,18 +319,27 @@ export function DatabaseDetail({
     const es = api.createDatabaseMonitoringStream(database.id);
     es.addEventListener("connected", (event: MessageEvent) => {
       const message = JSON.parse(event.data);
-      setLiveHealthHistory(message.healthHistory ?? database.healthHistory ?? []);
-      setLiveHealthStatus(message.healthStatus ?? database.healthStatus);
+      const healthHistory = message.healthHistory ?? database.healthHistory ?? [];
+      const healthStatus = message.healthStatus ?? database.healthStatus;
+      setLiveHealthHistory(healthHistory);
+      setLiveHealthStatus(healthStatus);
+      updateDatabaseMonitoringCache(database.id, { healthHistory, healthStatus });
       setMonitoringLoading(false);
     });
     es.addEventListener("history", (event: MessageEvent) => {
       const message = JSON.parse(event.data);
-      setMonitoringHistory(message.history ?? []);
+      const history = message.history ?? [];
+      setMonitoringHistory(history);
+      updateDatabaseMonitoringCache(database.id, { history });
       setMonitoringLoading(false);
     });
     es.addEventListener("snapshot", (event: MessageEvent) => {
       const snapshot = JSON.parse(event.data) as DatabaseMetricSnapshot;
-      setMonitoringHistory((prev) => [...prev, snapshot].slice(-60));
+      setMonitoringHistory((previous) => {
+        const history = appendDatabaseMetricSnapshot(previous, snapshot);
+        updateDatabaseMonitoringCache(database.id, { history, healthStatus: snapshot.status });
+        return history;
+      });
       setLiveHealthStatus(snapshot.status);
       setMonitoringLoading(false);
     });

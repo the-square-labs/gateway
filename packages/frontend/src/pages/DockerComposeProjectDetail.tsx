@@ -38,6 +38,7 @@ import {
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import { ExternalComposeBadge } from "@/components/docker/ExternalComposeBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -1029,9 +1030,7 @@ export function DockerComposeProjectDetail() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="truncate text-2xl font-bold">{project.name}</h1>
-                {project.managementState === "external" && (
-                  <Badge variant="warning">External</Badge>
-                )}
+                {project.managementState === "external" && <ExternalComposeBadge />}
                 <Badge variant={project.drifted ? "warning" : projectStatusVariant(project.status)}>
                   {project.drifted ? "Drift" : project.status}
                 </Badge>
@@ -1142,6 +1141,7 @@ export function DockerComposeProjectDetail() {
               <div className="grid gap-4 lg:grid-cols-2">
                 <PanelShell
                   title="Project"
+                  icon={<Boxes className="h-4 w-4" />}
                   description="Identity, node placement and management boundary."
                   bodyClassName="divide-y divide-border"
                 >
@@ -1159,6 +1159,7 @@ export function DockerComposeProjectDetail() {
                 </PanelShell>
                 <PanelShell
                   title="Runtime"
+                  icon={<Activity className="h-4 w-4" />}
                   description="Current node-observed state and drift status."
                   bodyClassName="divide-y divide-border"
                 >
@@ -1186,6 +1187,7 @@ export function DockerComposeProjectDetail() {
               </div>
               <PanelShell
                 title="Recent activity"
+                icon={<History className="h-4 w-4" />}
                 description="The six latest Compose lifecycle operations."
                 actions={
                   <Button
@@ -1332,7 +1334,7 @@ export function DockerComposeProjectDetail() {
         </Tabs>
       </div>
       <Dialog open={adoptOpen} onOpenChange={setAdoptOpen}>
-        <DialogContent clipOverflow className="sm:max-w-3xl">
+        <DialogContent clipOverflow className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Adopt Compose project</DialogTitle>
             <DialogDescription>

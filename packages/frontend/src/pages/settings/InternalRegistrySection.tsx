@@ -1,8 +1,8 @@
 import { HardDrive, Save, ShieldCheck } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -24,6 +25,56 @@ import type { DockerInternalRegistryState, Node, SSLCertificate } from "@/types"
 
 interface InternalRegistrySectionProps {
   nodesList: Node[];
+}
+
+function registryStatusReason(state: DockerInternalRegistryState | null): string | null {
+  if (!state || state.status === "ready") return null;
+  if (state.lastError) return state.lastError;
+  if (state.status === "maintenance") {
+    return `Registry maintenance is running${state.maintenancePhase !== "idle" ? ` (${state.maintenancePhase.replaceAll("_", " ")})` : ""}.`;
+  }
+  if (state.status === "starting") return "The registry service is still starting.";
+  if (state.status === "read_only") {
+    return "The registry health check passed, but its storage backend did not report writable access.";
+  }
+  if (state.status === "degraded") return "The registry is available with reduced capacity.";
+  return "Registry health checks are failing.";
+}
+
+function RegistryBadgeWithTooltip({
+  label,
+  tooltip,
+  variant,
+}: {
+  label: string;
+  tooltip: string | null;
+  variant: ComponentProps<typeof Badge>["variant"];
+}) {
+  const badge = (
+    <Badge variant={variant} size="inline">
+      {label}
+    </Badge>
+  );
+  if (!tooltip) return badge;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {badge}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        align="start"
+        className="max-w-xs whitespace-normal py-2 leading-relaxed"
+      >
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function certificateCoversHostname(certificate: SSLCertificate, hostname: string): boolean {
@@ -84,6 +135,11 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   const capacity = state?.storageCapacityBytes ?? null;
   const free = capacity === null ? null : Math.max(0, capacity - used);
   const externalAccessRequiresUpgrade = licensePlan !== "business" && licensePlan !== "enterprise";
+  const statusReason = registryStatusReason(state);
+  const readOnlyReason =
+    state && !state.writable
+      ? `Registry writes are disabled. ${statusReason ?? "The storage backend is not writable."}`
+      : null;
 
   const save = async () => {
     if (!state) return;
@@ -153,17 +209,23 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   return (
     <PanelShell
       title={
-        <span className="flex items-center gap-2">
-          <HardDrive className="h-4 w-4" />
-          Internal Registry
-          <Badge variant={state?.status === "ready" ? "success" : "warning"} size="inline">
-            {state?.status?.replaceAll("_", " ") ?? "Loading"}
-          </Badge>
-          <Badge variant={state?.writable ? "default" : "secondary"} size="inline">
-            {state?.writable ? "Writable" : "Read only"}
-          </Badge>
-        </span>
+        <TooltipProvider delayDuration={200}>
+          <span className="flex items-center gap-2">
+            Internal Registry
+            <RegistryBadgeWithTooltip
+              label={state?.status?.replaceAll("_", " ") ?? "Loading"}
+              variant={state?.status === "ready" ? "success" : "warning"}
+              tooltip={statusReason}
+            />
+            <RegistryBadgeWithTooltip
+              label={state?.writable ? "Writable" : "Read only"}
+              variant={state?.writable ? "default" : "secondary"}
+              tooltip={readOnlyReason}
+            />
+          </span>
+        </TooltipProvider>
       }
+      icon={<HardDrive className="h-4 w-4" />}
       description={state?.lastError ?? "Managed registry for Git builds and runtime image pulls."}
       dirty={dirty}
       actions={
@@ -199,14 +261,9 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
         </span>
       </SettingsControlRow>
       <SettingsControlRow
-        title="Retention"
-        description="Active, rollback, in-progress, and manual pins are never removed."
-      >
-        <span className="text-sm">3 successful artifacts + pins</span>
-      </SettingsControlRow>
-      <SettingsControlRow
         title="Garbage collection"
-        description="Expired unpinned manifests are removed on the maintenance schedule."
+        description="Retention and scheduled garbage collection are managed in Housekeeping."
+        help="Garbage collection permanently removes image layers and build artifacts that are no longer referenced. Its schedule and retention policy are configured in Housekeeping."
       >
         <span className="text-right text-sm text-muted-foreground">
           {state?.lastGcAt ? `Last ${new Date(state.lastGcAt).toLocaleString()}` : "Not run yet"}
@@ -214,15 +271,12 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
         </span>
       </SettingsControlRow>
       <SettingsControlRow
-        title="Object storage"
-        description="S3-compatible storage is planned but unavailable in this release."
-      >
-        <Badge variant="secondary">In development</Badge>
-      </SettingsControlRow>
-      <SettingsControlRow
         title={
           <span className="flex items-center gap-2">
-            External access
+            <SettingsHelpTitle
+              label="External access"
+              help="Publishes the internal registry through an Nginx ingress so Docker clients outside Gateway's private transport can pull images over HTTPS."
+            />
             {externalAccessRequiresUpgrade && (
               <LicensePlanBadge plan="business" label="Business+" />
             )}
@@ -241,6 +295,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
           <SettingsControlRow
             title="External domain"
             description="Optional hostname for Docker clients outside the Gateway private transport."
+            help="Public DNS name Docker clients use as the registry address. It must resolve to the selected ingress node and match the TLS certificate."
           >
             <DomainAutocompleteInput
               value={hostname}
@@ -253,6 +308,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
           <SettingsControlRow
             title="Ingress node"
             description="The selected Nginx node owns the public registry route."
+            help="This Nginx node terminates TLS and forwards registry traffic to Gateway. It must be reachable from the external Docker clients."
           >
             <Select value={nginxNodeId} onValueChange={setNginxNodeId}>
               <SelectTrigger className="sm:w-72">
@@ -270,6 +326,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
           <SettingsControlRow
             title="TLS certificate"
             description="Certificate presented by the external registry endpoint."
+            help="Docker verifies this certificate when connecting to the external registry domain. The certificate must be active and cover that exact hostname."
           >
             <Select value={certificateId} onValueChange={setCertificateId}>
               <SelectTrigger className="sm:w-72">
@@ -292,8 +349,8 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
           </SettingsControlRow>
         </>
       )}
-      <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
+        <span className="flex items-center gap-2 text-sm text-muted-foreground">
           <ShieldCheck className="h-4 w-4" />
           Repository-scoped pull/push tokens remain authoritative for external access.
         </span>

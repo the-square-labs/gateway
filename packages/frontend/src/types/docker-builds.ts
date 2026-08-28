@@ -203,8 +203,6 @@ export interface DockerInternalRegistryState {
   storageBackend: "filesystem";
   storageUsedBytes: number;
   storageCapacityBytes: number | null;
-  retentionSuccessfulArtifacts: 3;
-  objectStorageAvailable: false;
   externalAccessEnabled: boolean;
   externalHostname: string | null;
   externalNginxNodeId: string | null;

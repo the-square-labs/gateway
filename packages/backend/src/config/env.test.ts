@@ -13,15 +13,6 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
   if (!Object.hasOwn(overrides, 'SECURE_LINK_CONNECTOR_IMAGE')) {
     delete inheritedEnv.SECURE_LINK_CONNECTOR_IMAGE;
   }
-  if (!Object.hasOwn(overrides, 'RATE_LIMIT_AI_WS_MAX_REQUESTS')) {
-    delete inheritedEnv.RATE_LIMIT_AI_WS_MAX_REQUESTS;
-  }
-  if (!Object.hasOwn(overrides, 'RATE_LIMIT_INFERENCE_MAX_REQUESTS')) {
-    delete inheritedEnv.RATE_LIMIT_INFERENCE_MAX_REQUESTS;
-  }
-  if (!Object.hasOwn(overrides, 'INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN')) {
-    delete inheritedEnv.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN;
-  }
   if (!Object.hasOwn(overrides, 'GITHUB_OAUTH_CLIENT_ID')) {
     delete inheritedEnv.GITHUB_OAUTH_CLIENT_ID;
   }
@@ -31,10 +22,6 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
     NODE_ENV: 'test',
     DATABASE_URL: 'http://localhost/db',
     REDIS_URL: 'redis://localhost:6379',
-    OIDC_ISSUER: 'http://localhost/oidc',
-    OIDC_CLIENT_ID: 'test',
-    OIDC_CLIENT_SECRET: 'test',
-    OIDC_REDIRECT_URI: 'http://localhost/auth/callback',
     PKI_MASTER_KEY: '0000000000000000000000000000000000000000000000000000000000000000',
     ...overrides,
   };
@@ -66,33 +53,35 @@ describe('getEnv gRPC TLS config', () => {
     expect(env.GRPC_TLS_AUTO_DIR).toBe('/var/lib/gateway/tls');
   });
 
-  it('does not require a session secret for Redis-backed browser sessions', async () => {
-    const env = await loadEnv({ SESSION_EXPIRY: '600' });
+  it('does not expose browser-owned settings through runtime env', async () => {
+    const env = await loadEnv({
+      OIDC_ISSUER: 'https://legacy-idp.example.test',
+      OIDC_CLIENT_ID: 'legacy-client',
+      OIDC_CLIENT_SECRET: 'legacy-secret',
+      OIDC_REDIRECT_URI: 'https://gateway.example.test/auth/callback',
+      CLICKHOUSE_URL: 'https://legacy-clickhouse.example.test',
+      CLICKHOUSE_PASSWORD: 'legacy-password',
+      SESSION_EXPIRY: '600',
+      RATE_LIMIT_AI_WS_MAX_REQUESTS: '240',
+      RATE_LIMIT_INFERENCE_MAX_REQUESTS: '2400',
+      INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN: '48',
+      INFERENCE_BODY_MAX_BYTES: '67108864',
+      ACME_EMAIL: 'legacy@example.test',
+      ACME_STAGING: 'true',
+    });
 
-    expect(env.SESSION_EXPIRY).toBe(600);
+    expect('OIDC_ISSUER' in env).toBe(false);
+    expect('OIDC_CLIENT_SECRET' in env).toBe(false);
+    expect('CLICKHOUSE_URL' in env).toBe(false);
+    expect('CLICKHOUSE_PASSWORD' in env).toBe(false);
+    expect('SESSION_EXPIRY' in env).toBe(false);
+    expect('RATE_LIMIT_AI_WS_MAX_REQUESTS' in env).toBe(false);
+    expect('RATE_LIMIT_INFERENCE_MAX_REQUESTS' in env).toBe(false);
+    expect('INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN' in env).toBe(false);
+    expect('INFERENCE_BODY_MAX_BYTES' in env).toBe(false);
+    expect('ACME_EMAIL' in env).toBe(false);
+    expect('ACME_STAGING' in env).toBe(false);
     expect('SESSION_SECRET' in env).toBe(false);
-  });
-
-  it('allows enough websocket handshakes for reconnecting AI Workspace tabs', async () => {
-    const env = await loadEnv();
-
-    expect(env.RATE_LIMIT_AI_WS_MAX_REQUESTS).toBe(120);
-  });
-
-  it('allows a high inference request rate and supports deployment overrides', async () => {
-    const defaults = await loadEnv();
-    const overridden = await loadEnv({ RATE_LIMIT_INFERENCE_MAX_REQUESTS: '2400' });
-
-    expect(defaults.RATE_LIMIT_INFERENCE_MAX_REQUESTS).toBe(1800);
-    expect(overridden.RATE_LIMIT_INFERENCE_MAX_REQUESTS).toBe(2400);
-  });
-
-  it('allows concurrent inference runs and supports deployment overrides', async () => {
-    const defaults = await loadEnv();
-    const overridden = await loadEnv({ INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN: '48' });
-
-    expect(defaults.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN).toBe(32);
-    expect(overridden.INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN).toBe(48);
   });
 
   it('uses the built-in GitHub OAuth client ID unless explicitly overridden', async () => {

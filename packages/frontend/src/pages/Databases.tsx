@@ -770,15 +770,11 @@ export function Databases({
   const closeManagedCreate = useCallback(() => {
     if (managedProvisioning?.phase === "waiting") return;
     setManagedCreateOpen(false);
-    setManagedCreateStep(1);
-    setManagedProvisioning(null);
   }, [managedProvisioning]);
 
   const showManagedProvisioningError = useCallback(
     (failure: { databaseConnectionId: string; error: string }) => {
       setManagedCreateOpen(false);
-      setManagedCreateStep(1);
-      setManagedProvisioning(null);
       if (managedProvisioningErrorOpenTimerRef.current !== null) {
         window.clearTimeout(managedProvisioningErrorOpenTimerRef.current);
       }

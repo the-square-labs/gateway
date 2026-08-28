@@ -1,14 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Link2, Plus, RotateCcw, Trash2, Undo2 } from "lucide-react";
-import {
-  forwardRef,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useState,
-} from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -53,8 +45,10 @@ type ConnectionMode = "uri" | "credentials";
 interface PendingDatabaseLink {
   id: string;
   managedDatabaseId: string;
+  targetResourceId: string;
   environment: ManagedDatabaseBindingEnvironment;
   replacesExistingEnvironment: boolean;
+  replacesBindingId?: string;
 }
 
 interface PendingDatabaseLinkChanges {
@@ -149,6 +143,20 @@ function localDraftId() {
   return globalThis.crypto?.randomUUID?.() ?? `database-link-${Date.now()}-${Math.random()}`;
 }
 
+function composeServiceTarget(projectId: string, serviceName: string) {
+  return `${projectId}:${encodeURIComponent(serviceName)}`;
+}
+
+function composeServiceName(projectId: string, targetResourceId: string) {
+  const prefix = `${projectId}:`;
+  if (!targetResourceId.startsWith(prefix)) return "";
+  try {
+    return decodeURIComponent(targetResourceId.slice(prefix.length));
+  } catch {
+    return "";
+  }
+}
+
 export const ManagedDatabaseLinksSection = forwardRef<
   ManagedDatabaseLinksSectionHandle,
   {
@@ -164,7 +172,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart?: (transition: "updating" | "recreating") => void;
     onMutationEnd?: () => void;
     onRecreating?: () => void | Promise<void>;
-    targetSelector?: ReactNode;
+    composeServices?: Array<{ name: string; existingVariableNames: string[] }>;
   }
 >(function ManagedDatabaseLinksSection(
   {
@@ -180,7 +188,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart,
     onMutationEnd,
     onRecreating,
-    targetSelector,
+    composeServices = [],
   },
   ref
 ) {
@@ -190,6 +198,9 @@ export const ManagedDatabaseLinksSection = forwardRef<
   const [bindings, setBindings] = useState<ManagedDatabaseBinding[]>([]);
   const [changes, setChanges] = useState<PendingDatabaseLinkChanges>(EMPTY_CHANGES);
   const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
+  const [selectedComposeServiceName, setSelectedComposeServiceName] = useState(
+    composeServices[0]?.name ?? ""
+  );
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>("uri");
   const [environment, setEnvironment] = useState<ManagedDatabaseBindingEnvironment>({
     connectionUri: "DATABASE_URL",
@@ -221,7 +232,9 @@ export const ManagedDatabaseLinksSection = forwardRef<
             (binding) =>
               binding.targetNodeId === nodeId &&
               binding.targetType === targetType &&
-              binding.targetResourceId === targetResourceId
+              (targetType === "compose_service"
+                ? composeServiceName(targetResourceId, binding.targetResourceId) !== ""
+                : binding.targetResourceId === targetResourceId)
           )
       );
     } catch (error) {
@@ -246,19 +259,26 @@ export const ManagedDatabaseLinksSection = forwardRef<
       .catch(() => undefined);
   });
 
-  const displayBindings = useMemo<DisplayBinding[]>(
-    () => [
-      ...bindings.map((binding) => ({
-        binding,
-        pending: changes.removals.includes(binding.id) ? ("remove" as const) : null,
-      })),
+  const displayBindings = useMemo<DisplayBinding[]>(() => {
+    const replacedBindingIds = new Set(
+      changes.additions.flatMap((addition) =>
+        addition.replacesBindingId ? [addition.replacesBindingId] : []
+      )
+    );
+    return [
+      ...bindings
+        .filter((binding) => !replacedBindingIds.has(binding.id))
+        .map((binding) => ({
+          binding,
+          pending: changes.removals.includes(binding.id) ? ("remove" as const) : null,
+        })),
       ...changes.additions.map((addition) => ({
         binding: {
           id: addition.id,
           managedDatabaseId: addition.managedDatabaseId,
           targetNodeId: nodeId,
           targetType,
-          targetResourceId,
+          targetResourceId: addition.targetResourceId,
           environment: addition.environment,
           status: "creating" as const,
           createdAt: "",
@@ -266,11 +286,15 @@ export const ManagedDatabaseLinksSection = forwardRef<
         },
         pending: "add" as const,
       })),
-    ],
-    [bindings, changes, nodeId, targetResourceId, targetType]
-  );
-  const linkedIds = useMemo(
-    () => new Set(displayBindings.map(({ binding }) => binding.managedDatabaseId)),
+    ];
+  }, [bindings, changes, nodeId, targetType]);
+  const linkedTargets = useMemo(
+    () =>
+      new Set(
+        displayBindings
+          .filter((entry) => entry.pending !== "remove")
+          .map(({ binding }) => `${binding.managedDatabaseId}:${binding.targetResourceId}`)
+      ),
     [displayBindings]
   );
   const databaseNodeById = useMemo(
@@ -284,10 +308,21 @@ export const ManagedDatabaseLinksSection = forwardRef<
     },
     [databaseNodeById]
   );
+  const selectedTargetResourceId =
+    targetType === "compose_service"
+      ? selectedComposeServiceName
+        ? composeServiceTarget(targetResourceId, selectedComposeServiceName)
+        : ""
+      : targetResourceId;
   const available = useMemo(
     () =>
-      databases.filter((database) => databaseIsAvailable(database) && !linkedIds.has(database.id)),
-    [databaseIsAvailable, databases, linkedIds]
+      databases.filter(
+        (database) =>
+          databaseIsAvailable(database) &&
+          !!selectedTargetResourceId &&
+          !linkedTargets.has(`${database.id}:${selectedTargetResourceId}`)
+      ),
+    [databaseIsAvailable, databases, linkedTargets, selectedTargetResourceId]
   );
   const selected = available.find((database) => database.id === selectedDatabaseId) ?? available[0];
   const hasChanges = changes.additions.length > 0 || changes.removals.length > 0;
@@ -327,6 +362,13 @@ export const ManagedDatabaseLinksSection = forwardRef<
   );
 
   useEffect(() => {
+    if (targetType !== "compose_service") return;
+    if (!composeServices.some((service) => service.name === selectedComposeServiceName)) {
+      setSelectedComposeServiceName(composeServices[0]?.name ?? "");
+    }
+  }, [composeServices, selectedComposeServiceName, targetType]);
+
+  useEffect(() => {
     onDraftChange?.({
       hasChanges,
       managedVariableNames,
@@ -363,17 +405,39 @@ export const ManagedDatabaseLinksSection = forwardRef<
     Object.values(binding.environment).filter(Boolean).join(", ") || "credentials injected";
 
   const stageLink = async () => {
-    if (!selected || !hasCompleteEnvironment(selected, connectionMode, environment)) return;
+    if (
+      !selected ||
+      !selectedTargetResourceId ||
+      !hasCompleteEnvironment(selected, connectionMode, environment)
+    )
+      return;
     const names = Object.values(environment)
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value));
-    if (names.some((name) => managedVariableNames.includes(name))) {
+    const targetManagedVariableNames = displayBindings
+      .filter(
+        (entry) =>
+          entry.pending !== "remove" && entry.binding.targetResourceId === selectedTargetResourceId
+      )
+      .flatMap((entry) => Object.values(entry.binding.environment).filter(Boolean));
+    if (names.some((name) => targetManagedVariableNames.includes(name))) {
       toast.error("A managed database link already uses one of these environment variables");
       return;
     }
-    const existing = new Set(existingVariableNames);
+    const existing = new Set(
+      targetType === "compose_service"
+        ? (composeServices.find((service) => service.name === selectedComposeServiceName)
+            ?.existingVariableNames ?? [])
+        : existingVariableNames
+    );
     const collisions = names.filter((name) => existing.has(name));
     if (collisions.length > 0) {
+      if (targetType === "compose_service") {
+        toast.error(
+          `${selectedComposeServiceName} already uses ${collisions.join(", ")}. Choose different variable names.`
+        );
+        return;
+      }
       const ok = await confirm({
         title: "Replace existing variables?",
         description: `${collisions.join(", ")} already ${collisions.length === 1 ? "exists" : "exist"} on “${containerName}”. The managed database credentials will replace ${collisions.length === 1 ? "it" : "them"} when you save and recreate.`,
@@ -388,6 +452,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
         {
           id: localDraftId(),
           managedDatabaseId: selected.id,
+          targetResourceId: selectedTargetResourceId,
           replacesExistingEnvironment: collisions.length > 0,
           environment: Object.fromEntries(
             Object.entries(environment)
@@ -400,10 +465,88 @@ export const ManagedDatabaseLinksSection = forwardRef<
     setAddOpen(false);
   };
 
-  const stageUnlink = async (entry: DisplayBinding) => {
+  const stageServiceChange = (entry: DisplayBinding, serviceName: string) => {
+    if (targetType !== "compose_service") return;
+    const nextTargetResourceId = composeServiceTarget(targetResourceId, serviceName);
+    if (entry.binding.targetResourceId === nextTargetResourceId) return;
+
+    const pendingAddition = changes.additions.find((addition) => addition.id === entry.binding.id);
+    const replacedBinding = pendingAddition?.replacesBindingId
+      ? bindings.find((binding) => binding.id === pendingAddition.replacesBindingId)
+      : undefined;
+    if (replacedBinding?.targetResourceId === nextTargetResourceId) {
+      setChanges((current) => ({
+        removals: current.removals.filter((id) => id !== replacedBinding.id),
+        additions: current.additions.filter((addition) => addition.id !== entry.binding.id),
+      }));
+      return;
+    }
+
+    const environmentNames = Object.values(entry.binding.environment).filter(
+      (value): value is string => Boolean(value)
+    );
+    const targetEnvironmentNames = new Set(
+      composeServices.find((service) => service.name === serviceName)?.existingVariableNames ?? []
+    );
+    const conflicts = environmentNames.filter((name) => targetEnvironmentNames.has(name));
+    if (conflicts.length > 0) {
+      toast.error(
+        `${serviceName} already uses ${conflicts.join(", ")}. Change the variable names before moving this link.`
+      );
+      return;
+    }
+
+    const duplicate = displayBindings.some(
+      (candidate) =>
+        candidate.binding.id !== entry.binding.id &&
+        candidate.pending !== "remove" &&
+        candidate.binding.managedDatabaseId === entry.binding.managedDatabaseId &&
+        candidate.binding.targetResourceId === nextTargetResourceId
+    );
+    if (duplicate) {
+      toast.error("This database is already linked to that Compose service");
+      return;
+    }
+
     if (entry.pending === "add") {
       setChanges((current) => ({
         ...current,
+        additions: current.additions.map((addition) =>
+          addition.id === entry.binding.id
+            ? { ...addition, targetResourceId: nextTargetResourceId }
+            : addition
+        ),
+      }));
+      return;
+    }
+
+    setChanges((current) => ({
+      removals: current.removals.includes(entry.binding.id)
+        ? current.removals
+        : [...current.removals, entry.binding.id],
+      additions: [
+        ...current.additions,
+        {
+          id: localDraftId(),
+          managedDatabaseId: entry.binding.managedDatabaseId,
+          targetResourceId: nextTargetResourceId,
+          environment: entry.binding.environment,
+          replacesExistingEnvironment: false,
+          replacesBindingId: entry.binding.id,
+        },
+      ],
+    }));
+  };
+
+  const stageUnlink = async (entry: DisplayBinding) => {
+    if (entry.pending === "add") {
+      setChanges((current) => ({
+        removals: current.removals.filter(
+          (id) =>
+            id !==
+            current.additions.find((addition) => addition.id === entry.binding.id)
+              ?.replacesBindingId
+        ),
         additions: current.additions.filter((addition) => addition.id !== entry.binding.id),
       }));
       return;
@@ -440,6 +583,24 @@ export const ManagedDatabaseLinksSection = forwardRef<
         removals: [...changes.removals],
       };
       try {
+        const createAddition = async (addition: PendingDatabaseLink) => {
+          await api.createManagedDatabaseBinding(addition.managedDatabaseId, {
+            targetNodeId: nodeId,
+            targetType,
+            targetResourceId: addition.targetResourceId,
+            environment: addition.environment,
+            ...(options?.replaceExistingEnvironment ? { replaceExistingEnvironment: true } : {}),
+            ...(options?.targetEnvironment ? { targetEnvironment: options.targetEnvironment } : {}),
+          });
+          remaining.additions = remaining.additions.filter((item) => item.id !== addition.id);
+        };
+
+        // A Compose service move targets a different unique binding scope, so establish the
+        // replacement first. If the later unlink fails, the database remains reachable and the
+        // old link stays staged for removal instead of leaving the workload disconnected.
+        for (const addition of changes.additions.filter((item) => item.replacesBindingId)) {
+          await createAddition(addition);
+        }
         for (const bindingId of changes.removals) {
           const binding = bindings.find((item) => item.id === bindingId);
           if (!binding) continue;
@@ -452,16 +613,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
           }
           remaining.removals = remaining.removals.filter((id) => id !== bindingId);
         }
-        for (const addition of changes.additions) {
-          await api.createManagedDatabaseBinding(addition.managedDatabaseId, {
-            targetNodeId: nodeId,
-            targetType,
-            targetResourceId,
-            environment: addition.environment,
-            ...(options?.replaceExistingEnvironment ? { replaceExistingEnvironment: true } : {}),
-            ...(options?.targetEnvironment ? { targetEnvironment: options.targetEnvironment } : {}),
-          });
-          remaining.additions = remaining.additions.filter((item) => item.id !== addition.id);
+        for (const addition of changes.additions.filter((item) => !item.replacesBindingId)) {
+          await createAddition(addition);
         }
         setChanges(EMPTY_CHANGES);
         await load();
@@ -471,7 +624,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
         throw error;
       }
     },
-    [bindings, changes, hasChanges, load, nodeId, targetResourceId, targetType]
+    [bindings, changes, hasChanges, load, nodeId, targetType]
   );
 
   useImperativeHandle(ref, () => ({ applyChanges }), [applyChanges]);
@@ -509,6 +662,22 @@ export const ManagedDatabaseLinksSection = forwardRef<
 
   const credentialFields = selected ? CREDENTIAL_VARIABLES[selected.type] : [];
   const openAddDialog = () => {
+    if (targetType === "compose_service") {
+      const firstAvailableService = composeServices.find((service) => {
+        const serviceTarget = composeServiceTarget(targetResourceId, service.name);
+        return databases.some(
+          (database) =>
+            databaseIsAvailable(database) && !linkedTargets.has(`${database.id}:${serviceTarget}`)
+        );
+      });
+      if (!firstAvailableService) {
+        setNoAvailableDatabasesOpen(true);
+        return;
+      }
+      setSelectedComposeServiceName(firstAvailableService.name);
+      setAddOpen(true);
+      return;
+    }
     if (available.length === 0) {
       setNoAvailableDatabasesOpen(true);
       return;
@@ -520,9 +689,10 @@ export const ManagedDatabaseLinksSection = forwardRef<
     <>
       <PanelShell
         title="Managed Database Links"
+        icon={<Link2 className="h-4 w-4" />}
         description={
           targetType === "compose_service"
-            ? "Private sidecar connections stored in the selected service's Compose revision."
+            ? "Private sidecar connections stored in each selected service's Compose revision."
             : "Private sidecar connections. Changes apply with Save & Recreate."
         }
         dirty={hasChanges}
@@ -545,7 +715,6 @@ export const ManagedDatabaseLinksSection = forwardRef<
           </div>
         }
       >
-        {targetSelector ? <div className="border-b border-border">{targetSelector}</div> : null}
         {initialLoading ? (
           <div
             className="divide-y divide-border"
@@ -579,6 +748,27 @@ export const ManagedDatabaseLinksSection = forwardRef<
                 description={`${databaseType(entry.binding)} · ${environmentSummary(entry.binding)}`}
               >
                 <div className="flex items-center gap-2">
+                  {targetType === "compose_service" && (
+                    <Select
+                      value={composeServiceName(targetResourceId, entry.binding.targetResourceId)}
+                      onValueChange={(serviceName) => stageServiceChange(entry, serviceName)}
+                      disabled={disabled || saving || entry.pending === "remove"}
+                    >
+                      <SelectTrigger
+                        className="w-44"
+                        aria-label={`Compose service for ${databaseName(entry.binding)}`}
+                      >
+                        <SelectValue placeholder="Select service" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {composeServices.map((service) => (
+                          <SelectItem key={service.name} value={service.name}>
+                            {service.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   {databaseNode && (
                     <Badge
                       variant="secondary"
@@ -678,6 +868,29 @@ export const ManagedDatabaseLinksSection = forwardRef<
             <AnimatePresence mode="popLayout" initial={false}>
               <motion.div key={connectionMode} {...FORM_ANIMATION}>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  {targetType === "compose_service" && (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <label className="text-sm font-medium" htmlFor="managed-db-link-service">
+                        Compose service
+                      </label>
+                      <Select
+                        value={selectedComposeServiceName}
+                        onValueChange={setSelectedComposeServiceName}
+                        disabled={disabled || saving}
+                      >
+                        <SelectTrigger id="managed-db-link-service">
+                          <SelectValue placeholder="Select service" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {composeServices.map((service) => (
+                            <SelectItem key={service.name} value={service.name}>
+                              {service.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="managed-db-link-database">
                       Database
@@ -805,7 +1018,10 @@ export const ManagedDatabaseLinksSection = forwardRef<
             <Button
               type="button"
               disabled={
-                disabled || saving || !hasCompleteEnvironment(selected, connectionMode, environment)
+                disabled ||
+                saving ||
+                !hasCompleteEnvironment(selected, connectionMode, environment) ||
+                !selectedTargetResourceId
               }
               onClick={() => void stageLink()}
             >

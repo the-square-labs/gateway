@@ -1,7 +1,10 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, Loader2, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { DialogFooter } from "@/components/ui/dialog";
@@ -13,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClientUuid } from "@/lib/client-id";
 import {
   canAdoptComposeProject,
@@ -35,6 +38,19 @@ const DEFAULT_YAML = `services:
     ports:
       - "8080:80"
 `;
+
+const SOURCE_MODE_ANIMATION = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.15, ease: [0.25, 0.1, 0.25, 1] as const },
+};
+
+function nodeSupportsCompose(node: Node | undefined) {
+  const capabilities = node?.capabilities as Record<string, unknown> | undefined;
+  const advertised = Array.isArray(capabilities?.capabilities) ? capabilities.capabilities : [];
+  return capabilities?.dockerComposeV1 === true || advertised.includes("docker_compose_v1");
+}
 
 function parseVariables(value: string): Record<string, string> {
   if (!value.trim()) return {};
@@ -76,7 +92,6 @@ export function ComposeProjectEditor({
   const [sourceAutoBuild, setSourceAutoBuild] = useState(true);
   const [sourceAutoDeploy, setSourceAutoDeploy] = useState(true);
   const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
-  const [checkingSourceAdmission, setCheckingSourceAdmission] = useState(false);
   const [loading, setLoading] = useState(!!projectId);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -102,19 +117,26 @@ export function ComposeProjectEditor({
     )
       .then((available) => {
         setNodes(available);
-        if (!nodeId && available.length === 1) setNodeId(available[0].id);
+        if (!projectId) {
+          const composeNodes = available.filter((node) => nodeSupportsCompose(node));
+          const currentNodeIsAvailable = composeNodes.some((node) => node.id === nodeId);
+          if (!currentNodeIsAvailable) {
+            setNodeId(composeNodes.length === 1 ? composeNodes[0].id : "");
+          }
+        } else if (!nodeId && available.length === 1) {
+          setNodeId(available[0].id);
+        }
       })
       .catch(() => toast.error("Failed to load Docker nodes"));
-  }, [hasScopedAccess, nodeId, user?.scopes]);
+  }, [hasScopedAccess, nodeId, projectId, user?.scopes]);
 
   useEffect(() => {
     if (!repositoryCreation || !nodeId) {
       setSourceAdmission(null);
-      setCheckingSourceAdmission(false);
       return;
     }
     let cancelled = false;
-    setCheckingSourceAdmission(true);
+    setSourceAdmission(null);
     void api
       .getDockerBuildAdmission(nodeId)
       .then((status) => {
@@ -129,9 +151,6 @@ export function ComposeProjectEditor({
               error instanceof Error ? error.message : "Build capacity could not be verified",
           });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setCheckingSourceAdmission(false);
       });
     return () => {
       cancelled = true;
@@ -171,11 +190,11 @@ export function ComposeProjectEditor({
   }, [projectId]);
 
   const selectedNode = nodes.find((node) => node.id === nodeId);
-  const supportsCompose = useMemo(() => {
-    const capabilities = selectedNode?.capabilities as Record<string, unknown> | undefined;
-    const advertised = Array.isArray(capabilities?.capabilities) ? capabilities.capabilities : [];
-    return capabilities?.dockerComposeV1 === true || advertised.includes("docker_compose_v1");
-  }, [selectedNode]);
+  const supportsCompose = nodeSupportsCompose(selectedNode);
+  const selectableNodes = useMemo(
+    () => (projectId ? nodes : nodes.filter((node) => nodeSupportsCompose(node))),
+    [nodes, projectId]
+  );
 
   const input = useCallback(() => {
     const variables = parseVariables(variablesText);
@@ -229,6 +248,10 @@ export function ComposeProjectEditor({
           ? "Compose create and manage access are required to adopt this project"
           : "You do not have permission to apply this Compose configuration"
       );
+      return;
+    }
+    if (!supportsCompose) {
+      toast.error("Select a Docker node with Compose runtime available");
       return;
     }
     setSaving(true);
@@ -342,10 +365,7 @@ export function ComposeProjectEditor({
             )}
             Validate
           </Button>
-          <Button
-            onClick={() => void save()}
-            disabled={validating || saving || !supportsCompose || !canSubmit}
-          >
+          <Button onClick={() => void save()} disabled={validating || saving || !canSubmit}>
             {saving ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
             ) : (
@@ -359,134 +379,145 @@ export function ComposeProjectEditor({
   }
 
   if (onClose) {
+    const yamlPanel = (
+      <PanelShell
+        title="Compose YAML"
+        description="Images are required; build, host paths, privileged and swarm-only fields are rejected."
+        bodyClassName="h-[min(48dvh,440px)] min-h-72 overflow-hidden"
+      >
+        <CodeEditor
+          value={yaml}
+          onChange={setYaml}
+          language="yaml"
+          minHeight="0"
+          height="100%"
+          bordered={false}
+        />
+      </PanelShell>
+    );
+
     return (
       <div className="flex min-h-0 flex-col gap-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <label htmlFor="compose-name-modal" className="text-sm font-medium">
-              Project name
-            </label>
-            <Input
-              id="compose-name-modal"
-              value={name}
-              onChange={(event) => setName(event.target.value.toLowerCase())}
-              disabled={editing}
-              placeholder="my-project"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Target node</label>
-            <Select
-              value={nodeId}
-              onValueChange={setNodeId}
-              disabled={editing || adoption || !!defaultNodeId}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select node" />
-              </SelectTrigger>
-              <SelectContent>
-                {nodes.map((node) => (
-                  <SelectItem key={node.id} value={node.id}>
-                    {node.displayName || node.hostname}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {!supportsCompose && nodeId && (
-              <p className="text-xs text-warning">Compose runtime is unavailable on this node.</p>
-            )}
-          </div>
-        </div>
-
         {!projectId ? (
           <Tabs
             value={sourceMode}
             onValueChange={(value) => setSourceMode(value as "yaml" | "repository")}
+            className="flex min-h-0 flex-col gap-4"
           >
-            <TabsList>
-              <TabsTrigger value="yaml">Compose YAML</TabsTrigger>
-              <TabsTrigger value="repository">Repository</TabsTrigger>
-            </TabsList>
-            <TabsContent value="yaml" className="space-y-1.5">
+            <div className="grid gap-4 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Compose YAML</label>
-                <p className="text-xs text-muted-foreground">
-                  Images are required; build, host paths, privileged and swarm-only fields are
-                  rejected.
-                </p>
+                <span className="block text-sm font-medium">Source type</span>
+                <TabsList className="grid h-9 w-full grid-cols-2">
+                  <TabsTrigger value="yaml" className="h-full px-3 py-0">
+                    Compose YAML
+                  </TabsTrigger>
+                  <TabsTrigger value="repository" className="h-full px-3 py-0">
+                    Repository
+                  </TabsTrigger>
+                </TabsList>
               </div>
-              <div className="h-[min(48dvh,440px)] min-h-72 overflow-hidden border border-border">
-                <CodeEditor
-                  value={yaml}
-                  onChange={setYaml}
-                  language="yaml"
-                  minHeight="0"
-                  height="100%"
-                  bordered={false}
+              <div className="space-y-1.5">
+                <label htmlFor="compose-name-modal" className="text-sm font-medium">
+                  Project name
+                </label>
+                <Input
+                  id="compose-name-modal"
+                  value={name}
+                  onChange={(event) => setName(event.target.value.toLowerCase())}
+                  placeholder="my-project"
                 />
               </div>
-            </TabsContent>
-            <TabsContent value="repository">
-              <RepositorySourceFields
-                connectorId={sourceConnectorId}
-                connectorOptions={sourceConnectorOptions}
-                repositories={sourceRepositories}
-                repositoryOptions={sourceRepositories.map((repository) => ({
-                  value: repository.projectId,
-                  label: repository.fullPath,
-                  keywords: `${repository.name} ${repository.fullPath}`,
-                }))}
-                projectId={sourceProjectId}
-                branch={sourceBranch}
-                dockerfilePath="Dockerfile"
-                contextPath="."
-                composeFilePath={sourceComposeFilePath}
-                autoBuild={sourceAutoBuild}
-                autoDeploy={sourceAutoDeploy}
-                onConnectorChange={(value) => {
-                  setSourceConnectorId(value);
-                  setSourceProjectId("");
-                }}
-                onProjectChange={setSourceProjectId}
-                onBranchChange={setSourceBranch}
-                onDockerfilePathChange={() => {}}
-                onContextPathChange={() => {}}
-                onComposeFilePathChange={setSourceComposeFilePath}
-                onAutoBuildChange={setSourceAutoBuild}
-                onAutoDeployChange={setSourceAutoDeploy}
-              />
-              {checkingSourceAdmission && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  Checking Build Worker capacity…
-                </p>
-              )}
-              {sourceAdmission?.ready === false && (
-                <p className="mt-3 text-xs text-destructive" role="alert">
-                  {sourceAdmission.message || "Build capacity is unavailable."}
-                </p>
-              )}
-            </TabsContent>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Target node</label>
+                <Select
+                  value={nodeId}
+                  onValueChange={setNodeId}
+                  disabled={
+                    !!defaultNodeId && selectableNodes.some((node) => node.id === defaultNodeId)
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select node" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectableNodes.map((node) => (
+                      <SelectItem key={node.id} value={node.id}>
+                        {node.displayName || node.hostname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <AnimatedHeight>
+              <AnimatePresence initial={false}>
+                <motion.div key={sourceMode} {...SOURCE_MODE_ANIMATION} className="overflow-hidden">
+                  {sourceMode === "yaml" ? (
+                    yamlPanel
+                  ) : (
+                    <div>
+                      <RepositorySourceFields
+                        connectorId={sourceConnectorId}
+                        connectorOptions={sourceConnectorOptions}
+                        repositories={sourceRepositories}
+                        repositoryOptions={sourceRepositories.map((repository) => ({
+                          value: repository.projectId,
+                          label: repository.fullPath,
+                          keywords: `${repository.name} ${repository.fullPath}`,
+                        }))}
+                        projectId={sourceProjectId}
+                        branch={sourceBranch}
+                        dockerfilePath="Dockerfile"
+                        contextPath="."
+                        composeFilePath={sourceComposeFilePath}
+                        autoBuild={sourceAutoBuild}
+                        autoDeploy={sourceAutoDeploy}
+                        onConnectorChange={(value) => {
+                          setSourceConnectorId(value);
+                          setSourceProjectId("");
+                        }}
+                        onProjectChange={setSourceProjectId}
+                        onBranchChange={setSourceBranch}
+                        onDockerfilePathChange={() => {}}
+                        onContextPathChange={() => {}}
+                        onComposeFilePathChange={setSourceComposeFilePath}
+                        onAutoBuildChange={setSourceAutoBuild}
+                        onAutoDeployChange={setSourceAutoDeploy}
+                      />
+                    </div>
+                  )}
+                </motion.div>
+              </AnimatePresence>
+            </AnimatedHeight>
           </Tabs>
         ) : (
-          <div className="space-y-1.5">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Compose YAML</label>
-              <p className="text-xs text-muted-foreground">
-                Images are required; build, host paths, privileged and swarm-only fields are
-                rejected.
-              </p>
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor="compose-name-modal" className="text-sm font-medium">
+                  Project name
+                </label>
+                <Input id="compose-name-modal" value={name} disabled />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Target node</label>
+                <Select value={nodeId} disabled>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select node" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nodes.map((node) => (
+                      <SelectItem key={node.id} value={node.id}>
+                        {node.displayName || node.hostname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="h-[min(48dvh,440px)] min-h-72 overflow-hidden border border-border">
-              <CodeEditor
-                value={yaml}
-                onChange={setYaml}
-                language="yaml"
-                minHeight="0"
-                height="100%"
-                bordered={false}
-              />
-            </div>
-          </div>
+            {yamlPanel}
+          </>
         )}
 
         <DialogFooter>
@@ -505,22 +536,7 @@ export function ComposeProjectEditor({
             )}
             Validate
           </Button>
-          <Button
-            onClick={() => void save()}
-            disabled={
-              validating ||
-              saving ||
-              !supportsCompose ||
-              !canSubmit ||
-              checkingSourceAdmission ||
-              (repositoryCreation &&
-                (!sourceConnectorId ||
-                  !sourceProjectId ||
-                  !sourceBranch.trim() ||
-                  !sourceComposeFilePath.trim() ||
-                  sourceAdmission?.ready === false))
-            }
-          >
+          <Button onClick={() => void save()} disabled={validating || saving || !canSubmit}>
             {saving ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
             ) : (

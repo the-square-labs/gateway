@@ -718,6 +718,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Data lanes"
           description="Persistent HTTP/2 data-plane connections per daemon (1–16)"
+          help="Each lane is a persistent connection from one relay daemon to Gateway. More lanes can increase parallel throughput but consume more connections and memory on both sides."
         >
           <NumericInput
             value={dataLanes}
@@ -730,6 +731,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Read chunk"
           description="Per-tunnel pooled read buffer; protocol frames remain capped at 1 MiB"
+          help="Value is bytes per tunnel read buffer, in 4 KiB increments. Raising it increases per-tunnel memory use; it does not raise the 1 MiB protocol-frame limit."
         >
           <NumericInput
             value={readChunkBytes}
@@ -743,6 +745,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Default workload relay spread"
           description="Active relay instances used by new workload connections; apply bulk changes with Rebalance"
+          help="Controls how many healthy relay instances receive each new workload assignment. Fixed count limits fan-out; All ready relays maximizes redundancy and connection use."
           controlsClassName="sm:w-96 sm:min-w-96 sm:max-w-96"
         >
           <div className="flex w-full items-center gap-2">
@@ -778,6 +781,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Adaptive admission"
           description="Throttle new proxy streams only when measured relay pressure rises"
+          help="When enabled, Gateway delays or rejects new lower-priority proxy streams as relays approach capacity while preserving room for database traffic."
         >
           <Switch
             checked={adaptiveAdmissionEnabled}
@@ -788,6 +792,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Proxy pressure target"
           description="Start fair-share admission for dominant proxy routes at this measured pressure"
+          help="Percentage of measured relay pressure where fair-share throttling begins for new streams on dominant proxy routes."
         >
           <NumericInput
             value={proxyTargetPressurePercent}
@@ -800,6 +805,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Database reserve"
           description="Capacity kept beyond the proxy target for higher-priority database tunnels"
+          help="Additional percentage points reserved above the proxy target for database tunnels. Target plus reserve must remain below the hard cutoff."
         >
           <NumericInput
             value={databaseReservePercent}
@@ -812,6 +818,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Hard pressure cutoff"
           description="Last-resort safety threshold; databases remain admissible until this point"
+          help="Percentage of measured pressure where new database tunnels are also rejected. It must exceed the proxy target plus database reserve."
         >
           <NumericInput
             value={hardPressurePercent}
@@ -824,6 +831,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Grant lifetime"
           description="Lifetime of newly issued endpoint and connection grants, in hours (1–48)"
+          help="A grant authorizes a relay endpoint or connection until it expires. Shorter lifetimes rotate authorization sooner; longer lifetimes reduce renewal frequency."
         >
           <NumericInput
             value={grantTtlHours}
@@ -836,6 +844,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         <SettingsControlRow
           title="Automatic recovery"
           description="Allow up to three bounded managed relay recovery attempts"
+          help="Lets Gateway restart or repair an unhealthy managed relay automatically. Recovery is bounded to three attempts to avoid an endless restart loop."
         >
           <Switch checked={autoRecovery} onChange={setAutoRecovery} disabled={!canEdit || saving} />
         </SettingsControlRow>

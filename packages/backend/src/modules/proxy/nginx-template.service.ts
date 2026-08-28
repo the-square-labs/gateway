@@ -476,6 +476,10 @@ const BUILTIN_REDIRECT_TEMPLATE = `server {
         return {{redirectStatusCode}} {{sanitize redirectUrl}};
     }
 {{/if}}
+
+{{#if advancedConfig}}
+    {{{indent (applyAccessListToAdvancedLocations advancedConfig accessList) 4}}}
+{{/if}}
 }
 {{#if sslEnabled}}
 
@@ -503,6 +507,10 @@ server {
     location / {
         return {{redirectStatusCode}} {{sanitize redirectUrl}};
     }
+
+{{#if advancedConfig}}
+    {{{indent (applyAccessListToAdvancedLocations advancedConfig accessList) 4}}}
+{{/if}}
 }
 {{/if}}
 `;

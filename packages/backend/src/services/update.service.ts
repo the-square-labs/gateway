@@ -1161,18 +1161,6 @@ function legacySettingsMigrationEnv(env: Env): string[] {
     DATABASE_URL: env.DATABASE_URL,
     REDIS_URL: env.REDIS_URL,
     PKI_MASTER_KEY: env.PKI_MASTER_KEY,
-    APP_URL: process.env.APP_URL,
-    OIDC_ISSUER: env.OIDC_ISSUER,
-    OIDC_CLIENT_ID: env.OIDC_CLIENT_ID,
-    OIDC_CLIENT_SECRET: env.OIDC_CLIENT_SECRET,
-    OIDC_REDIRECT_URI: env.OIDC_REDIRECT_URI,
-    OIDC_SCOPES: env.OIDC_SCOPES,
-    CLICKHOUSE_URL: env.CLICKHOUSE_URL,
-    CLICKHOUSE_USERNAME: env.CLICKHOUSE_USERNAME,
-    CLICKHOUSE_PASSWORD: env.CLICKHOUSE_PASSWORD,
-    CLICKHOUSE_DATABASE: env.CLICKHOUSE_DATABASE,
-    CLICKHOUSE_LOGS_TABLE: env.CLICKHOUSE_LOGS_TABLE,
-    CLICKHOUSE_REQUEST_TIMEOUT_MS: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
   };
   return Object.entries(values)
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)

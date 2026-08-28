@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
@@ -121,17 +122,25 @@ export function ProxyHostDetail({
   const canDeleteProxyHost = !!id && (hasScope("proxy:delete") || hasScope(`proxy:delete:${id}`));
   const [host, setHost] = useState<ProxyHost | null>(null);
   const [maintenanceAccessCode, setMaintenanceAccessCode] = useState<string | null>(null);
+  const displayedMaintenanceAccessCode = useRetainedDialogValue(
+    maintenanceAccessCode,
+    maintenanceAccessCode !== null
+  );
   const [isCreatingMaintenanceAccessCode, setIsCreatingMaintenanceAccessCode] = useState(false);
+  const hasSecureLinkRuntime =
+    host?.type === "proxy" &&
+    host.secureLinkActive === true &&
+    (host.upstreamKind === "docker_container" || host.upstreamKind === "docker_deployment");
   const visibleTabs = useMemo(
     () => [
       "details",
       "settings",
-      ...(host?.upstreamKind && host.upstreamKind !== "manual" ? ["secure-link"] : []),
+      ...(hasSecureLinkRuntime ? ["secure-link"] : []),
       ...(canViewAdvancedConfig ? ["advanced"] : []),
       ...(canViewRawConfig ? ["raw"] : []),
       "logs",
     ],
-    [canViewAdvancedConfig, canViewRawConfig, host?.upstreamKind]
+    [canViewAdvancedConfig, canViewRawConfig, hasSecureLinkRuntime]
   );
 
   const [healthHistory, setHealthHistory] = useState<NonNullable<ProxyHost["healthHistory"]>>([]);
@@ -142,6 +151,12 @@ export function ProxyHostDetail({
   const [activeTab, setActiveTab] = useUrlTab(visibleTabs, "details", (tab) =>
     proxyHostRoute(routeSlug, tab)
   );
+
+  useEffect(() => {
+    if (params.tab === "secure-link" && host && !hasSecureLinkRuntime) {
+      setActiveTab("details");
+    }
+  }, [hasSecureLinkRuntime, host, params.tab, setActiveTab]);
 
   // Edit dialog
   const [editOpen, setEditOpen] = useState(false);
@@ -1329,13 +1344,13 @@ export function ProxyHostDetail({
           </DialogHeader>
           <div className="flex min-w-0 border border-input bg-background">
             <Input
-              value={maintenanceAccessCode ?? ""}
+              value={displayedMaintenanceAccessCode ?? ""}
               readOnly
               aria-label="Maintenance access code"
               className="min-w-0 flex-1 border-0 bg-transparent font-mono focus-visible:ring-0"
             />
             <CopyButton
-              value={maintenanceAccessCode ?? ""}
+              value={displayedMaintenanceAccessCode ?? ""}
               label="maintenance access code"
               className="border-l border-input"
             />

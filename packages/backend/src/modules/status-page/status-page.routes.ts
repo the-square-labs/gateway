@@ -17,6 +17,7 @@ import {
   listStatusPageServicesRoute,
   promoteStatusPageIncidentRoute,
   publicStatusPageRoute,
+  reorderStatusPageServicesRoute,
   resolveStatusPageIncidentRoute,
   updateStatusPageIncidentRoute,
   updateStatusPageServiceRoute,
@@ -27,6 +28,7 @@ import {
   CreateStatusPageIncidentUpdateSchema,
   CreateStatusPageServiceSchema,
   IncidentListQuerySchema,
+  ReorderStatusPageServicesSchema,
   StatusPageSettingsSchema,
   UpdateStatusPageIncidentSchema,
   UpdateStatusPageServiceSchema,
@@ -76,6 +78,16 @@ statusPageRoutes.openapi(
     const user = c.get('user')!;
     const input = CreateStatusPageServiceSchema.parse(await c.req.json());
     return c.json({ data: await service.createService(input, user.id) }, 201);
+  }
+);
+
+statusPageRoutes.openapi(
+  { ...reorderStatusPageServicesRoute, middleware: requireScope('status-page:manage') },
+  async (c) => {
+    const service = container.resolve(StatusPageService);
+    const user = c.get('user')!;
+    const input = ReorderStatusPageServicesSchema.parse(await c.req.json());
+    return c.json({ data: await service.reorderServices(input.serviceIds, user.id) });
   }
 );
 

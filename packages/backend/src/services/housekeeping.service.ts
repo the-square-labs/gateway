@@ -22,6 +22,8 @@ import type { SystemCertificateLifecycleService } from './system-certificate-lif
 const logger = createChildLogger('HousekeepingService');
 const VOLUME_CLEANUP_PROTECTED_LABEL = 'gateway.housekeeping.protected';
 const SYSTEM_CERTIFICATE_KEY_RETENTION_DAYS = 30;
+const LOGGING_SETTINGS_KEY = 'logging:clickhouse';
+const DEFAULT_INTERNAL_REGISTRY_RETENTION_COUNT = 3;
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -35,7 +37,7 @@ export interface HousekeepingConfig {
   structuredLogs: { enabled: boolean; maxRows: number; maxSizeBytes: number };
   clickHouseInternals: { enabled: boolean; maxSizeBytes: number };
   orphanedAIArtifacts: { enabled: boolean };
-  gatewayLogs: { enabled: false };
+  internalRegistry: { enabled: true; retentionSuccessfulArtifacts: number };
   orphanedVolumes: { enabled: boolean; retentionDays: number };
   dockerPrune: { enabled: boolean };
   orphanedCerts: { enabled: boolean };
@@ -69,7 +71,12 @@ export interface HousekeepingStats {
   structuredLogs: { totalRows: number; totalSizeBytes: number; status: string };
   clickHouseInternals: { totalRows: number; totalSizeBytes: number; status: string; capBytes: number };
   orphanedAIArtifacts: { count: number; totalSizeBytes: number };
-  gatewayLogs: { totalSizeBytes: number; fileCount: number; available: false };
+  internalRegistry: {
+    totalSizeBytes: number;
+    capacityBytes: number | null;
+    status: string;
+    lastGcAt: string | null;
+  };
   orphanedVolumes: { count: number; reclaimableBytes: number };
   orphanedCerts: {
     count: number;
@@ -103,6 +110,7 @@ const KEYS = {
   clickHouseInternalsEnabled: 'housekeeping:clickhouse_internals:enabled',
   clickHouseInternalsMaxSizeBytes: 'housekeeping:clickhouse_internals:max_size_bytes',
   orphanedAIArtifactsEnabled: 'housekeeping:orphaned_ai_artifacts:enabled',
+  internalRegistryRetention: 'housekeeping:internal_registry:retention_successful_artifacts',
   orphanedVolumesEnabled: 'housekeeping:orphaned_volumes:enabled',
   orphanedVolumesRetention: 'housekeeping:orphaned_volumes:retention_days',
   dockerPruneEnabled: 'housekeeping:docker_prune:enabled',
@@ -123,13 +131,13 @@ const DEFAULTS: Record<string, unknown> = {
   [KEYS.dismissedAlertsRetention]: 30,
   [KEYS.deliveryLogEnabled]: true,
   [KEYS.deliveryLogRetention]: 7,
-  [KEYS.structuredLogsEnabled]: false,
+  [KEYS.structuredLogsEnabled]: true,
   [KEYS.structuredLogsMaxRows]: 100_000,
   [KEYS.structuredLogsMaxSizeBytes]: 10 * 1024 * 1024 * 1024,
-  [KEYS.clickHouseInternalsEnabled]: false,
   [KEYS.clickHouseInternalsMaxSizeBytes]: 512 * 1024 * 1024,
   [KEYS.orphanedAIArtifactsEnabled]: true,
-  [KEYS.orphanedVolumesEnabled]: false,
+  [KEYS.internalRegistryRetention]: DEFAULT_INTERNAL_REGISTRY_RETENTION_COUNT,
+  [KEYS.orphanedVolumesEnabled]: true,
   [KEYS.orphanedVolumesRetention]: 30,
   [KEYS.dockerPruneEnabled]: true,
   [KEYS.orphanedCertsEnabled]: true,
@@ -169,9 +177,14 @@ export class HousekeepingService {
   // ── Config ──────────────────────────────────────────────────────
 
   async getConfig(): Promise<HousekeepingConfig> {
-    const rows = await this.db.select().from(settings).where(sql`${settings.key} LIKE 'housekeeping:%'`);
+    const rows = await this.db
+      .select()
+      .from(settings)
+      .where(sql`${settings.key} LIKE 'housekeeping:%' OR ${settings.key} = ${LOGGING_SETTINGS_KEY}`);
 
     const map = new Map(rows.map((r) => [r.key, r.value]));
+    const loggingSettings = map.get(LOGGING_SETTINGS_KEY) as { mode?: unknown } | undefined;
+    const clickHouseInternalsDefault = loggingSettings?.mode === 'local';
     const get = <T>(key: string, fallback: T): T => {
       const v = map.get(key);
       return v !== undefined && v !== null ? (v as T) : fallback;
@@ -202,7 +215,7 @@ export class HousekeepingService {
         maxSizeBytes: get(KEYS.structuredLogsMaxSizeBytes, DEFAULTS[KEYS.structuredLogsMaxSizeBytes] as number),
       },
       clickHouseInternals: {
-        enabled: get(KEYS.clickHouseInternalsEnabled, DEFAULTS[KEYS.clickHouseInternalsEnabled] as boolean),
+        enabled: get(KEYS.clickHouseInternalsEnabled, clickHouseInternalsDefault),
         maxSizeBytes: get(
           KEYS.clickHouseInternalsMaxSizeBytes,
           DEFAULTS[KEYS.clickHouseInternalsMaxSizeBytes] as number
@@ -211,8 +224,12 @@ export class HousekeepingService {
       orphanedAIArtifacts: {
         enabled: get(KEYS.orphanedAIArtifactsEnabled, DEFAULTS[KEYS.orphanedAIArtifactsEnabled] as boolean),
       },
-      gatewayLogs: {
-        enabled: false,
+      internalRegistry: {
+        enabled: true,
+        retentionSuccessfulArtifacts: get(
+          KEYS.internalRegistryRetention,
+          DEFAULTS[KEYS.internalRegistryRetention] as number
+        ),
       },
       orphanedVolumes: {
         enabled: get(KEYS.orphanedVolumesEnabled, DEFAULTS[KEYS.orphanedVolumesEnabled] as boolean),
@@ -261,6 +278,8 @@ export class HousekeepingService {
       updates.push([KEYS.clickHouseInternalsMaxSizeBytes, partial.clickHouseInternals.maxSizeBytes]);
     if (partial.orphanedAIArtifacts?.enabled !== undefined)
       updates.push([KEYS.orphanedAIArtifactsEnabled, partial.orphanedAIArtifacts.enabled]);
+    if (partial.internalRegistry?.retentionSuccessfulArtifacts !== undefined)
+      updates.push([KEYS.internalRegistryRetention, partial.internalRegistry.retentionSuccessfulArtifacts]);
     if (partial.orphanedVolumes?.enabled !== undefined)
       updates.push([KEYS.orphanedVolumesEnabled, partial.orphanedVolumes.enabled]);
     if (partial.orphanedVolumes?.retentionDays !== undefined)
@@ -297,7 +316,7 @@ export class HousekeepingService {
       deliveryLog,
       clickHouse,
       orphanedAIArtifacts,
-      gatewayLogs,
+      internalRegistry,
       orphanedVolumes,
       orphanedCerts,
       acme,
@@ -310,7 +329,7 @@ export class HousekeepingService {
       this.getDeliveryLogStats(),
       Promise.resolve(this.loggingMaintenanceService?.getSnapshot() ?? null),
       this.getOrphanedAIArtifactStats(),
-      this.getGatewayLogStats(),
+      this.getInternalRegistryStats(),
       this.getOrphanedVolumeStats(),
       this.getOrphanedCertStats(),
       this.getAcmeChallengeStats(),
@@ -335,7 +354,7 @@ export class HousekeepingService {
         capBytes: clickHouse?.internal.capBytes ?? 0,
       },
       orphanedAIArtifacts,
-      gatewayLogs,
+      internalRegistry,
       orphanedVolumes,
       orphanedCerts,
       acmeChallenges: acme,
@@ -367,6 +386,7 @@ export class HousekeepingService {
           await this.runCategory('Internal Registry', async () => {
             const run = await this.internalRegistryMaintenanceService!.runGarbageCollection({
               requestedById: userId ?? null,
+              retentionCount: config.internalRegistry.retentionSuccessfulArtifacts,
             });
             const candidateIds = Array.isArray(run.progress?.candidateArtifactIds)
               ? run.progress.candidateArtifactIds
@@ -461,7 +481,7 @@ export class HousekeepingService {
   async getRunHistory(): Promise<HousekeepingRunResult[]> {
     const row = await this.db.select().from(settings).where(eq(settings.key, KEYS.runHistory)).limit(1);
     if (!row.length) return [];
-    return (row[0].value as HousekeepingRunResult[]) || [];
+    return ((row[0].value as HousekeepingRunResult[]) || []).slice(0, MAX_HISTORY);
   }
 
   // ── Category Implementations ────────────────────────────────────
@@ -734,8 +754,17 @@ export class HousekeepingService {
     return this.sandboxArtifactService.getOrphanedStats();
   }
 
-  private async getGatewayLogStats(): Promise<HousekeepingStats['gatewayLogs']> {
-    return { totalSizeBytes: 0, fileCount: 0, available: false };
+  private async getInternalRegistryStats(): Promise<HousekeepingStats['internalRegistry']> {
+    if (!this.internalRegistryMaintenanceService) {
+      return { totalSizeBytes: 0, capacityBytes: null, status: 'unavailable', lastGcAt: null };
+    }
+    const state = await this.internalRegistryMaintenanceService.getState();
+    return {
+      totalSizeBytes: state.storageUsedBytes,
+      capacityBytes: state.storageCapacityBytes,
+      status: state.status,
+      lastGcAt: state.lastGcAt?.toISOString() ?? null,
+    };
   }
 
   private async getOrphanedVolumeStats(): Promise<HousekeepingStats['orphanedVolumes']> {

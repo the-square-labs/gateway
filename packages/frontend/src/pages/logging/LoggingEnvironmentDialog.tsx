@@ -64,7 +64,11 @@ export function LoggingEnvironmentDialog({
         <div className="space-y-4">
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Name</span>
-            <Input value={name} onChange={(event) => setName(event.target.value)} />
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Production"
+            />
           </label>
           {environment && (
             <p className="text-xs text-muted-foreground">
@@ -73,7 +77,11 @@ export function LoggingEnvironmentDialog({
           )}
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Description</span>
-            <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+            <Input
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Application logs from production services"
+            />
           </label>
         </div>
         <DialogFooter>

@@ -16,6 +16,12 @@ describe("DatabaseConnectionForm", () => {
     );
     expect(screen.getByText("Host")).toBeInTheDocument();
     expect(screen.getByText("Password")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Primary Postgres")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Optional description")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("db.example.com")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("app")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("gateway")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Enter password")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Connection URI" })).not.toBeInTheDocument();
   });
 

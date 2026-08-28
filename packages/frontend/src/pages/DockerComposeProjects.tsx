@@ -17,6 +17,7 @@ import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { DockerFolderedResourceList } from "@/components/docker/DockerFolderedResourceList";
+import { ExternalComposeBadge } from "@/components/docker/ExternalComposeBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { createClientUuid } from "@/lib/client-id";
 import { canAdoptComposeProject, hasComposeProjectScope } from "@/lib/compose-access";
 import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
@@ -268,6 +270,10 @@ export function DockerComposeProjects({
             .includes(query)
       );
   }, [projects, search, visibleNodeId]);
+  const retainedAdoptEditorProject = useRetainedDialogValue(
+    adoptEditorProject,
+    !!adoptEditorProject
+  );
 
   const columns = useMemo<ResourceListColumn<DockerComposeProjectSummary>[]>(
     () => [
@@ -281,14 +287,10 @@ export function DockerComposeProjects({
               <Boxes className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="min-w-0">
-              <TruncateStart text={project.name} className="text-sm font-medium" />
-              {project.managementState === "external" && (
-                <div className="mt-1">
-                  <Badge variant="warning" size="inline">
-                    External
-                  </Badge>
-                </div>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                <TruncateStart text={project.name} className="min-w-0 text-sm font-medium" />
+                {project.managementState === "external" && <ExternalComposeBadge />}
+              </div>
             </div>
           </div>
         ),
@@ -511,7 +513,7 @@ export function DockerComposeProjects({
   );
   const createDialog = (
     <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-      <DialogContent clipOverflow className="sm:max-w-3xl">
+      <DialogContent clipOverflow className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>New Compose Project</DialogTitle>
           <DialogDescription>
@@ -527,16 +529,16 @@ export function DockerComposeProjects({
       open={!!adoptEditorProject}
       onOpenChange={(open) => !open && setAdoptEditorProject(null)}
     >
-      <DialogContent clipOverflow className="sm:max-w-3xl">
+      <DialogContent clipOverflow className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Adopt Compose project</DialogTitle>
           <DialogDescription>
             Review the configuration before adopting the project.
           </DialogDescription>
         </DialogHeader>
-        {adoptEditorProject && (
+        {retainedAdoptEditorProject && (
           <ComposeProjectEditor
-            projectIdOverride={adoptEditorProject.id}
+            projectIdOverride={retainedAdoptEditorProject.id}
             adoptionOverride
             onClose={() => setAdoptEditorProject(null)}
           />

@@ -378,6 +378,7 @@ export function InferenceProviderConnectDialog({
                   <SettingsControlRow
                     title="Allow private network"
                     description="Only for an explicitly trusted private endpoint"
+                    help="Allows loopback, RFC 1918, and private IPv6 provider addresses. Link-local and metadata ranges remain blocked; enable only for a trusted endpoint."
                   >
                     <Switch
                       checked={allowPrivateNetwork}

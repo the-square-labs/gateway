@@ -3,6 +3,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { alerts, certificateAuthorities, certificates, sslCertificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AlertService } from '@/modules/audit/alert.service.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 
 const logger = createChildLogger('ExpiryAlertJob');
@@ -12,9 +13,7 @@ export class ExpiryAlertJob {
 
   constructor(
     private readonly db: DrizzleClient,
-    private readonly alertService: AlertService,
-    private readonly warningDays: number,
-    private readonly criticalDays: number
+    private readonly alertService: AlertService
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -24,11 +23,12 @@ export class ExpiryAlertJob {
   async run(): Promise<void> {
     logger.info('Starting expiry alert check');
 
+    const { expiryWarningDays, expiryCriticalDays } = getEnvironmentSettingsSnapshot().pkiDefaults;
     const now = new Date();
     const warningThreshold = new Date(now);
-    warningThreshold.setDate(warningThreshold.getDate() + this.warningDays);
+    warningThreshold.setDate(warningThreshold.getDate() + expiryWarningDays);
     const criticalThreshold = new Date(now);
-    criticalThreshold.setDate(criticalThreshold.getDate() + this.criticalDays);
+    criticalThreshold.setDate(criticalThreshold.getDate() + expiryCriticalDays);
 
     let alertsCreated = 0;
 

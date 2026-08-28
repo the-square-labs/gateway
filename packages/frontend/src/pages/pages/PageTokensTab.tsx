@@ -64,6 +64,14 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
     { onReconnect: load }
   );
 
+  const openCreate = () => {
+    setName("");
+    setAllowUserTag(true);
+    setAllowedTagPatterns("");
+    setExpiresAt("");
+    setDialogOpen(true);
+  };
+
   const create = async () => {
     if (!name.trim() || saving) return;
     setSaving(true);
@@ -80,10 +88,6 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
       setCreatedToken(created);
       setCreatedTokenOpen(true);
       setDialogOpen(false);
-      setName("");
-      setAllowUserTag(true);
-      setAllowedTagPatterns("");
-      setExpiresAt("");
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create deploy token");
@@ -120,7 +124,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
         description="Use a token with the resumable webhook API. The raw secret is shown exactly once."
         actions={
           canManage ? (
-            <Button onClick={() => setDialogOpen(true)}>
+            <Button onClick={openCreate}>
               <Plus className="h-4 w-4" />
               Create token
             </Button>
@@ -132,9 +136,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
         ) : tokens.length === 0 ? (
           <EmptyState
             message="No deploy tokens have been created."
-            {...(canManage
-              ? { actionLabel: "Create one", onAction: () => setDialogOpen(true) }
-              : {})}
+            {...(canManage ? { actionLabel: "Create one", onAction: openCreate } : {})}
             embedded
           />
         ) : (

@@ -1,4 +1,4 @@
-import { KeyRound, Plus, Save, ScrollText, Settings, Trash2 } from "lucide-react";
+import { Code2, KeyRound, Plus, Save, ScrollText, Settings, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -28,6 +28,7 @@ import { loggingEnvironmentRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { LoggingEnvironment, LoggingSchema, LoggingSchemaMode } from "@/types";
+import { LoggingConnectionInstructionsDialog } from "./LoggingConnectionInstructionsDialog";
 import { LoggingExplorer } from "./LoggingExplorer";
 import { LoggingSchemaEditor } from "./LoggingSchemaEditor";
 import { LoggingTokenPanel } from "./LoggingTokenPanel";
@@ -236,6 +237,7 @@ export function LoggingEnvironmentDetail({
   const [logsRefreshKey, setLogsRefreshKey] = useState(0);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [connectionInstructionsOpen, setConnectionInstructionsOpen] = useState(false);
 
   const setTokenDialogOpenGuarded = (nextOpen: boolean) => {
     if (nextOpen && !requireLicenseFeature("structured-logging", "Logging ingest tokens")) return;
@@ -270,6 +272,12 @@ export function LoggingEnvironmentDetail({
     }
   };
   const headerActions: ResponsiveHeaderAction[] = [
+    {
+      id: "logging-environment:connect",
+      label: "Connection instructions",
+      icon: <Code2 className="h-4 w-4" />,
+      onClick: () => setConnectionInstructionsOpen(true),
+    },
     ...(activeTab === "logs"
       ? [
           {
@@ -345,6 +353,10 @@ export function LoggingEnvironmentDetail({
             </div>
           </div>
           <ResponsiveHeaderActions actions={headerActions}>
+            <Button variant="outline" onClick={() => setConnectionInstructionsOpen(true)}>
+              <Code2 className="h-4 w-4" />
+              Connect
+            </Button>
             {activeTab === "logs" && (
               <RefreshButton
                 onClick={() => setLogsRefreshKey((current) => current + 1)}
@@ -420,6 +432,10 @@ export function LoggingEnvironmentDetail({
             />
           </TabsContent>
         </Tabs>
+        <LoggingConnectionInstructionsDialog
+          open={connectionInstructionsOpen}
+          onOpenChange={setConnectionInstructionsOpen}
+        />
       </div>
     </PageTransition>
   );
@@ -624,67 +640,6 @@ function SettingsNumberRow({
         value={value}
         onChange={(event) => onChange(event.target.value ? Number(event.target.value) : null)}
       />
-    </div>
-  );
-}
-
-function SettingsValueRow({
-  label,
-  description,
-  value,
-}: {
-  label: string;
-  description: string;
-  value: ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
-      <div className="text-right text-sm text-muted-foreground">{value}</div>
-    </div>
-  );
-}
-
-export function LoggingGlobalSettings({
-  loggingEnabled,
-  environmentCount,
-  schemaCount,
-}: {
-  loggingEnabled: boolean;
-  environmentCount: number;
-  schemaCount: number;
-}) {
-  return (
-    <div className="space-y-6 pb-6">
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <SettingsPanel title="Storage" description="External structured log storage">
-          <SettingsValueRow
-            label="Status"
-            description="External structured log storage"
-            value={
-              <Badge variant={loggingEnabled ? "success" : "secondary"}>
-                {loggingEnabled ? "Enabled" : "Disabled"}
-              </Badge>
-            }
-          />
-        </SettingsPanel>
-
-        <SettingsPanel title="Inventory" description="Configured logging metadata">
-          <SettingsValueRow
-            label="Environments"
-            description="Configured ingest boundaries"
-            value={<Badge variant="outline">{environmentCount}</Badge>}
-          />
-          <SettingsValueRow
-            label="Schemas"
-            description="Reusable validation schemas"
-            value={<Badge variant="outline">{schemaCount}</Badge>}
-          />
-        </SettingsPanel>
-      </div>
     </div>
   );
 }

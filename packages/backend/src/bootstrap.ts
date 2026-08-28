@@ -39,6 +39,7 @@ import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { AvatarStorageService, resolveAvatarStorageDir } from '@/modules/auth/avatar-storage.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
@@ -148,7 +149,7 @@ import { NotificationEvaluatorService } from '@/modules/notifications/notificati
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
-import { PageArtifactStore } from '@/modules/pages/artifacts/page-artifact-store.js';
+import { PageArtifactStore, resolvePageStorageDir } from '@/modules/pages/artifacts/page-artifact-store.js';
 import { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
 import { PageDeploymentService } from '@/modules/pages/deployments/page-deployment.service.js';
 import { PageProjectService } from '@/modules/pages/page-project.service.js';
@@ -175,6 +176,7 @@ import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { ProxyDockerUpstreamService } from '@/modules/proxy/proxy-docker-upstream.service.js';
 import { ProxyMaintenanceAccessService } from '@/modules/proxy/proxy-maintenance-access.service.js';
 import { ProxySecureLinkService } from '@/modules/proxy/proxy-secure-link.service.js';
+import { EnvironmentSettingsService } from '@/modules/settings/environment-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
@@ -251,6 +253,9 @@ export async function initializeContainer(): Promise<void> {
   // Realtime event bus (in-process; swappable to Redis pub/sub later)
   const eventBus = new EventBusService();
   container.registerInstance(EventBusService, eventBus);
+  const environmentSettingsService = new EnvironmentSettingsService(db, eventBus);
+  await environmentSettingsService.initialize();
+  container.registerInstance(EnvironmentSettingsService, environmentSettingsService);
   const readModelCoordinator = new ReadModelCoordinator(eventBus);
   container.registerInstance(ReadModelCoordinator, readModelCoordinator);
   const inferenceSetupEvents = new InferenceSetupEventsService(eventBus);
@@ -264,7 +269,6 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(CryptoService, cryptoService);
 
   const oidcSettingsService = new OidcSettingsService(db, cryptoService);
-  await oidcSettingsService.importLegacyEnv(env);
   container.registerInstance(OidcSettingsService, oidcSettingsService);
 
   const authSettingsService = new AuthSettingsService(db);
@@ -310,6 +314,11 @@ export async function initializeContainer(): Promise<void> {
   auditService.setEventBus(eventBus);
   container.registerInstance(AuditService, auditService);
 
+  const avatarStorageService = new AvatarStorageService(resolveAvatarStorageDir(env.NODE_ENV));
+  await avatarStorageService.initialize();
+  await avatarStorageService.migrateLegacyDataUrls(db);
+  container.registerInstance(AvatarStorageService, avatarStorageService);
+
   const authService = new AuthService(
     db,
     sessionService,
@@ -320,6 +329,7 @@ export async function initializeContainer(): Promise<void> {
     generalSettingsService
   );
   authService.setLicenseQuotaService(licenseQuotaService);
+  authService.setAvatarStorageService(avatarStorageService);
   container.registerInstance(AuthService, authService);
   container.registerInstance(
     LocalAuthService,
@@ -1016,7 +1026,7 @@ export async function initializeContainer(): Promise<void> {
   statusPageService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(StatusPageService, statusPageService);
 
-  const acmeService = new ACMEService(env.ACME_EMAIL, env.ACME_STAGING);
+  const acmeService = new ACMEService();
   const http01ChallengeNodes = new Map<string, string>();
   acmeService.onHttp01Preflight = async (domains: string[]) => {
     await Promise.all(
@@ -1145,7 +1155,7 @@ export async function initializeContainer(): Promise<void> {
   const pageProjectFolderService = new PageProjectFolderService(db, auditService);
   pageProjectFolderService.setEventBus(eventBus);
   container.registerInstance(PageProjectFolderService, pageProjectFolderService);
-  const pageArtifactStore = new PageArtifactStore(env.PAGES_STORAGE_DIR);
+  const pageArtifactStore = new PageArtifactStore(resolvePageStorageDir(env.PAGES_STORAGE_DIR, env.NODE_ENV));
   await pageArtifactStore.initialize();
   container.registerInstance(PageArtifactStore, pageArtifactStore);
   const pageDeployTokenService = new PageDeployTokenService(db, auditService);
@@ -1328,9 +1338,8 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(UpdateService, updateService);
 
   const loggingSettingsService = new LoggingSettingsService(db, cryptoService);
-  await loggingSettingsService.importLegacyEnv(env);
   container.registerInstance(LoggingSettingsService, loggingSettingsService);
-  const loggingClickHouseService = new LoggingClickHouseService(env);
+  const loggingClickHouseService = new LoggingClickHouseService();
   container.registerInstance(LoggingClickHouseService, loggingClickHouseService);
   const loggingFeatureService = new LoggingFeatureService(loggingClickHouseService);
   container.registerInstance(LoggingFeatureService, loggingFeatureService);
@@ -1379,15 +1388,7 @@ export async function initializeContainer(): Promise<void> {
     loggingFeatureService.markUnavailable(error instanceof Error ? error.message : 'ClickHouse initialization failed');
     logger.warn('External logging ClickHouse initialization failed', { error });
   }
-  const loggingEnvironmentService = new LoggingEnvironmentService(
-    db,
-    auditService,
-    {
-      requests: env.LOGGING_GLOBAL_REQUESTS_PER_WINDOW,
-      events: env.LOGGING_GLOBAL_EVENTS_PER_WINDOW,
-    },
-    loggingClickHouseService
-  );
+  const loggingEnvironmentService = new LoggingEnvironmentService(db, auditService, loggingClickHouseService);
   loggingEnvironmentService.setEventBus(eventBus);
   loggingEnvironmentService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingEnvironmentService, loggingEnvironmentService);
@@ -1405,9 +1406,9 @@ export async function initializeContainer(): Promise<void> {
   const loggingSchemaFolderService = new LoggingSchemaFolderService(db, auditService);
   loggingSchemaFolderService.setEventBus(eventBus);
   container.registerInstance(LoggingSchemaFolderService, loggingSchemaFolderService);
-  const loggingValidationService = new LoggingValidationService(env);
+  const loggingValidationService = new LoggingValidationService();
   container.registerInstance(LoggingValidationService, loggingValidationService);
-  const loggingRateLimitService = new LoggingRateLimitService(redis, env);
+  const loggingRateLimitService = new LoggingRateLimitService(redis);
   container.registerInstance(LoggingRateLimitService, loggingRateLimitService);
   const loggingMetadataService = new LoggingMetadataService(db);
   container.registerInstance(LoggingMetadataService, loggingMetadataService);
@@ -1475,6 +1476,7 @@ export async function initializeContainer(): Promise<void> {
   housekeepingService.setLoggingMaintenanceService(loggingMaintenanceService);
   housekeepingService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   housekeepingService.setPagesMaintenanceService(pageMaintenanceService);
+  housekeepingService.setInternalRegistryMaintenanceService(dockerInternalRegistryService);
   container.registerInstance(HousekeepingService, housekeepingService);
 
   // Group service (injectable — resolve from container)
@@ -1633,7 +1635,7 @@ export async function initializeContainer(): Promise<void> {
   const healthCheckJob = new HealthCheckJob(db, nodeDispatch);
   healthCheckJob.setEventBus(eventBus);
   healthCheckJob.setEvaluator(notifEvaluatorService);
-  const expiryAlertJob = new ExpiryAlertJob(db, alertService, env.EXPIRY_WARNING_DAYS, env.EXPIRY_CRITICAL_DAYS);
+  const expiryAlertJob = new ExpiryAlertJob(db, alertService);
   expiryAlertJob.setEventBus(eventBus);
 
   const dnsCheckJob = new DnsCheckJob(domainsService);

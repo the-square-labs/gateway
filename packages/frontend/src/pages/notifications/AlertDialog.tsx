@@ -597,7 +597,7 @@ export function AlertDialog({
         </DialogHeader>
 
         <AnimatedHeight>
-          <AnimatePresence mode="wait">
+          <AnimatePresence initial={false} mode="wait">
             {/* ── Step 1: Configuration ── */}
             {step === 1 && (
               <motion.div key="step-1" {...STEP_ANIMATION} className="space-y-5">
@@ -931,7 +931,7 @@ export function AlertDialog({
               <motion.div key="step-2" {...STEP_ANIMATION} className="space-y-5">
                 {/* Scope */}
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
                     <div>
                       <p className="text-sm font-medium">
                         Limit to specific {cat?.label?.toLowerCase() ?? category}s
@@ -944,6 +944,7 @@ export function AlertDialog({
                     </div>
                     <Switch
                       checked={scopeEnabled}
+                      ariaLabel={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
                       onChange={(v) => {
                         setScopeEnabled(v);
                         if (!v) setResourceIds([]);

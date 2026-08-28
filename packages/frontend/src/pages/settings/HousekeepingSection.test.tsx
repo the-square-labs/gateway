@@ -16,7 +16,7 @@ const config: HousekeepingConfig = {
   structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
   clickHouseInternals: { enabled: true, maxSizeBytes: 512 * 1024 ** 2 },
   orphanedAIArtifacts: { enabled: true },
-  gatewayLogs: { enabled: false },
+  internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 3 },
   orphanedVolumes: { enabled: false, retentionDays: 30 },
   dockerPrune: { enabled: true },
   orphanedCerts: { enabled: true },
@@ -36,7 +36,12 @@ const stats = {
     capBytes: 512 * 1024 ** 2,
   },
   orphanedAIArtifacts: { count: 0, totalSizeBytes: 0 },
-  gatewayLogs: { totalSizeBytes: 0, fileCount: 0, available: false },
+  internalRegistry: {
+    totalSizeBytes: 1024,
+    capacityBytes: null,
+    status: "ready",
+    lastGcAt: null,
+  },
   orphanedVolumes: { count: 0, reclaimableBytes: 0 },
   orphanedCerts: { count: 0, certIds: [], currentCount: 0, supersededCount: 0, unknownCount: 0 },
   acmeChallenges: { fileCount: 0, totalSizeBytes: 0 },
@@ -77,6 +82,40 @@ describe("HousekeepingSection ClickHouse internals", () => {
       expect(update).toHaveBeenCalledWith(
         expect.objectContaining({
           clickHouseInternals: { enabled: true, maxSizeBytes: 768 * 1024 ** 2 },
+        })
+      )
+    );
+  });
+
+  it("keeps registry cleanup enabled while allowing its retention to be saved", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getHousekeepingConfig").mockResolvedValue(structuredClone(config));
+    vi.spyOn(api, "getHousekeepingStats").mockResolvedValue(stats);
+    const update = vi
+      .spyOn(api, "updateHousekeepingConfig")
+      .mockImplementation(async (next) => next as HousekeepingConfig);
+
+    render(
+      <MemoryRouter>
+        <HousekeepingSection canRun canConfigure />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Internal Registry");
+    expect(screen.getByRole("button", { name: "Internal Registry cleanup" })).toBeDisabled();
+
+    const input = screen.getByRole("spinbutton", {
+      name: "Retained successful registry artifacts",
+    });
+    expect(input).toHaveValue(3);
+    await user.clear(input);
+    await user.type(input, "5");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 5 },
         })
       )
     );

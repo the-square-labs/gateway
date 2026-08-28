@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -103,7 +104,12 @@ export function VolumeMountsSection({
 
   return (
     <PanelShell
-      title="Volume Mounts"
+      title={
+        <SettingsHelpTitle
+          label="Volume Mounts"
+          help="Mounts persistent named volumes or host paths into the container. Data outside the container writable layer survives container recreation."
+        />
+      }
       description="Requires container recreation"
       dirty={mountsChanged}
       actions={

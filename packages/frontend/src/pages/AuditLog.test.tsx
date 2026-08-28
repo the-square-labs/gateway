@@ -5,6 +5,8 @@ import {
   formatAuditToken,
   getAuditEntryUserKey,
   getAuditEntryUserLabel,
+  mergeAuditFilterUsers,
+  mergeAuditFilterValues,
 } from "@/pages/audit-log/audit-format";
 import type { AuditLogEntry } from "@/types";
 
@@ -20,6 +22,7 @@ const baseEntry: AuditLogEntry = {
   createdAt: "2026-06-21T08:30:00.000Z",
   userName: "Ada Lovelace",
   userEmail: "ada@example.com",
+  userAvatarUrl: "/auth/avatars/11111111-1111-4111-8111-111111111111.webp",
 };
 
 describe("AuditLog helpers", () => {
@@ -98,5 +101,29 @@ describe("AuditLog helpers", () => {
     vi.setSystemTime(new Date("2026-06-21T08:30:00.123Z"));
 
     expect(buildAuditExportFilename("csv")).toBe("gateway-audit-log-2026-06-21T08-30-00-123Z.csv");
+  });
+
+  it("keeps audit filter options stable while new pages and filters load", () => {
+    expect(mergeAuditFilterValues(["z.action", "a.action"], ["m.action", "a.action"])).toEqual([
+      "a.action",
+      "m.action",
+      "z.action",
+    ]);
+    expect(
+      mergeAuditFilterUsers(
+        [
+          { id: "user-2", label: "Zoe" },
+          { id: "user-1", label: "Old label" },
+        ],
+        [
+          { id: "user-1", label: "Ada" },
+          { id: "user-3", label: "Linus" },
+        ]
+      )
+    ).toEqual([
+      { id: "user-1", label: "Ada" },
+      { id: "user-3", label: "Linus" },
+      { id: "user-2", label: "Zoe" },
+    ]);
   });
 });

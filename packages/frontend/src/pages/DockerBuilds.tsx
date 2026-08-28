@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { api } from "@/services/api";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
@@ -92,6 +93,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pinBuild, setPinBuild] = useState<DockerBuild | null>(null);
   const [pinOpen, setPinOpen] = useState(false);
+  const displayedPinBuild = useRetainedDialogValue(pinBuild, pinOpen);
   const requestId = useRef(0);
   const pollRequestId = useRef(0);
   const loadingMore = useRef(false);
@@ -606,31 +608,33 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
             <DialogTitle>Pin build</DialogTitle>
             <DialogDescription>
               Keep{" "}
-              {pinBuild ? `${pinBuild.target.name} · ${shortSha(pinBuild.commitSha)}` : "build"}{" "}
+              {displayedPinBuild
+                ? `${displayedPinBuild.target.name} · ${shortSha(displayedPinBuild.commitSha)}`
+                : "build"}{" "}
               visible.
             </DialogDescription>
           </DialogHeader>
-          {pinBuild &&
+          {displayedPinBuild &&
             (() => {
-              if (pinBuild.target.kind === "pages_project") return null;
+              if (displayedPinBuild.target.kind === "pages_project") return null;
               const scopeBase =
-                pinBuild.target.kind === "compose_project"
+                displayedPinBuild.target.kind === "compose_project"
                   ? ("docker:compose:view" as const)
                   : ("docker:containers:view" as const);
               const scopeResourceId =
-                pinBuild.target.kind === "container"
-                  ? pinBuild.target.containerName
-                  : pinBuild.target.kind === "deployment"
-                    ? pinBuild.target.deploymentId
-                    : pinBuild.target.composeProjectId;
+                displayedPinBuild.target.kind === "container"
+                  ? displayedPinBuild.target.containerName
+                  : displayedPinBuild.target.kind === "deployment"
+                    ? displayedPinBuild.target.deploymentId
+                    : displayedPinBuild.target.composeProjectId;
               const nodeSlug =
-                dockerNodes.find((node) => node.id === pinBuild.target.nodeId)?.slug ??
-                pinBuild.target.nodeId;
+                dockerNodes.find((node) => node.id === displayedPinBuild.target.nodeId)?.slug ??
+                displayedPinBuild.target.nodeId;
               const meta = {
-                nodeId: pinBuild.target.nodeId,
+                nodeId: displayedPinBuild.target.nodeId,
                 nodeSlug,
-                name: `${pinBuild.target.name} · ${shortSha(pinBuild.commitSha)}`,
-                state: pinBuild.status,
+                name: `${displayedPinBuild.target.name} · ${shortSha(displayedPinBuild.commitSha)}`,
+                state: displayedPinBuild.status,
                 kind: "build" as const,
                 scopeBase,
                 scopeResourceId,
@@ -643,9 +647,9 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                       <p className="text-xs text-muted-foreground">Show current build status</p>
                     </div>
                     <Switch
-                      checked={isPinnedDashboard(pinBuild.id)}
+                      checked={isPinnedDashboard(displayedPinBuild.id)}
                       onChange={() => {
-                        toggleDashboard(pinBuild.id, meta);
+                        toggleDashboard(displayedPinBuild.id, meta);
                         usePinnedContainersStore.getState().invalidate();
                       }}
                     />
@@ -656,9 +660,9 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                       <p className="text-xs text-muted-foreground">Quick access to build details</p>
                     </div>
                     <Switch
-                      checked={isPinnedSidebar(pinBuild.id)}
+                      checked={isPinnedSidebar(displayedPinBuild.id)}
                       onChange={() => {
-                        toggleSidebar(pinBuild.id, meta);
+                        toggleSidebar(displayedPinBuild.id, meta);
                         usePinnedContainersStore.getState().invalidate();
                       }}
                     />

@@ -3,7 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DockerRegistryTokenService, dockerRegistryTokenContract } from './docker-registry-token.service.js';
+import {
+  DockerRegistryTokenService,
+  dockerRegistryTokenContract,
+  resolveDockerRegistryAuthDir,
+} from './docker-registry-token.service.js';
 
 let tempDir = '';
 
@@ -13,6 +17,21 @@ afterEach(async () => {
 });
 
 describe('DockerRegistryTokenService', () => {
+  it('uses a writable auth directory outside production', async () => {
+    expect(resolveDockerRegistryAuthDir({ NODE_ENV: 'development' }, '/tmp/test-runtime')).toBe(
+      '/tmp/test-runtime/gateway-registry-auth'
+    );
+    expect(resolveDockerRegistryAuthDir({ NODE_ENV: 'production' }, '/tmp/test-runtime')).toBe(
+      '/var/lib/gateway-registry-auth'
+    );
+    expect(
+      resolveDockerRegistryAuthDir(
+        { NODE_ENV: 'development', GATEWAY_REGISTRY_AUTH_DIR: '/custom/registry-auth' },
+        '/tmp/test-runtime'
+      )
+    ).toBe('/custom/registry-auth');
+  });
+
   it('issues a Distribution-compatible RS256 token only for the allowed repository actions', async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-registry-token-'));
     const service = new DockerRegistryTokenService(tempDir);

@@ -113,6 +113,22 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).not.toContain('ipv6=off');
   });
 
+  it('renders advanced configuration in every redirect server block', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        type: 'redirect',
+        redirectUrl: 'https://target.example.com',
+        redirectStatusCode: 308,
+        advancedConfig: 'add_header X-Redirect-Advanced yes;',
+      },
+      null
+    );
+
+    expect(rendered.match(/add_header X-Redirect-Advanced yes;/g)).toHaveLength(2);
+    expect(rendered).toContain('return 308 https://target.example.com;');
+  });
+
   it('renders registry ingress through its dedicated Unix socket and rewrites only the token realm', async () => {
     const rendered = await service().renderForHost(
       {

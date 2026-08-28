@@ -20,7 +20,7 @@ describe('ACMEService HTTP-01 preflight', () => {
   });
 
   it('resolves every validation ingress before creating an ACME account or order', async () => {
-    const service = new ACMEService('admin@example.com', true);
+    const service = new ACMEService();
     const failure = new Error('ingress unavailable');
     service.onHttp01Preflight = vi.fn().mockRejectedValue(failure);
 
@@ -55,7 +55,7 @@ describe('ACMEService HTTP-01 preflight', () => {
       return client;
     });
 
-    const service = new ACMEService('admin@example.com', true);
+    const service = new ACMEService();
     service.onHttp01Preflight = vi.fn().mockResolvedValue(undefined);
     service.onChallengeCreate = vi.fn().mockResolvedValue(undefined);
     service.onChallengeRemove = vi.fn().mockResolvedValue(undefined);
@@ -84,7 +84,7 @@ describe('ACMEService HTTP-01 preflight', () => {
       return client;
     });
 
-    const service = new ACMEService('fallback@example.com', true);
+    const service = new ACMEService();
 
     await expect(
       service.requestCertDNS01Start(['app.example.com'], undefined, 'operator@example.com')

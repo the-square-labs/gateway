@@ -24,7 +24,6 @@ export function PageTransition({
   const prefersReducedMotion = useReducedMotion();
   const [pendingInitialLoads, setPendingInitialLoads] = useState(0);
   const [initialLoadCollectionComplete, setInitialLoadCollectionComplete] = useState(false);
-  const [entranceComplete, setEntranceComplete] = useState(false);
   const acceptsInitialLoads = useRef(true);
 
   const registerInitialLoad = useCallback<RegisterInitialPageLoad>(() => {
@@ -53,7 +52,7 @@ export function PageTransition({
 
   return (
     <InitialPageLoadContext.Provider value={registerInitialLoad}>
-      <InitialPageReadyContext.Provider value={!waitingForInitialData && entranceComplete}>
+      <InitialPageReadyContext.Provider value={!waitingForInitialData}>
         <motion.div
           initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
           animate={
@@ -70,9 +69,6 @@ export function PageTransition({
           style={{ visibility: waitingForInitialData ? "hidden" : "visible" }}
           aria-busy={waitingForInitialData || undefined}
           data-page-transition
-          onAnimationComplete={() => {
-            if (!waitingForInitialData) setEntranceComplete(true);
-          }}
         >
           {children}
         </motion.div>

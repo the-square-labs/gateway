@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Minus, Plus } from "lucide-react";
+import { Database, Minus, Plus, Users } from "lucide-react";
 import { type Dispatch, type SetStateAction, useMemo } from "react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -174,6 +174,7 @@ export function ModelGeneralFields({
             <PanelShell
               title="Provider model metadata"
               description={`${selected.bindings.length} of ${selected.totalAccounts} enabled account${selected.totalAccounts === 1 ? "" : "s"} can serve this model`}
+              icon={<Database className="h-4 w-4" />}
               wrapHeader
               headerActionsClassName="w-full min-w-0 shrink flex-wrap justify-start"
               actions={Object.entries(selected.capabilities).map(([capability, enabled]) => (
@@ -197,6 +198,11 @@ export function ModelGeneralFields({
                         : field.editableWhenDetected
                           ? "Detected from provider metadata; may be overridden"
                           : "Detected from provider metadata"
+                  }
+                  help={
+                    field.key === "autoCompactTokenLimit"
+                      ? "Gateway starts compacting conversation context at this input-token threshold. It must not exceed Maximum input tokens."
+                      : undefined
                   }
                 >
                   <Input
@@ -262,6 +268,7 @@ export function ModelAccessFields({
     <PanelShell
       title="Model access"
       description="Choose who can use this model through Gateway"
+      icon={<Users className="h-4 w-4" />}
       actions={
         mode === "selected" ? (
           <Button
@@ -282,6 +289,7 @@ export function ModelAccessFields({
       <SettingsControlRow
         title="Access"
         description="Publish for everyone, selected users and groups, or disable access"
+        help="Controls who can discover and request this model through Gateway. Selected access is additive across the users and permission groups listed below."
       >
         <Select value={mode} onValueChange={(value) => setMode(value as AccessMode)}>
           <SelectTrigger aria-label="Access" className="w-full">

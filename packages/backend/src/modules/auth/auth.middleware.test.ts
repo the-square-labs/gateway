@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
+import { runWithAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { authMiddleware, optionalAuthMiddleware } from '@/modules/auth/auth.middleware.js';
 import { getSessionCookieName } from '@/modules/auth/session-cookie.js';
 import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
@@ -172,6 +173,24 @@ describe('authMiddleware browser session credentials', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ userId: USER.id });
+  });
+
+  it('refreshes session metadata from the same resolved request context used by audit logs', async () => {
+    const sessionService = registerSession();
+
+    const response = await runWithAuditRequestContext({ ipAddress: '203.0.113.25', userAgent: 'Current Browser' }, () =>
+      createApp().request('/read', { headers: { Cookie: 'session_id=session-1' } })
+    );
+
+    expect(response.status).toBe(200);
+    expect(sessionService.updateSession).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        user: expect.objectContaining({ id: USER.id }),
+        ipAddress: '203.0.113.25',
+        userAgent: 'Current Browser',
+      })
+    );
   });
 
   it('authorizes an impersonation session only with the subject identity and scopes', async () => {

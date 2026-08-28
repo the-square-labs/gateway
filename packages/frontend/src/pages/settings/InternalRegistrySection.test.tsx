@@ -17,8 +17,6 @@ const state: DockerInternalRegistryState = {
   storageBackend: "filesystem",
   storageUsedBytes: 1024,
   storageCapacityBytes: null,
-  retentionSuccessfulArtifacts: 3,
-  objectStorageAvailable: false,
   externalAccessEnabled: false,
   externalHostname: null,
   externalNginxNodeId: null,
@@ -94,6 +92,56 @@ describe("InternalRegistrySection", () => {
         nginxNodeId: nginxNode.id,
       },
     ]);
+  });
+
+  it("moves retention to housekeeping and removes the object storage placeholder", async () => {
+    renderWithRouter(<InternalRegistrySection nodesList={[nginxNode]} />);
+
+    await screen.findByText("Local volume");
+    expect(screen.queryByText("Retention")).not.toBeInTheDocument();
+    expect(screen.queryByText("Object storage")).not.toBeInTheDocument();
+    expect(screen.getByText(/managed in Housekeeping/)).toBeInTheDocument();
+  });
+
+  it("explains the unhealthy registry badge on hover", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getDockerInternalRegistryState).mockResolvedValue({
+      ...state,
+      status: "unhealthy",
+      writable: false,
+      lastError: "Registry probe failed",
+    });
+
+    renderWithRouter(<InternalRegistrySection nodesList={[nginxNode]} />);
+
+    const unhealthy = await screen.findByText("unhealthy");
+    const unhealthyTrigger = unhealthy.closest("button");
+    if (!unhealthyTrigger) throw new Error("Unhealthy badge trigger not found");
+    await user.hover(unhealthyTrigger);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Registry probe failed");
+  });
+
+  it("explains the read-only registry badge on hover", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getDockerInternalRegistryState).mockResolvedValue({
+      ...state,
+      status: "read_only",
+      writable: false,
+      lastError: "Storage backend rejected writes",
+    });
+
+    renderWithRouter(<InternalRegistrySection nodesList={[nginxNode]} />);
+
+    await screen.findByText("Local volume");
+    const readOnlyTrigger = screen
+      .getAllByText("Read only")
+      .map((element) => element.closest("button"))
+      .find((element): element is HTMLButtonElement => element !== null);
+    if (!readOnlyTrigger) throw new Error("Read-only badge trigger not found");
+    await user.hover(readOnlyTrigger);
+    expect(
+      await screen.findAllByText("Registry writes are disabled. Storage backend rejected writes")
+    ).not.toHaveLength(0);
   });
 
   it("submits a real certificate id for licensed external exposure", async () => {

@@ -302,7 +302,7 @@ Let's Encrypt integration for free, automated SSL certificates.
 - Renewal failures are logged and alerted
 
 ## Staging Mode
-- ACME_STAGING=true in settings uses Let's Encrypt staging servers
+- Choose the Let's Encrypt staging provider in the certificate form when testing issuance
 - Certificates are NOT trusted by browsers (for testing only)
 - Useful for testing ACME flow without hitting rate limits
 - Rate limits: 50 certs per registered domain per week (production)

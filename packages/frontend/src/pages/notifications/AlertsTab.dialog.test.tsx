@@ -178,6 +178,8 @@ describe("AlertDialog", () => {
     await screen.findByDisplayValue("CPU High");
     await user.click(screen.getByRole("button", { name: /next/i }));
 
+    const scopeToggleRow = screen.getByText("Limit to specific nodes").closest(".flex");
+    expect(scopeToggleRow).toHaveClass("border", "border-border", "bg-muted/30", "p-3");
     expect(await screen.findByRole("checkbox", { name: "Primary Node" })).toHaveClass(
       "form-checkbox"
     );

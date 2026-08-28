@@ -4,7 +4,9 @@ export type StatusPageSourceType =
   | "proxy_host"
   | "database"
   | "docker_container"
-  | "docker_deployment";
+  | "docker_deployment"
+  | "docker_compose_project"
+  | "pages_project";
 export type StatusPageServiceStatus =
   | "operational"
   | "degraded"

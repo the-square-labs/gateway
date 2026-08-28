@@ -322,9 +322,8 @@ describe("AuthProvisioningSection inference setting", () => {
       </>
     );
 
-    const inferenceRow = (await screen.findByText("Inference")).parentElement?.parentElement;
-    if (!inferenceRow) throw new Error("Inference settings row not found");
-    await user.click(within(inferenceRow).getByRole("button", { name: "Enable inference" }));
+    await screen.findByText("Inference");
+    await user.click(screen.getByRole("button", { name: "Enable inference" }));
     expect(screen.queryByText("Enable alpha inference?")).not.toBeInTheDocument();
     const save = screen
       .getAllByRole("button", { name: "Save" })

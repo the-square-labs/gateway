@@ -144,7 +144,6 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
 
   const closeRegDialog = () => {
     setRegDialogOpen(false);
-    setTimeout(() => setRegEditId(null), 200);
   };
 
   const handleRegSave = async () => {

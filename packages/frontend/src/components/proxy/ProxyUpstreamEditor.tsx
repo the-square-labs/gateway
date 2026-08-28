@@ -1,4 +1,4 @@
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Network, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
@@ -715,6 +715,7 @@ export function ProxyUpstreamPanel({
 
   return (
     <PanelShell
+      icon={<Network className="h-4 w-4" />}
       title="Upstream"
       description="Route traffic manually, to Docker, or Pages"
       className="overflow-visible"
@@ -747,6 +748,7 @@ export function ProxyUpstreamPanel({
         <SettingsControlRow
           title="Enable IPv6 support"
           description="Allow this upstream hostname to resolve and connect over IPv6"
+          help="Enables AAAA resolution and IPv6 connections for a manually configured hostname. Keep disabled when the upstream or network path is IPv4-only."
         >
           <Switch
             checked={upstreamIpv6Enabled}
@@ -759,6 +761,7 @@ export function ProxyUpstreamPanel({
       <SettingsControlRow
         title="Relay spread"
         description="Relay capacity used by this workload and all its Secure Links; existing connections stay pinned"
+        help="Controls how many ready Relay instances may accept new connections for this workload. Changing it affects new connections only; active streams remain on their current Relay."
         controlsClassName="sm:w-96 sm:min-w-96 sm:max-w-96"
       >
         <div className="flex w-full items-center gap-2">

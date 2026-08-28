@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { BookOpen, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -176,6 +176,7 @@ export function AgentSkillsPanel() {
       <PanelShell
         title="Agent Skills"
         description="Reusable operating instructions that AI Workspace loads only when relevant"
+        icon={<BookOpen className="h-4 w-4" />}
         actions={
           canManage ? (
             <Button onClick={openCreate}>

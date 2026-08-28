@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { DatabaseConnection } from "@/types";
-import { isPrivateManagedDatabase, shouldRefreshDatabaseDetailForEvent } from "./DatabaseDetail";
+import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
+import {
+  appendDatabaseMetricSnapshot,
+  databaseMonitoringCacheKey,
+  isPrivateManagedDatabase,
+  shouldRefreshDatabaseDetailForEvent,
+} from "./DatabaseDetail";
 
 describe("isPrivateManagedDatabase", () => {
   it("does not classify an external database as a private managed database", () => {
@@ -16,5 +21,24 @@ describe("isPrivateManagedDatabase", () => {
   it("does not reload the whole detail after an extension action updates its own tab state", () => {
     expect(shouldRefreshDatabaseDetailForEvent("extensions.updated")).toBe(false);
     expect(shouldRefreshDatabaseDetailForEvent("updated")).toBe(true);
+  });
+});
+
+describe("database monitoring cache", () => {
+  it("uses a stable per-database cache key", () => {
+    expect(databaseMonitoringCacheKey("database-1")).toBe("database:monitoring:database-1");
+  });
+
+  it("keeps only the newest 60 metric snapshots", () => {
+    const history = Array.from({ length: 60 }, (_, index) => ({
+      timestamp: String(index),
+    })) as DatabaseMetricSnapshot[];
+    const next = { timestamp: "newest" } as DatabaseMetricSnapshot;
+
+    const updated = appendDatabaseMetricSnapshot(history, next);
+
+    expect(updated).toHaveLength(60);
+    expect(updated[0]?.timestamp).toBe("1");
+    expect(updated.at(-1)).toBe(next);
   });
 });

@@ -16,13 +16,8 @@ export class ACMEService {
   onChallengeCreate?: (token: string, content: string, domain: string) => Promise<void>;
   onChallengeRemove?: (token: string, domain: string) => Promise<void>;
 
-  constructor(
-    private readonly acmeEmail: string | undefined,
-    private readonly staging: boolean
-  ) {}
-
   private getAcmeEmail(contactEmail?: string): string {
-    const email = contactEmail?.trim() || this.acmeEmail?.trim();
+    const email = contactEmail?.trim();
     if (!email) {
       throw new AppError(
         400,
@@ -302,8 +297,7 @@ export class ACMEService {
   // ---------------------------------------------------------------------------
 
   private getDirectoryUrl(staging?: boolean): string {
-    const useStaging = staging !== undefined ? staging : this.staging;
-    return useStaging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production;
+    return staging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production;
   }
 
   /**

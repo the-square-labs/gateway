@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   databaseConnections,
+  dockerComposeProjects,
   dockerDeployments,
   dockerHealthChecks,
   nodes,
+  pageDeployments,
+  pageProjects,
+  pageTags,
   proxyHosts,
   settings,
   statusPageIncidents,
@@ -562,6 +566,24 @@ describe('StatusPageService safe DTO', () => {
 });
 
 describe('StatusPageService incident deletion', () => {
+  it('applies incident pagination offset without loading the full history', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = createService({
+      query: {
+        statusPageIncidents: { findMany },
+      },
+    });
+
+    await service.listIncidents({ status: 'all', limit: 20, offset: 40 });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 20,
+        offset: 40,
+      })
+    );
+  });
+
   it('rejects deleting active incidents', async () => {
     const service = createService({
       query: {
@@ -606,11 +628,16 @@ describe('StatusPageService incident deletion', () => {
 });
 
 describe('StatusPageService Docker sources', () => {
-  it('resolves Docker container and deployment health sources', async () => {
+  it('resolves Docker, Compose, and Pages health sources', async () => {
     const containerServiceId = '11111111-1111-4111-8111-111111111112';
     const deploymentServiceId = '11111111-1111-4111-8111-111111111113';
     const containerCheckId = '22222222-2222-4222-8222-222222222222';
     const deploymentId = '33333333-3333-4333-8333-333333333333';
+    const composeServiceId = '11111111-1111-4111-8111-111111111114';
+    const composeProjectId = '55555555-5555-4555-8555-555555555555';
+    const pagesServiceId = '11111111-1111-4111-8111-111111111115';
+    const pageProjectId = '66666666-6666-4666-8666-666666666666';
+    const pageDeploymentId = '77777777-7777-4777-8777-777777777777';
     const serviceRows = [
       {
         id: containerServiceId,
@@ -621,6 +648,16 @@ describe('StatusPageService Docker sources', () => {
         id: deploymentServiceId,
         sourceType: 'docker_deployment',
         sourceId: deploymentId,
+      },
+      {
+        id: composeServiceId,
+        sourceType: 'docker_compose_project',
+        sourceId: composeProjectId,
+      },
+      {
+        id: pagesServiceId,
+        sourceType: 'pages_project',
+        sourceId: pageProjectId,
       },
     ];
     const containerCheck = {
@@ -641,6 +678,26 @@ describe('StatusPageService Docker sources', () => {
       id: deploymentId,
       name: 'web',
     };
+    const composeProject = {
+      id: composeProjectId,
+      name: 'Storefront',
+      status: 'running',
+      availability: 'available',
+    };
+    const pageProject = {
+      id: pageProjectId,
+      name: 'Docs',
+      migrationStatus: null,
+    };
+    const latestTag = {
+      projectId: pageProjectId,
+      name: 'latest',
+      deploymentId: pageDeploymentId,
+    };
+    const pageDeployment = {
+      id: pageDeploymentId,
+      status: 'ready',
+    };
     const db = {
       select: () => ({
         from: (table: unknown) => ({
@@ -650,6 +707,10 @@ describe('StatusPageService Docker sources', () => {
             if (table === databaseConnections) return [];
             if (table === dockerHealthChecks) return [containerCheck, deploymentCheck];
             if (table === dockerDeployments) return [deployment];
+            if (table === dockerComposeProjects) return [composeProject];
+            if (table === pageProjects) return [pageProject];
+            if (table === pageTags) return [latestTag];
+            if (table === pageDeployments) return [pageDeployment];
             return [];
           },
         }),
@@ -668,5 +729,63 @@ describe('StatusPageService Docker sources', () => {
       rawStatus: 'degraded',
       status: 'degraded',
     });
+    expect(sources.get(composeServiceId)).toMatchObject({
+      label: 'Storefront',
+      rawStatus: 'online',
+      status: 'operational',
+    });
+    expect(sources.get(pagesServiceId)).toMatchObject({
+      label: 'Docs',
+      rawStatus: 'online',
+      status: 'operational',
+    });
+  });
+});
+
+describe('StatusPageService ordering', () => {
+  it('persists the complete service order atomically', async () => {
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    const updates: Array<{ id: string; sortOrder: number }> = [];
+    const findMany = vi.fn().mockResolvedValue(ids.map((id) => ({ id })));
+    const db = {
+      query: { statusPageServices: { findMany } },
+      transaction: async (work: (tx: any) => Promise<void>) =>
+        work({
+          update: () => ({
+            set: (values: { sortOrder: number }) => ({
+              where: (condition: { queryChunks?: unknown[] }) => {
+                const id = ids[updates.length]!;
+                updates.push({ id, sortOrder: values.sortOrder });
+                return condition;
+              },
+            }),
+          }),
+        }),
+    };
+    const service = createService(db);
+
+    await service.reorderServices([...ids].reverse(), USER_ID);
+
+    expect(updates.map((update) => update.sortOrder)).toEqual([0, 1]);
+    expect(findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects partial reorder payloads', async () => {
+    const db = {
+      query: {
+        statusPageServices: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([
+              { id: '11111111-1111-4111-8111-111111111111' },
+              { id: '22222222-2222-4222-8222-222222222222' },
+            ]),
+        },
+      },
+    };
+
+    await expect(
+      createService(db).reorderServices(['11111111-1111-4111-8111-111111111111'], USER_ID)
+    ).rejects.toMatchObject({ code: 'STATUS_PAGE_REORDER_INVALID' });
   });
 });

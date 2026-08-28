@@ -130,6 +130,10 @@ vi.mock("./proxy-detail/RawConfigTab", () => ({
   ),
 }));
 
+vi.mock("./proxy-detail/SecureLinkTab", () => ({
+  SecureLinkTab: () => <div>Secure link runtime</div>,
+}));
+
 function makeProxyHost(overrides: Record<string, unknown> = {}) {
   return {
     id: "host-1",
@@ -567,6 +571,43 @@ describe("ProxyHostDetail", () => {
 
     expect(await screen.findByText("application")).toBeInTheDocument();
     expect(screen.queryByText("Secure Link")).not.toBeInTheDocument();
+  });
+
+  it("shows Link Runtime only for an active Docker Secure Link", async () => {
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(
+      makeProxyHost({
+        upstreamKind: "docker_container",
+        dockerContainerName: "application",
+        secureLinkActive: true,
+      })
+    );
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    expect(await screen.findByRole("tab", { name: "Link Runtime" })).toBeInTheDocument();
+  });
+
+  it("redirects an unavailable Link Runtime route back to Details", async () => {
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(
+      makeProxyHost({
+        upstreamKind: "docker_container",
+        dockerContainerName: "application",
+        secureLinkActive: false,
+      })
+    );
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/secure-link",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    expect(await screen.findByText("Details tab")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Link Runtime" })).not.toBeInTheDocument();
   });
 
   it("shows maintenance as the primary state with a responsive disable action", async () => {

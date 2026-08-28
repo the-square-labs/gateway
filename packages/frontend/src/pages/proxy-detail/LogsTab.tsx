@@ -1,12 +1,4 @@
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
 import {
   ResourceListCell,
@@ -32,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { VirtualLogList } from "@/components/ui/virtual-log-list";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -69,7 +62,20 @@ const LOG_COLUMNS: ResourceListColumn<NginxLogEntry>[] = [
   { id: "size", label: "Size", width: 90, align: "right" },
 ];
 
-const LOAD_MORE_SCROLL_THRESHOLD = 560;
+const LOG_VIEW_CACHE_LIMIT = 5_000;
+const proxyLogViewCache = new Map<string, NginxLogEntry[]>();
+
+function cacheProxyLogs(hostId: string, entries: NginxLogEntry[]) {
+  const bounded =
+    entries.length > LOG_VIEW_CACHE_LIMIT ? entries.slice(-LOG_VIEW_CACHE_LIMIT) : entries;
+  if (!proxyLogViewCache.has(hostId) && proxyLogViewCache.size >= 20) {
+    const oldestHostId = proxyLogViewCache.keys().next().value;
+    if (oldestHostId) proxyLogViewCache.delete(oldestHostId);
+  }
+  proxyLogViewCache.delete(hostId);
+  proxyLogViewCache.set(hostId, bounded);
+  return bounded;
+}
 
 function TruncatedCellText({
   children,
@@ -99,15 +105,6 @@ function logEntryKey(entry: NginxLogEntry) {
     entry.raw,
     entry.level,
   ].join("\u0000");
-}
-
-function logEntryDomKey(entry: NginxLogEntry) {
-  let hash = 0;
-  const key = logEntryKey(entry);
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash * 31 + key.charCodeAt(i)) | 0;
-  }
-  return String(hash >>> 0);
 }
 
 function formatLogTimestamp(timestamp: string) {
@@ -160,7 +157,7 @@ function matchesSearch(entry: NginxLogEntry, search: string) {
 }
 
 export function LogsTab({ hostId }: { hostId: string }) {
-  const [logs, setLogs] = useState<NginxLogEntry[]>([]);
+  const [logs, setLogs] = useState<NginxLogEntry[]>(() => proxyLogViewCache.get(hostId) ?? []);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -176,12 +173,9 @@ export function LogsTab({ hostId }: { hostId: string }) {
   const [prependVersion, setPrependVersion] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const userScrolled = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
   const mountedRef = useRef(true);
-  const prependAnchor = useRef<{ key: string; offsetTop: number } | null>(null);
   const hasLogs = logs.length > 0;
 
   const visibleLogs = useMemo(
@@ -191,8 +185,6 @@ export function LogsTab({ hostId }: { hostId: string }) {
       ),
     [debouncedSearch, logs, statusFilter]
   );
-  const hasVisibleLogs = visibleLogs.length > 0;
-
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(t);
@@ -207,58 +199,13 @@ export function LogsTab({ hostId }: { hostId: string }) {
   }, [hasMore]);
 
   const requestMoreLogs = useCallback(() => {
-    const el = scrollRef.current;
     const ws = wsRef.current;
-    if (!el || !hasMoreRef.current || loadingMoreRef.current) return;
+    if (!hasMoreRef.current || loadingMoreRef.current) return;
     if (ws?.readyState !== WebSocket.OPEN) return;
 
     loadingMoreRef.current = true;
     setLoadingMore(true);
     ws.send(JSON.stringify({ type: "load_more" }));
-  }, []);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      userScrolled.current = !atBottom;
-      if (el.scrollTop < LOAD_MORE_SCROLL_THRESHOLD) requestMoreLogs();
-    };
-    el.addEventListener("scroll", onScroll);
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [requestMoreLogs]);
-
-  useLayoutEffect(() => {
-    if (prependVersion === 0) return;
-    const el = scrollRef.current;
-    const anchor = prependAnchor.current;
-    prependAnchor.current = null;
-    if (!el || !anchor) return;
-    const row = el.querySelector<HTMLElement>(`[data-log-key="${anchor.key}"]`);
-    if (!row) return;
-    const nextOffsetTop = row.getBoundingClientRect().top - el.getBoundingClientRect().top;
-    el.scrollTop += nextOffsetTop - anchor.offsetTop;
-  }, [prependVersion]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: auto-scroll on new logs
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && !userScrolled.current && !prependAnchor.current) el.scrollTop = el.scrollHeight;
-  }, [logs]);
-
-  const capturePrependAnchor = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return null;
-    const scrollerTop = el.getBoundingClientRect().top;
-    const rows = Array.from(el.querySelectorAll<HTMLElement>("[data-log-key]"));
-    const row =
-      rows.find((item) => item.getBoundingClientRect().bottom > scrollerTop) ?? rows[0] ?? null;
-    if (!row) return null;
-    return {
-      key: row.dataset.logKey ?? "",
-      offsetTop: row.getBoundingClientRect().top - scrollerTop,
-    };
   }, []);
 
   const connectWs = useCallback(() => {
@@ -268,14 +215,10 @@ export function LogsTab({ hostId }: { hostId: string }) {
     }
 
     setStreamError(null);
-    setLogs([]);
     setHasMore(true);
     setLoadingMore(false);
-    setPrependVersion(0);
     loadingMoreRef.current = false;
     hasMoreRef.current = true;
-    userScrolled.current = false;
-    prependAnchor.current = null;
 
     const ws = api.createProxyLogStreamWebSocket(hostId, 200);
     wsRef.current = ws;
@@ -290,25 +233,34 @@ export function LogsTab({ hostId }: { hostId: string }) {
           message?: string;
         };
         if (msg.type === "initial") {
-          setLogs(msg.entries ?? []);
+          const initialEntries = msg.entries ?? [];
+          setLogs(cacheProxyLogs(hostId, initialEntries));
+          setHasMore(msg.hasMore ?? false);
+          setStreamError(null);
+          loadingMoreRef.current = false;
+          setLoadingMore(false);
+        } else if (msg.type === "sync") {
+          const syncedEntries = msg.entries ?? [];
+          setLogs((prev) => cacheProxyLogs(hostId, mergeLogEntries(syncedEntries, prev, "append")));
           setHasMore(msg.hasMore ?? false);
           setStreamError(null);
           loadingMoreRef.current = false;
           setLoadingMore(false);
         } else if (msg.type === "history") {
           const historyEntries = msg.entries ?? [];
-          prependAnchor.current = historyEntries.length > 0 ? capturePrependAnchor() : null;
-          setLogs((prev) => mergeLogEntries(prev, historyEntries, "prepend"));
+          setLogs((prev) =>
+            cacheProxyLogs(hostId, mergeLogEntries(prev, historyEntries, "prepend"))
+          );
           setHasMore(msg.hasMore ?? false);
           setLoadingMore(false);
           loadingMoreRef.current = false;
           if (historyEntries.length > 0) {
             setPrependVersion((version) => version + 1);
-          } else {
-            prependAnchor.current = null;
           }
         } else if (msg.type === "new") {
-          setLogs((prev) => mergeLogEntries(prev, msg.entries ?? [], "append"));
+          setLogs((prev) =>
+            cacheProxyLogs(hostId, mergeLogEntries(prev, msg.entries ?? [], "append"))
+          );
         } else if (msg.type === "error" || msg.type === "auth_error") {
           setStreamError(msg.message || "Log stream is not available");
           setLoadingMore(false);
@@ -330,7 +282,7 @@ export function LogsTab({ hostId }: { hostId: string }) {
       if (!mountedRef.current) return;
       setStreamError("Log stream is not available");
     };
-  }, [capturePrependAnchor, hostId]);
+  }, [hostId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -378,12 +330,18 @@ export function LogsTab({ hostId }: { hostId: string }) {
         innerClassName={cn("flex flex-col", hasLogs && "h-full")}
       >
         <ResourceListHeaderTable columns={LOG_COLUMNS} />
-        <div
-          ref={scrollRef}
+        <VirtualLogList
+          lines={visibleLogs}
+          keyFn={(entry) => logEntryKey(entry)}
+          estimateLineHeight={52}
+          prependVersion={prependVersion}
+          onLoadMore={requestMoreLogs}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          initialScrollToEnd
           className={cn(hasLogs ? "min-h-0 flex-1 overflow-y-auto" : "overflow-visible")}
-        >
-          <ResourceListTable columns={LOG_COLUMNS} bodyClassName="[&>tr:last-child]:border-b-0">
-            {!hasVisibleLogs ? (
+          emptyState={
+            <ResourceListTable columns={LOG_COLUMNS} bodyClassName="[&>tr:last-child]:border-b-0">
               <ResourceListRow className="opacity-100">
                 <ResourceListCell colSpan={7} contentClassName="block p-0">
                   <EmptyState
@@ -395,65 +353,61 @@ export function LogsTab({ hostId }: { hostId: string }) {
                   />
                 </ResourceListCell>
               </ResourceListRow>
-            ) : (
-              visibleLogs.map((entry, i) => {
-                const isError = entry.logType === "error";
-                return (
-                  <ResourceListRow
-                    key={`${logEntryKey(entry)}:${i}`}
-                    data-log-key={logEntryDomKey(entry)}
-                    className="opacity-100"
-                    interactive
-                    onClick={() => setSelectedLog(entry)}
-                  >
-                    <ResourceListCell contentClassName="text-sm text-muted-foreground">
-                      <TruncatedCellText title={entry.timestamp}>
-                        {formatLogTimestamp(entry.timestamp)}
-                      </TruncatedCellText>
-                    </ResourceListCell>
-                    <ResourceListCell>
-                      <Badge variant={isError ? "destructive" : "secondary"}>
-                        {isError ? "err" : "acc"}
+            </ResourceListTable>
+          }
+          renderLine={(entry) => {
+            const isError = entry.logType === "error";
+            return (
+              <ResourceListTable columns={LOG_COLUMNS} bodyClassName="[&>tr:last-child]:border-b-0">
+                <ResourceListRow
+                  className="opacity-100"
+                  interactive
+                  onClick={() => setSelectedLog(entry)}
+                >
+                  <ResourceListCell contentClassName="text-sm text-muted-foreground">
+                    <TruncatedCellText title={entry.timestamp}>
+                      {formatLogTimestamp(entry.timestamp)}
+                    </TruncatedCellText>
+                  </ResourceListCell>
+                  <ResourceListCell>
+                    <Badge variant={isError ? "destructive" : "secondary"}>
+                      {isError ? "err" : "acc"}
+                    </Badge>
+                  </ResourceListCell>
+                  <ResourceListCell contentClassName="text-sm text-muted-foreground">
+                    <TruncatedCellText title={isError ? undefined : entry.remoteAddr}>
+                      {isError ? "\u2014" : entry.remoteAddr}
+                    </TruncatedCellText>
+                  </ResourceListCell>
+                  <ResourceListCell contentClassName="text-sm">
+                    <TruncatedCellText title={isError ? undefined : entry.method}>
+                      {isError ? "\u2014" : entry.method}
+                    </TruncatedCellText>
+                  </ResourceListCell>
+                  <ResourceListCell contentClassName="text-sm">
+                    <TruncatedCellText title={isError ? entry.raw : entry.path}>
+                      {isError ? entry.raw : entry.path}
+                    </TruncatedCellText>
+                  </ResourceListCell>
+                  <ResourceListCell>
+                    {isError ? (
+                      <Badge variant="destructive">{entry.level || "err"}</Badge>
+                    ) : (
+                      <Badge variant={STATUS_VARIANT[String(entry.status)[0]] ?? "secondary"}>
+                        {entry.status}
                       </Badge>
-                    </ResourceListCell>
-                    <ResourceListCell contentClassName="text-sm text-muted-foreground">
-                      <TruncatedCellText title={isError ? undefined : entry.remoteAddr}>
-                        {isError ? "\u2014" : entry.remoteAddr}
-                      </TruncatedCellText>
-                    </ResourceListCell>
-                    <ResourceListCell contentClassName="text-sm">
-                      <TruncatedCellText title={isError ? undefined : entry.method}>
-                        {isError ? "\u2014" : entry.method}
-                      </TruncatedCellText>
-                    </ResourceListCell>
-                    <ResourceListCell contentClassName="text-sm">
-                      <TruncatedCellText title={isError ? entry.raw : entry.path}>
-                        {isError ? entry.raw : entry.path}
-                      </TruncatedCellText>
-                    </ResourceListCell>
-                    <ResourceListCell>
-                      {isError ? (
-                        <Badge variant="destructive">{entry.level || "err"}</Badge>
-                      ) : (
-                        <Badge variant={STATUS_VARIANT[String(entry.status)[0]] ?? "secondary"}>
-                          {entry.status}
-                        </Badge>
-                      )}
-                    </ResourceListCell>
-                    <ResourceListCell
-                      align="right"
-                      contentClassName="text-sm text-muted-foreground"
-                    >
-                      <TruncatedCellText title={isError ? undefined : entry.bodyBytesSent}>
-                        {isError ? "\u2014" : entry.bodyBytesSent}
-                      </TruncatedCellText>
-                    </ResourceListCell>
-                  </ResourceListRow>
-                );
-              })
-            )}
-          </ResourceListTable>
-        </div>
+                    )}
+                  </ResourceListCell>
+                  <ResourceListCell align="right" contentClassName="text-sm text-muted-foreground">
+                    <TruncatedCellText title={isError ? undefined : entry.bodyBytesSent}>
+                      {isError ? "\u2014" : entry.bodyBytesSent}
+                    </TruncatedCellText>
+                  </ResourceListCell>
+                </ResourceListRow>
+              </ResourceListTable>
+            );
+          }}
+        />
       </ResourceListFrame>
 
       <Dialog open={selectedLogOpen} onOpenChange={onSelectedLogOpenChange}>
@@ -482,7 +436,6 @@ export function LogsTab({ hostId }: { hostId: string }) {
                       : String(selectedLog.status),
                   ],
                   ["Size", selectedLog.logType === "error" ? "-" : selectedLog.bodyBytesSent],
-                  ["Raw", selectedLog.raw || "-"],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -494,6 +447,12 @@ export function LogsTab({ hostId }: { hostId: string }) {
                     </span>
                   </div>
                 ))}
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <div className="text-sm text-muted-foreground">Raw</div>
+                <pre className="max-h-64 min-w-0 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/30 p-3 font-mono text-xs leading-5 text-foreground">
+                  {selectedLog.raw || "-"}
+                </pre>
               </div>
             </div>
           )}

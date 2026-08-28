@@ -1,5 +1,13 @@
 import { z } from '@hono/zod-openapi';
-import { appRoute, createdJson, IdParamSchema, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
+import {
+  appRoute,
+  commonErrorResponses,
+  createdJson,
+  IdParamSchema,
+  jsonBody,
+  okJson,
+  UnknownDataResponseSchema,
+} from '@/lib/openapi.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -173,6 +181,15 @@ export const updateUserNameRoute = appRoute({
   summary: "Rename a local user's account",
   request: { params: IdParamSchema, ...jsonBody(UpdateUserNameSchema) },
   responses: okJson(UnknownDataResponseSchema),
+});
+
+export const resetUserAvatarRoute = appRoute({
+  method: 'delete',
+  path: '/users/{id}/avatar',
+  tags: ['Admin'],
+  summary: "Reset a user's avatar",
+  request: { params: IdParamSchema },
+  responses: { ...okJson(UnknownDataResponseSchema), ...commonErrorResponses },
 });
 
 export const sendAdminUserPasswordSetupRoute = appRoute({

@@ -24,6 +24,9 @@ import type {
   Domain,
   DomainSearchResult,
   DomainWithUsage,
+  EnvironmentSettings,
+  EnvironmentSettingsResponse,
+  EnvironmentSettingsUpdate,
   FinalizeSetupState,
   FinalizeSetupStep,
   FinalizeSetupStepStatus,
@@ -525,6 +528,10 @@ class ApiClient extends withInferenceCoreApi(
     });
   }
 
+  async resetUserAvatar(userId: string): Promise<User> {
+    return this.request<User>(`/admin/users/${userId}/avatar`, { method: "DELETE" });
+  }
+
   async sendUserPasswordLink(
     userId: string
   ): Promise<{ message: string; purpose: "password_setup" | "password_reset" }> {
@@ -639,6 +646,19 @@ class ApiClient extends withInferenceCoreApi(
 
   async getAuthProvisioningSettings(): Promise<AuthProvisioningSettings> {
     return this.request<AuthProvisioningSettings>("/admin/auth-settings");
+  }
+
+  async getEnvironmentSettings(): Promise<EnvironmentSettingsResponse> {
+    return this.request<EnvironmentSettingsResponse>("/settings/environment");
+  }
+
+  async updateEnvironmentSettings(data: EnvironmentSettingsUpdate): Promise<EnvironmentSettings> {
+    return this.unwrapData(
+      this.request<{ data: EnvironmentSettings }>("/settings/environment", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      })
+    );
   }
 
   async updateAuthProvisioningSettings(data: {
@@ -1662,6 +1682,15 @@ class ApiClient extends withInferenceCoreApi(
     );
   }
 
+  async reorderStatusPageServices(serviceIds: string[]): Promise<StatusPageServiceItem[]> {
+    return this.unwrapData(
+      this.request<{ data: StatusPageServiceItem[] }>("/status-page/services/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ serviceIds }),
+      })
+    );
+  }
+
   async deleteStatusPageService(id: string): Promise<void> {
     await this.request<void>(`/status-page/services/${id}`, { method: "DELETE" });
   }
@@ -1669,10 +1698,12 @@ class ApiClient extends withInferenceCoreApi(
   async listStatusPageIncidents(params?: {
     status?: "active" | "resolved" | "all";
     limit?: number;
+    offset?: number;
   }): Promise<StatusPageIncident[]> {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.set("status", params.status);
     if (params?.limit) searchParams.set("limit", String(params.limit));
+    if (params?.offset !== undefined) searchParams.set("offset", String(params.offset));
     const query = searchParams.toString();
     return this.unwrapData(
       this.request<{ data: StatusPageIncident[] }>(

@@ -44,7 +44,12 @@ export const HousekeepingConfigUpdateSchema = z
       })
       .optional(),
     orphanedAIArtifacts: z.object({ enabled: z.boolean().optional() }).optional(),
-    gatewayLogs: z.object({ enabled: z.literal(false).optional() }).optional(),
+    internalRegistry: z
+      .object({
+        enabled: z.literal(true).optional(),
+        retentionSuccessfulArtifacts: z.number().int().min(1).max(100).optional(),
+      })
+      .optional(),
     orphanedVolumes: z
       .object({ enabled: z.boolean().optional(), retentionDays: z.number().int().min(1).max(365).optional() })
       .optional(),

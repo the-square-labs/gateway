@@ -131,7 +131,7 @@ export function LoggingTokenPanel({
         )}
       </PanelShell>
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-xl">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create Ingest Token</DialogTitle>
             <DialogDescription>Generate a write-only token for this environment.</DialogDescription>
@@ -156,7 +156,11 @@ export function LoggingTokenPanel({
           ) : (
             <label className="block space-y-1.5">
               <span className="text-sm font-medium">Name</span>
-              <Input value={name} onChange={(event) => setName(event.target.value)} />
+              <Input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Production collector"
+              />
             </label>
           )}
           <DialogFooter>

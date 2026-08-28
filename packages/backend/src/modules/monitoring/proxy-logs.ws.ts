@@ -7,11 +7,12 @@ import { createChildLogger } from '@/lib/logger.js';
 import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
-import { logRelay, type RelayedLogEntry } from './log-relay.service.js';
+import { getNginxLogHistory, logRelay, type RelayedLogEntry } from './log-relay.service.js';
 import { requestNginxHostLogHistory, subscribeNginxHostLogs } from './nginx-log-subscriptions.js';
 
 const logger = createChildLogger('ProxyLogStream');
 const HISTORY_BATCH_SIZE = 200;
+const MAX_HISTORY_ENTRIES = 5_000;
 
 interface ProxyLogStreamWSState {
   user: User | null;
@@ -21,7 +22,9 @@ interface ProxyLogStreamWSState {
   cleanupSubscription: (() => void) | null;
   loadingMore: boolean;
   pendingWhileLoading: RelayedLogEntry[];
-  loadedOffset: number;
+  historyLoadedCount: number;
+  oldestHistoryKey: string | null;
+  newestHistoryKey: string | null;
   hasMore: boolean;
 }
 
@@ -40,7 +43,7 @@ function send(ws: WSContext, msg: Record<string, unknown>): void {
   }
 }
 
-function logEntryKey(entry: RelayedLogEntry): string {
+export function proxyLogEntryKey(entry: RelayedLogEntry): string {
   return [
     entry.logType,
     entry.timestamp,
@@ -52,6 +55,40 @@ function logEntryKey(entry: RelayedLogEntry): string {
     entry.raw,
     entry.level,
   ].join('\u0000');
+}
+
+export function selectProxyLogHistoryPage(
+  snapshot: RelayedLogEntry[],
+  pending: RelayedLogEntry[],
+  oldestHistoryKey: string | null,
+  newestHistoryKey: string | null,
+  batchSize = HISTORY_BATCH_SIZE
+): { entries: RelayedLogEntry[]; liveEntries: RelayedLogEntry[]; hasMore: boolean } {
+  const historySnapshot = snapshot.filter((entry) => entry.logType !== 'error');
+  const oldestIndex = oldestHistoryKey
+    ? historySnapshot.findIndex((entry) => proxyLogEntryKey(entry) === oldestHistoryKey)
+    : historySnapshot.length;
+  const end = Math.max(0, oldestIndex >= 0 ? oldestIndex : historySnapshot.length);
+  const start = Math.max(0, end - batchSize);
+  const newestIndex = newestHistoryKey
+    ? historySnapshot.findIndex((entry) => proxyLogEntryKey(entry) === newestHistoryKey)
+    : -1;
+  const liveAccessKeys = new Set(newestIndex >= 0 ? historySnapshot.slice(newestIndex + 1).map(proxyLogEntryKey) : []);
+  const snapshotKeys = new Set(snapshot.map(proxyLogEntryKey));
+  const liveByKey = new Map<string, RelayedLogEntry>();
+  for (const entry of snapshot) {
+    const key = proxyLogEntryKey(entry);
+    if (entry.logType === 'error' || liveAccessKeys.has(key)) liveByKey.set(key, entry);
+  }
+  for (const entry of pending) {
+    const key = proxyLogEntryKey(entry);
+    if (!snapshotKeys.has(key)) liveByKey.set(key, entry);
+  }
+  return {
+    entries: historySnapshot.slice(start, end),
+    liveEntries: [...liveByKey.values()],
+    hasMore: start > 0,
+  };
 }
 
 async function resolveHostNode(hostId: string): Promise<string | null> {
@@ -77,7 +114,9 @@ export function createProxyLogStreamWSHandlers(hostId: string, tail: number, cre
         cleanupSubscription: null,
         loadingMore: false,
         pendingWhileLoading: [],
-        loadedOffset: 0,
+        historyLoadedCount: 0,
+        oldestHistoryKey: null,
+        newestHistoryKey: null,
         hasMore: true,
       };
       wsStates.set(ws, state);
@@ -180,7 +219,12 @@ async function authenticateAndStartStream(
       return;
     }
     if (state.streaming) {
-      state.loadedOffset += 1;
+      if (entry.logType !== 'error') {
+        state.historyLoadedCount += 1;
+        const key = proxyLogEntryKey(entry);
+        if (!state.oldestHistoryKey) state.oldestHistoryKey = key;
+        state.newestHistoryKey = key;
+      }
       send(ws, { type: 'new', entries: [entry] });
     }
   };
@@ -200,8 +244,19 @@ async function authenticateAndStartStream(
 
   state.loadingMore = true;
   state.pendingWhileLoading = [];
-  const initialResult = await requestNginxHostLogHistory(registry, nodeId, hostId, tail + 1);
-  if (!initialResult.ok) {
+  const normalizedTail = Math.max(1, Math.min(Math.floor(tail), HISTORY_BATCH_SIZE));
+  const bufferedEntries = getNginxLogHistory(hostId).filter((entry) => entry.nodeId === nodeId);
+  if (bufferedEntries.length > 0) {
+    send(ws, {
+      type: 'initial',
+      entries: bufferedEntries.slice(-normalizedTail),
+      hasMore: true,
+      cached: true,
+    });
+  }
+
+  const initialResult = await requestNginxHostLogHistory(registry, nodeId, hostId, normalizedTail + 1);
+  if (!initialResult.ok && bufferedEntries.length === 0) {
     state.loadingMore = false;
     state.pendingWhileLoading = [];
     send(ws, { type: 'error', message: initialResult.message });
@@ -209,19 +264,35 @@ async function authenticateAndStartStream(
     return;
   }
 
-  const initialEntries = initialResult.entries.slice(-tail);
-  state.loadedOffset = initialEntries.length;
-  state.hasMore = initialResult.entries.length > tail;
-  const snapshotKeys = new Set(initialResult.entries.map(logEntryKey));
-  const liveEntries = state.pendingWhileLoading.filter((entry) => !snapshotKeys.has(logEntryKey(entry)));
+  const initialSnapshot = initialResult.ok ? initialResult.entries : bufferedEntries;
+  const initialEntries = initialSnapshot.slice(-normalizedTail);
+  const initialHistoryEntries = initialEntries.filter((entry) => entry.logType !== 'error');
+  const initialHistorySnapshot = initialSnapshot.filter((entry) => entry.logType !== 'error');
+  state.historyLoadedCount = initialHistoryEntries.length;
+  state.oldestHistoryKey = initialHistoryEntries[0] ? proxyLogEntryKey(initialHistoryEntries[0]) : null;
+  state.newestHistoryKey = initialHistoryEntries.at(-1) ? proxyLogEntryKey(initialHistoryEntries.at(-1)!) : null;
+  state.hasMore = initialResult.ok ? initialHistorySnapshot.length > initialHistoryEntries.length : true;
+  const snapshotKeys = new Set(initialSnapshot.map(proxyLogEntryKey));
+  const liveEntries = state.pendingWhileLoading.filter((entry) => !snapshotKeys.has(proxyLogEntryKey(entry)));
   state.pendingWhileLoading = [];
   state.loadingMore = false;
-  send(ws, { type: 'initial', entries: initialEntries, hasMore: state.hasMore });
+  send(ws, {
+    type: bufferedEntries.length > 0 ? 'sync' : 'initial',
+    entries: initialEntries,
+    hasMore: state.hasMore,
+  });
 
   state.streaming = true;
   send(ws, { type: 'connected', streaming: true });
   if (liveEntries.length > 0) {
-    state.loadedOffset += liveEntries.length;
+    const liveHistoryEntries = liveEntries.filter((entry) => entry.logType !== 'error');
+    state.historyLoadedCount += liveHistoryEntries.length;
+    if (!state.oldestHistoryKey && liveHistoryEntries[0]) {
+      state.oldestHistoryKey = proxyLogEntryKey(liveHistoryEntries[0]);
+    }
+    if (liveHistoryEntries.at(-1)) {
+      state.newestHistoryKey = proxyLogEntryKey(liveHistoryEntries.at(-1)!);
+    }
     send(ws, { type: 'new', entries: liveEntries });
   }
 }
@@ -233,6 +304,12 @@ async function handleLoadMore(
   registry: NodeRegistryService
 ) {
   try {
+    if (state.historyLoadedCount >= MAX_HISTORY_ENTRIES) {
+      state.hasMore = false;
+      send(ws, { type: 'history', entries: [], hasMore: false });
+      return;
+    }
+
     const nodeId = await resolveHostNode(hostId);
     if (!nodeId) {
       send(ws, { type: 'history', entries: [], hasMore: false });
@@ -241,25 +318,34 @@ async function handleLoadMore(
     }
 
     state.pendingWhileLoading = [];
-    const requestedTail = state.loadedOffset + HISTORY_BATCH_SIZE + 1;
+    const requestedTail = Math.min(state.historyLoadedCount + HISTORY_BATCH_SIZE + 1, MAX_HISTORY_ENTRIES + 1);
     const result = await requestNginxHostLogHistory(registry, nodeId, hostId, requestedTail);
     if (!result.ok) {
       send(ws, { type: 'error', message: result.message });
       return;
     }
 
-    const end = Math.max(0, result.entries.length - state.loadedOffset);
-    const start = Math.max(0, end - HISTORY_BATCH_SIZE);
-    const entries = result.entries.slice(start, end);
-    state.loadedOffset += entries.length;
-    state.hasMore = result.entries.length > state.loadedOffset;
-    send(ws, { type: 'history', entries, hasMore: state.hasMore });
+    const page = selectProxyLogHistoryPage(
+      result.entries,
+      state.pendingWhileLoading,
+      state.oldestHistoryKey,
+      state.newestHistoryKey
+    );
+    state.historyLoadedCount += page.entries.length;
+    if (page.entries[0]) state.oldestHistoryKey = proxyLogEntryKey(page.entries[0]);
+    state.hasMore = state.historyLoadedCount < MAX_HISTORY_ENTRIES && page.hasMore;
+    send(ws, { type: 'history', entries: page.entries, hasMore: state.hasMore });
 
-    const snapshotKeys = new Set(result.entries.map(logEntryKey));
-    const liveEntries = state.pendingWhileLoading.filter((entry) => !snapshotKeys.has(logEntryKey(entry)));
-    if (liveEntries.length > 0) {
-      state.loadedOffset += liveEntries.length;
-      send(ws, { type: 'new', entries: liveEntries });
+    if (page.liveEntries.length > 0) {
+      const liveHistoryEntries = page.liveEntries.filter((entry) => entry.logType !== 'error');
+      state.historyLoadedCount += liveHistoryEntries.length;
+      if (!state.oldestHistoryKey && liveHistoryEntries[0]) {
+        state.oldestHistoryKey = proxyLogEntryKey(liveHistoryEntries[0]);
+      }
+      if (liveHistoryEntries.at(-1)) {
+        state.newestHistoryKey = proxyLogEntryKey(liveHistoryEntries.at(-1)!);
+      }
+      send(ws, { type: 'new', entries: page.liveEntries });
     }
   } finally {
     state.pendingWhileLoading = [];

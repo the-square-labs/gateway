@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useUpdateStore } from "@/stores/update";
 
@@ -38,9 +39,17 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     void fetchStatus().finally(() => setInitialLoadComplete(true));
   }, [fetchStatus]);
 
-  useScrollToNavigationTarget("system-updates", updateStatus !== null);
+  const navigationHighlighted = useScrollToNavigationTarget("system-updates", initialLoadComplete, {
+    block: "center",
+    highlightDurationMs: 2200,
+  });
 
-  if (!initialLoadComplete) return <Skeleton />;
+  if (!initialLoadComplete)
+    return (
+      <div id="system-updates" className="xl:col-span-2">
+        <Skeleton />
+      </div>
+    );
 
   const handleCheckUpdate = async () => {
     await checkForUpdates();
@@ -108,7 +117,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
           id="system-updates"
           title={<span className="text-warning">Gateway Update Available</span>}
           description="A Gateway update is ready to install"
-          className="xl:col-span-2"
+          className={cn("xl:col-span-2", navigationHighlighted && "navigation-target-ripple")}
           dirty
           actions={
             <>
@@ -160,7 +169,10 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
           title={<span className="text-warning">Relay Pool Update Available</span>}
           description="A signed Relay release is ready for a one-instance-at-a-time rollout"
-          className="xl:col-span-2"
+          className={cn(
+            "xl:col-span-2",
+            !gatewayUpdateAvailable && navigationHighlighted && "navigation-target-ripple"
+          )}
           dirty
           actions={
             <>

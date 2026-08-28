@@ -781,7 +781,7 @@ export function AdminGroups({
                 </p>
               </div>
             </div>
-            <div className="flex items-center justify-between gap-4 rounded border border-border px-3 py-3">
+            <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
               <div>
                 <p className="text-sm font-medium">Require two-factor authentication</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">

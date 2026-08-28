@@ -1,7 +1,21 @@
-import { Loader2, Minus, Plus, RefreshCw, Save } from "lucide-react";
+import {
+  FileCode,
+  HeartPulse,
+  ListPlus,
+  Loader2,
+  Lock,
+  Minus,
+  Network,
+  Plus,
+  Radio,
+  RefreshCw,
+  Replace,
+  Save,
+  ShieldCheck,
+} from "lucide-react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { ProxyUpstreamPanel } from "@/components/proxy/ProxyUpstreamEditor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -158,17 +172,6 @@ export function SettingsTab({
     { value: "", label: "None" },
     ...accessLists.map((accessList) => ({ value: accessList.id, label: accessList.name })),
   ];
-  const editableBuiltinVariables =
-    host.type === "redirect"
-      ? [
-          { name: "redirectUrl", description: "Redirect target URL", type: "string" as const },
-          {
-            name: "redirectStatusCode",
-            description: "Redirect status code",
-            type: "number" as const,
-          },
-        ]
-      : [];
   const templateVariableDefinitions = selectedTemplate?.variables ?? [];
   const cacheEnabled = templateVariables.cacheEnabled === true;
   const rateLimitMode =
@@ -189,29 +192,6 @@ export function SettingsTab({
       Boolean(host.tlsDistribution.error))
       ? host.tlsDistribution
       : null;
-
-  const renderBuiltinValue = (variable: (typeof editableBuiltinVariables)[number]) => {
-    if (variable.name === "redirectUrl") {
-      return (
-        <Input
-          value={templateRedirectUrl}
-          onChange={(event) => setTemplateRedirectUrl(event.target.value)}
-          className={tableInputClass}
-          disabled={!canManage}
-        />
-      );
-    }
-    return (
-      <NumericInput
-        value={templateRedirectStatusCode}
-        onChange={setTemplateRedirectStatusCode}
-        min={300}
-        max={399}
-        className={tableInputClass}
-        disabled={!canManage}
-      />
-    );
-  };
 
   const renderTemplateValue = (variable: NonNullable<NginxTemplate["variables"]>[number]) => {
     const disabledByDependency =
@@ -291,6 +271,7 @@ export function SettingsTab({
     <div className="space-y-4">
       {tlsDistributionProblem && (
         <PanelShell
+          icon={<Network className="h-4 w-4" />}
           title={
             <div className="flex flex-wrap items-center gap-2">
               <span>TLS distribution</span>
@@ -345,8 +326,16 @@ export function SettingsTab({
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 32rem), 1fr))" }}
       >
         {host.type === "proxy" && host.upstreamKind !== "pages" && (
-          <PanelShell title="WebSocket Support" description="Enable WebSocket proxying">
-            <SettingsControlRow title="Enabled" description="Allow WebSocket protocol upgrades">
+          <PanelShell
+            icon={<Radio className="h-4 w-4" />}
+            title="WebSocket Support"
+            description="Enable WebSocket proxying"
+          >
+            <SettingsControlRow
+              title="Enabled"
+              description="Allow WebSocket protocol upgrades"
+              help="Forwards Upgrade and Connection headers so long-lived WebSocket connections can pass through this Route. Leave disabled for ordinary HTTP-only upstreams."
+            >
               <Switch
                 checked={host.websocketSupport}
                 onChange={(value) => onToggle("websocketSupport", value)}
@@ -356,11 +345,16 @@ export function SettingsTab({
           </PanelShell>
         )}
         <PanelShell
+          icon={<ShieldCheck className="h-4 w-4" />}
           title="Access List"
           description="Restrict access via IP rules or basic authentication"
           className="overflow-visible"
         >
-          <SettingsControlRow title="Policy" description="Access policy applied to this proxy host">
+          <SettingsControlRow
+            title="Policy"
+            description="Access policy applied to this proxy host"
+            help="Applies the selected reusable Access List before traffic reaches the upstream. A policy may restrict client IP addresses, require Basic Authentication, or require both."
+          >
             <Combobox
               value={accessListId}
               options={accessListOptions}
@@ -393,6 +387,7 @@ export function SettingsTab({
       ) : null}
 
       <PanelShell
+        icon={<FileCode className="h-4 w-4" />}
         title="Config Template"
         description="Select a template and configure its variables"
         dirty={hasTemplateSettingsChanged}
@@ -413,7 +408,11 @@ export function SettingsTab({
         }
         wrapHeader
       >
-        <SettingsControlRow title="Template" description="Nginx configuration used for this host">
+        <SettingsControlRow
+          title="Template"
+          description="Nginx configuration used for this host"
+          help="Selects the Nginx template rendered for this Route. Template variables below alter supported behavior without replacing the complete generated configuration."
+        >
           <Select
             value={nginxTemplateId || "__none__"}
             onValueChange={(value) => onNginxTemplateChange(value === "__none__" ? "" : value)}
@@ -433,7 +432,49 @@ export function SettingsTab({
           </Select>
         </SettingsControlRow>
 
-        {editableBuiltinVariables.length > 0 || templateVariableDefinitions.length > 0 ? (
+        {host.type === "redirect" ? (
+          <>
+            <SettingsControlRow
+              title="Redirect URL"
+              description="Target URL for incoming requests"
+              help="The absolute destination sent to clients in the HTTP Location header. Preserve any required path or query parameters explicitly in this value."
+            >
+              <Input
+                value={templateRedirectUrl}
+                onChange={(event) => setTemplateRedirectUrl(event.target.value)}
+                placeholder="https://example.com"
+                className="w-full sm:w-72"
+                disabled={!canManage}
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Status Code"
+              description="HTTP redirect response status"
+              help="301 and 308 are cacheable permanent redirects. 307 and 308 preserve the original request method and body instead of converting it to GET."
+            >
+              <Select
+                value={String(templateRedirectStatusCode)}
+                onValueChange={(value) => setTemplateRedirectStatusCode(Number(value))}
+                disabled={!canManage}
+              >
+                <SelectTrigger
+                  className="w-full font-sans sm:w-72"
+                  aria-label="Redirect status code"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="font-sans">
+                  <SelectItem value="301">301 — Permanent</SelectItem>
+                  <SelectItem value="302">302 — Temporary</SelectItem>
+                  <SelectItem value="307">307 — Temporary, preserve method</SelectItem>
+                  <SelectItem value="308">308 — Permanent, preserve method</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+          </>
+        ) : null}
+
+        {templateVariableDefinitions.length > 0 ? (
           <div className="overflow-x-auto">
             <div className="min-w-[680px]">
               <div className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,16rem)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -441,7 +482,7 @@ export function SettingsTab({
                 <div className="border-l border-border px-3 py-2">Description</div>
                 <div className="border-l border-border px-3 py-2">Value</div>
               </div>
-              {[...editableBuiltinVariables, ...templateVariableDefinitions].map((variable) => (
+              {templateVariableDefinitions.map((variable) => (
                 <div
                   key={variable.name}
                   className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,16rem)] border-b border-border last:border-b-0"
@@ -454,13 +495,7 @@ export function SettingsTab({
                       {variable.description || "No description"}
                     </p>
                   </div>
-                  <div className="border-l border-border">
-                    {editableBuiltinVariables.includes(variable as never)
-                      ? renderBuiltinValue(variable as (typeof editableBuiltinVariables)[number])
-                      : renderTemplateValue(
-                          variable as NonNullable<NginxTemplate["variables"]>[number]
-                        )}
-                  </div>
+                  <div className="border-l border-border">{renderTemplateValue(variable)}</div>
                 </div>
               ))}
             </div>
@@ -469,6 +504,7 @@ export function SettingsTab({
       </PanelShell>
 
       <PanelShell
+        icon={<Lock className="h-4 w-4" />}
         title="SSL"
         description="HTTPS termination and transport settings"
         dirty={hasSslSettingsChanged}
@@ -486,24 +522,40 @@ export function SettingsTab({
         }
         wrapHeader
       >
-        <SettingsControlRow title="Enabled" description="Serve this host over HTTPS">
+        <SettingsControlRow
+          title="Enabled"
+          description="Serve this host over HTTPS"
+          help="Enables TLS termination for this Route. A valid certificate must cover every configured domain name before clients can connect without certificate warnings."
+        >
           <Switch checked={sslEnabled} onChange={setSslEnabled} disabled={!canManage} />
         </SettingsControlRow>
-        <SettingsControlRow title="Force HTTPS" description="Redirect HTTP requests to HTTPS">
+        <SettingsControlRow
+          title="Force HTTPS"
+          description="Redirect HTTP requests to HTTPS"
+          help="Redirects plaintext HTTP traffic to the equivalent HTTPS URL. Enable only after certificate distribution is ready on every proxy replica."
+        >
           <Switch
             checked={sslForced}
             onChange={setSslForced}
             disabled={!canManage || !sslEnabled}
           />
         </SettingsControlRow>
-        <SettingsControlRow title="HTTP/2" description="Enable HTTP/2 protocol support">
+        <SettingsControlRow
+          title="HTTP/2"
+          description="Enable HTTP/2 protocol support"
+          help="Allows compatible HTTPS clients to multiplex requests over one connection. The upstream protocol is configured separately and does not have to use HTTP/2."
+        >
           <Switch
             checked={http2Support}
             onChange={setHttp2Support}
             disabled={!canManage || !sslEnabled}
           />
         </SettingsControlRow>
-        <SettingsControlRow title="SSL Certificate" description="Certificate used for HTTPS">
+        <SettingsControlRow
+          title="SSL Certificate"
+          description="Certificate used for HTTPS"
+          help="Selects the certificate distributed to proxy replicas for TLS termination. Its Subject Alternative Names must cover the Route domains."
+        >
           <Select
             value={sslCertificateId || "__none__"}
             onValueChange={(value) => setSslCertificateId(value === "__none__" ? "" : value)}
@@ -526,6 +578,7 @@ export function SettingsTab({
 
       {host.type !== "404" && (
         <PanelShell
+          icon={<HeartPulse className="h-4 w-4" />}
           title="Health Check"
           description="Periodic upstream availability monitoring"
           dirty={hasHealthCheckSettingsChanged}
@@ -546,14 +599,22 @@ export function SettingsTab({
           }
           wrapHeader
         >
-          <SettingsControlRow title="Enabled" description="Run periodic health probes">
+          <SettingsControlRow
+            title="Enabled"
+            description="Run periodic health probes"
+            help="Gateway periodically requests the upstream through this Route and records availability and latency independently from client traffic."
+          >
             <Switch
               checked={healthCheckEnabled}
               onChange={setHealthCheckEnabled}
               disabled={!canManage}
             />
           </SettingsControlRow>
-          <SettingsControlRow title="URL Path" description="Path requested from the upstream">
+          <SettingsControlRow
+            title="URL Path"
+            description="Path requested from the upstream"
+            help="Path appended to the Route host for each health probe. Prefer a lightweight endpoint that verifies essential application dependencies."
+          >
             <Input
               value={healthCheckUrl}
               onChange={(event) => setHealthCheckUrl(event.target.value)}
@@ -565,6 +626,7 @@ export function SettingsTab({
           <SettingsControlRow
             title="Expected Status"
             description="Leave empty to accept any successful 2xx response"
+            help="When set, only this exact HTTP status counts as healthy. Leave empty when any response in the 200–299 range is acceptable."
           >
             <Input
               type="number"
@@ -580,6 +642,7 @@ export function SettingsTab({
           <SettingsControlRow
             title="Slow Threshold"
             description="Mark degraded above this multiple of the 3-hour average; 0 disables it"
+            help="Compares the latest response time with the rolling three-hour baseline. For example, 3 marks the Route degraded when it becomes three times slower than normal."
           >
             <NumericInput
               value={healthCheckSlowThreshold}
@@ -593,38 +656,36 @@ export function SettingsTab({
           <SettingsControlRow
             title="Expected Body"
             description="Optional response body assertion"
+            help="Optionally verifies response content after the status check succeeds. This can detect a healthy proxy returning the wrong application or maintenance page."
             controlsClassName="sm:min-w-[24rem] sm:max-w-[32rem]"
           >
             <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
-              <SettingsInlineControl label="Match">
-                <Select
-                  value={healthCheckBodyMatchMode}
-                  onValueChange={(value) =>
-                    setHealthCheckBodyMatchMode(
-                      value as "includes" | "exact" | "starts_with" | "ends_with"
-                    )
-                  }
-                  disabled={!canManage || !healthCheckEnabled}
-                >
-                  <SelectTrigger className="font-sans">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="font-sans">
-                    <SelectItem value="includes">Includes</SelectItem>
-                    <SelectItem value="exact">Exact Match</SelectItem>
-                    <SelectItem value="starts_with">Starts With</SelectItem>
-                    <SelectItem value="ends_with">Ends With</SelectItem>
-                  </SelectContent>
-                </Select>
-              </SettingsInlineControl>
-              <SettingsInlineControl label="Value">
-                <Input
-                  value={healthCheckExpectedBody}
-                  onChange={(event) => setHealthCheckExpectedBody(event.target.value)}
-                  placeholder="Optional"
-                  disabled={!canManage || !healthCheckEnabled}
-                />
-              </SettingsInlineControl>
+              <Select
+                value={healthCheckBodyMatchMode}
+                onValueChange={(value) =>
+                  setHealthCheckBodyMatchMode(
+                    value as "includes" | "exact" | "starts_with" | "ends_with"
+                  )
+                }
+                disabled={!canManage || !healthCheckEnabled}
+              >
+                <SelectTrigger className="font-sans" aria-label="Expected body match mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="font-sans">
+                  <SelectItem value="includes">Includes</SelectItem>
+                  <SelectItem value="exact">Exact Match</SelectItem>
+                  <SelectItem value="starts_with">Starts With</SelectItem>
+                  <SelectItem value="ends_with">Ends With</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={healthCheckExpectedBody}
+                onChange={(event) => setHealthCheckExpectedBody(event.target.value)}
+                placeholder="Optional"
+                aria-label="Expected body value"
+                disabled={!canManage || !healthCheckEnabled}
+              />
             </div>
           </SettingsControlRow>
         </PanelShell>
@@ -632,6 +693,7 @@ export function SettingsTab({
 
       {showCustomHeaders && (
         <PanelShell
+          icon={<ListPlus className="h-4 w-4" />}
           title="Custom Headers"
           description="Headers added to proxied requests"
           dirty={hasHeadersChanged}
@@ -720,6 +782,7 @@ export function SettingsTab({
 
       {showCustomRewrites && (
         <PanelShell
+          icon={<Replace className="h-4 w-4" />}
           title="URL Rewrites"
           description="Rewrite request paths before proxying"
           dirty={hasRewritesChanged}

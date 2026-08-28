@@ -111,6 +111,37 @@ describe("Combobox", () => {
     expect(input).toHaveValue("new.example");
   });
 
+  it("reopens on click when the input remains focused after a selection", async () => {
+    const user = userEvent.setup();
+    function ControlledCombobox() {
+      const [value, setValue] = useState("");
+      return (
+        <Combobox
+          value={value}
+          options={[
+            { value: "alpha", label: "Alpha" },
+            { value: "beta", label: "Beta" },
+          ]}
+          onValueChange={setValue}
+          ariaLabel="Environment"
+        />
+      );
+    }
+    render(<ControlledCombobox />);
+
+    const input = screen.getByRole("combobox", { name: "Environment" });
+    await user.click(input);
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Alpha" }));
+
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(input);
+
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+  });
+
   it("preserves option group headings while filtering", async () => {
     const user = userEvent.setup();
     render(

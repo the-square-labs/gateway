@@ -450,6 +450,22 @@ describe('DockerInternalRegistryService', () => {
     expect(store.state).toMatchObject({ status: 'ready', writable: true, maintenancePhase: 'idle' });
   });
 
+  it('uses and persists a configurable successful-artifact retention count', async () => {
+    const store = new FakeStore();
+    const { service } = createService(store, createExecutor(store));
+
+    await expect(
+      service.runGarbageCollection({ requestedById: 'user-1', leaseOwner: 'owner-1', retentionCount: 1 })
+    ).resolves.toMatchObject({
+      progress: expect.objectContaining({
+        retentionCount: 1,
+        retainedArtifactIds: ['a'],
+        candidateArtifactIds: ['b', 'c', 'd'],
+      }),
+    });
+    expect(store.deleted).toEqual(new Set(['b', 'c', 'd']));
+  });
+
   for (const action of [
     'pauseAdmissions',
     'drainUploads',

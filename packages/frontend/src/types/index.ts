@@ -18,6 +18,7 @@ export type * from "./docker";
 export type * from "./docker-builds";
 export type * from "./docker-migration";
 export type * from "./domains";
+export type * from "./environment-settings";
 export type * from "./housekeeping";
 export type * from "./inference";
 export type * from "./inference-core";

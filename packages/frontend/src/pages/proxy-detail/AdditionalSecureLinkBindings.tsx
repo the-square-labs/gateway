@@ -1,4 +1,4 @@
-import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Link2, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/common/ConfirmDialog";
@@ -188,6 +188,7 @@ export function AdditionalSecureLinkBindings({
 
   return (
     <PanelShell
+      icon={<Link2 className="h-4 w-4" />}
       title="Additional Secure Link Bindings"
       description="Provision managed upstreams for use in Advanced config"
       className="overflow-visible"
@@ -339,7 +340,11 @@ export function AdditionalSecureLinkBindings({
             </DialogDescription>
           </DialogHeader>
           <div className="border border-border">
-            <SettingsControlRow title="Name" description="Variable-safe binding name">
+            <SettingsControlRow
+              title="Name"
+              description="Variable-safe binding name"
+              help="Becomes the identifier used in Advanced config, for example additionalSecureLinks.api. Names must start with a letter and contain only letters, numbers, and underscores."
+            >
               <Input
                 value={name}
                 onChange={(event) => setName(event.target.value)}

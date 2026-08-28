@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
 import type { CryptoService } from '@/services/crypto.service.js';
@@ -33,6 +32,15 @@ export interface LoggingRuntimeSettings {
   database: string;
   table: string;
   requestTimeoutMs: number;
+}
+
+export interface LegacyLoggingEnvironment {
+  CLICKHOUSE_URL: string;
+  CLICKHOUSE_USERNAME: string;
+  CLICKHOUSE_PASSWORD: string;
+  CLICKHOUSE_DATABASE: string;
+  CLICKHOUSE_LOGS_TABLE: string;
+  CLICKHOUSE_REQUEST_TIMEOUT_MS: number;
 }
 
 export interface LoggingSettingsInput {
@@ -126,7 +134,7 @@ export class LoggingSettingsService {
     return this.getRuntimeConfig();
   }
 
-  async importLegacyEnv(env: Env): Promise<boolean> {
+  async importLegacyEnv(env: LegacyLoggingEnvironment): Promise<boolean> {
     if (await this.getStored()) return false;
     if (!env.CLICKHOUSE_URL) {
       await this.saveConfig({ mode: 'disabled' });

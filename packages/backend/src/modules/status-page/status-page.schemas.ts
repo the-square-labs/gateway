@@ -34,7 +34,15 @@ export const StatusPageSettingsSchema = z.object({
 });
 
 export const CreateStatusPageServiceSchema = z.object({
-  sourceType: z.enum(['node', 'proxy_host', 'database', 'docker_container', 'docker_deployment']),
+  sourceType: z.enum([
+    'node',
+    'proxy_host',
+    'database',
+    'docker_container',
+    'docker_deployment',
+    'docker_compose_project',
+    'pages_project',
+  ]),
   sourceId: z.string().uuid(),
   publicName: z.string().min(1).max(255),
   publicDescription: z.string().max(1000).optional().nullable(),
@@ -48,6 +56,14 @@ export const CreateStatusPageServiceSchema = z.object({
 export const UpdateStatusPageServiceSchema = CreateStatusPageServiceSchema.partial().omit({
   sourceType: true,
   sourceId: true,
+});
+
+export const ReorderStatusPageServicesSchema = z.object({
+  serviceIds: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(500)
+    .refine((ids) => new Set(ids).size === ids.length, 'Service ids must be unique'),
 });
 
 export const CreateStatusPageIncidentSchema = z.object({
@@ -75,11 +91,13 @@ export const CreateStatusPageIncidentUpdateSchema = z.object({
 export const IncidentListQuerySchema = z.object({
   status: z.enum(['active', 'resolved', 'all']).optional().default('all'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(100_000).default(0),
 });
 
 export type StatusPageSettingsInput = z.infer<typeof StatusPageSettingsSchema>;
 export type CreateStatusPageServiceInput = z.infer<typeof CreateStatusPageServiceSchema>;
 export type UpdateStatusPageServiceInput = z.infer<typeof UpdateStatusPageServiceSchema>;
+export type ReorderStatusPageServicesInput = z.infer<typeof ReorderStatusPageServicesSchema>;
 export type CreateStatusPageIncidentInput = z.infer<typeof CreateStatusPageIncidentSchema>;
 export type UpdateStatusPageIncidentInput = z.infer<typeof UpdateStatusPageIncidentSchema>;
 export type CreateStatusPageIncidentUpdateInput = z.infer<typeof CreateStatusPageIncidentUpdateSchema>;

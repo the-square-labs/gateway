@@ -26,7 +26,6 @@ import {
   HEADER_ACTION_PRIORITY,
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -376,12 +375,7 @@ export function PageProjectDetail({
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <PageBackButton onClick={() => navigate("/pages")} label="Back to Pages" />
             <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="min-w-0 truncate text-2xl font-bold">{project.name}</h1>
-                <Badge variant="secondary" size="inline">
-                  Pages Project
-                </Badge>
-              </div>
+              <h1 className="min-w-0 truncate text-2xl font-bold">{project.name}</h1>
               <p className="truncate text-sm text-muted-foreground">
                 {project.slug}
                 {project.description ? ` · ${project.description}` : ""}

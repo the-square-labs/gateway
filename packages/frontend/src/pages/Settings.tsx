@@ -1,4 +1,13 @@
-import { Activity, Bot, Network, Plug, ServerCog, SlidersHorizontal, Sparkles } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  Braces,
+  Network,
+  Plug,
+  ServerCog,
+  SlidersHorizontal,
+  Sparkles,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -13,6 +22,7 @@ import { PagesSettingsSection } from "./pages/PageGlobalSettings";
 import { AIConfigSection } from "./settings/AIConfigSection";
 import { AuthProvisioningSection } from "./settings/AuthProvisioningSection";
 import { DockerRegistriesSection } from "./settings/DockerRegistriesSection";
+import { EnvironmentSettingsSection } from "./settings/EnvironmentSettingsSection";
 import { HousekeepingSection } from "./settings/HousekeepingSection";
 import { InferenceSettingsSection } from "./settings/InferenceSettingsSection";
 import { IntegrationsSection } from "./settings/IntegrationsSection";
@@ -25,6 +35,7 @@ import { UpdateSection } from "./settings/UpdateSection";
 const SETTINGS_TABS = [
   "general",
   "advanced",
+  "environment",
   "relay",
   "features",
   "integrations",
@@ -83,6 +94,7 @@ export function Settings() {
     const tabs: SettingsTab[] = [];
     if (canAccessGeneralTab) tabs.push("general");
     if (canAccessAdvancedTab) tabs.push("advanced");
+    if (canViewGatewaySettings) tabs.push("environment");
     if (canViewGatewaySettings) tabs.push("relay");
     if (canAccessFeaturesTab) tabs.push("features");
     if (canViewIntegrations) tabs.push("integrations");
@@ -151,6 +163,12 @@ export function Settings() {
               </TabsTrigger>
             )}
             {canViewGatewaySettings && (
+              <TabsTrigger value="environment" className="gap-1.5">
+                <Braces className="h-3.5 w-3.5" />
+                Environment
+              </TabsTrigger>
+            )}
+            {canViewGatewaySettings && (
               <TabsTrigger value="relay" className="gap-1.5">
                 <Activity className="h-3.5 w-3.5" />
                 Relay
@@ -208,6 +226,15 @@ export function Settings() {
                   <AuthProvisioningSection canEdit={canEditGatewaySettings} section="advanced" />
                 )}
                 {canManageRegistries && <DockerRegistriesSection nodesList={nodesList} />}
+                <PoweredByFooter />
+              </div>
+            </TabsContent>
+          )}
+
+          {canViewGatewaySettings && (
+            <TabsContent value="environment" className="pb-0">
+              <div className="space-y-4">
+                <EnvironmentSettingsSection canEdit={canEditGatewaySettings} />
                 <PoweredByFooter />
               </div>
             </TabsContent>

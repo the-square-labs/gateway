@@ -399,7 +399,10 @@ export function InferenceUsersTable({
                 />
               }
             />
-            <SettingsControlRow title="Billing timezone">
+            <SettingsControlRow
+              title="Billing timezone"
+              help="Defines calendar-month boundaries for the API USD budget. Rolling 5-hour, 7-day, and 30-day credit windows are unaffected."
+            >
               <Combobox
                 value={form.billingTimezone}
                 options={billingTimezoneOptions(form.billingTimezone)}

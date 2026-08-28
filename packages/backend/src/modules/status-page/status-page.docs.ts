@@ -4,6 +4,7 @@ import {
   CreateStatusPageIncidentUpdateSchema,
   CreateStatusPageServiceSchema,
   IncidentListQuerySchema,
+  ReorderStatusPageServicesSchema,
   StatusPageSettingsSchema,
   UpdateStatusPageIncidentSchema,
   UpdateStatusPageServiceSchema,
@@ -52,6 +53,14 @@ export const updateStatusPageServiceRoute = appRoute({
   tags: ['Status Page'],
   summary: 'Update an exposed status page service',
   request: { params: IdParamSchema, ...jsonBody(UpdateStatusPageServiceSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const reorderStatusPageServicesRoute = appRoute({
+  method: 'put',
+  path: '/services/reorder',
+  tags: ['Status Page'],
+  summary: 'Reorder exposed status page services',
+  request: jsonBody(ReorderStatusPageServicesSchema),
   responses: okJson(UnknownDataResponseSchema),
 });
 export const deleteStatusPageServiceRoute = appRoute({

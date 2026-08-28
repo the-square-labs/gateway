@@ -7,25 +7,31 @@ import {
   Loader2,
   type LucideIcon,
   Monitor,
+  MonitorSmartphone,
   Moon,
+  Pencil,
   Plus,
   Printer,
+  ShieldCheck,
   SlidersHorizontal,
   Smartphone,
   Sun,
   Tablet,
   Trash2,
+  UserRound,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { AvatarCropDialog } from "@/components/common/AvatarCropDialog";
 import { CopyButton } from "@/components/common/CopyButton";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,7 +79,6 @@ import {
 import { InferenceTokensSection } from "./inference/InferenceTokensSection";
 import { InferenceUsage } from "./inference/InferenceUsagePanels";
 import { ApiTokensSection } from "./settings/ApiTokensSection";
-import { InferenceEndpointSettingsPanel } from "./settings/inference/InferenceEndpointSettingsPanel";
 import { OAuthApplicationsSection } from "./settings/OAuthApplicationsSection";
 
 const PROFILE_TABS = ["preferences", "authorizations"] as const;
@@ -86,7 +91,7 @@ function isProfileTab(value: string | null | undefined): value is ProfileTab {
 export function Profile() {
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
-  const { user, hasScope } = useAuthStore();
+  const { user, hasScope, setUser } = useAuthStore();
   const {
     theme,
     setTheme,
@@ -100,12 +105,14 @@ export function Profile() {
   const [proxyHostsList, setProxyHostsList] = useState<ProxyHost[]>([]);
   const [databasesList, setDatabasesList] = useState<DatabaseConnection[]>([]);
   const [loggingSchemasList, setLoggingSchemasList] = useState<LoggingSchema[]>([]);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const activeTab: ProfileTab = isProfileTab(tabParam) ? tabParam : "preferences";
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
 
   const canUseAI = hasScope(AI_SCOPE);
   const canUseInference = inferenceEnabled && hasScope("feat:ai:use");
-  const canViewInferenceUsage = hasScope("feat:ai:use");
   const canManageInferenceTokens = hasScope("feat:ai:use");
   const canViewSystemCertificates = hasScope("admin:details:certificates");
   const userScopes = user?.scopes;
@@ -172,6 +179,34 @@ export function Profile() {
     }
   };
 
+  const updateAvatar = async (avatar: Blob | null) => {
+    setAvatarUploading(true);
+    try {
+      const updatedUser = await api.updateCurrentUserAvatar(avatar);
+      setUser(updatedUser);
+      toast.success(avatar ? "Avatar updated" : "Avatar removed");
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update avatar");
+      return false;
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
+  const handleAvatarFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!SUPPORTED_AVATAR_TYPES.has(file.type)) {
+      toast.error("Choose a PNG, JPEG, or WebP image");
+      return;
+    }
+    if (file.size > MAX_AVATAR_SOURCE_BYTES) {
+      toast.error("Choose an image no larger than 25 MiB");
+      return;
+    }
+    setAvatarFile(file);
+  };
+
   const handleTabChange = (value: string) => {
     navigate(value === "preferences" ? "/profile" : "/profile/authorizations");
   };
@@ -201,33 +236,87 @@ export function Profile() {
 
           <TabsContent value="preferences" className="pb-0">
             <div className="space-y-4">
-              <PanelShell title="Profile">
+              <PanelShell title="Profile" icon={<UserRound className="h-4 w-4" />}>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  aria-label="Choose avatar image"
+                  onChange={(event) => {
+                    void handleAvatarFile(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
                 {user && (
-                  <div className="flex items-center gap-4 p-4">
-                    <Avatar className="h-10 w-10 shrink-0">
-                      <AvatarImage src={user.avatarUrl ?? undefined} />
-                      <AvatarFallback className="text-sm">
-                        {getInitials(user.name || user.email)}
-                      </AvatarFallback>
-                    </Avatar>
+                  <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
+                    <button
+                      type="button"
+                      aria-label="Change avatar"
+                      className="group relative h-10 w-10 shrink-0 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      disabled={avatarUploading}
+                      onClick={() => avatarInputRef.current?.click()}
+                    >
+                      <Avatar className="h-10 w-10">
+                        <AvatarImage src={user.avatarUrl ?? undefined} />
+                        <AvatarFallback className="text-sm">
+                          {getInitials(user.name || user.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span
+                        className={cn(
+                          "absolute inset-0 flex items-center justify-center bg-black/60 text-white opacity-0 transition-opacity",
+                          "group-hover:opacity-100 group-focus-visible:opacity-100",
+                          avatarUploading && "opacity-100"
+                        )}
+                      >
+                        {avatarUploading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Pencil className="h-4 w-4" />
+                        )}
+                      </span>
+                    </button>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium">{user.name || "Not set"}</p>
                       <p className="text-xs text-muted-foreground">{user.email}</p>
                     </div>
-                    <Badge variant="secondary" size="inline">
-                      {user.groupName}
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:justify-end">
+                      <Badge variant="secondary" size="inline">
+                        {user.groupName}
+                      </Badge>
+                      {user.avatarUrl && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={avatarUploading}
+                          onClick={() => void updateAvatar(null)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Remove
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 )}
               </PanelShell>
 
-              {canUseInference && <InferenceEndpointSettingsPanel />}
+              <AvatarCropDialog
+                file={avatarFile}
+                open={avatarFile !== null}
+                uploading={avatarUploading}
+                onOpenChange={(open) => {
+                  if (!open) setAvatarFile(null);
+                }}
+                onUpload={updateAvatar}
+              />
 
               {user?.authMethod !== "oidc" && <LocalAccountSecurityPanel />}
 
-              {canUseInference && canViewInferenceUsage && <InferenceUsage />}
+              {canUseInference && <InferenceUsage />}
 
-              <PanelShell title="Preferences">
+              <PanelShell title="Preferences" icon={<SlidersHorizontal className="h-4 w-4" />}>
                 <div className="divide-y divide-border">
                   <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div>
@@ -270,7 +359,12 @@ export function Profile() {
                   {canViewSystemCertificates && (
                     <div className="flex items-center justify-between gap-4 px-4 py-3">
                       <div>
-                        <p className="text-sm font-medium">Show system certificates</p>
+                        <p className="text-sm font-medium">
+                          <SettingsHelpTitle
+                            label="Show system certificates"
+                            help="Includes Gateway-managed internal PKI and SSL certificates in certificate lists and dashboard totals. Hiding them does not disable or delete any certificate."
+                          />
+                        </p>
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           Include internal PKI and SSL certificates in lists and dashboard counts
                         </p>
@@ -319,6 +413,9 @@ export function Profile() {
   );
 }
 
+const MAX_AVATAR_SOURCE_BYTES = 25 * 1024 * 1024;
+const SUPPORTED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
 function BrowserSessionsPanel() {
   const [sessions, setSessions] = useState<BrowserSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -363,6 +460,7 @@ function BrowserSessionsPanel() {
     <PanelShell
       title="Active sessions"
       description="Browser sessions currently authorized for this account"
+      icon={<MonitorSmartphone className="h-4 w-4" />}
       actions={
         hasOtherSessions ? (
           <Button variant="outline" onClick={revokeOthers} disabled={loading}>
@@ -675,6 +773,7 @@ function LocalAccountSecurityPanel() {
     <PanelShell
       title="Account security"
       description="Configure Gateway MFA and local sign-in credentials"
+      icon={<ShieldCheck className="h-4 w-4" />}
     >
       <div className="divide-y divide-border">
         <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -959,7 +1058,12 @@ function AIApprovalModeRow({
   return (
     <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0">
-        <p className="text-sm font-medium">AI approval mode</p>
+        <p className="text-sm font-medium">
+          <SettingsHelpTitle
+            label="AI approval mode"
+            help="Controls when AI Workspace asks for confirmation before running tools or making changes. It does not grant permissions beyond your account scopes or bypass server-side authorization."
+          />
+        </p>
         <p className="mt-0.5 text-xs text-muted-foreground">{current.description}</p>
       </div>
       <DropdownMenu>

@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
-const gitlabPipeline = fileURLToPath(new URL('../../../../.gitlab-ci.yml', import.meta.url));
+const githubReleaseScript = fileURLToPath(new URL('../../../../scripts/github-release.sh', import.meta.url));
 const relayMinGatewayVersion = fileURLToPath(new URL('../../../../config/relay/min-gateway-version', import.meta.url));
 const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node.sh', import.meta.url));
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
@@ -142,35 +142,21 @@ describe('install.sh managed browser bootstrap', () => {
   });
 
   it('publishes both connector images with Relay releases instead of Gateway releases', () => {
-    const source = readFileSync(gitlabPipeline, 'utf8');
-    const relaySigning = source.slice(source.indexOf('sign-relay-update:'), source.indexOf('upload-relay-update:'));
-    const gatewaySigning = source.slice(
-      source.indexOf('sign-gateway-update:'),
-      source.indexOf('upload-gateway-update:')
-    );
-    const secureConnectorPublishing = source.slice(
-      source.indexOf('publish-secure-link-connector:'),
-      source.indexOf('\nrelease:')
-    );
-    const databaseConnectorPublishing = source.slice(
-      source.indexOf('publish-database-connector:'),
-      source.indexOf('publish-secure-link-connector:')
-    );
+    const source = readFileSync(githubReleaseScript, 'utf8');
+    const relayPublishing = source.slice(source.indexOf('publish_relay()'), source.indexOf('\ncase "$tag"'));
+    const gatewayPublishing = source.slice(source.indexOf('publish_gateway()'), source.indexOf('\npublish_daemon()'));
 
-    expect(relaySigning).toContain('publish-secure-link-connector');
-    expect(relaySigning).toContain('publish-database-connector');
-    expect(relaySigning).toContain('--secure-link-connector-image');
-    expect(relaySigning).toContain('--database-connector-image');
-    expect(relaySigning).toContain('--min-gateway-version');
-    expect(relaySigning).toContain('config/relay/min-gateway-version');
-    expect(gatewaySigning).not.toContain('publish-secure-link-connector');
-    expect(gatewaySigning).not.toContain('publish-database-connector');
-    expect(gatewaySigning).not.toContain('--secure-link-connector-image');
-    expect(gatewaySigning).not.toContain('--database-connector-image');
-    expect(secureConnectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
-    expect(secureConnectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
-    expect(databaseConnectorPublishing).toContain('/^v\\d+\\.\\d+\\.\\d+-relay$/');
-    expect(databaseConnectorPublishing).not.toContain('/^v\\d+\\.\\d+\\.\\d+$/');
+    expect(relayPublishing).toContain('database-connector');
+    expect(relayPublishing).toContain('secure-link-connector');
+    expect(relayPublishing).toContain('--secure-link-connector-image');
+    expect(relayPublishing).toContain('--database-connector-image');
+    expect(relayPublishing).toContain('--min-gateway-version');
+    expect(relayPublishing).toContain('config/relay/min-gateway-version');
+    expect(gatewayPublishing).not.toContain('--secure-link-connector-image');
+    expect(gatewayPublishing).not.toContain('--database-connector-image');
+    expect(source).toContain('^v[0-9]+\\.[0-9]+\\.[0-9]+-relay$');
+    expect(source).toContain('^v[0-9]+\\.[0-9]+\\.[0-9]+-database-connector$');
+    expect(source).toContain('^v[0-9]+\\.[0-9]+\\.[0-9]+-secure-link-connector$');
     expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+$/);
   });
 

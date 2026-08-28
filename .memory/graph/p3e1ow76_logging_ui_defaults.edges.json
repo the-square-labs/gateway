@@ -1,0 +1,15 @@
+{
+  "file_name": "p3e1ow76_logging_ui_defaults",
+  "edges": [
+    {
+      "from_id": "p3e1ow76",
+      "to_id": "2npkkqwm",
+      "relation": "same_area",
+      "weight": 0.88,
+      "reason": "Both define the Gateway logging housekeeping and ClickHouse Internals contract, including persisted defaults and retention-related behavior.",
+      "source": "auto",
+      "created_at": 1787903602312,
+      "updated_at": 1787903602312
+    }
+  ]
+}

@@ -138,7 +138,7 @@ export function RepositorySourceFields({
           )}
         </div>
       )}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
         <div>
           <p className="text-sm font-medium">Automatic builds</p>
           <p className="text-xs text-muted-foreground">
@@ -148,7 +148,7 @@ export function RepositorySourceFields({
         <Switch checked={autoBuild} onChange={onAutoBuildChange} ariaLabel="Automatic builds" />
       </div>
       {!pages && (
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
           <div>
             <p className="text-sm font-medium">Automatic deployment</p>
             <p className="text-xs text-muted-foreground">

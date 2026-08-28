@@ -595,9 +595,11 @@ databaseRoutes.openapi(
     const connections = container.resolve(DatabaseConnectionService);
 
     return streamSSE(c, async (stream) => {
-      const details = await connections.get(databaseId);
-      const healthHistory = await connections.getHealthHistory(databaseId);
-      const history = await monitoring.getHistory(databaseId);
+      const [details, healthHistory, history] = await Promise.all([
+        connections.get(databaseId),
+        connections.getHealthHistory(databaseId),
+        monitoring.getHistory(databaseId),
+      ]);
       await stream.writeSSE({
         data: JSON.stringify({
           connected: true,

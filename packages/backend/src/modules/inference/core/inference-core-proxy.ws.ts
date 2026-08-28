@@ -74,7 +74,7 @@ const UPSTREAM_CLOSE_BEFORE_RETRY_MS = 1_000;
  */
 export function createCoreResponsesWSHandlers(
   auth: InferenceCoreWebSocketAuth | null,
-  maxPayloadBytes = 33_554_432
+  maxPayloadBytes: number | (() => number | Promise<number>) = 50 * 1024 * 1024
 ): WSEvents {
   const state: ConnectionState = { active: null, unsubscribe: null, closedForRevocation: false };
   return {
@@ -101,7 +101,9 @@ export function createCoreResponsesWSHandlers(
         sendError(ws, protocol.status, protocol.code, protocol.message);
         return;
       }
-      if (payloadBytes(event.data) > maxPayloadBytes) {
+      const effectiveMaxPayloadBytes =
+        typeof maxPayloadBytes === 'function' ? await maxPayloadBytes() : maxPayloadBytes;
+      if (payloadBytes(event.data) > effectiveMaxPayloadBytes) {
         sendError(ws, 413, 'request_too_large', 'WebSocket message is too large');
         ws.close(1009, 'Message too large');
         return;

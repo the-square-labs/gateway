@@ -1,5 +1,14 @@
-import { Check, Cloud, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Check,
+  Cloud,
+  Globe2,
+  Loader2,
+  Plus,
+  RefreshCw,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -82,7 +91,6 @@ export function CloudflareIntegrationsSection() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadConnectors = useCallback(async () => {
     if (!canView) return;
@@ -107,21 +115,13 @@ export function CloudflareIntegrationsSection() {
     void loadConnectors();
   });
 
-  useEffect(() => {
-    return () => {
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    };
-  }, []);
-
   const openCreateDialog = () => {
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     setEditingConnector(null);
     setForm(emptyForm());
     setDialogOpen(true);
   };
 
   const openEditDialog = async (connector: CloudflareConnector) => {
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     setDialogOpen(true);
     setEditingConnector(connector);
     setLoadingDetail(true);
@@ -144,12 +144,6 @@ export function CloudflareIntegrationsSection() {
 
   const closeDialog = () => {
     setDialogOpen(false);
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    resetTimerRef.current = setTimeout(() => {
-      setEditingConnector(null);
-      setForm(emptyForm());
-      resetTimerRef.current = null;
-    }, 220);
   };
 
   const updateSettings = (patch: Partial<CloudflareConnectorSettings>) => {
@@ -394,6 +388,7 @@ export function CloudflareIntegrationsSection() {
               <PanelShell
                 title="DNS Defaults"
                 description="Applied when a domain does not override them."
+                icon={<SlidersHorizontal className="h-4 w-4" />}
               >
                 <SettingsControlRow
                   title="Auto Sync"
@@ -427,7 +422,11 @@ export function CloudflareIntegrationsSection() {
                     onChange={(checked) => updateSettings({ autoSyncEnabled: checked })}
                   />
                 </SettingsControlRow>
-                <SettingsControlRow title="TTL" description="Cloudflare automatic TTL uses 1">
+                <SettingsControlRow
+                  title="TTL"
+                  description="Cloudflare automatic TTL uses 1"
+                  help="1 delegates TTL to Cloudflare Automatic. Other values are seconds and become the default for records without an explicit TTL."
+                >
                   <Input
                     type="number"
                     value={form.settings.defaultTtl}
@@ -454,6 +453,7 @@ export function CloudflareIntegrationsSection() {
                 <PanelShell
                   title="Synced Zones"
                   description="Read-only zones available to domain autodetection."
+                  icon={<Globe2 className="h-4 w-4" />}
                 >
                   {editingConnector.zones?.length ? (
                     <div className="divide-y divide-border">

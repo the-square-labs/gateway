@@ -12,7 +12,7 @@ import type { DockerService } from '@/services/docker.service.js';
 import type { DockerRegistryGrant, DockerRegistryTokenService } from './docker-registry-token.service.js';
 
 const REGISTRY_STATE_ID = 'system';
-const DEFAULT_RETENTION_COUNT = 3;
+export const DEFAULT_REGISTRY_RETENTION_COUNT = 3;
 
 export const DEFAULT_REGISTRY_MAINTENANCE_LEASE_MS = 15 * 60_000;
 export const MAX_REGISTRY_WRITE_TOKEN_TTL_SECONDS = 30;
@@ -146,7 +146,7 @@ export interface DockerRegistryMaintenanceStore {
 
 export function selectRegistryRetentionCandidates(
   artifacts: RegistryRetentionArtifact[],
-  retentionCount = DEFAULT_RETENTION_COUNT
+  retentionCount = DEFAULT_REGISTRY_RETENTION_COUNT
 ): { retained: RegistryRetentionArtifact[]; candidates: RegistryRetentionArtifact[] } {
   const retainedIds = new Set(artifacts.filter((artifact) => artifact.pinned).map((artifact) => artifact.id));
   const byBinding = new Map<string, RegistryRetentionArtifact[]>();

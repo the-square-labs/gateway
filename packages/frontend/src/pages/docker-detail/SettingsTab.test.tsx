@@ -135,6 +135,16 @@ describe("docker detail SettingsTab", () => {
 
     const executionPanel = screen.getByRole("heading", { name: "Execution" }).closest(".border");
     expect(executionPanel?.parentElement).toHaveClass("min-[1044px]:grid-cols-2");
+    expect(screen.getByRole("button", { name: "About Execution" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About Image and Tag" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About Runtime" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "About Working Dir and Entrypoint" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About User and Hostname" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "About Command and Stop Grace" })
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(portMappingsSectionSpy).toHaveBeenLastCalledWith(
@@ -234,6 +244,8 @@ describe("docker detail SettingsTab", () => {
       await screen.findByText(`${window.location.origin}/api/webhooks/docker/token-1`)
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About Webhook" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About Image Cleanup" })).toBeInTheDocument();
   });
 
   it("keeps permitted webhook and cleanup panels stable while their settings load", () => {

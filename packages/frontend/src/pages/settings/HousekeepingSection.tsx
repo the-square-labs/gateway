@@ -2,6 +2,7 @@ import { Archive, Check, Loader2, Play, Save, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
-import { formatBytes, formatRelativeDate } from "@/lib/utils";
+import { cn, formatBytes, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
   HousekeepingCategoryResult,
@@ -24,9 +25,40 @@ interface HousekeepingSectionProps {
   canConfigure: boolean;
 }
 
+const HOUSEKEEPING_HELP: Record<string, string> = {
+  "Nginx Logs":
+    "Rotates active Nginx log files, compresses older files, and deletes files beyond the configured retention period.",
+  "Structured Logs":
+    "Removes old structured Gateway logs from ClickHouse when configured row or storage limits are exceeded.",
+  "ClickHouse Internals":
+    "Trims supported ClickHouse system-log tables. It does not remove Gateway structured logs, which use the separate policy above.",
+  "Audit Log":
+    "Deletes Gateway audit-trail records older than the configured retention period. Removed audit events cannot be restored from Gateway.",
+  "Dismissed Alerts":
+    "Removes alerts that were already dismissed and have exceeded their retention period. Active alerts are not affected.",
+  "Delivery Log":
+    "Deletes old notification delivery attempts, including successful and failed webhook or email delivery records.",
+  "Orphaned AI Artifacts":
+    "Deletes sandbox files that are no longer referenced by an AI conversation or retained artifact record.",
+  "Internal Registry":
+    "Garbage-collects unreferenced image layers and build artifacts from Gateway's internal Docker registry after the retention window.",
+  "Orphaned Volumes":
+    "Removes anonymous Docker volumes that are no longer attached to a container and have exceeded the configured age.",
+  "Retired System PKI Keys":
+    "Permanently destroys private keys after their managed system certificates have been retired for 30 days.",
+  "ACME Challenges":
+    "Removes expired certificate-validation tokens and temporary challenge files left after ACME issuance attempts.",
+  "Docker Images":
+    "Prunes old Gateway-managed images while preserving images still used by containers or required by the active release.",
+};
+
 function normalizeHousekeepingConfig(config: HousekeepingConfig): HousekeepingConfig {
   return {
     ...config,
+    internalRegistry: {
+      enabled: true,
+      retentionSuccessfulArtifacts: config.internalRegistry?.retentionSuccessfulArtifacts ?? 3,
+    },
     clickHouseInternals: {
       enabled: config.clickHouseInternals?.enabled ?? false,
       maxSizeBytes: config.clickHouseInternals?.maxSizeBytes ?? 512 * 1024 ** 2,
@@ -48,14 +80,14 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
           dismissedAlerts: { enabled: true, retentionDays: 30 },
           deliveryLog: { enabled: true, retentionDays: 7 },
           structuredLogs: {
-            enabled: false,
+            enabled: true,
             maxRows: 100_000,
             maxSizeBytes: 10 * 1024 ** 3,
           },
-          clickHouseInternals: { enabled: false, maxSizeBytes: 512 * 1024 ** 2 },
+          clickHouseInternals: { enabled: true, maxSizeBytes: 512 * 1024 ** 2 },
           orphanedAIArtifacts: { enabled: true },
-          gatewayLogs: { enabled: false },
-          orphanedVolumes: { enabled: false, retentionDays: 30 },
+          internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 3 },
+          orphanedVolumes: { enabled: true, retentionDays: 30 },
           dockerPrune: { enabled: true },
           orphanedCerts: { enabled: true },
           acmeCleanup: { enabled: true },
@@ -97,7 +129,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     loadHousekeeping();
   }, [loadHousekeeping]);
 
-  useScrollToNavigationTarget("housekeeping", initialLoadComplete);
+  const navigationHighlighted = useScrollToNavigationTarget("housekeeping", initialLoadComplete, {
+    block: "center",
+    highlightDurationMs: 2200,
+  });
 
   const hkHasChanges = hkSavedConfig
     ? JSON.stringify(hkConfig) !== JSON.stringify(hkSavedConfig)
@@ -153,6 +188,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     !hkConfig.clickHouseInternals.enabled ||
     (Number.isInteger(hkConfig.clickHouseInternals.maxSizeBytes) &&
       hkConfig.clickHouseInternals.maxSizeBytes >= 1024 ** 2);
+  const internalRegistryRetentionValid =
+    Number.isInteger(hkConfig.internalRegistry.retentionSuccessfulArtifacts) &&
+    hkConfig.internalRegistry.retentionSuccessfulArtifacts >= 1 &&
+    hkConfig.internalRegistry.retentionSuccessfulArtifacts <= 100;
   const historyColumns: SimpleTableColumn<HousekeepingRunResult>[] = [
     {
       id: "time",
@@ -206,13 +245,19 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     }
   };
 
-  if (!initialLoadComplete) return <Skeleton />;
+  if (!initialLoadComplete)
+    return (
+      <div id="housekeeping">
+        <Skeleton />
+      </div>
+    );
 
   return (
     <>
       <PanelShell
         icon={<Archive className="h-4 w-4" />}
         id="housekeeping"
+        className={cn(navigationHighlighted && "navigation-target-ripple")}
         title="Housekeeping"
         description="Automated cleanup of logs, old data, and unused resources"
         actions={
@@ -222,7 +267,8 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               !hkHasChanges ||
               masterControlsDisabled ||
               !structuredLogsValid ||
-              !clickHouseInternalsValid
+              !clickHouseInternalsValid ||
+              !internalRegistryRetentionValid
             }
           >
             <Save className="h-4 w-4" />
@@ -252,7 +298,12 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
               <div>
-                <p className="text-sm font-medium">Schedule</p>
+                <p className="text-sm font-medium">
+                  <SettingsHelpTitle
+                    label="Schedule"
+                    help="A cron expression defines when automatic cleanup runs. For example, 0 3 * * * runs every day at 03:00 in the Gateway host timezone."
+                  />
+                </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Cron expression for automatic cleanup runs
                 </p>
@@ -511,14 +562,33 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               disabled={controlsDisabled}
             />
             <HousekeepingCard
-              label="Gateway Logs"
-              description="Clean stored Gateway application logs"
-              stat={hkStats ? formatBytes(hkStats.gatewayLogs.totalSizeBytes) : "..."}
-              statDetail="disabled"
-              enabled={false}
+              label="Internal Registry"
+              description="Garbage-collect unreferenced build artifacts"
+              stat={hkStats ? formatBytes(hkStats.internalRegistry.totalSizeBytes) : "..."}
+              statDetail="used"
+              enabled
               onToggle={() => {}}
               disabled
-              disabledReason="Log storage is not enabled"
+              lastResult={hkStats?.lastRun?.categories.find(
+                (category) => category.category === "Internal Registry"
+              )}
+              inlineControls={
+                <>
+                  <span>&middot;</span>
+                  <span>keep</span>
+                  <RegistryRetentionControl
+                    value={hkConfig.internalRegistry.retentionSuccessfulArtifacts}
+                    disabled={controlsDisabled}
+                    onChange={(retentionSuccessfulArtifacts) =>
+                      setHkConfig((current) => ({
+                        ...current,
+                        internalRegistry: { enabled: true, retentionSuccessfulArtifacts },
+                      }))
+                    }
+                  />
+                  <span>artifacts per source</span>
+                </>
+              }
             />
             <HousekeepingCard
               label="Orphaned Volumes"
@@ -608,7 +678,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             />
           </div>
           <div className="flex flex-col gap-2 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-xs text-muted-foreground">
+            <div className="text-sm text-muted-foreground">
               {hkStats?.lastRun ? (
                 <span>
                   Last run {formatRelativeDate(hkStats.lastRun.startedAt)}
@@ -624,7 +694,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             </div>
             <button
               onClick={handleViewHistory}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               View history
             </button>
@@ -650,6 +720,41 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function RegistryRetentionControl({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  const [localValue, setLocalValue] = useState(String(value));
+
+  useEffect(() => setLocalValue(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number.parseInt(localValue, 10);
+    const normalized = Math.max(1, Math.min(100, Number.isFinite(parsed) ? parsed : value));
+    setLocalValue(String(normalized));
+    if (normalized !== value) onChange(normalized);
+  };
+
+  return (
+    <input
+      type="number"
+      aria-label="Retained successful registry artifacts"
+      className="w-10 border border-input bg-background px-1 text-center text-xs text-foreground tabular-nums outline-none focus:border-primary disabled:opacity-50"
+      min={1}
+      max={100}
+      value={localValue}
+      disabled={disabled}
+      onChange={(event) => setLocalValue(event.target.value)}
+      onBlur={commit}
+    />
   );
 }
 
@@ -690,7 +795,9 @@ function HousekeepingCard({
     <div className="border-t border-r border-border p-4 last:border-r-0 [&:nth-child(2n)]:border-r-0 sm:[&:nth-child(2n)]:border-r lg:[&:nth-child(2n)]:border-r lg:[&:nth-child(3n)]:border-r-0 flex items-center justify-between gap-4">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium">{label}</p>
+          <p className="text-sm font-medium">
+            <SettingsHelpTitle label={label} help={HOUSEKEEPING_HELP[label]} />
+          </p>
           {lastResult &&
             (lastResult.success ? (
               <Check className="h-3 w-3 text-emerald-500 shrink-0" />
@@ -734,7 +841,12 @@ function HousekeepingCard({
           {inlineControls}
         </div>
       </div>
-      <Switch checked={enabled} onChange={onToggle} disabled={disabled} />
+      <Switch
+        checked={enabled}
+        onChange={onToggle}
+        disabled={disabled}
+        ariaLabel={`${label} cleanup`}
+      />
     </div>
   );
 }

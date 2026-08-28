@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { Env } from '@/config/env.js';
 import type { LoggingFieldDefinition } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { EnvironmentSettings } from '@/modules/settings/environment-settings.schemas.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import { LoggingEventSchema } from './logging.schemas.js';
 import { type LoggingClickHouseRow, type LoggingSeverity, SEVERITY_NUMBER } from './logging-storage.types.js';
 
@@ -22,15 +23,19 @@ export interface LoggingValidationResult {
 }
 
 export class LoggingValidationService {
-  constructor(private readonly env: Env) {}
+  constructor(
+    private readonly getLimits: () => EnvironmentSettings['loggingIngest'] = () =>
+      getEnvironmentSettingsSnapshot().loggingIngest
+  ) {}
 
   enforceBodySize(contentLength: string | undefined, body: unknown): void {
+    const limits = this.getLimits();
     const headerBytes = contentLength ? Number(contentLength) : 0;
-    if (Number.isFinite(headerBytes) && headerBytes > this.env.LOGGING_INGEST_MAX_BODY_BYTES) {
+    if (Number.isFinite(headerBytes) && headerBytes > limits.maxBodyBytes) {
       throw new AppError(413, 'LOGGING_PAYLOAD_TOO_LARGE', 'Logging ingest payload is too large');
     }
     const parsedBytes = byteLength(JSON.stringify(body));
-    if (parsedBytes > this.env.LOGGING_INGEST_MAX_BODY_BYTES) {
+    if (parsedBytes > limits.maxBodyBytes) {
       throw new AppError(413, 'LOGGING_PAYLOAD_TOO_LARGE', 'Logging ingest payload is too large');
     }
   }
@@ -42,14 +47,15 @@ export class LoggingValidationService {
     schemaMode: 'loose' | 'strip' | 'reject';
     fieldSchema: LoggingFieldDefinition[];
   }): LoggingValidationResult {
-    if (params.logs.length > this.env.LOGGING_INGEST_MAX_BATCH_SIZE) {
+    const limits = this.getLimits();
+    if (params.logs.length > limits.maxBatchSize) {
       throw new AppError(400, 'BATCH_TOO_LARGE', 'Logging ingest batch contains too many entries');
     }
 
     const rows: LoggingClickHouseRow[] = [];
     const errors: LoggingValidationError[] = [];
     for (const [index, raw] of params.logs.entries()) {
-      const result = this.validateOne(raw, index, params);
+      const result = this.validateOne(raw, index, params, limits);
       if ('row' in result) rows.push(result.row);
       else errors.push(...result.errors);
     }
@@ -64,7 +70,8 @@ export class LoggingValidationService {
       retentionDays: number;
       schemaMode: 'loose' | 'strip' | 'reject';
       fieldSchema: LoggingFieldDefinition[];
-    }
+    },
+    limits = this.getLimits()
   ): { row: LoggingClickHouseRow } | { errors: LoggingValidationError[] } {
     const parsed = LoggingEventSchema.safeParse(raw);
     if (!parsed.success) {
@@ -90,7 +97,7 @@ export class LoggingValidationService {
         error(index, 'INVALID_TIMESTAMP', 'timestamp', 'Timestamp is older than this environment retention window')
       );
     }
-    if (byteLength(event.message) > this.env.LOGGING_INGEST_MAX_MESSAGE_BYTES) {
+    if (byteLength(event.message) > limits.maxMessageBytes) {
       errors.push(error(index, 'MESSAGE_TOO_LARGE', 'message', 'Message exceeds the configured byte limit'));
     }
 
@@ -102,7 +109,8 @@ export class LoggingValidationService {
       location: 'label',
       schema: schemaByLocation.label,
       mode: params.schemaMode,
-      maxEntries: this.env.LOGGING_INGEST_MAX_LABELS,
+      maxEntries: limits.maxLabels,
+      limits,
       errors,
     });
     const fields = this.sanitizeMap({
@@ -112,7 +120,8 @@ export class LoggingValidationService {
       location: 'field',
       schema: schemaByLocation.field,
       mode: params.schemaMode,
-      maxEntries: this.env.LOGGING_INGEST_MAX_FIELDS,
+      maxEntries: limits.maxFields,
+      limits,
       errors,
     });
 
@@ -182,6 +191,7 @@ export class LoggingValidationService {
     schema: Map<string, LoggingFieldDefinition>;
     mode: 'loose' | 'strip' | 'reject';
     maxEntries: number;
+    limits: EnvironmentSettings['loggingIngest'];
     errors: LoggingValidationError[];
   }): Record<string, unknown> {
     const entries = Object.entries(params.values);
@@ -195,7 +205,7 @@ export class LoggingValidationService {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of entries) {
       const fieldPath = `${params.path}.${key}`;
-      if (!isSafeKey(key, this.env.LOGGING_INGEST_MAX_KEY_LENGTH)) {
+      if (!isSafeKey(key, params.limits.maxKeyLength)) {
         params.errors.push(error(params.index, 'INVALID_KEY', fieldPath, 'Key is not allowed'));
         continue;
       }
@@ -210,7 +220,7 @@ export class LoggingValidationService {
       }
 
       const expectedType = definition?.type ?? (params.location === 'label' ? 'string' : inferType(value));
-      if (!this.isValidValue(value, expectedType, fieldPath, params.index, params.errors)) continue;
+      if (!this.isValidValue(value, expectedType, fieldPath, params.index, params.errors, params.limits)) continue;
       sanitized[key] = value;
     }
     return sanitized;
@@ -221,9 +231,10 @@ export class LoggingValidationService {
     expectedType: string,
     path: string,
     index: number,
-    errors: LoggingValidationError[]
+    errors: LoggingValidationError[],
+    limits: EnvironmentSettings['loggingIngest']
   ): boolean {
-    if (byteLength(JSON.stringify(value)) > this.env.LOGGING_INGEST_MAX_VALUE_BYTES) {
+    if (byteLength(JSON.stringify(value)) > limits.maxValueBytes) {
       errors.push(error(index, 'VALUE_TOO_LARGE', path, 'Value exceeds the configured byte limit'));
       return false;
     }
@@ -248,7 +259,7 @@ export class LoggingValidationService {
       errors.push(error(index, 'INVALID_TYPE', path, 'Expected datetime string value'));
       return false;
     }
-    if (expectedType === 'json' && getJsonDepth(value) > this.env.LOGGING_INGEST_MAX_JSON_DEPTH) {
+    if (expectedType === 'json' && getJsonDepth(value) > limits.maxJsonDepth) {
       errors.push(error(index, 'JSON_TOO_DEEP', path, 'JSON value exceeds the configured depth limit'));
       return false;
     }

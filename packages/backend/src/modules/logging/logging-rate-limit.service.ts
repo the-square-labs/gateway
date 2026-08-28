@@ -1,7 +1,8 @@
-import type { Env } from '@/config/env.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { EnvironmentSettings } from '@/modules/settings/environment-settings.schemas.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { RedisClient } from '@/services/cache.service.js';
 
 type RateScope = 'global' | 'token' | 'environment';
@@ -18,7 +19,8 @@ function rateLimitUnavailable(error?: unknown): AppError {
 export class LoggingRateLimitService {
   constructor(
     private readonly redis: RedisClient,
-    private readonly env: Env
+    private readonly getLimits: () => EnvironmentSettings['loggingIngest'] = () =>
+      getEnvironmentSettingsSnapshot().loggingIngest
   ) {}
 
   async check(params: {
@@ -28,47 +30,42 @@ export class LoggingRateLimitService {
     environmentRequestLimit: number | null;
     environmentEventLimit: number | null;
   }): Promise<void> {
-    const windowSeconds = this.env.LOGGING_RATE_LIMIT_WINDOW_SECONDS;
+    const limits = this.getLimits();
+    const windowSeconds = limits.rateLimitWindowSeconds;
     const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
-    await this.hit(
-      `logging:rl:${bucket}:global:requests`,
-      1,
-      this.env.LOGGING_GLOBAL_REQUESTS_PER_WINDOW,
-      windowSeconds,
-      'global'
-    );
+    await this.hit(`logging:rl:${bucket}:global:requests`, 1, limits.globalRequestsPerWindow, windowSeconds, 'global');
     await this.hit(
       `logging:rl:${bucket}:global:events`,
       params.events,
-      this.env.LOGGING_GLOBAL_EVENTS_PER_WINDOW,
+      limits.globalEventsPerWindow,
       windowSeconds,
       'global'
     );
     await this.hit(
       `logging:rl:${bucket}:token:${params.tokenId}:requests`,
       1,
-      this.env.LOGGING_TOKEN_REQUESTS_PER_WINDOW,
+      limits.tokenRequestsPerWindow,
       windowSeconds,
       'token'
     );
     await this.hit(
       `logging:rl:${bucket}:token:${params.tokenId}:events`,
       params.events,
-      this.env.LOGGING_TOKEN_EVENTS_PER_WINDOW,
+      limits.tokenEventsPerWindow,
       windowSeconds,
       'token'
     );
     await this.hit(
       `logging:rl:${bucket}:env:${params.environmentId}:requests`,
       1,
-      params.environmentRequestLimit ?? this.env.LOGGING_TOKEN_REQUESTS_PER_WINDOW,
+      params.environmentRequestLimit ?? limits.tokenRequestsPerWindow,
       windowSeconds,
       'environment'
     );
     await this.hit(
       `logging:rl:${bucket}:env:${params.environmentId}:events`,
       params.events,
-      params.environmentEventLimit ?? this.env.LOGGING_TOKEN_EVENTS_PER_WINDOW,
+      params.environmentEventLimit ?? limits.tokenEventsPerWindow,
       windowSeconds,
       'environment'
     );

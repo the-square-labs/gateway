@@ -236,6 +236,33 @@ describe('AuthService user preferences', () => {
   });
 });
 
+describe('AuthService user avatars', () => {
+  it('updates the avatar and emits a user change', async () => {
+    const updatedUser = dbUser({ avatarUrl: 'data:image/png;base64,cG5n' });
+    const returning = vi.fn().mockResolvedValue([updatedUser]);
+    const set = vi.fn(() => ({ where: vi.fn(() => ({ returning })) }));
+    const eventBus = { publish: vi.fn() };
+    const service = new AuthService(
+      { update: vi.fn(() => ({ set })) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+    service.setEventBus(eventBus as any);
+
+    await expect(service.updateUserAvatar(updatedUser.id, updatedUser.avatarUrl)).resolves.toMatchObject({
+      id: updatedUser.id,
+      avatarUrl: updatedUser.avatarUrl,
+    });
+    expect(set).toHaveBeenCalledWith({ avatarUrl: updatedUser.avatarUrl, updatedAt: expect.any(Date) });
+    expect(eventBus.publish).toHaveBeenCalledWith('user.changed', {
+      id: updatedUser.id,
+      action: 'updated',
+    });
+  });
+});
+
 describe('AuthService.listUsers', () => {
   it('returns the persisted sign-in method for an admin reload', async () => {
     vi.mocked(fetchGroupScopeMap).mockResolvedValue(new Map());
@@ -678,6 +705,35 @@ describe('AuthService OIDC identity binding', () => {
         ipAddress: '203.0.113.10',
         userAgent: 'Mozilla/5.0 Gateway test browser',
       }
+    );
+  });
+
+  it('preserves a custom avatar when OIDC profile claims are synchronized', async () => {
+    const existingUser = dbUser({
+      oidcSubject: 'real-sub',
+      name: 'User',
+      avatarUrl: '/auth/avatars/11111111-1111-4111-8111-111111111111.webp',
+    });
+    const harness = createAuthServiceHarness({
+      authSettings: {
+        oidcAutoCreateUsers: true,
+        oidcDefaultGroupId: 'viewer-group',
+        oidcRequireVerifiedEmail: false,
+      },
+      existingBySubject: existingUser,
+    });
+
+    const result = await harness.loginWithClaims({
+      oidcSubject: 'real-sub',
+      email: existingUser.email,
+      emailVerified: true,
+      name: 'User',
+      avatarUrl: 'https://identity.example.com/provider-avatar.png',
+    });
+
+    expect(result.user.avatarUrl).toBe(existingUser.avatarUrl);
+    expect(harness.updateSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ avatarUrl: 'https://identity.example.com/provider-avatar.png' })
     );
   });
 

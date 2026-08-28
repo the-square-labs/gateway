@@ -3,7 +3,7 @@ import { getCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
-import { setAuditImpersonationContext } from '@/modules/audit/audit-request-context.js';
+import { getAuditRequestContext, setAuditImpersonationContext } from '@/modules/audit/audit-request-context.js';
 import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
@@ -214,10 +214,15 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     }
     c.set('isTokenAuth', false);
     c.set('authType', 'session');
-    sessionService.updateSession(credential.value, { user }).catch(() => {});
+    const requestContext = getAuditRequestContext();
+    await sessionService.updateSession(credential.value, {
+      user,
+      ...(requestContext?.ipAddress ? { ipAddress: requestContext.ipAddress } : {}),
+      ...(requestContext?.userAgent ? { userAgent: requestContext.userAgent } : {}),
+    });
     if (session.purpose !== 'setup') {
-      sessionService.touchSession?.(credential.value, session).catch(() => {});
-      sessionService.refreshSession(credential.value, session).catch(() => {});
+      sessionService.touchSession?.(credential.value).catch(() => {});
+      sessionService.refreshSession(credential.value).catch(() => {});
     }
   }
 

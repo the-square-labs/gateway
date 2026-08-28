@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -147,7 +148,12 @@ export function NetworksSection({
 
   return (
     <PanelShell
-      title="Networks"
+      title={
+        <SettingsHelpTitle
+          label="Networks"
+          help="Attached Docker networks determine which containers can reach this container and which network-scoped DNS names and aliases it receives."
+        />
+      }
       description="Applied instantly without container recreation"
       dirty={networksChanged}
       actions={

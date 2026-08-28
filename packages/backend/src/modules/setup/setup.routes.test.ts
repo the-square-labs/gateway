@@ -62,6 +62,10 @@ vi.mock('@/modules/auth/session-cookie.js', () => ({
   getAcceptedSessionCookieNames: () => ['gw_session'],
 }));
 
+vi.mock('@/lib/request-ip.js', () => ({
+  getClientIpForContext: vi.fn().mockResolvedValue('203.0.113.25'),
+}));
+
 import { setupRoutes } from './setup.routes.js';
 
 function createApp() {
@@ -274,7 +278,11 @@ describe('setup wizard routes', () => {
       expect.objectContaining({ id: '00000000-0000-0000-0000-000000000000' }),
       undefined,
       undefined,
-      expect.objectContaining({ purpose: 'setup', setupSessionId: 'valid' })
+      expect.objectContaining({
+        purpose: 'setup',
+        setupSessionId: 'valid',
+        ipAddress: '203.0.113.25',
+      })
     );
     expect(response.headers.get('set-cookie')).toContain('purpose-session');
   });

@@ -219,6 +219,97 @@ describe("ManagedDatabaseLinksSection", () => {
     expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
   });
 
+  it("lets each Compose binding select its own service", async () => {
+    const composeBinding: ManagedDatabaseBinding = {
+      ...binding,
+      targetType: "compose_service",
+      targetResourceId: "project-1:web",
+    };
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([composeBinding]);
+    const create = vi
+      .spyOn(api, "createManagedDatabaseBinding")
+      .mockResolvedValue({ ...composeBinding, id: "binding-2", targetResourceId: "project-1:api" });
+    vi.mocked(confirm).mockResolvedValue(true);
+
+    renderLinks({
+      targetType: "compose_service",
+      targetResourceId: "project-1",
+      containerName: "project",
+      composeServices: [
+        { name: "web", existingVariableNames: ["DATABASE_URL"] },
+        { name: "api", existingVariableNames: [] },
+      ],
+    });
+
+    const existingService = await screen.findByRole("combobox", {
+      name: "Compose service for App Postgres",
+    });
+    expect(existingService).toHaveTextContent("web");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("combobox", { name: "Compose service" })).toHaveTextContent(
+      "api"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add link" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(
+        database.id,
+        expect.objectContaining({
+          targetType: "compose_service",
+          targetResourceId: "project-1:api",
+        })
+      )
+    );
+  });
+
+  it("stages moving one existing Compose binding to another service", async () => {
+    const composeBinding: ManagedDatabaseBinding = {
+      ...binding,
+      targetType: "compose_service",
+      targetResourceId: "project-1:web",
+    };
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([composeBinding]);
+    const remove = vi.spyOn(api, "deleteManagedDatabaseBinding").mockResolvedValue(undefined);
+    const create = vi
+      .spyOn(api, "createManagedDatabaseBinding")
+      .mockResolvedValue({ ...composeBinding, targetResourceId: "project-1:worker" });
+    vi.mocked(confirm).mockResolvedValue(true);
+
+    renderLinks({
+      targetType: "compose_service",
+      targetResourceId: "project-1",
+      containerName: "project",
+      composeServices: [
+        { name: "web", existingVariableNames: ["DATABASE_URL"] },
+        { name: "worker", existingVariableNames: [] },
+      ],
+    });
+
+    fireEvent.click(
+      await screen.findByRole("combobox", { name: "Compose service for App Postgres" })
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "worker" }));
+
+    expect(screen.getByText("pending")).toBeInTheDocument();
+    expect(remove).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(database.id, composeBinding.id));
+    expect(create).toHaveBeenCalledWith(
+      database.id,
+      expect.objectContaining({
+        targetType: "compose_service",
+        targetResourceId: "project-1:worker",
+      })
+    );
+  });
+
   it("does not submit an enclosing form", async () => {
     vi.spyOn(api, "listManagedDatabases").mockResolvedValue([]);
     const onSubmit = vi.fn((event: FormEvent) => event.preventDefault());

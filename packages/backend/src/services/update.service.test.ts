@@ -205,6 +205,11 @@ describe('UpdateService foundation migration', () => {
       expect.objectContaining({
         Image: artifact.imageRef,
         Cmd: ['node', 'dist/cli/migrate-legacy-settings.js', '/host'],
+        Env: expect.not.arrayContaining([
+          expect.stringMatching(/^OIDC_/),
+          expect.stringMatching(/^CLICKHOUSE_/),
+          expect.stringMatching(/^APP_URL=/),
+        ]),
         HostConfig: expect.objectContaining({ Binds: ['/srv/gateway:/host'] }),
       })
     );

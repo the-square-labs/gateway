@@ -2,10 +2,14 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   databaseConnections,
+  dockerComposeProjects,
   dockerDeployments,
   dockerHealthChecks,
   nginxTemplates,
   nodes,
+  pageDeployments,
+  pageProjects,
+  pageTags,
   proxyHosts,
   settings,
   sslCertificates,
@@ -363,8 +367,8 @@ export class StatusPageService {
   async listServices() {
     const rows = await this.db.query.statusPageServices.findMany({
       orderBy: [
-        asc(statusPageServices.publicGroup),
         asc(statusPageServices.sortOrder),
+        asc(statusPageServices.publicGroup),
         asc(statusPageServices.publicName),
       ],
     });
@@ -382,6 +386,10 @@ export class StatusPageService {
     await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('status-pages');
     await this.validateServiceSource(input.sourceType, input.sourceId);
     const config = await this.getConfig();
+    const lastService = await this.db.query.statusPageServices.findFirst({
+      columns: { sortOrder: true },
+      orderBy: [desc(statusPageServices.sortOrder)],
+    });
     const [row] = await this.db
       .insert(statusPageServices)
       .values({
@@ -390,7 +398,7 @@ export class StatusPageService {
         publicName: input.publicName,
         publicDescription: input.publicDescription ?? null,
         publicGroup: input.publicGroup ?? null,
-        sortOrder: input.sortOrder ?? 0,
+        sortOrder: input.sortOrder ?? (lastService?.sortOrder ?? -1) + 1,
         enabled: input.enabled ?? true,
         createThresholdSeconds: input.createThresholdSeconds ?? config.autoCreateThresholdSeconds,
         resolveThresholdSeconds: input.resolveThresholdSeconds ?? config.autoResolveThresholdSeconds,
@@ -435,6 +443,31 @@ export class StatusPageService {
     });
     this.emit('service_updated', id);
     return row;
+  }
+
+  async reorderServices(serviceIds: string[], userId: string) {
+    const rows = await this.db.query.statusPageServices.findMany({ columns: { id: true } });
+    const existingIds = new Set(rows.map((row) => row.id));
+    if (rows.length !== serviceIds.length || serviceIds.some((id) => !existingIds.has(id))) {
+      throw new AppError(400, 'STATUS_PAGE_REORDER_INVALID', 'Reorder payload must contain every exposed service once');
+    }
+
+    await this.db.transaction(async (tx) => {
+      for (const [sortOrder, id] of serviceIds.entries()) {
+        await tx
+          .update(statusPageServices)
+          .set({ sortOrder, updatedById: userId, updatedAt: new Date() })
+          .where(eq(statusPageServices.id, id));
+      }
+    });
+    await this.auditService.log({
+      userId,
+      action: 'status_page.services_reorder',
+      resourceType: 'status_page',
+      details: { serviceIds },
+    });
+    this.emit('services_reordered');
+    return this.listServices();
   }
 
   async deleteService(id: string, userId: string): Promise<void> {
@@ -494,17 +527,30 @@ export class StatusPageService {
       }
       return;
     }
+    if (sourceType === 'docker_compose_project') {
+      const project = await this.db.query.dockerComposeProjects.findFirst({
+        where: eq(dockerComposeProjects.id, sourceId),
+      });
+      if (!project) throw new AppError(404, 'DOCKER_COMPOSE_PROJECT_NOT_FOUND', 'Docker Compose Project not found');
+      return;
+    }
+    if (sourceType === 'pages_project') {
+      const project = await this.db.query.pageProjects.findFirst({ where: eq(pageProjects.id, sourceId) });
+      if (!project) throw new AppError(404, 'PAGE_PROJECT_NOT_FOUND', 'Page Project not found');
+      return;
+    }
     const database = await this.db.query.databaseConnections.findFirst({ where: eq(databaseConnections.id, sourceId) });
     if (!database) throw new AppError(404, 'DATABASE_NOT_FOUND', 'Database not found');
   }
 
-  async listIncidents(query: { status?: 'active' | 'resolved' | 'all'; limit?: number }) {
+  async listIncidents(query: { status?: 'active' | 'resolved' | 'all'; limit?: number; offset?: number }) {
     const conditions = [];
     if (query.status && query.status !== 'all') conditions.push(eq(statusPageIncidents.status, query.status));
     const incidents = await this.db.query.statusPageIncidents.findMany({
       where: conditions.length ? and(...conditions) : undefined,
       orderBy: [desc(statusPageIncidents.startedAt)],
       limit: query.limit ?? 50,
+      offset: query.offset ?? 0,
     });
     return this.attachIncidentUpdates(incidents);
   }
@@ -790,39 +836,68 @@ export class StatusPageService {
       .filter((row) => row.sourceType === 'docker_container')
       .map((row) => row.sourceId);
     const dockerDeploymentIds = rows.filter((row) => row.sourceType === 'docker_deployment').map((row) => row.sourceId);
+    const dockerComposeProjectIds = rows
+      .filter((row) => row.sourceType === 'docker_compose_project')
+      .map((row) => row.sourceId);
+    const pageProjectIds = rows.filter((row) => row.sourceType === 'pages_project').map((row) => row.sourceId);
 
-    const [nodeRows, proxyRows, databaseRows, dockerContainerChecks, dockerDeploymentsRows, dockerDeploymentChecks] =
-      await Promise.all([
-        nodeIds.length
-          ? this.db.select().from(nodes).where(inArray(nodes.id, nodeIds))
-          : Promise.resolve([] as Array<typeof nodes.$inferSelect>),
-        proxyIds.length
-          ? this.db
-              .select()
-              .from(proxyHosts)
-              .where(and(inArray(proxyHosts.id, proxyIds), eq(proxyHosts.isSystem, false)))
-          : Promise.resolve([] as Array<typeof proxyHosts.$inferSelect>),
-        databaseIds.length
-          ? this.db.select().from(databaseConnections).where(inArray(databaseConnections.id, databaseIds))
-          : Promise.resolve([] as Array<typeof databaseConnections.$inferSelect>),
-        dockerContainerCheckIds.length
-          ? this.db.select().from(dockerHealthChecks).where(inArray(dockerHealthChecks.id, dockerContainerCheckIds))
-          : Promise.resolve([] as Array<typeof dockerHealthChecks.$inferSelect>),
-        dockerDeploymentIds.length
-          ? this.db.select().from(dockerDeployments).where(inArray(dockerDeployments.id, dockerDeploymentIds))
-          : Promise.resolve([] as Array<typeof dockerDeployments.$inferSelect>),
-        dockerDeploymentIds.length
-          ? this.db
-              .select()
-              .from(dockerHealthChecks)
-              .where(
-                and(
-                  eq(dockerHealthChecks.target, 'deployment'),
-                  inArray(dockerHealthChecks.deploymentId, dockerDeploymentIds)
-                )
+    const [
+      nodeRows,
+      proxyRows,
+      databaseRows,
+      dockerContainerChecks,
+      dockerDeploymentsRows,
+      dockerDeploymentChecks,
+      dockerComposeRows,
+      pageProjectRows,
+      pageLatestTags,
+    ] = await Promise.all([
+      nodeIds.length
+        ? this.db.select().from(nodes).where(inArray(nodes.id, nodeIds))
+        : Promise.resolve([] as Array<typeof nodes.$inferSelect>),
+      proxyIds.length
+        ? this.db
+            .select()
+            .from(proxyHosts)
+            .where(and(inArray(proxyHosts.id, proxyIds), eq(proxyHosts.isSystem, false)))
+        : Promise.resolve([] as Array<typeof proxyHosts.$inferSelect>),
+      databaseIds.length
+        ? this.db.select().from(databaseConnections).where(inArray(databaseConnections.id, databaseIds))
+        : Promise.resolve([] as Array<typeof databaseConnections.$inferSelect>),
+      dockerContainerCheckIds.length
+        ? this.db.select().from(dockerHealthChecks).where(inArray(dockerHealthChecks.id, dockerContainerCheckIds))
+        : Promise.resolve([] as Array<typeof dockerHealthChecks.$inferSelect>),
+      dockerDeploymentIds.length
+        ? this.db.select().from(dockerDeployments).where(inArray(dockerDeployments.id, dockerDeploymentIds))
+        : Promise.resolve([] as Array<typeof dockerDeployments.$inferSelect>),
+      dockerDeploymentIds.length
+        ? this.db
+            .select()
+            .from(dockerHealthChecks)
+            .where(
+              and(
+                eq(dockerHealthChecks.target, 'deployment'),
+                inArray(dockerHealthChecks.deploymentId, dockerDeploymentIds)
               )
-          : Promise.resolve([] as Array<typeof dockerHealthChecks.$inferSelect>),
-      ]);
+            )
+        : Promise.resolve([] as Array<typeof dockerHealthChecks.$inferSelect>),
+      dockerComposeProjectIds.length
+        ? this.db.select().from(dockerComposeProjects).where(inArray(dockerComposeProjects.id, dockerComposeProjectIds))
+        : Promise.resolve([] as Array<typeof dockerComposeProjects.$inferSelect>),
+      pageProjectIds.length
+        ? this.db.select().from(pageProjects).where(inArray(pageProjects.id, pageProjectIds))
+        : Promise.resolve([] as Array<typeof pageProjects.$inferSelect>),
+      pageProjectIds.length
+        ? this.db
+            .select()
+            .from(pageTags)
+            .where(and(inArray(pageTags.projectId, pageProjectIds), eq(pageTags.name, 'latest')))
+        : Promise.resolve([] as Array<typeof pageTags.$inferSelect>),
+    ]);
+    const pageDeploymentIds = pageLatestTags.flatMap((tag) => (tag.deploymentId ? [tag.deploymentId] : []));
+    const pageDeploymentRows = pageDeploymentIds.length
+      ? await this.db.select().from(pageDeployments).where(inArray(pageDeployments.id, pageDeploymentIds))
+      : [];
 
     const byNode = new Map(nodeRows.map((row) => [row.id, row]));
     const byProxy = new Map(proxyRows.map((row) => [row.id, row]));
@@ -832,6 +907,10 @@ export class StatusPageService {
     const byDockerDeploymentCheck = new Map(
       dockerDeploymentChecks.flatMap((row) => (row.deploymentId ? [[row.deploymentId, row] as const] : []))
     );
+    const byDockerComposeProject = new Map(dockerComposeRows.map((row) => [row.id, row]));
+    const byPageProject = new Map(pageProjectRows.map((row) => [row.id, row]));
+    const latestTagByPageProject = new Map(pageLatestTags.map((row) => [row.projectId, row]));
+    const byPageDeployment = new Map(pageDeploymentRows.map((row) => [row.id, row]));
 
     for (const row of rows) {
       if (row.sourceType === 'node') {
@@ -881,6 +960,48 @@ export class StatusPageService {
           rawStatus: source.healthStatus,
           status: mapStatus(source.healthStatus),
           history: source.healthHistory ?? [],
+        });
+      } else if (row.sourceType === 'docker_compose_project') {
+        const source = byDockerComposeProject.get(row.sourceId);
+        if (!source) continue;
+        const rawStatus =
+          source.availability === 'unavailable' || source.status === 'failed' || source.status === 'missing'
+            ? 'offline'
+            : source.status === 'running'
+              ? 'online'
+              : source.status === 'degraded'
+                ? 'degraded'
+                : source.status === 'stopped'
+                  ? 'maintenance'
+                  : 'recovering';
+        result.set(row.id, {
+          label: source.name,
+          rawStatus,
+          status: mapStatus(rawStatus),
+          history: [],
+        });
+      } else if (row.sourceType === 'pages_project') {
+        const source = byPageProject.get(row.sourceId);
+        if (!source) continue;
+        const latestTag = latestTagByPageProject.get(source.id);
+        const deployment = latestTag?.deploymentId ? byPageDeployment.get(latestTag.deploymentId) : null;
+        const rawStatus =
+          source.migrationStatus === 'failed'
+            ? 'error'
+            : source.migrationStatus
+              ? 'maintenance'
+              : deployment?.status === 'ready'
+                ? 'online'
+                : deployment?.status === 'failed' || deployment?.status === 'deleted'
+                  ? 'offline'
+                  : deployment
+                    ? 'maintenance'
+                    : 'unknown';
+        result.set(row.id, {
+          label: source.name,
+          rawStatus,
+          status: mapStatus(rawStatus),
+          history: [],
         });
       }
     }

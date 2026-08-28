@@ -3,7 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
+import {
+  SettingsControlRow,
+  SettingsHelpTitle,
+  SettingsInlineControl,
+} from "@/components/common/SettingsControlRow";
 import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckSection";
 import { GpuSettingsSection, normalizeGpuDeviceIds } from "@/components/docker/GpuSettingsSection";
 import { Button } from "@/components/ui/button";
@@ -953,7 +957,12 @@ export function SettingsTab({
         />
 
         <PanelShell
-          title="Execution"
+          title={
+            <SettingsHelpTitle
+              label="Execution"
+              help="Container creation settings that Docker cannot change in place. Saving recreates the container with the same managed identity and the updated configuration."
+            />
+          }
           description="Requires container recreation"
           dirty={execChanged || imageTagChanged || effectiveGpuChanged || runtimeProfileChanged}
           bodyClassName="divide-y divide-border"
@@ -976,7 +985,11 @@ export function SettingsTab({
             ) : null
           }
         >
-          <SettingsControlRow title="Image and Tag" description="Container image reference">
+          <SettingsControlRow
+            title="Image and Tag"
+            description="Container image reference"
+            help="Image selects the repository; Tag selects the version. Changing either pulls and recreates the container. Digest-pinned images keep their immutable digest instead of an editable Tag."
+          >
             <div className="grid w-full gap-2 sm:grid-cols-2">
               <SettingsInlineControl label="Image">
                 <Input value={parsedImageName} disabled />
@@ -992,7 +1005,11 @@ export function SettingsTab({
               </SettingsInlineControl>
             </div>
           </SettingsControlRow>
-          <SettingsControlRow title="Runtime" description="Container isolation profile">
+          <SettingsControlRow
+            title="Runtime"
+            description="Container isolation profile"
+            help="Default uses the node's standard Docker runtime. Secure adds stronger isolation when the node and license support it. Changing the profile recreates the container."
+          >
             <SettingsInlineControl label="Profile">
               <Select
                 value={runtimeProfile}
@@ -1037,6 +1054,7 @@ export function SettingsTab({
           <SettingsControlRow
             title="Working Dir and Entrypoint"
             description="Initial process context"
+            help="Working Dir becomes the process current directory. Entrypoint replaces the image ENTRYPOINT and is normally left empty unless the image requires an explicit override."
           >
             <div className="grid w-full gap-2 sm:grid-cols-2">
               <SettingsInlineControl label="Working Dir">
@@ -1057,7 +1075,11 @@ export function SettingsTab({
               </SettingsInlineControl>
             </div>
           </SettingsControlRow>
-          <SettingsControlRow title="User and Hostname" description="Container identity">
+          <SettingsControlRow
+            title="User and Hostname"
+            description="Container identity"
+            help="User overrides the account used to start the process, such as root or 1000:1000. Hostname controls the name visible to applications inside the container."
+          >
             <div className="grid w-full gap-2 sm:grid-cols-2">
               <SettingsInlineControl label="User">
                 <Input
@@ -1080,6 +1102,7 @@ export function SettingsTab({
           <SettingsControlRow
             title="Command and Stop Grace"
             description="Command override and shutdown timeout"
+            help="Command replaces the image CMD. Stop Grace is how long Docker waits after requesting a graceful shutdown before forcefully terminating the process."
           >
             <div className="grid w-full gap-2 sm:grid-cols-2">
               <SettingsInlineControl label="Command">

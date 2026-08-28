@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { nanoid } from 'nanoid';
 import { injectable } from 'tsyringe';
-import { getEnv } from '@/config/env.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { AuthMethod, PublicSession, SessionData, User } from '@/types.js';
 import type { CacheService } from './cache.service.js';
 
@@ -27,9 +27,9 @@ export class SessionService {
       expiresAt?: number;
     } = {}
   ): Promise<{ sessionId: string; expiresAt: number }> {
-    const env = getEnv();
+    const expirySeconds = getEnvironmentSettingsSnapshot().sessions.expirySeconds;
     const sessionId = nanoid(32);
-    const expiresAt = Math.min(metadata.expiresAt ?? Number.POSITIVE_INFINITY, Date.now() + env.SESSION_EXPIRY * 1000);
+    const expiresAt = Math.min(metadata.expiresAt ?? Number.POSITIVE_INFINITY, Date.now() + expirySeconds * 1000);
 
     const sessionData: SessionData = {
       userId: user.id,
@@ -49,11 +49,11 @@ export class SessionService {
       expiresAt,
     };
 
-    await this.cache.set(`${SESSION_PREFIX}${sessionId}`, sessionData, env.SESSION_EXPIRY);
+    await this.cache.set(`${SESSION_PREFIX}${sessionId}`, sessionData, expirySeconds);
 
     if (sessionData.purpose !== 'impersonation') {
       await this.cache.sadd(`${USER_SESSIONS_PREFIX}${user.id}`, sessionId);
-      await this.cache.expire(`${USER_SESSIONS_PREFIX}${user.id}`, env.SESSION_EXPIRY + 86400);
+      await this.cache.expire(`${USER_SESSIONS_PREFIX}${user.id}`, expirySeconds + 86400);
     }
 
     return { sessionId, expiresAt };
@@ -185,16 +185,16 @@ export class SessionService {
     const resolved = session ?? (await this.getSession(sessionId));
     if (!resolved || (resolved.purpose !== undefined && resolved.purpose !== 'user')) return false;
 
-    const env = getEnv();
-    const halfTtl = (env.SESSION_EXPIRY * 1000) / 2;
+    const expirySeconds = getEnvironmentSettingsSnapshot().sessions.expirySeconds;
+    const halfTtl = (expirySeconds * 1000) / 2;
     const remaining = resolved.expiresAt - Date.now();
 
     if (remaining > halfTtl) return false;
 
-    const newExpiresAt = Date.now() + env.SESSION_EXPIRY * 1000;
+    const newExpiresAt = Date.now() + expirySeconds * 1000;
     resolved.expiresAt = newExpiresAt;
 
-    await this.cache.set(`${SESSION_PREFIX}${sessionId}`, resolved, env.SESSION_EXPIRY);
+    await this.cache.set(`${SESSION_PREFIX}${sessionId}`, resolved, expirySeconds);
 
     return true;
   }

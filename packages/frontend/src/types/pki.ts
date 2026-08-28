@@ -129,6 +129,7 @@ export interface AuditLogEntry {
   createdAt: string;
   userName: string | null;
   userEmail: string | null;
+  userAvatarUrl?: string | null;
 }
 
 // Alert types

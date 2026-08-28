@@ -2,7 +2,7 @@ import { Play, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -167,7 +167,12 @@ export function DockerHealthCheckSection({
 
   return (
     <PanelShell
-      title="Health Check"
+      title={
+        <SettingsHelpTitle
+          label="Health Check"
+          help="Gateway periodically requests a published HTTP route and records availability, response time, status code, and optional body validation."
+        />
+      }
       description="Gateway HTTP health from a published route"
       dirty={changed}
       wrapHeader
@@ -195,6 +200,7 @@ export function DockerHealthCheckSection({
       <SettingsControlRow
         title="Enabled"
         description="Run gateway HTTP checks for this target"
+        help="Starts scheduled checks from Gateway. This is separate from a Dockerfile HEALTHCHECK executed inside the Docker runtime."
         controlsClassName="flex justify-end justify-self-end !w-auto !min-w-0 !max-w-none"
       >
         <Switch
@@ -204,7 +210,11 @@ export function DockerHealthCheckSection({
         />
       </SettingsControlRow>
 
-      <SettingsControlRow title="Route and Scheme" description="Published route used for checks">
+      <SettingsControlRow
+        title="Route and Scheme"
+        description="Published route used for checks"
+        help="Selects the published host/container port pair Gateway should call and whether the request uses HTTP or HTTPS."
+      >
         <div className="grid w-full gap-2 sm:grid-cols-2">
           <div className="space-y-1">
             <Select
@@ -256,7 +266,11 @@ export function DockerHealthCheckSection({
         </div>
       </SettingsControlRow>
 
-      <SettingsControlRow title="Request" description="Path and slow response threshold">
+      <SettingsControlRow
+        title="Request"
+        description="Path and slow response threshold"
+        help="Path is appended to the selected route. Responses slower than the threshold remain reachable but are reported as degraded."
+      >
         <div className="grid w-full gap-2 sm:grid-cols-2">
           <Input
             value={draft.path}
@@ -272,7 +286,11 @@ export function DockerHealthCheckSection({
         </div>
       </SettingsControlRow>
 
-      <SettingsControlRow title="Status Range" description="Accepted HTTP status codes">
+      <SettingsControlRow
+        title="Status Range"
+        description="Accepted HTTP status codes"
+        help="Only responses within this inclusive minimum and maximum range count as healthy. A typical range is 200 through 399."
+      >
         <div className="grid w-full gap-2 sm:grid-cols-2">
           <Input
             inputMode="numeric"
@@ -289,7 +307,11 @@ export function DockerHealthCheckSection({
         </div>
       </SettingsControlRow>
 
-      <SettingsControlRow title="Timing" description="Check interval and request timeout">
+      <SettingsControlRow
+        title="Timing"
+        description="Check interval and request timeout"
+        help="Interval controls how often Gateway checks the route. Timeout is the maximum wait for one response and should remain shorter than the interval."
+      >
         <div className="grid w-full gap-2 sm:grid-cols-2">
           <Input
             inputMode="numeric"
@@ -306,7 +328,11 @@ export function DockerHealthCheckSection({
         </div>
       </SettingsControlRow>
 
-      <SettingsControlRow title="Body Match" description="Optional response body assertion">
+      <SettingsControlRow
+        title="Body Match"
+        description="Optional response body assertion"
+        help="Optionally verifies response content after the status check passes. Useful for detecting a healthy proxy that is serving the wrong application response."
+      >
         <div className="grid w-full gap-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
           <Select
             value={draft.bodyMatchMode}

@@ -19,11 +19,10 @@ env:
   GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
 
 jobs:
-  test:
-    name: Test
-    if: ${{ !contains(github.ref_name, '-') }}
+  verify:
+    name: Full verification
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     steps:
       - name: Check out tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -41,22 +40,33 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.24.4'
+          cache-dependency-path: |
+            packages/daemons/go.work.sum
+            packages/relay/go.sum
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test frontend
-        run: pnpm --filter frontend test
+      - name: Lint
+        run: pnpm lint
 
-      - name: Test backend
-        run: pnpm --filter backend test
+      - name: Typecheck
+        run: pnpm typecheck
 
-      - name: Test assistant Docker contract
-        run: pnpm --filter backend test -- src/modules/ai/ai.assistant-docker.e2e.test.ts
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build:all
 
   build:
     name: Build
     if: ${{ !contains(github.ref_name, '-') }}
-    needs: test
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -221,6 +231,7 @@ jobs:
   component-release:
     name: Component release
     if: ${{ contains(github.ref_name, '-') }}
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:

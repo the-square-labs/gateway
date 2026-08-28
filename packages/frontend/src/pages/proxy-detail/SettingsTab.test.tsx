@@ -90,6 +90,12 @@ describe("proxy detail SettingsTab", () => {
     render(<SettingsTab {...makeProps()} />);
 
     expect(screen.getByText("Access List").closest("div.border")).toHaveClass("overflow-visible");
+    expect(screen.getByText("Access List").closest("h3")?.querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "About Policy" })).toBeInTheDocument();
+    expect(screen.getByText("Config Template").closest("h3")?.querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "About Template" })).toBeInTheDocument();
+    expect(screen.getByText("SSL").closest("h3")?.querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "About SSL Certificate" })).toBeInTheDocument();
   });
 
   it("lays out WebSocket and Access List panels by their available container width", () => {
@@ -111,6 +117,8 @@ describe("proxy detail SettingsTab", () => {
 
     expect(screen.queryByText("WebSocket Support")).not.toBeInTheDocument();
     expect(screen.getByText("Health Check")).toBeInTheDocument();
+    expect(screen.getByText("Health Check").closest("h3")?.querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "About Expected Status" })).toBeInTheDocument();
   });
 
   it("renders cacheEnabled as an Enabled or Disabled dropdown", () => {
@@ -254,6 +262,42 @@ describe("proxy detail SettingsTab", () => {
     const saveButton = screen.getByRole("button", { name: "Saving..." });
     expect(saveButton).toBeDisabled();
     expect(saveButton.querySelector(".animate-spin")).not.toBeNull();
+  });
+
+  it("renders redirect settings as standard rows with supported status codes", async () => {
+    const user = userEvent.setup();
+    const setTemplateRedirectStatusCode = vi.fn();
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: { ...host, type: "redirect" },
+          templateRedirectUrl: "https://example.com",
+          templateRedirectStatusCode: 301,
+          setTemplateRedirectStatusCode,
+        })}
+      />
+    );
+
+    expect(screen.getByDisplayValue("https://example.com")).toBeInTheDocument();
+    const statusCode = screen.getByRole("combobox", { name: "Redirect status code" });
+    await user.click(statusCode);
+    await user.click(screen.getByRole("option", { name: "308 — Permanent, preserve method" }));
+
+    expect(setTemplateRedirectStatusCode).toHaveBeenCalledWith(308);
+  });
+
+  it("keeps health-check body controls accessible without nested field captions", () => {
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: { ...host, type: "redirect" },
+          healthCheckEnabled: true,
+        })}
+      />
+    );
+
+    expect(screen.getByRole("combobox", { name: "Expected body match mode" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Expected body value" })).toBeEnabled();
   });
 
   it("marks every saveable settings panel with the shared dirty border", () => {
