@@ -19,7 +19,7 @@ The disk figures are free capacity after the operating system is installed. When
 - Inbound `3000/tcp` for the UI/API and `9443/tcp` for managed daemon gRPC connections.
 - A trusted reverse proxy is optional. Gateway can serve port 3000 directly over HTTP or over a certificate issued by its existing System CA.
 
-Gateway mounts the host Docker socket for self-updates and optional managed local ClickHouse. Run it in an isolated VM or on a dedicated trusted host.
+Gateway intentionally mounts the host Docker socket. It is required for signed in-place self-updates, foundation migration and recovery, image housekeeping, and optional Gateway-managed local services such as ClickHouse and Inference Core. This is a deliberate host trust boundary, not container isolation: Docker socket access is equivalent to administrative control of the Docker host, even if the socket bind is marked read-only. Treat the Gateway app container as part of the host trusted computing base, run it in an isolated VM or dedicated trusted host, and never place unrelated workloads or credentials on that Docker host. Removing the mount is not a supported hardening option because it disables product lifecycle and recovery paths; deployments that require a control plane without host Docker access must isolate Gateway in its own VM.
 
 The control-plane stack also includes a Gateway-managed Docker Distribution registry with a persistent volume and no host-published port. Reserve registry capacity in addition to the base figures above when Git-source builds are enabled; retention keeps three successful artifacts per source plus active, rollback, in-progress, and manual pins.
 

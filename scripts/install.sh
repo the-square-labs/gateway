@@ -906,6 +906,9 @@ services:
       - gateway_relay_identity:/var/lib/gateway-relay
       - gateway_registry_auth:/var/lib/gateway-registry-auth
       - ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
+      # Intentional host trust boundary: required for signed self-update,
+      # recovery, housekeeping, and Gateway-managed local services.
+      # Run Gateway on a dedicated host/VM; a read-only bind is not safer.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:

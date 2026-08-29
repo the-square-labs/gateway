@@ -14,7 +14,7 @@ Gateway defaults to security controls that reduce the most common self-hosted co
 - No long-lived daemon shared secret. First enrollment uses a one-time token plus a pinned Gateway gRPC TLS leaf fingerprint, then replaces the token with an mTLS client certificate.
 - No global trust for programmatic tokens. API/OAuth scopes are bounded by the owning user's current effective permissions.
 - No silent secret reveal. Certificate exports, database credential reveal, Docker secret access, and dangerous OAuth scopes require explicit permissions.
-- New Gateway-created Docker workloads are non-privileged, add no Linux capabilities, and run with `no-new-privileges`. The optional Secure profile uses gVisor `runsc` for a stronger host-isolation boundary; it is not presented as a full virtual machine or universal syscall compatibility layer.
+- New Gateway-created Docker workloads are non-privileged, add no Linux capabilities, and run with `no-new-privileges`. The optional Secure profile uses gVisor `runsc` for a stronger host-isolation boundary; it is not presented as a full virtual machine or universal syscall compatibility layer. Secure Runtime rejects Docker `NetworkMode=host` and `NetworkMode=container:*`. Its gVisor host-network backend still operates inside the Docker-created network namespace so ordinary bridge networks, published ports, and Docker service discovery continue to work; it does not place the workload in the node's host network namespace.
 - New and changed container mounts can reference only Gateway-managed local Docker volumes. Gateway rejects new host bind mounts; unchanged legacy mounts can remain attached until an operator removes or migrates them.
 - Git-source builds run only on nodes enrolled as Build Workers. The same `docker-daemon` binary runs in a command-restricted `builder` mode with no Docker Engine socket; it supervises dedicated BuildKit and containerd services using the standard runc runtime. Build admission fails closed unless the worker advertises execution, dedicated-runtime, and enforced-resource-profile capabilities. The separate worker host or outer unprivileged container is the security boundary and must not contain unrelated workloads or credentials.
 - Repository-backed Compose projects are committed as one parent batch with one isolated child build per service. Gateway does not create or activate the immutable Compose revision until every expected child artifact passes vulnerability policy. The revision pins every service digest before apply, and active/rollback retention rotates only after the Compose operation succeeds.
@@ -32,6 +32,14 @@ Gateway defaults to security controls that reduce the most common self-hosted co
 - No anonymous control plane. Administrative and automation actions are permission-gated and audited.
 
 Gateway still needs to be treated as sensitive infrastructure. Run it in an isolated VM or dedicated host, protect `.env`, back up secrets carefully, and limit Docker socket access to trusted operators.
+
+## Gateway Host Docker Socket Trust Boundary
+
+The production Gateway app intentionally mounts `/var/run/docker.sock`. This is required for signed self-update orchestration, foundation migration and recovery, image pruning and registry maintenance, and Gateway-managed local services. It is not an accidental convenience mount and it is not expected to provide a security boundary between the app container and its Docker host.
+
+Docker Engine authorization is carried by access to the socket itself. A read-only bind mount does not make Docker API operations read-only, and a process with Docker API access can generally obtain host-level control. Gateway therefore treats the app container and its dedicated Docker host as one trusted computing base. An application-level compromise must be handled as a potential compromise of that host.
+
+The supported production control is host isolation: install Gateway in its own VM or dedicated machine, do not run customer workloads or unrelated control planes on the same Docker host, restrict host login and Docker-group membership, and keep the signed update chain enabled. Removing the socket mount is not a supported hardening mode because it breaks self-update, recovery, and managed-service lifecycle paths. An organization that requires the control-plane process to have no host Docker authority must place Gateway in a dedicated VM whose only purpose is running Gateway; the VM boundary is the isolation boundary.
 
 ## Identity And Login
 
@@ -219,6 +227,6 @@ Gateway does not remove the need for host security:
 - A root compromise of the Gateway host can compromise the control plane.
 - A root compromise of a managed host can access that daemon's local certificate and whatever the host itself can access.
 - Losing `PKI_MASTER_KEY` means encrypted PKI and private key material cannot be decrypted.
-- Exposing the Docker socket is privileged by nature, so Gateway should run on isolated infrastructure.
+- The production Docker socket mount is an intentional product requirement, not an accidental exposure. It makes the Gateway app and Docker host one trust domain, so Gateway must run on isolated infrastructure.
 
 These are the normal boundaries for an infrastructure control plane. Gateway's design makes those boundaries explicit and gives operators tools to keep access narrow, observable, and PKI-backed.

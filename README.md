@@ -28,7 +28,7 @@ curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts
 ```
 
 > [!IMPORTANT]
-> **Production deployment note:** Gateway is a privileged infrastructure control plane. For internal operations such as self-updates and local housekeeping, the Gateway app mounts the host Docker socket. Run Gateway in an isolated VM or dedicated host, and do not place unrelated workloads on the same Docker host.
+> **Production deployment note:** Gateway is a privileged infrastructure control plane. The host Docker socket mount is intentional and required for signed self-updates, recovery, housekeeping, and Gateway-managed local services. The app container is therefore part of the Docker host's trusted computing base: compromise of the app must be treated as potential host compromise. Run Gateway in an isolated VM or dedicated host, never colocate unrelated workloads or credentials on that Docker host, and do not remove or replace the socket mount with a read-only mount (the Docker API remains privileged and required operations would break).
 
 The installer starts Gateway and prints a one-time setup code. The browser wizard then configures the canonical URL, selectable public and local node-network endpoints, one or more sign-in methods (OIDC, password, or email code), the first system administrator, optional structured logging, and optional AI Workspace. Gateway Inference is configured inside the AI Workspace flow rather than as a separate onboarding product.
 
