@@ -21,6 +21,10 @@ import { type DomainUsage, logger } from './domain.service.shared.js';
 
 export * from './domain.service.shared.js';
 
+function hasIngressResourceScope(scopes: string[], baseScope: string, resourceId: string): boolean {
+  return scopes.includes(baseScope) || scopes.includes(`${baseScope}:${resourceId}`);
+}
+
 export class DomainsService extends DomainsServiceRuntime {
   async listDomains(params: DomainListQuery, options?: { allowedIds?: string[] }) {
     const conditions = [];
@@ -103,12 +107,39 @@ export class DomainsService extends DomainsServiceRuntime {
     };
   }
 
-  async migrateIngress(id: string, input: DomainIngressMigrationInput, userId: string) {
+  async migrateIngress(id: string, input: DomainIngressMigrationInput, userId: string, actorScopes: string[] = []) {
     if (!this.proxyService) {
       throw new AppError(503, 'PROXY_SERVICE_UNAVAILABLE', 'Proxy host migration is unavailable');
     }
 
     const impact = await this.buildIngressMigrationImpact(id, input.targetNodeId);
+    if (!hasIngressResourceScope(actorScopes, 'proxy:create', impact.targetNode.id)) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${impact.targetNode.id}`);
+    }
+    const unauthorizedHost = impact.proxyHosts.find(
+      (host) => !hasIngressResourceScope(actorScopes, 'proxy:edit', host.id)
+    );
+    if (unauthorizedHost) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:edit:${unauthorizedHost.id}`);
+    }
+    if (!actorScopes.includes('admin:system') && impact.proxyHosts.length > 0) {
+      const [systemHost] = await this.db
+        .select({ id: proxyHosts.id })
+        .from(proxyHosts)
+        .where(
+          and(
+            inArray(
+              proxyHosts.id,
+              impact.proxyHosts.map((host) => host.id)
+            ),
+            eq(proxyHosts.isSystem, true)
+          )
+        )
+        .limit(1);
+      if (systemHost) {
+        throw new AppError(403, 'FORBIDDEN', 'Moving system proxy hosts requires admin:system scope');
+      }
+    }
     if (impact.pending) return this.completeIngressMigration(impact, userId);
 
     if (impact.proxyHosts.some((host) => host.upstreamKind !== 'manual')) {

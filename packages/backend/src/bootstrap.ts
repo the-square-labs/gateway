@@ -617,7 +617,7 @@ export async function initializeContainer(): Promise<void> {
   const folderService = new FolderService(db, auditService);
   container.registerInstance(FolderService, folderService);
 
-  const nginxTemplateService = new NginxTemplateService(db, auditService);
+  const nginxTemplateService = new NginxTemplateService(db, auditService, configValidator);
   container.registerInstance(NginxTemplateService, nginxTemplateService);
 
   // Node management (daemon communication)

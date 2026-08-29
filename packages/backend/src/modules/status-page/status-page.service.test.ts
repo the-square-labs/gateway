@@ -220,7 +220,8 @@ describe('StatusPageService settings validation', () => {
         nodeId: '22222222-2222-4222-8222-222222222222',
         upstreamUrl: 'http://172.16.20.60:3000',
       },
-      USER_ID
+      USER_ID,
+      ['proxy:raw:write']
     );
 
     expect(proxyService.upsertStatusPageSystemHost).toHaveBeenCalledWith(
@@ -229,6 +230,29 @@ describe('StatusPageService settings validation', () => {
       }),
       USER_ID
     );
+  });
+
+  it('rejects custom upstream changes without raw proxy permission', async () => {
+    const service = createService(
+      dbForSettings({
+        id: '22222222-2222-4222-8222-222222222222',
+        type: 'nginx',
+        status: 'online',
+      })
+    );
+
+    await expect(
+      service.updateSettings(
+        {
+          enabled: true,
+          domain: 'status.example.com',
+          nodeId: '22222222-2222-4222-8222-222222222222',
+          upstreamUrl: 'http://172.16.20.60:3000',
+        },
+        USER_ID,
+        ['status-page:manage']
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('removes the system proxy host reference when disabled', async () => {

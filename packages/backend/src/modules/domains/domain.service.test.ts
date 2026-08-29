@@ -11,6 +11,7 @@ vi.mock('@/db/schema/proxy-hosts.js', () => ({
     enabled: 'proxyHosts.enabled',
     nodeId: 'proxyHosts.nodeId',
     upstreamKind: 'proxyHosts.upstreamKind',
+    isSystem: 'proxyHosts.isSystem',
   },
 }));
 
@@ -185,11 +186,20 @@ describe('DomainsService Cloudflare lifecycle', () => {
     };
     vi.spyOn(service as any, 'buildIngressMigrationImpact')
       .mockResolvedValueOnce(impact)
+      .mockResolvedValueOnce(impact)
       .mockResolvedValueOnce({ ...impact, pending: true, migrationId: 'migration-1' });
     vi.spyOn(service as any, 'reconcileDomainTarget').mockResolvedValue(undefined);
     vi.spyOn(service as any, 'completeIngressMigration').mockResolvedValue({ status: 'completed' });
 
-    await service.migrateIngress(domain.id, { targetNodeId: targetNode.id }, 'user-1');
+    await expect(service.migrateIngress(domain.id, { targetNodeId: targetNode.id }, 'user-1')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+
+    await service.migrateIngress(domain.id, { targetNodeId: targetNode.id }, 'user-1', [
+      `proxy:create:${targetNode.id}`,
+      `proxy:edit:${host.id}`,
+      'admin:system',
+    ]);
 
     expect(proxyService.updateProxyHost).toHaveBeenCalledWith(
       host.id,
@@ -273,6 +283,49 @@ describe('DomainsService Cloudflare lifecycle', () => {
     }));
     const db = {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([legacyDomain]) })) })),
+      update: vi.fn(() => ({ set: updateSet })),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    vi.spyOn(service, 'getNginxNodeOptions').mockResolvedValue({
+      eligibleNodes: [
+        {
+          id: 'node-1',
+          slug: 'edge-1',
+          hostname: 'edge-1',
+          displayName: null,
+          appearanceColor: null,
+          effectiveAddress: '1.1.1.1',
+          effectiveAddresses: ['1.1.1.1'],
+        },
+      ],
+      unconfiguredNodes: [],
+      totalNginxNodes: 1,
+      unconfiguredNginxNodes: 0,
+    });
+    vi.spyOn(service, 'getUsage').mockResolvedValue({ proxyHosts: [], sslCertificates: [] });
+    const reconcile = vi.spyOn(service as any, 'reconcileDomainTarget').mockResolvedValue(undefined);
+
+    await (service as any).backfillNginxNodeAssignments();
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ nginxNodeId: 'node-1', pendingDnsTargetIp: null })
+    );
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('assigns Cloudflare domains without implicitly authorizing a DNS retarget', async () => {
+    const cloudflareDomain = {
+      id: 'domain-1',
+      domain: 'managed.example.com',
+      dnsProvider: 'cloudflare',
+      nginxNodeId: null,
+      pendingDnsTargetIp: null,
+    };
+    const updateSet = vi.fn((values: Record<string, unknown>) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...cloudflareDomain, ...values }]) })),
+    }));
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([cloudflareDomain]) })) })),
       update: vi.fn(() => ({ set: updateSet })),
     };
     const service = new DomainsService(db as never, { log: vi.fn() } as never);

@@ -230,7 +230,11 @@ export class StatusPageService {
     return configuredHost !== null && normalizeHost(hostHeader) === configuredHost;
   }
 
-  async updateSettings(input: StatusPageSettingsInput, userId: string): Promise<StatusPageConfig> {
+  async updateSettings(
+    input: StatusPageSettingsInput,
+    userId: string,
+    actorScopes: string[] = []
+  ): Promise<StatusPageConfig> {
     const previous = await this.getConfig();
     const next: StatusPageConfig = {
       ...previous,
@@ -242,6 +246,12 @@ export class StatusPageService {
       upstreamUrl:
         input.upstreamUrl === undefined ? previous.upstreamUrl : input.upstreamUrl ? input.upstreamUrl.trim() : null,
     };
+
+    const upstreamChanged = input.upstreamUrl !== undefined && next.upstreamUrl !== previous.upstreamUrl;
+    const enablingCustomUpstream = !previous.enabled && next.enabled && Boolean(next.upstreamUrl);
+    if ((upstreamChanged || enablingCustomUpstream) && !actorScopes.includes('proxy:raw:write')) {
+      throw new AppError(403, 'FORBIDDEN', 'Configuring a custom status page upstream requires proxy:raw:write scope');
+    }
 
     if (!previous.enabled && next.enabled) {
       // LICENSE ENFORCEMENT: Only enabling a new status page requires Personal; existing pages remain manageable.

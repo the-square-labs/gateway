@@ -111,6 +111,7 @@ import { systemRoutes } from '@/modules/system/system.routes.js';
 import { tokensRoutes } from '@/modules/tokens/tokens.routes.js';
 import { uiBootstrapRoutes } from '@/modules/ui-bootstrap/ui-bootstrap.routes.js';
 import type { RedisClient } from '@/services/cache.service.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
 import type { AppEnv } from '@/types.js';
 import { authenticateEventsConnection, createEventsWSHandlers } from '@/ws/events.ws.js';
@@ -118,6 +119,8 @@ import { authenticateEventsConnection, createEventsWSHandlers } from '@/ws/event
 const STATUS_PREVIEW_PREFIX = '/_status-preview';
 const OPENAPI_DOCUMENT_PATH = '/api/openapi.json';
 const HEALTH_REDIS_TIMEOUT_MS = 1000;
+const INFERENCE_RESPONSES_WEBSOCKET_PATH = '/api/inference/v1/responses';
+const ENVIRONMENT_SETTINGS_KEY = 'environment:settings';
 const GATEWAY_RESTARTING_SCRIPT_PATH = '/gateway-restarting.js';
 const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
@@ -401,6 +404,24 @@ export function createApp(): GatewayAppRuntime {
   // WebSocket support for AI assistant
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app: app as any });
   wss.options.maxPayload = getEnvironmentSettingsSnapshot().requestLimits.inferenceWebSocketMaxPayloadBytes;
+  const inferenceSockets = new Set<typeof wss.clients extends Set<infer Socket> ? Socket : never>();
+  wss.on('connection', (socket, request) => {
+    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    if (pathname !== INFERENCE_RESPONSES_WEBSOCKET_PATH) return;
+    inferenceSockets.add(socket);
+    socket.once('close', () => inferenceSockets.delete(socket));
+  });
+  if (container.isRegistered(EventBusService)) {
+    container.resolve(EventBusService).subscribe('system.config.changed', (payload) => {
+      if ((payload as { key?: unknown } | null)?.key !== ENVIRONMENT_SETTINGS_KEY) return;
+      const previousLimit = wss.options.maxPayload;
+      const nextLimit = getEnvironmentSettingsSnapshot().requestLimits.inferenceWebSocketMaxPayloadBytes;
+      wss.options.maxPayload = nextLimit;
+      if (typeof previousLimit !== 'number' || nextLimit >= previousLimit) return;
+      for (const socket of inferenceSockets) socket.terminate();
+      inferenceSockets.clear();
+    });
+  }
 
   // Global middleware
   app.use('*', requestId());

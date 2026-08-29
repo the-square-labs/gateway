@@ -1015,6 +1015,18 @@ export async function recreateWithConfig(
 
 function assertSecureRuntimeConfiguration(config: Record<string, unknown>, inspect?: Record<string, any>) {
   if (config.runtimeProfile !== 'secure') return;
+  const requestedNetworks = Array.isArray(config.networks) ? config.networks : undefined;
+  const networkMode =
+    requestedNetworks !== undefined
+      ? requestedNetworks.find((network): network is string => typeof network === 'string')
+      : inspect?.HostConfig?.NetworkMode;
+  if (networkMode === 'host' || String(networkMode ?? '').startsWith('container:')) {
+    throw new AppError(
+      409,
+      'SECURE_RUNTIME_NETWORK_NAMESPACE_UNSUPPORTED',
+      'Secure Runtime requires an isolated Docker network namespace'
+    );
+  }
   const gpu = config.gpu as { deviceIds?: unknown[] } | undefined;
   const hasRequestedGpu = Array.isArray(gpu?.deviceIds) && gpu.deviceIds.length > 0;
   const preservesGpu = gpu === undefined && inspect ? dockerGpuAttachmentFromInspect(inspect).mode !== 'none' : false;

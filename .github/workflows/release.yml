@@ -223,7 +223,19 @@ jobs:
             fi
             gh release create "$GITHUB_REF_NAME" "${args[@]}"
           fi
-          gh release upload "$GITHUB_REF_NAME" gateway-image.update.json --clobber
+          (
+            cd scripts
+            sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
+          )
+          gh release upload "$GITHUB_REF_NAME" \
+            gateway-image.update.json \
+            gateway-daemon-installers.sha256 \
+            scripts/setup-daemon.sh \
+            scripts/setup-node.sh \
+            scripts/setup-docker-node.sh \
+            scripts/setup-database-node.sh \
+            scripts/setup-monitoring-node.sh \
+            --clobber
 
   release:
     name: Release
@@ -241,6 +253,12 @@ jobs:
             --json assets \
             --jq '.assets[].name')
           grep -Fxq gateway-image.update.json <<<"$assets"
+          grep -Fxq gateway-daemon-installers.sha256 <<<"$assets"
+          grep -Fxq setup-daemon.sh <<<"$assets"
+          grep -Fxq setup-node.sh <<<"$assets"
+          grep -Fxq setup-docker-node.sh <<<"$assets"
+          grep -Fxq setup-database-node.sh <<<"$assets"
+          grep -Fxq setup-monitoring-node.sh <<<"$assets"
           gh release edit "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --draft=false

@@ -26,6 +26,19 @@ die() {
 }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+sha256_file() {
+    local file="$1"
+    if command_exists sha256sum; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command_exists shasum; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command_exists openssl; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        die "A SHA-256 tool (sha256sum, shasum, or openssl) is required"
+    fi
+}
+
 show_header() {
     echo -e "${BRAND_MINT}╭───────────────────────────────────╮${NC}"
     printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-33s${NC} ${BRAND_MINT}│${NC}\n" "Gateway Node Setup"
@@ -54,7 +67,8 @@ prompt_choice() {
     echo "${reply:-$default}"
 }
 
-GITHUB_RAW_BASE="${GATEWAY_GITHUB_RAW_BASE:-https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts}"
+SETUP_VERSION="${GATEWAY_SETUP_VERSION:-latest}"
+RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/wiolett-industries/gateway/releases}"
 STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RUN_USER="root"
 DRY_RUN=0
@@ -144,9 +158,23 @@ if [[ -x "$LOCAL_DOCKER_SCRIPT" ]]; then
     DOCKER_SCRIPT="$LOCAL_DOCKER_SCRIPT"
 else
     command_exists curl || die "curl is required to fetch setup-docker-node.sh."
-    url="${GITHUB_RAW_BASE%/}/setup-docker-node.sh"
+    if [[ "$SETUP_VERSION" == "latest" ]]; then
+        release_url="${RELEASE_DOWNLOAD_BASE%/}/latest/download"
+    else
+        [[ "$SETUP_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "Invalid release tag: ${SETUP_VERSION}"
+        release_url="${RELEASE_DOWNLOAD_BASE%/}/download/${SETUP_VERSION}"
+    fi
     DOWNLOADED_DOCKER_SCRIPT=$(mktemp /tmp/gateway-setup-docker.XXXXXX)
-    curl -fsSL "$url" -o "$DOWNLOADED_DOCKER_SCRIPT" || die "Could not download setup-docker-node.sh."
+    checksums=$(mktemp /tmp/gateway-setup-checksums.XXXXXX)
+    curl -fsSL "${release_url}/gateway-daemon-installers.sha256" -o "$checksums" ||
+        die "Could not download installer checksums."
+    curl -fsSL "${release_url}/setup-docker-node.sh" -o "$DOWNLOADED_DOCKER_SCRIPT" ||
+        die "Could not download setup-docker-node.sh."
+    expected=$(awk '$2 == "setup-docker-node.sh" { print $1 }' "$checksums")
+    actual=$(sha256_file "$DOWNLOADED_DOCKER_SCRIPT")
+    rm -f "$checksums"
+    [[ "$expected" =~ ^[a-f0-9]{64}$ && "$actual" == "$expected" ]] ||
+        die "Checksum verification failed for setup-docker-node.sh."
     chmod 700 "$DOWNLOADED_DOCKER_SCRIPT"
     DOCKER_SCRIPT="$DOWNLOADED_DOCKER_SCRIPT"
 fi

@@ -446,13 +446,13 @@ The UI shows ready-to-copy commands. Run one of these on the target server as ro
 
 For **nginx** nodes:
 \`\`\`bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-node.sh | sudo bash -s -- \\
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
 
 For **docker** nodes:
 \`\`\`bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | sudo bash -s -- \\
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-docker-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
 
@@ -462,7 +462,7 @@ For **database** nodes, run setup-database-node.sh with the generated Gateway ad
 
 For **monitoring** nodes:
 \`\`\`bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-monitoring-node.sh | sudo bash -s -- \\
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-monitoring-node.sh | sudo bash -s -- \\
   --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
 \`\`\`
 

@@ -160,10 +160,12 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         }
         if (a.operation === 'create') {
           this.ensureToolScope(user, 'proxy:templates:create');
+          this.ensureToolScope(user, 'proxy:raw:write');
           return templateService.createTemplate(CreateNginxTemplateSchema.parse(args), user.id);
         }
         if (a.operation === 'update') {
           this.ensureToolScopeForResource(user, 'proxy:templates:edit', String(a.templateId));
+          this.ensureToolScope(user, 'proxy:raw:write');
           return templateService.updateTemplate(a.templateId, UpdateNginxTemplateSchema.parse(args), user.id);
         }
         if (a.operation === 'delete') {

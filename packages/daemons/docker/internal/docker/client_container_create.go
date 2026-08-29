@@ -523,6 +523,10 @@ func (c *Client) applyRuntimeProfile(hostCfg *container.HostConfig, profile stri
 		if !c.runscHealthy.Load() {
 			return fmt.Errorf("Secure Runtime is not healthy on this node")
 		}
+		networkMode := strings.TrimSpace(string(hostCfg.NetworkMode))
+		if networkMode == "host" || strings.HasPrefix(networkMode, "container:") {
+			return fmt.Errorf("Secure Runtime requires an isolated Docker network namespace")
+		}
 		if gpuConfig != nil && len(gpuConfig.DeviceIDs) > 0 {
 			return fmt.Errorf("Secure Runtime does not support GPU attachments")
 		}

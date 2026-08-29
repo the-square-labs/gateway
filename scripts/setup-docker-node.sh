@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Installs docker-daemon on a host and enrolls it with the Gateway.
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | \
+#   curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-docker-node.sh | \
 #     sudo bash -s -- --gateway gateway.example.com:9443 --token <ENROLLMENT_TOKEN> --gateway-cert-sha256 sha256:<HEX>
 #
 # Or download and run:

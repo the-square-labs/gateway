@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   scopes: ['proxy:templates:view'],
   templateService: {
     listTemplates: vi.fn(),
+    createTemplate: vi.fn(),
+    updateTemplate: vi.fn(),
     cloneTemplate: vi.fn(),
     renderTemplate: vi.fn(),
     previewWithSampleData: vi.fn(),
@@ -69,6 +71,8 @@ describe('nginx template routes', () => {
     mocks.scopes = ['proxy:templates:view'];
     vi.clearAllMocks();
     mocks.templateService.listTemplates.mockResolvedValue([{ id: 'template-1', name: 'Default' }]);
+    mocks.templateService.createTemplate.mockResolvedValue({ id: 'template-2', name: 'Custom' });
+    mocks.templateService.updateTemplate.mockResolvedValue({ id: 'template-1', name: 'Updated' });
     mocks.templateService.cloneTemplate.mockResolvedValue({ id: 'clone-1', name: 'Default Copy' });
     mocks.templateService.renderTemplate.mockReturnValue('rendered');
     mocks.templateService.previewWithSampleData.mockReturnValue('sample');
@@ -103,6 +107,36 @@ describe('nginx template routes', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ data: [{ id: 'template-1', name: 'Default' }] });
+  });
+
+  it('requires a privileged browser session to create template content', async () => {
+    mocks.scopes = ['proxy:templates:create', 'proxy:raw:write'];
+    const input = { name: 'Custom', type: 'proxy', content: 'server {}' };
+
+    const programmatic = await createApp().request('/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    expect(programmatic.status).toBe(403);
+    expect(mocks.templateService.createTemplate).not.toHaveBeenCalled();
+
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:templates:create'];
+    const withoutRawScope = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    expect(withoutRawScope.status).toBe(403);
+
+    mocks.scopes = ['proxy:templates:create', 'proxy:raw:write'];
+    const allowed = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    expect(allowed.status).toBe(201);
   });
 
   it('requires create scope when cloning a template', async () => {
@@ -163,7 +197,8 @@ describe('nginx template routes', () => {
   });
 
   it('does not let a resource-scoped edit grant test unrelated new template content', async () => {
-    mocks.scopes = ['proxy:templates:edit:11111111-1111-4111-8111-111111111111'];
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:templates:edit:11111111-1111-4111-8111-111111111111', 'proxy:raw:write'];
 
     const response = await createApp().request('/test', {
       method: 'POST',

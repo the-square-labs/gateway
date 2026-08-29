@@ -564,10 +564,9 @@ export abstract class DomainsServiceRuntime {
         continue;
       }
 
-      const pendingDnsTargetIp = row.dnsProvider === 'cloudflare' ? selected.effectiveAddress : null;
       const [assigned] = await this.db
         .update(domains)
-        .set({ nginxNodeId: selected.id, pendingDnsTargetIp, updatedAt: new Date() })
+        .set({ nginxNodeId: selected.id, pendingDnsTargetIp: null, updatedAt: new Date() })
         .where(sql`${domains.id} = ${row.id} AND ${domains.nginxNodeId} IS NULL`)
         .returning();
       if (!assigned) continue;
@@ -578,9 +577,6 @@ export abstract class DomainsServiceRuntime {
         resourceId: row.id,
         details: { nginxNodeId: selected.id, source: usedNodeIds.length === 0 ? 'first_eligible' : 'proxy_host' },
       });
-      if (assigned.dnsProvider === 'cloudflare') {
-        await this.reconcileDomainTarget(assigned, selected.effectiveAddress);
-      }
     }
   }
 

@@ -96,6 +96,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
   );
   const { hasScope } = useAuthStore();
   const canManage = hasScope("status-page:manage");
+  const canManageUpstream = hasScope("proxy:raw:write");
   const [config, setConfig] = useState<StatusPageConfig>(
     () => api.getCached<StatusPageConfig>("settings:status-page-config") ?? DEFAULT_CONFIG
   );
@@ -273,7 +274,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         >
           <Input
             value={config.upstreamUrl ?? ""}
-            disabled={!canManage || savingSettings}
+            disabled={!canManage || !canManageUpstream || savingSettings}
             placeholder="http://172.16.20.60:3000"
             onChange={(event) =>
               setConfig((prev) => ({ ...prev, upstreamUrl: event.target.value }))

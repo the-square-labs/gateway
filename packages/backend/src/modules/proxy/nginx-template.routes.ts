@@ -33,6 +33,20 @@ export const nginxTemplateRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openAp
 
 nginxTemplateRoutes.use('*', authMiddleware);
 
+function assertRawTemplateWrite(c: { get(key: 'authType' | 'effectiveScopes'): unknown }) {
+  if (c.get('authType') !== 'session') {
+    throw new AppError(
+      403,
+      'BROWSER_SESSION_REQUIRED',
+      'Nginx template content requires browser session authentication'
+    );
+  }
+  const scopes = c.get('effectiveScopes');
+  if (!Array.isArray(scopes) || !hasScope(scopes, 'proxy:raw:write')) {
+    throw new AppError(403, 'FORBIDDEN', 'Nginx template content requires proxy:raw:write scope');
+  }
+}
+
 // List all nginx templates
 nginxTemplateRoutes.openapi(
   { ...listNginxTemplatesRoute, middleware: requireScopeBase('proxy:templates:view') },
@@ -63,6 +77,7 @@ nginxTemplateRoutes.openapi(
 nginxTemplateRoutes.openapi(
   { ...createNginxTemplateRoute, middleware: requireScope('proxy:templates:create') },
   async (c) => {
+    assertRawTemplateWrite(c);
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -76,6 +91,7 @@ nginxTemplateRoutes.openapi(
 nginxTemplateRoutes.openapi(
   { ...updateNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:edit', 'id') },
   async (c) => {
+    assertRawTemplateWrite(c);
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
     const id = c.req.param('id')!;
@@ -176,6 +192,7 @@ nginxTemplateRoutes.openapi(
     middleware: requireAnyScopeBase('proxy:templates:create', 'proxy:templates:edit'),
   },
   async (c) => {
+    assertRawTemplateWrite(c);
     const service = container.resolve(NginxTemplateService);
     const nodeDispatch = container.resolve(NodeDispatchService);
     const body = await c.req.json();

@@ -86,6 +86,15 @@ func TestSecureRuntimeProfileFailsClosedAndRejectsGPU(t *testing.T) {
 	); err == nil {
 		t.Fatal("expected Secure Runtime to reject GPU attachment")
 	}
+	for _, networkMode := range []container.NetworkMode{"host", "container:shared-workload"} {
+		if err := client.applyRuntimeProfile(
+			&container.HostConfig{NetworkMode: networkMode},
+			"secure",
+			nil,
+		); err == nil {
+			t.Fatalf("expected Secure Runtime to reject network mode %q", networkMode)
+		}
+	}
 }
 
 func TestCreateManagedVolumeRejectsExistingVolumeWithoutCreating(t *testing.T) {

@@ -13,6 +13,7 @@ const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
 const monitoringNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-monitoring-node.sh', import.meta.url));
 const daemonInstaller = fileURLToPath(new URL('../../../../scripts/setup-daemon.sh', import.meta.url));
+const releaseWorkflow = fileURLToPath(new URL('../../../../.github/workflows/release.yml', import.meta.url));
 const relayNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-relay-node.sh', import.meta.url));
 
 describe('setup-relay-node.sh', () => {
@@ -360,6 +361,21 @@ describe('daemon installer interactive selectors', () => {
     expect(syntax.status, syntax.stderr).toBe(0);
     expect(source).toContain('/dev/ttyS*|/dev/hvc*|/dev/xvc*|/dev/console');
     expect(source).toContain('read -rsn1 key < "$tty" 2>/dev/null');
+  });
+});
+
+describe('daemon installer release integrity', () => {
+  it('downloads immutable release assets and verifies the selected installer checksum', () => {
+    const source = readFileSync(daemonInstaller, 'utf8');
+    const workflow = readFileSync(releaseWorkflow, 'utf8');
+
+    expect(source).toContain('gateway-daemon-installers.sha256');
+    expect(source).toContain('Checksum verification failed for $' + '{name}');
+    expect(source).toContain('/download/$' + '{SETUP_VERSION}');
+    expect(source).not.toContain('raw.githubusercontent.com');
+    expect(workflow).toContain('gateway-daemon-installers.sha256');
+    expect(workflow).toContain('scripts/setup-daemon.sh');
+    expect(workflow).toContain('scripts/setup-database-node.sh');
   });
 });
 

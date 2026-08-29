@@ -17,6 +17,7 @@ import { formatHostPort } from '@/lib/network-endpoint.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { getDnsResolverServers } from '@/modules/domains/dns.utils.js';
+import type { ConfigValidatorService } from '@/services/config-validator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
 import type { ProxyAdditionalRouteConfig, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
@@ -714,7 +715,8 @@ export class NginxTemplateService {
 
   constructor(
     private readonly db: DrizzleClient,
-    private readonly auditService: AuditService
+    private readonly auditService: AuditService,
+    private readonly configValidator?: ConfigValidatorService
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -893,9 +895,21 @@ export class NginxTemplateService {
   renderTemplate(content: string, host: ProxyHostConfig): string {
     const template = this.compileTemplate(content);
     const baseContext = this.buildBaseContext(host);
+    const advancedConfig = host.advancedConfig ? this.renderTemplateString(host.advancedConfig, baseContext) : null;
+    if (advancedConfig && this.configValidator) {
+      const sourceValidation = this.configValidator.validate(host.advancedConfig!, false);
+      const renderedValidation = this.configValidator.validate(advancedConfig, false);
+      if (sourceValidation.valid && !renderedValidation.valid) {
+        throw new AppError(
+          400,
+          'INVALID_ADVANCED_CONFIG_TEMPLATE',
+          `Rendered advanced config is unsafe: ${renderedValidation.errors.join('; ')}`
+        );
+      }
+    }
     const context = {
       ...baseContext,
-      advancedConfig: host.advancedConfig ? this.renderTemplateString(host.advancedConfig, baseContext) : null,
+      advancedConfig,
     };
     return template(context);
   }

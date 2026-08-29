@@ -133,6 +133,31 @@ describe('daemonContainerCreateConfig', () => {
 });
 
 describe('createContainer compensation', () => {
+  it.each([
+    'host',
+    'container:shared-workload',
+  ])('rejects the %s network namespace for Secure Runtime before daemon dispatch', async (network) => {
+    const sendDockerContainerCommand = vi.fn();
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertDockerRuntimeProfileAvailable: vi.fn().mockResolvedValue(undefined),
+      assertDockerGpuCapability: vi.fn(),
+      assertDockerPortBindIpCapability: vi.fn(),
+      nodeDispatch: { sendDockerContainerCommand },
+    };
+
+    await expect(
+      createContainer(
+        ctx as never,
+        'node-1',
+        { image: 'nginx:alpine', runtimeProfile: 'secure', networks: [network] },
+        'user-1'
+      )
+    ).rejects.toMatchObject({ code: 'SECURE_RUNTIME_NETWORK_NAMESPACE_UNSUPPORTED' });
+    expect(sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+
   it('removes an auto-named runtime container when canonical identity inspection fails', async () => {
     const sendDockerContainerCommand = vi
       .fn()

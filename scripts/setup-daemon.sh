@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Downloads and runs the appropriate setup script for a daemon type.
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-daemon.sh | \
+#   curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-daemon.sh | \
 #     sudo bash -s -- --type nginx --gateway gateway.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
 # ────────────────────────────────────────────────────────────────────
 
@@ -24,8 +24,9 @@ ERROR_TAG='\033[48;2;96;61;43m\033[38;2;245;221;202m'
 
 # ── Defaults ────────────────────────────────────────────────────────
 DAEMON_TYPE=""
-GITHUB_RAW_BASE="${GATEWAY_GITHUB_RAW_BASE:-https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts}"
 LOCAL_SCRIPT_DIR="${GATEWAY_SETUP_SCRIPT_DIR:-}"
+SETUP_VERSION="${GATEWAY_SETUP_VERSION:-latest}"
+RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/wiolett-industries/gateway/releases}"
 PASSTHROUGH_ARGS=()
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -35,6 +36,19 @@ err()  { echo -e "${ERROR_TAG} ERROR ${NC} $*" >&2; }
 die()  { err "$@"; exit 1; }
 
 command_exists() { command -v "$1" &>/dev/null; }
+
+sha256_file() {
+    local file="$1"
+    if command_exists sha256sum; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command_exists shasum; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command_exists openssl; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        die "A SHA-256 tool (sha256sum, shasum, or openssl) is required"
+    fi
+}
 
 mktemp_compat() {
     local prefix="${1:-/tmp/gateway-tmp}"
@@ -140,6 +154,7 @@ Usage:
 
 Options:
   --type <type>            Daemon type: nginx, docker, databases, or monitoring
+  --version <tag>          Gateway release tag containing the installers (default: latest stable)
   --script-dir <path>      Run a daemon-specific installer from a local directory
   -h, --help               Show this help
 
@@ -161,6 +176,7 @@ HELP
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --type)           DAEMON_TYPE="$2"; shift 2 ;;
+        --version)        SETUP_VERSION="$2"; shift 2 ;;
         --script-dir)     LOCAL_SCRIPT_DIR="$2"; shift 2 ;;
         -h|--help)        show_help ;;
         *)                PASSTHROUGH_ARGS+=("$1"); shift ;;
@@ -209,18 +225,36 @@ if [[ -n "$LOCAL_SCRIPT_DIR" ]]; then
     [[ -f "$TMPSCRIPT" ]] || die "Local installer not found: ${TMPSCRIPT}"
     log "Running local ${SCRIPT_NAME}..."
 else
-    DOWNLOAD_URL="${GITHUB_RAW_BASE%/}/${SCRIPT_NAME}"
-    log "Downloading ${SCRIPT_NAME} from GitHub..."
-
-    TMPSCRIPT=$(mktemp_compat /tmp/gateway-setup)
-    trap 'rm -f "$TMPSCRIPT"' EXIT
-
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMPSCRIPT"; then
-        die "Failed to download ${SCRIPT_NAME} from releases. URL: ${DOWNLOAD_URL}"
+    if [[ "$SETUP_VERSION" == "latest" ]]; then
+        RELEASE_URL="${RELEASE_DOWNLOAD_BASE%/}/latest/download"
+    else
+        [[ "$SETUP_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "Invalid release tag: ${SETUP_VERSION}"
+        RELEASE_URL="${RELEASE_DOWNLOAD_BASE%/}/download/${SETUP_VERSION}"
     fi
-    chmod +x "$TMPSCRIPT"
+    TMPDIR=$(mktemp -d /tmp/gateway-setup.XXXXXX)
+    trap 'rm -rf "$TMPDIR"' EXIT
+    CHECKSUMS="${TMPDIR}/gateway-daemon-installers.sha256"
+    log "Downloading verified ${SCRIPT_NAME} from Gateway releases..."
+    curl -fsSL "${RELEASE_URL}/gateway-daemon-installers.sha256" -o "$CHECKSUMS" ||
+        die "Failed to download installer checksums from ${RELEASE_URL}"
+
+    fetch_verified() {
+        local name="$1" target="${TMPDIR}/$1" expected actual
+        expected=$(awk -v name="$name" '$2 == name { print $1 }' "$CHECKSUMS")
+        [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || die "Missing or invalid checksum for ${name}"
+        curl -fsSL "${RELEASE_URL}/${name}" -o "$target" || die "Failed to download ${name} from ${RELEASE_URL}"
+        actual=$(sha256_file "$target")
+        [[ "$actual" == "$expected" ]] || die "Checksum verification failed for ${name}"
+        chmod 700 "$target"
+    }
+
+    fetch_verified "$SCRIPT_NAME"
+    if [[ "$DAEMON_TYPE" == "databases" ]]; then
+        fetch_verified setup-docker-node.sh
+    fi
+    TMPSCRIPT="${TMPDIR}/${SCRIPT_NAME}"
     log "Running ${SCRIPT_NAME}..."
 fi
 echo ""
 
-exec bash "$TMPSCRIPT" "${PASSTHROUGH_ARGS[@]}"
+bash "$TMPSCRIPT" "${PASSTHROUGH_ARGS[@]}"

@@ -36,7 +36,7 @@ Gateway daemons have a small resource footprint compared with the services they 
 Universal setup command:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-daemon.sh | \
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-daemon.sh | \
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -50,14 +50,14 @@ The wrapper downloads the daemon-specific installer and forwards all arguments.
 Nginx node:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-node.sh | \
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
 Docker node:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | \
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-docker-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -132,7 +132,7 @@ The GPU must appear as attachable on the node before it can be selected. A devic
 Monitoring node:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-monitoring-node.sh | \
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-monitoring-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -166,7 +166,7 @@ The nginx installer supports:
 Example:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-daemon.sh | \
+curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-daemon.sh | \
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT> --nginx-mode integrate
 ```
 

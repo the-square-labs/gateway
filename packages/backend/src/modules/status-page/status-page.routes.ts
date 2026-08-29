@@ -59,7 +59,7 @@ statusPageRoutes.openapi(
     const service = container.resolve(StatusPageService);
     const user = c.get('user')!;
     const input = StatusPageSettingsSchema.parse(await c.req.json());
-    return c.json({ data: await service.updateSettings(input, user.id) });
+    return c.json({ data: await service.updateSettings(input, user.id, c.get('effectiveScopes') || []) });
   }
 );
 
