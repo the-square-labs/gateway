@@ -19,6 +19,51 @@ env:
   NX_SKIP_NX_CACHE: '1'
 
 jobs:
+  changes:
+    name: Detect application changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      application: ${{ steps.changes.outputs.application }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Detect application changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "application=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base_sha="$BEFORE_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base_sha="$BASE_SHA"
+          elif [[ -z "$base_sha" || "$base_sha" =~ ^0+$ ]]; then
+            base_sha=$(git rev-list --max-parents=0 "$HEAD_SHA")
+          fi
+
+          application=false
+          while IFS= read -r path; do
+            case "$path" in
+              .github/*|.workflow/*|docs/*|*.md|*.mdx|LICENSE*|scripts/github-release.sh|scripts/release-tag.sh|scripts/push-image-with-digest.sh)
+                ;;
+              *)
+                application=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$base_sha" "$HEAD_SHA")
+
+          echo "application=$application" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -83,7 +128,8 @@ jobs:
 
   test:
     name: Test
-    if: ${{ github.event_name != 'pull_request' }}
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -119,7 +165,8 @@ jobs:
 
   build:
     name: Build
-    if: ${{ github.event_name != 'pull_request' }}
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
