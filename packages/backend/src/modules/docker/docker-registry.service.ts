@@ -930,6 +930,14 @@ export class DockerRegistryService {
   ): Promise<DockerRegistryAuthCandidate[]> {
     if (registryId) {
       const auth = await this.getAuthForPull(registryId, nodeId, context);
+      const imageRegistryHost = this.extractRegistryHostFromImageRef(imageRef);
+      if (auth && imageRegistryHost && this.normalizeRegistryHost(auth.url) !== imageRegistryHost) {
+        throw new AppError(
+          400,
+          'REGISTRY_IMAGE_HOST_MISMATCH',
+          'The selected registry credentials do not match the image registry host.'
+        );
+      }
       return auth ? [auth] : [];
     }
 

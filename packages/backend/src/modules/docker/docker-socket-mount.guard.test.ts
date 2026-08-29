@@ -54,12 +54,12 @@ describe('Docker mount scope guard', () => {
     ).toThrowError(/docker:containers:mounts/);
   });
 
-  it('allows normal updates that omit mount fields', () => {
+  it('requires mount scope when an image update preserves a host bind mount', () => {
     const currentDefinitions = normalizeMountDefinitionsFromInspect({
       Mounts: [{ Type: 'bind', Source: '/srv/app/config', Destination: '/config', RW: false }],
     });
 
-    expect(
+    expect(() =>
       assertDockerMountChangeAllowed({
         nodeId: 'node-1',
         actorScopes: ['docker:containers:edit:node-1'],
@@ -67,10 +67,10 @@ describe('Docker mount scope guard', () => {
         nextConfig: { image: 'nginx:latest' } as never,
         useCurrentWhenNextMissing: true,
       })
-    ).toEqual({ mountsChanged: false });
+    ).toThrowError(/docker:containers:mounts/);
   });
 
-  it('allows recreates that preserve equivalent bind and volume definitions', () => {
+  it('allows recreates that preserve equivalent bind and volume definitions with mount scope', () => {
     const currentDefinitions = normalizeMountDefinitionsFromInspect({
       Mounts: [
         { Type: 'bind', Source: '/srv/app/config', Destination: '/config', RW: false },
@@ -87,7 +87,7 @@ describe('Docker mount scope guard', () => {
     expect(
       assertDockerMountChangeAllowed({
         nodeId: 'node-1',
-        actorScopes: ['docker:containers:manage:node-1'],
+        actorScopes: ['docker:containers:manage:node-1', 'docker:containers:mounts:node-1'],
         currentDefinitions,
         nextConfig: {},
         currentInspect: null,
@@ -128,7 +128,7 @@ describe('Docker mount scope guard', () => {
     expect(
       assertDockerMountChangeAllowed({
         nodeId: 'node-1',
-        actorScopes: ['docker:containers:manage:node-1'],
+        actorScopes: ['docker:containers:manage:node-1', 'docker:containers:mounts:node-1'],
         currentDefinitions,
         nextConfig: { image: 'nginx:latest' } as never,
         useCurrentWhenNextMissing: true,

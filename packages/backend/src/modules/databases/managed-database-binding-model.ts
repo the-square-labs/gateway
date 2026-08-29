@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { managedDatabaseBindings, managedDatabaseInstances } from '@/db/schema/index.js';
+import type { managedDatabaseBindings, managedDatabaseInstances } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { ManagedDatabaseBindingCredentials } from './managed-database-binding-target-runtime.js';
 

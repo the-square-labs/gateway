@@ -156,6 +156,17 @@ certRoutes.openapi(
       includeSystem: hasScope(scopes, 'admin:details:certificates'),
     });
     const includeSystem = hasScope(scopes, 'admin:details:certificates');
+    const exportsPrivateKey = ['private-key', 'pem-bundle', 'pkcs12', 'jks'].includes(format);
+    if (exportsPrivateKey) {
+      const ca = await caService.getCA(cert.caId, { includeSystem: true });
+      if (ca.isSystem && !hasScope(scopes, 'admin:system')) {
+        throw new AppError(
+          403,
+          'SYSTEM_CERT_KEY_EXPORT_FORBIDDEN',
+          'System certificate private keys cannot be exported'
+        );
+      }
+    }
     const keyExport = async (format: 'pkcs12' | 'jks' | 'private-key' | 'pem-bundle') => {
       const recorded = await auditService.log({
         userId: user.id,

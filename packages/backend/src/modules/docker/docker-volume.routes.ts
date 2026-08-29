@@ -473,6 +473,10 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
+      const scopes = c.get('effectiveScopes') || [];
+      if (!TokensService.hasScope(scopes, `docker:volumes:view:${nodeId}`)) {
+        throw new HTTPException(403, { message: `Missing required scope: docker:volumes:view:${nodeId}` });
+      }
       await assertComposeVolumeMutationAllowed(nodeId, name);
       const data = await service.adoptVolume(nodeId, name, user.id);
       return c.json({ data });

@@ -174,11 +174,15 @@ export function assertDockerMountChangeAllowed(args: {
   const mountsChanged = !definitionsEqual(currentDefinitions, nextDefinitions);
 
   const resourceSuffix = args.resourceId ? `${args.nodeId}/${args.resourceId}` : args.nodeId;
-  if (mountsChanged && !hasScope([...args.actorScopes], `docker:containers:mounts:${resourceSuffix}`)) {
+  const hasMountScope = hasScope([...args.actorScopes], `docker:containers:mounts:${resourceSuffix}`);
+  const preservesHostBindCapability = currentDefinitions.some((definition) => definition.type === 'bind');
+  if ((mountsChanged || preservesHostBindCapability) && !hasMountScope) {
     throw new AppError(
       403,
       'MISSING_DOCKER_MOUNTS_SCOPE',
-      'Changing Docker container or deployment mounts requires docker:containers:mounts for this node'
+      preservesHostBindCapability && !mountsChanged
+        ? 'Mutating a Docker container or deployment with host bind mounts requires docker:containers:mounts'
+        : 'Changing Docker container or deployment mounts requires docker:containers:mounts for this node'
     );
   }
 

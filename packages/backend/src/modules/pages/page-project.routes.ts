@@ -229,12 +229,17 @@ pageProjectRoutes.post('/projects/:id/source/discovery', requireScopeForResource
   return c.json({ data });
 });
 
-pageProjectRoutes.put('/projects/:id/source', requireScopeForResource('pages:edit', 'id'), async (c) => {
-  const target = pageSourceTarget(c.req.param('id')!);
-  const input = DockerSourceBindingUpsertSchema.parse({ ...(await c.req.json()), target });
-  const data = await container.resolve(DockerSourceService).upsert(input, sourceActor(c));
-  return c.json({ data });
-});
+pageProjectRoutes.put(
+  '/projects/:id/source',
+  requireScopeForResource('pages:edit', 'id'),
+  requireScopeForResource('pages:deploy', 'id'),
+  async (c) => {
+    const target = pageSourceTarget(c.req.param('id')!);
+    const input = DockerSourceBindingUpsertSchema.parse({ ...(await c.req.json()), target });
+    const data = await container.resolve(DockerSourceService).upsert(input, sourceActor(c));
+    return c.json({ data });
+  }
+);
 
 pageProjectRoutes.delete('/projects/:id/source', requireScopeForResource('pages:edit', 'id'), async (c) => {
   const removed = await container

@@ -13,16 +13,13 @@ import { Switch } from "@/components/ui/switch";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { cn, formatBytes, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
-import type {
-  HousekeepingConfig,
-  HousekeepingRunResult,
-  HousekeepingStats,
-} from "@/types";
+import type { HousekeepingConfig, HousekeepingRunResult, HousekeepingStats } from "@/types";
 
 interface HousekeepingSectionProps {
   canRun: boolean;
   canConfigure: boolean;
 }
+
 import {
   HousekeepingCard,
   normalizeHousekeepingConfig,

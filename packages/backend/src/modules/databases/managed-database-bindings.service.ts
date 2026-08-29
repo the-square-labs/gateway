@@ -17,6 +17,7 @@ import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { CreateManagedDatabaseBindingInput } from './databases.schemas.js';
 import { ManagedDatabaseBindingAdmission } from './managed-database-binding-admission.js';
 import { ManagedDatabaseBindingIdentityRuntime } from './managed-database-binding-identity-runtime.js';
+import { reconcileManagedDatabaseBindingLifecycle } from './managed-database-binding-lifecycle.js';
 import {
   managedDatabaseBindingEncryptedPayload,
   managedDatabaseBindingPort,
@@ -24,10 +25,9 @@ import {
   newManagedDatabaseBindingCredentials,
 } from './managed-database-binding-model.js';
 import {
-  ManagedDatabaseBindingTargetRuntime,
   type ManagedDatabaseBindingCredentials,
+  ManagedDatabaseBindingTargetRuntime,
 } from './managed-database-binding-target-runtime.js';
-import { reconcileManagedDatabaseBindingLifecycle } from './managed-database-binding-lifecycle.js';
 
 type ManagedDatabaseRow = typeof managedDatabaseInstances.$inferSelect;
 type ManagedDatabaseBindingRow = typeof managedDatabaseBindings.$inferSelect;
@@ -68,9 +68,9 @@ export class ManagedDatabaseBindingService {
     private readonly auditService: AuditService,
     private readonly cryptoService: CryptoService,
     private readonly nodeDispatch: NodeDispatchService,
-    private readonly dockerManagement: DockerManagementService,
-    private readonly dockerDeployments: DockerDeploymentService,
-    private readonly dockerSecrets: DockerSecretService,
+    dockerManagement: DockerManagementService,
+    dockerDeployments: DockerDeploymentService,
+    dockerSecrets: DockerSecretService,
     _connectorImage: string,
     _allowDevelopmentConnectorImage = false,
     private readonly relayPolicy?: Pick<
@@ -78,7 +78,7 @@ export class ManagedDatabaseBindingService {
       'ensureBindingRoute' | 'syncNodeGrantBundle' | 'probeManagedDatabaseBindingRoute' | 'revokeOwner'
     > &
       Partial<Pick<RelayPolicyService, 'getManagedDatabaseBindingRouteRuntime'>>,
-    private readonly dockerCompose?: DockerComposeService,
+    dockerCompose?: DockerComposeService,
     private readonly identityManager?: ManagedDatabaseIdentityManager
   ) {
     this.targetRuntime = new ManagedDatabaseBindingTargetRuntime(
@@ -471,7 +471,9 @@ export class ManagedDatabaseBindingService {
   async revealCredentials(managedDatabaseId: string, bindingId: string) {
     const database = await this.getReadyDatabase(managedDatabaseId);
     const binding = await this.getBinding(managedDatabaseId, bindingId);
-    const plaintext = this.cryptoService.decryptString(managedDatabaseBindingEncryptedPayload(binding.encryptedCredentials));
+    const plaintext = this.cryptoService.decryptString(
+      managedDatabaseBindingEncryptedPayload(binding.encryptedCredentials)
+    );
     const credentials = JSON.parse(plaintext) as BindingCredentials;
     const port = managedDatabaseBindingPort(database.type);
     const host = binding.connectorAlias;
@@ -661,7 +663,9 @@ export class ManagedDatabaseBindingService {
   }
 
   private bindingCredentials(binding: ManagedDatabaseBindingRow): BindingCredentials {
-    const plaintext = this.cryptoService.decryptString(managedDatabaseBindingEncryptedPayload(binding.encryptedCredentials));
+    const plaintext = this.cryptoService.decryptString(
+      managedDatabaseBindingEncryptedPayload(binding.encryptedCredentials)
+    );
     return JSON.parse(plaintext) as BindingCredentials;
   }
 
@@ -720,7 +724,11 @@ export class ManagedDatabaseBindingService {
 
   private async assertBindingTargetMigrationReady(nodeId: string) {
     await this.assertDockerNode(nodeId);
-    const [node] = await this.db.select({ capabilities: nodes.capabilities }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    const [node] = await this.db
+      .select({ capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
     const capabilities = (node?.capabilities as { capabilities?: unknown } | null)?.capabilities;
     if (!Array.isArray(capabilities) || !capabilities.includes('managed_database_binding_listener_v1')) {
       throw new AppError(

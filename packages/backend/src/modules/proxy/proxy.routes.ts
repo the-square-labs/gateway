@@ -333,6 +333,9 @@ proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('pro
   if (input.upstreamKind === 'pages') {
     await container.resolve(LicensePolicyService).requireFeature('pages');
     await container.resolve(PageProfileService).requireEnabled();
+    if (input.healthCheckEnabled) {
+      throw new AppError(400, 'PAGES_ROUTE_SETTINGS_INVALID', 'Pages Routes do not support managed health checks');
+    }
   }
   if (!hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
@@ -387,6 +390,9 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
     await container.resolve(PageProfileService).requireEnabled();
   }
   const existingPageTarget = existing.pageTarget as { projectId?: unknown } | null | undefined;
+  if (existing.upstreamKind === 'pages' && input.healthCheckEnabled === true) {
+    throw new AppError(400, 'PAGES_ROUTE_SETTINGS_INVALID', 'Pages Routes do not support managed health checks');
+  }
   if (
     existing.upstreamKind === 'pages' &&
     (typeof existingPageTarget?.projectId !== 'string' ||
@@ -418,6 +424,9 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
     if (!hasScope(scopes, `proxy:raw:write:${id}`) && !hasScope(scopes, 'proxy:raw:write')) {
       throw new AppError(403, 'FORBIDDEN', 'Writing raw config requires proxy:raw:write scope');
     }
+  }
+  if (input.nodeId && input.nodeId !== existing.nodeId && !hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
   }
   const host = await proxyService.updateProxyHost(id, input, user.id, {
     bypassAdvancedValidation,

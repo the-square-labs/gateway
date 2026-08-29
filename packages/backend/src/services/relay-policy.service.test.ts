@@ -56,9 +56,9 @@ describe('managed database listener equality', () => {
     };
 
     expect(managedDatabaseListenerConfigsEqual(current, { ...current, listenPort: 6379 })).toBe(false);
-    expect(
-      managedDatabaseListenerConfigsEqual(current, { ...current, allowedSources: ['container:other'] })
-    ).toBe(false);
+    expect(managedDatabaseListenerConfigsEqual(current, { ...current, allowedSources: ['container:other'] })).toBe(
+      false
+    );
   });
 });
 
@@ -223,10 +223,7 @@ describe('RelayPolicyService snapshots', () => {
     const firstDispatch = new Promise<{ success: true }>((resolve) => {
       releaseFirst = () => resolve({ success: true });
     });
-    const sendRelayGrantBundle = vi
-      .fn()
-      .mockReturnValueOnce(firstDispatch)
-      .mockResolvedValueOnce({ success: true });
+    const sendRelayGrantBundle = vi.fn().mockReturnValueOnce(firstDispatch).mockResolvedValueOnce({ success: true });
     service.setNodeDispatch({ sendRelayGrantBundle } as never);
     const bundles = vi
       .spyOn(service, 'getNodeGrantBundle')

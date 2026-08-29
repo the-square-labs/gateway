@@ -93,7 +93,11 @@ export class ManagedDatabaseBindingAdmission {
       const secretKeys = await this.dockerSecrets.getSecretKeys(targetNodeId, `deployment:${targetResourceId}`);
       const existing = new Set([...Object.keys(deployment.desiredConfig.env ?? {}), ...secretKeys]);
       if ([...requested].some((name) => existing.has(name))) {
-        throw new AppError(409, 'MANAGED_DATABASE_BINDING_ENV_CONFLICT', 'The deployment already uses an environment variable');
+        throw new AppError(
+          409,
+          'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
+          'The deployment already uses an environment variable'
+        );
       }
       return;
     }
@@ -101,7 +105,11 @@ export class ManagedDatabaseBindingAdmission {
     if (targetType === 'compose_service') {
       const existing = await this.requireCompose().getServiceEnvironmentNames(targetNodeId, targetResourceId);
       if ([...requested].some((name) => existing.has(name))) {
-        throw new AppError(409, 'MANAGED_DATABASE_BINDING_ENV_CONFLICT', 'The Compose service already uses an environment variable');
+        throw new AppError(
+          409,
+          'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
+          'The Compose service already uses an environment variable'
+        );
       }
       return;
     }
@@ -118,7 +126,11 @@ export class ManagedDatabaseBindingAdmission {
       for (const key of await this.dockerSecrets.getSecretKeys(targetNodeId, name)) envKeys.add(key);
     }
     if ([...requested].some((key) => envKeys.has(key)) && !(targetType === 'container' && replaceExistingEnvironment)) {
-      throw new AppError(409, 'MANAGED_DATABASE_BINDING_ENV_CONFLICT', 'The container already uses an environment variable');
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
+        'The container already uses an environment variable'
+      );
     }
   }
 

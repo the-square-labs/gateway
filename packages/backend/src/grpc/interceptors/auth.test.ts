@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as grpc from '@grpc/grpc-js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   configureRelayForwardedIdentityTrust,
   extractDaemonCertificateIdentity,
@@ -131,6 +131,24 @@ describe('relay-forwarded daemon identity', () => {
     commit();
     expect(extractDaemonCertificateIdentity(forwardedCall(raw))).toBeNull();
     expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
+  });
+
+  it('rolls back staged relay trust when rotation is not acknowledged', () => {
+    vi.useFakeTimers();
+    try {
+      const nextRaw = Buffer.from('unacknowledged-relay-certificate');
+      const nextFingerprint = `sha256:${createHash('sha256').update(nextRaw).digest('hex')}`;
+      configureRelayForwardedIdentityTrust(fingerprint);
+
+      stageRelayForwardedIdentityTrust(nextFingerprint);
+      expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
+
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      expect(extractDaemonCertificateIdentity(forwardedCall(raw))).not.toBeNull();
+      expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

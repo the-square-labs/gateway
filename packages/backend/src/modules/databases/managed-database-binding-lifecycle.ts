@@ -13,9 +13,7 @@ export interface ManagedDatabaseBindingLifecycleActions<TBinding> {
   markReady(binding: TBinding): Promise<TBinding>;
 }
 
-export type ManagedDatabaseBindingLifecycleResult<TBinding> =
-  | { deleted: true }
-  | { deleted: false; binding: TBinding };
+export type ManagedDatabaseBindingLifecycleResult<TBinding> = { deleted: true } | { deleted: false; binding: TBinding };
 
 /**
  * Monotonic binding lifecycle. The persisted desired state is authoritative;

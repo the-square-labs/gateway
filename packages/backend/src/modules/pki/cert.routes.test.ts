@@ -91,6 +91,7 @@ describe('certificate key exports', () => {
       certificatePem: 'CERTIFICATE_PEM',
     });
     mocks.certService.getCertificatePrivateKey.mockResolvedValue('PRIVATE_KEY_PEM');
+    mocks.caService.getCA.mockResolvedValue({ id: 'ca-1', isSystem: false });
     mocks.auditService.log.mockResolvedValue(true);
     mocks.exportService.exportPEMBundle.mockReturnValue(Buffer.from('zip-content'));
   });
@@ -111,6 +112,20 @@ describe('certificate key exports', () => {
 
   it('accepts only the matching resource-scoped export grant', async () => {
     mocks.scopes = ['pki:cert:export:other-cert'];
+
+    const response = await createApp().request('/cert-1/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format: 'private-key' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.certService.getCertificatePrivateKey).not.toHaveBeenCalled();
+  });
+
+  it('does not allow the read-only system certificate scope to export a system private key', async () => {
+    mocks.scopes = ['pki:cert:export:cert-1', 'admin:details:certificates'];
+    mocks.caService.getCA.mockResolvedValue({ id: 'ca-1', isSystem: true });
 
     const response = await createApp().request('/cert-1/export', {
       method: 'POST',

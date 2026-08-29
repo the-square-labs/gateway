@@ -94,5 +94,4 @@ describe('Docker exec unauthenticated message limit', () => {
       true
     );
   });
-
 });

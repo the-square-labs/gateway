@@ -255,6 +255,23 @@ describe('inference core proxy', () => {
     });
   });
 
+  it('rejects compressed request bodies with excessive expansion before JSON parsing', async () => {
+    const { service, fetchStub } = createService();
+    const compressed = zstdCompressSync(
+      Buffer.from(JSON.stringify({ model: 'gpt-5.5', input: 'a'.repeat(2 * 1024 * 1024) }))
+    );
+    const c = createContext(compressed, {
+      'content-type': 'application/json',
+      'content-encoding': 'zstd',
+    });
+
+    await expect(service.proxy(c, 'responses')).rejects.toMatchObject({
+      status: 413,
+      code: 'request_too_large',
+    });
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
   it('fails closed with a stable gateway error when the core is unavailable', async () => {
     const { service, coreAccounting } = createService({ coreError: new Error('not ready') });
     const c = createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }), { 'content-type': 'application/json' });

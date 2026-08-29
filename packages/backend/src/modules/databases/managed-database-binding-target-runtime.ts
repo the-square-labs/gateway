@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { managedDatabaseBindings, managedDatabaseInstances } from '@/db/schema/index.js';
+import { managedDatabaseBindings, type managedDatabaseInstances } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -258,9 +258,12 @@ export class ManagedDatabaseBindingTargetRuntime {
             labels['com.docker.compose.service'] === target.serviceName
           );
         })
-        .map((container: any) => String(container.Names?.[0] ?? container.Name ?? container.name ?? '').replace(/^\/+/, ''))
+        .map((container: any) =>
+          String(container.Names?.[0] ?? container.Name ?? container.name ?? '').replace(/^\/+/, '')
+        )
         .filter(Boolean);
-      if (names.length === 0) throw new Error(`managed database Compose target ${target.serviceName} has no containers`);
+      if (names.length === 0)
+        throw new Error(`managed database Compose target ${target.serviceName} has no containers`);
       return names;
     }
     if (binding.targetType === 'deployment') {
@@ -336,7 +339,9 @@ export class ManagedDatabaseBindingTargetRuntime {
         containerId: binding.targetResourceId,
       })
     );
-    const current = environmentMap(await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId));
+    const current = environmentMap(
+      await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
+    );
     const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
     const managedNames = Object.keys(values);
     for (const name of managedNames) {
@@ -356,7 +361,8 @@ export class ManagedDatabaseBindingTargetRuntime {
       userId
     );
     const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : targetName;
-    if (updatedName && targetRuntimeId) await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId);
+    if (updatedName && targetRuntimeId)
+      await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId);
   }
 
   async remove(
@@ -430,7 +436,9 @@ export class ManagedDatabaseBindingTargetRuntime {
           await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
         }
       }
-      const current = environmentMap(await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId));
+      const current = environmentMap(
+        await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
+      );
       const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
       for (const name of variableNames) delete ordinaryEnvironment[name];
       const removeEnv = Array.from(
@@ -447,7 +455,8 @@ export class ManagedDatabaseBindingTargetRuntime {
         userId
       );
       const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : targetName;
-      if (updatedName && targetRuntimeId) await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId);
+      if (updatedName && targetRuntimeId)
+        await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId);
     } catch (error) {
       if (!isMissingContainerError(error)) throw error;
     }
@@ -463,11 +472,15 @@ export class ManagedDatabaseBindingTargetRuntime {
     if (binding.targetType === 'deployment') {
       const values = await this.matchingDeploymentSecretValues(binding, expected);
       if (Object.keys(values).length !== Object.keys(expected).length) {
-        throw new Error(`managed database binding target ${binding.targetResourceId} did not persist pending credentials`);
+        throw new Error(
+          `managed database binding target ${binding.targetResourceId} did not persist pending credentials`
+        );
       }
       return;
     }
-    const current = environmentMap(await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId));
+    const current = environmentMap(
+      await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
+    );
     const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true, true);
     const secretValues = Object.fromEntries(secrets.map((secret) => [secret.key, secret.value]));
     for (const [key, value] of Object.entries(expected)) {

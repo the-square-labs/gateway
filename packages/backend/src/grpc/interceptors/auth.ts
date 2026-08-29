@@ -68,11 +68,22 @@ export function configureRelayForwardedIdentityTrust(fingerprint: string | null)
  */
 export function stageRelayForwardedIdentityTrust(nextFingerprint: string): () => void {
   const generation = ++relayTrustGeneration;
+  const previousFingerprints = new Set(trustedRelayFingerprints);
   trustedRelayFingerprints = new Set([...trustedRelayFingerprints, nextFingerprint]);
   let committed = false;
+  const rollbackTimer = setTimeout(
+    () => {
+      if (committed || generation !== relayTrustGeneration) return;
+      relayTrustGeneration += 1;
+      trustedRelayFingerprints = previousFingerprints;
+    },
+    5 * 60 * 1000
+  );
+  rollbackTimer.unref?.();
   const commit = () => {
     if (committed || generation !== relayTrustGeneration) return;
     committed = true;
+    clearTimeout(rollbackTimer);
     configureRelayForwardedIdentityTrust(nextFingerprint);
   };
   return commit;

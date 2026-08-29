@@ -18,10 +18,11 @@ import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '..
 import type { GrpcServerDeps } from '../server.js';
 
 const logger = createChildLogger('GrpcControl');
-const pendingCommandRegistrations = new Map<string, symbol>();
+const pendingCommandRegistrations = new Map<string, { token: symbol; sequence: number }>();
+let commandRegistrationSequence = 0;
 
 function clearPendingCommandRegistration(nodeId: string, token: symbol): void {
-  if (pendingCommandRegistrations.get(nodeId) === token) {
+  if (pendingCommandRegistrations.get(nodeId)?.token === token) {
     pendingCommandRegistrations.delete(nodeId);
   }
 }
@@ -336,7 +337,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             registering = true;
             const claimedNodeId = msg.register.nodeId;
             const registrationToken = Symbol(claimedNodeId);
-            pendingCommandRegistrations.set(claimedNodeId, registrationToken);
+            const registrationSequence = ++commandRegistrationSequence;
 
             // Verify mTLS cert CN and serial match the enrolled node (prevents node impersonation).
             const certIdentity = extractDaemonCertificateIdentity(stream as any);
@@ -359,6 +360,14 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.end();
               return;
             }
+
+            // A stream without an authenticated certificate cannot affect the
+            // per-node registration race. Once certificate identity matches,
+            // preserve arrival order while the enrolled serial is loaded.
+            pendingCommandRegistrations.set(claimedNodeId, {
+              token: registrationToken,
+              sequence: registrationSequence,
+            });
 
             logger.info('Node registering', {
               nodeId: claimedNodeId,
@@ -431,7 +440,15 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               return;
             }
 
-            if (closed || pendingCommandRegistrations.get(claimedNodeId) !== registrationToken) {
+            // Only an authenticated, enrolled daemon may supersede an in-flight
+            // registration for the same node. Preserve arrival order even when
+            // certificate/DB validation finishes out of order.
+            const currentRegistration = pendingCommandRegistrations.get(claimedNodeId);
+            if (
+              closed ||
+              currentRegistration?.token !== registrationToken ||
+              currentRegistration.sequence !== registrationSequence
+            ) {
               registering = false;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
@@ -489,7 +506,8 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 msg.register.configVersionHash,
                 stream as any,
                 {
-                  isCurrentRegistration: () => pendingCommandRegistrations.get(claimedNodeId) === registrationToken,
+                  isCurrentRegistration: () =>
+                    pendingCommandRegistrations.get(claimedNodeId)?.token === registrationToken,
                   capabilities: msg.register.capabilities ?? [],
                 }
               );

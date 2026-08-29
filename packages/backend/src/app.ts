@@ -400,7 +400,7 @@ export function createApp(): GatewayAppRuntime {
 
   // WebSocket support for AI assistant
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app: app as any });
-  wss.options.maxPayload = 512 * 1024 * 1024;
+  wss.options.maxPayload = getEnvironmentSettingsSnapshot().requestLimits.inferenceWebSocketMaxPayloadBytes;
 
   // Global middleware
   app.use('*', requestId());

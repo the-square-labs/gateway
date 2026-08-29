@@ -143,11 +143,7 @@ export class ManagedDatabaseBindingIdentityRuntime {
     let failures = 0;
     const eligibleDatabaseIds = new Set<string>();
     for (const { database: storedDatabase, binding: storedBinding } of rows) {
-      if (
-        nodeId !== undefined &&
-        storedDatabase.nodeId !== nodeId &&
-        storedBinding.targetNodeId !== nodeId
-      ) {
+      if (nodeId !== undefined && storedDatabase.nodeId !== nodeId && storedBinding.targetNodeId !== nodeId) {
         continue;
       }
       if (
@@ -246,7 +242,8 @@ export class ManagedDatabaseBindingIdentityRuntime {
 
   private async reconcileUnversioned(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
     const failedDelete = binding.status === 'error' && binding.lastError?.startsWith('Binding removal failed') === true;
-    const failedCreate = binding.status === 'error' && binding.lastError?.startsWith('Binding preparation failed') === true;
+    const failedCreate =
+      binding.status === 'error' && binding.lastError?.startsWith('Binding preparation failed') === true;
     const failedReconcile =
       binding.status === 'error' && binding.lastError?.startsWith('Binding reconciliation failed') === true;
     if (failedCreate || failedDelete) {
@@ -416,12 +413,7 @@ export class ManagedDatabaseBindingIdentityRuntime {
         database.nodeId,
         'binding_principal_drop_v2',
         database.id,
-        this.callbacks.bindingPrincipalPayload(
-          database,
-          { ...binding, principalName: legacy.username },
-          legacy,
-          owner
-        )
+        this.callbacks.bindingPrincipalPayload(database, { ...binding, principalName: legacy.username }, legacy, owner)
       )
     );
   }

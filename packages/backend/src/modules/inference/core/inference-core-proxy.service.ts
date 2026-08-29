@@ -89,6 +89,8 @@ const CORE_ADMITTED: ReadonlySet<CoreProxyOperation> = new Set([
 type ProxyRequestBody = string | ArrayBuffer | FormData;
 
 const MAX_DECOMPRESSED_JSON_BODY_BYTES = 256 * 1024 * 1024;
+const MAX_COMPRESSED_BODY_EXPANSION_RATIO = 32;
+const MIN_DECOMPRESSED_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_CORE_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_CORE_IMAGE_BODY_BYTES = 100 * 1024 * 1024;
 const MAX_CODEX_IMAGE_EDIT_IMAGES = 5;
@@ -836,7 +838,11 @@ function decodeRequestBody(raw: Uint8Array, contentEncoding: string | undefined)
   }
 
   const input = raw as Uint8Array<ArrayBuffer>;
-  const options = { maxOutputLength: MAX_DECOMPRESSED_JSON_BODY_BYTES };
+  const maxOutputLength = Math.min(
+    MAX_DECOMPRESSED_JSON_BODY_BYTES,
+    Math.max(MIN_DECOMPRESSED_JSON_BODY_BYTES, raw.byteLength * MAX_COMPRESSED_BODY_EXPANSION_RATIO)
+  );
+  const options = { maxOutputLength };
   try {
     if (encoding === 'zstd') return zstdDecompressSync(input, options);
     if (encoding === 'gzip' || encoding === 'x-gzip') return gunzipSync(input, options);

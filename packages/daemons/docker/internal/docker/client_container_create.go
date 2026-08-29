@@ -583,7 +583,12 @@ func (c *Client) HTTPProbe(ctx context.Context, configJSON string) (HTTPProbeRes
 	if err != nil {
 		return HTTPProbeResult{}, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	probeClient := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := probeClient.Do(req)
 	responseMs := time.Since(start).Milliseconds()
 	if err != nil {
 		return HTTPProbeResult{OK: false, Status: "offline", ResponseMs: responseMs, Error: err.Error()}, nil

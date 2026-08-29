@@ -1,6 +1,10 @@
 import { gzipSync, strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { preparePageArchive, preparePageFolder, sha256Hex } from "../../src/lib/pages-manual-upload";
+import {
+  preparePageArchive,
+  preparePageFolder,
+  sha256Hex,
+} from "../../src/lib/pages-manual-upload";
 
 function folderFile(path: string, content: string): File {
   const file = new File([content], path.split("/").at(-1) ?? path, { type: "text/plain" });

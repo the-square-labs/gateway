@@ -204,15 +204,12 @@ describe('inference model capability characterization', () => {
     });
 
     expect(
-      __testOnly.detectedCapabilityState(
-        { tools: true, vision: true },
-        [
-          sourceRow('Primary A', 'model-a', { tools: true, vision: true }),
-          sourceRow('Primary B', 'model-b', { tools: true, vision: false }),
-          sourceRow('Disabled', 'model-disabled', { tools: false, vision: false }, { enabled: false }),
-          sourceRow('Sidecar', 'model-sidecar', { tools: false, vision: true }, { role: 'vision_sidecar' }),
-        ] as never
-      )
+      __testOnly.detectedCapabilityState({ tools: true, vision: true }, [
+        sourceRow('Primary A', 'model-a', { tools: true, vision: true }),
+        sourceRow('Primary B', 'model-b', { tools: true, vision: false }),
+        sourceRow('Disabled', 'model-disabled', { tools: false, vision: false }, { enabled: false }),
+        sourceRow('Sidecar', 'model-sidecar', { tools: false, vision: true }, { role: 'vision_sidecar' }),
+      ] as never)
     ).toEqual({
       effective: { tools: true, vision: false },
       limitations: { vision: ['Primary B · model-b'] },

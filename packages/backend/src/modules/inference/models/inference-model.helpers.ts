@@ -1,8 +1,4 @@
-import type {
-  InferenceDiscoveredModel,
-  InferenceModelSource,
-  InferenceProviderConnection,
-} from '@/db/schema/index.js';
+import type { InferenceDiscoveredModel, InferenceModelSource, InferenceProviderConnection } from '@/db/schema/index.js';
 import { knownProviderModel } from '../providers/inference-provider-model-catalog.js';
 import type { InferenceModelInput, InferenceModelSourceInput } from './inference-model.types.js';
 

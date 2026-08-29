@@ -1,6 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import type { RelayManagedDatabaseListenerConfig } from '@/db/schema/relay.js';
 import {
   managedDatabaseInstances,
   relayEndpointAssignmentGenerations,
@@ -12,6 +11,7 @@ import {
   relayPools,
   relayRoutes,
 } from '@/db/schema/index.js';
+import type { RelayManagedDatabaseListenerConfig } from '@/db/schema/relay.js';
 import {
   RELAY_MAX_FRAME_BYTES,
   type RelayControlClient,
@@ -233,9 +233,7 @@ export class RelayPolicyService {
     const bundle = this.lastNodeGrantBundles.get(nodeId) ?? (await this.getNodeGrantBundle(nodeId));
     const assignment = bundle.grants.find(
       (grant) =>
-        grant.role === 'connect' &&
-        grant.ownerKind === 'managed_database_binding' &&
-        grant.ownerId === bindingId
+        grant.role === 'connect' && grant.ownerKind === 'managed_database_binding' && grant.ownerId === bindingId
     );
     if (!assignment) throw new Error('Managed database binding relay grant is unavailable');
     if (!assignment.routeId || !assignment.targetEndpointId) {
@@ -720,12 +718,14 @@ export class RelayPolicyService {
   async syncNodeGrantBundle(nodeId: string) {
     if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
     const previous = this.nodeGrantSyncs.get(nodeId) ?? Promise.resolve(undefined);
-    const current = previous.catch(() => undefined).then(async () => {
-      const bundle = await this.getNodeGrantBundle(nodeId);
-      const result = await this.dispatch!.sendRelayGrantBundle(nodeId, bundle);
-      if (result.success) this.lastNodeGrantBundles.set(nodeId, bundle);
-      return result;
-    });
+    const current = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const bundle = await this.getNodeGrantBundle(nodeId);
+        const result = await this.dispatch!.sendRelayGrantBundle(nodeId, bundle);
+        if (result.success) this.lastNodeGrantBundles.set(nodeId, bundle);
+        return result;
+      });
     this.nodeGrantSyncs.set(nodeId, current);
     try {
       return await current;

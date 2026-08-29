@@ -158,8 +158,7 @@ describe('watchDockerRecreateByName finalization', () => {
       .mockResolvedValueOnce({
         success: true,
         detail: JSON.stringify({ id: 'daemon-task-1', status: 'running' }),
-      })
-      ;
+      });
 
     watchDockerRecreateByName(
       context as never,

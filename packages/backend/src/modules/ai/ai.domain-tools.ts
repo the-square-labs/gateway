@@ -49,6 +49,9 @@ export async function executeDomainTool(
       }
       if (a.operation === 'update') {
         context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
+        if (typeof a.proxied === 'boolean') {
+          context.ensureToolScopeForResource(user, 'integrations:cloudflare:dns:edit', String(a.domainId));
+        }
         return context.domainsService.updateDomain(a.domainId, UpdateDomainSchema.parse(args), user.id);
       }
       if (a.operation === 'check_dns') {

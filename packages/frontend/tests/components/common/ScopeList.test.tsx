@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { Node } from "@/types";
 import { ScopeList } from "@/components/common/ScopeList";
+import type { Node } from "@/types";
 
 const apiMocks = vi.hoisted(() => ({
   listDockerContainers: vi.fn().mockResolvedValue([]),

@@ -140,6 +140,38 @@ describe('AIService domain tool routing', () => {
         { ...BASE_USER, scopes: ['domains:view', 'domains:view:domain-1', 'domains:edit:domain-1'] },
         'manage_domain',
         {
+          operation: 'update',
+          domainId: 'domain-1',
+          proxied: false,
+        }
+      )
+    ).resolves.toMatchObject({ error: expect.stringContaining('integrations:cloudflare:dns:edit') });
+
+    await expect(
+      service.executeTool(
+        {
+          ...BASE_USER,
+          scopes: [
+            'domains:view',
+            'domains:view:domain-1',
+            'domains:edit:domain-1',
+            'integrations:cloudflare:dns:edit',
+          ],
+        },
+        'manage_domain',
+        {
+          operation: 'update',
+          domainId: 'domain-1',
+          proxied: false,
+        }
+      )
+    ).resolves.toMatchObject({ result: { id: 'domain-1' }, invalidateStores: ['domains'] });
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['domains:view', 'domains:view:domain-1', 'domains:edit:domain-1'] },
+        'manage_domain',
+        {
           operation: 'check_dns',
           domainId: 'domain-1',
         }

@@ -244,6 +244,17 @@ describe('DockerRegistryService image registry mappings', () => {
     expect(candidates.map((candidate) => candidate.registryId)).toEqual(['registry-1']);
   });
 
+  it('rejects explicit registry credentials for a different image registry host', async () => {
+    const { service } = createSingleRegistryService(registryRow({ scope: 'global', nodeId: null }));
+
+    await expect(
+      service.resolveAuthCandidatesForImagePull('node-1', 'attacker.example/team/app:new', 'registry-1')
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'REGISTRY_IMAGE_HOST_MISMATCH',
+    });
+  });
+
   it('allows an explicit node-scoped registry on its own target node', async () => {
     const { service } = createSingleRegistryService(registryRow({ scope: 'node', nodeId: 'node-1' }));
 
