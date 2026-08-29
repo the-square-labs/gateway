@@ -152,7 +152,7 @@ describe('LicenseService', () => {
 
     expect(fetcher).toHaveBeenCalledOnce();
     const [url, request] = fetcher.mock.calls[0]!;
-    expect(url).toBe('https://license.wiolett.cloud/api/v1/installations/register');
+    expect(url).toBe('https://license.thesqlabs.com/api/v1/installations/register');
     const body = JSON.parse(request.body);
     expect(body).toMatchObject({
       installationName: 'gateway.example.com',

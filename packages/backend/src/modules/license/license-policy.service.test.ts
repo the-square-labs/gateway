@@ -25,7 +25,7 @@ const baseStatus = (): LicenseStatusView => ({
   activeInstallationId: null,
   activeInstallationName: null,
   errorMessage: null,
-  serverUrl: 'https://license.wiolett.cloud',
+  serverUrl: 'https://license.thesqlabs.com',
 });
 
 describe('LicensePolicyService', () => {

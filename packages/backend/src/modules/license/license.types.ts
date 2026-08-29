@@ -1,4 +1,4 @@
-export const LICENSE_SERVER_URL = 'https://license.wiolett.cloud';
+export const LICENSE_SERVER_URL = 'https://license.thesqlabs.com';
 export const LICENSE_LEGACY_ENTITLEMENTS_VERSION = 3;
 export const LICENSE_ENTITLEMENTS_VERSION = 4;
 export const LICENSE_OFFLINE_GRACE_DAYS = 30;

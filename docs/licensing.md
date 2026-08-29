@@ -107,7 +107,7 @@ Contact [contact@thesqlabs.com](mailto:contact@thesqlabs.com) or [Square Labs on
 Gateway verifies paid product license keys against:
 
 ```text
-https://license.wiolett.cloud
+https://license.thesqlabs.com
 ```
 
 Registration and activation flow:
