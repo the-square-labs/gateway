@@ -7,6 +7,7 @@ on:
       - '!v*-wiolett.*'
 
 permissions:
+  actions: read
   contents: write
   packages: write
 
@@ -20,7 +21,7 @@ env:
 
 jobs:
   verify:
-    name: Full verification
+    name: Reuse or run verification
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
@@ -29,18 +30,42 @@ jobs:
     steps:
       - name: Check out tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
 
       - name: Classify release tag
         id: release-tag
         run: scripts/release-tag.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
+      - name: Find successful main CI for tagged commit
+        id: main-ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit_sha=$(git rev-parse "${GITHUB_REF_NAME}^{}")
+          successful_run=$(
+            gh api \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
+              --jq '.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success") | .id' \
+              | head -n 1
+          )
+          if [[ -n "$successful_run" ]]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Reusing successful main CI run ${successful_run} for ${commit_sha}"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No successful main CI run found for ${commit_sha}; running full verification"
+          fi
+
       - name: Install pnpm
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
           version: 9.15.0
           run_install: false
 
       - name: Set up Node.js
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
@@ -48,6 +73,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Set up Go
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.24.4'
@@ -56,18 +82,23 @@ jobs:
             packages/relay/go.sum
 
       - name: Install dependencies
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         run: pnpm install --frozen-lockfile
 
       - name: Lint
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         run: pnpm lint
 
       - name: Typecheck
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         run: pnpm typecheck
 
       - name: Test
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         run: pnpm test
 
       - name: Build
+        if: ${{ steps.main-ci.outputs.found != 'true' }}
         run: pnpm build:all
 
   build:

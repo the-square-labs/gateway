@@ -106,8 +106,6 @@ publish_gateway() {
   fi
   require_signing_key
   docker_login
-  pnpm --filter frontend test
-  pnpm --filter backend test
   ./scripts/sync-update-trust-anchor.sh
   docker build \
     --tag "${gateway_image}:${tag}" \
@@ -235,10 +233,6 @@ publish_daemon() {
   fi
   require_signing_key
   ./scripts/sync-update-trust-anchor.sh
-  (
-    cd packages/daemons
-    go test "./${daemon_dir}/..." ./shared/...
-  )
   build_daemon_assets "$daemon_dir" "$daemon_name" "$daemon_suffix" "$ldflags_version_pkg"
   complete_release "${assets[@]}"
 }
@@ -267,12 +261,6 @@ publish_relay() {
   require_signing_key
   docker_login
   ./scripts/sync-update-trust-anchor.sh
-  (cd packages/relay && go test ./...)
-  (
-    cd packages/daemons
-    go test ./relay/... ./shared/... ./secure-link-connector/...
-    go vet ./relay/... ./shared/...
-  )
 
   docker build \
     --file packages/relay/Dockerfile \
