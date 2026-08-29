@@ -105,11 +105,16 @@ export function proxyUpstreamRequest(
     return {
       upstreamKind: "docker_container",
       forwardScheme: selection.scheme,
-      dockerNodeId: selection.dockerNodeId,
-      dockerContainerName: selection.containerName,
-      dockerComposeProjectId: selection.composeProjectId,
-      dockerComposeServiceName: selection.composeServiceName,
-      dockerContainerPort: selection.containerPort,
+      ...(selection.dockerNodeId ? { dockerNodeId: selection.dockerNodeId } : {}),
+      ...(selection.containerName
+        ? { dockerContainerName: selection.containerName }
+        : selection.composeProjectId && selection.composeServiceName
+          ? {
+              dockerComposeProjectId: selection.composeProjectId,
+              dockerComposeServiceName: selection.composeServiceName,
+            }
+          : {}),
+      ...(selection.containerPort != null ? { dockerContainerPort: selection.containerPort } : {}),
       dockerProtocol: "tcp",
     };
   }
@@ -123,8 +128,8 @@ export function proxyUpstreamRequest(
   return {
     upstreamKind: "docker_deployment",
     forwardScheme: selection.scheme,
-    dockerDeploymentId: selection.deploymentId,
-    dockerContainerPort: selection.containerPort,
+    ...(selection.deploymentId ? { dockerDeploymentId: selection.deploymentId } : {}),
+    ...(selection.containerPort != null ? { dockerContainerPort: selection.containerPort } : {}),
     dockerProtocol: "tcp",
   };
 }

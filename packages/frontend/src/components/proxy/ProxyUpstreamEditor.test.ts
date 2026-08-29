@@ -40,6 +40,8 @@ describe("proxy Docker upstream selection", () => {
       dockerProtocol: "tcp",
     });
     expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerHostPort");
+    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerComposeProjectId");
+    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerComposeServiceName");
   });
 
   it("requires an explicit choice when multiple mappings exist", () => {
@@ -105,10 +107,10 @@ describe("proxy Docker upstream selection", () => {
     expect(proxyUpstreamRequest(selected)).toMatchObject({
       upstreamKind: "docker_container",
       dockerNodeId: "node-1",
-      dockerContainerName: null,
       dockerComposeProjectId: "project-1",
       dockerComposeServiceName: "api",
       dockerContainerPort: 8080,
     });
+    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerContainerName");
   });
 });

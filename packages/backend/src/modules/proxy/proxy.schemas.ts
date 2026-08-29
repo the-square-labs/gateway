@@ -61,9 +61,12 @@ export const CreateProxyHostSchema = z
     forwardScheme: z.enum(['http', 'https']).default('http'),
     upstreamIpv6Enabled: z.boolean().default(false),
     dockerNodeId: z.string().uuid().optional(),
-    dockerContainerName: z.string().min(1).max(255).optional(),
-    dockerComposeProjectId: z.string().uuid().optional(),
-    dockerComposeServiceName: z.string().min(1).max(255).optional(),
+    // Older browser bundles serialized mutually exclusive Docker target fields
+    // as null. Accept those payloads so cached clients remain compatible while
+    // still requiring exactly one complete container or Compose reference.
+    dockerContainerName: z.string().min(1).max(255).optional().nullable(),
+    dockerComposeProjectId: z.string().uuid().optional().nullable(),
+    dockerComposeServiceName: z.string().min(1).max(255).optional().nullable(),
     dockerDeploymentId: z.string().uuid().optional(),
     dockerContainerPort: z.number().int().min(1).max(65535).optional(),
     dockerHostPort: z.number().int().min(1).max(65535).optional(),
