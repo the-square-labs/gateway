@@ -17,8 +17,6 @@ function service(overrides: Record<string, unknown> = {}) {
     (overrides.dockerManagement ?? {}) as any,
     (overrides.dockerDeployments ?? {}) as any,
     (overrides.dockerSecrets ?? {}) as any,
-    'unused-sidecar-image',
-    false,
     relayPolicy as any,
     overrides.dockerCompose as any,
     overrides.identityManager as any

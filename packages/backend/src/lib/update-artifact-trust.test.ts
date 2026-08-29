@@ -29,7 +29,6 @@ const gatewayPayload = Buffer.from(
     image: 'registry.gitlab.wiolett.net/wiolett/gateway',
     digest: `sha256:${checksum}`,
     imageRef: `registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`,
-    databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
     secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
     createdAt: '2026-05-02T14:39:10Z',
   })
@@ -51,7 +50,6 @@ const relayPayload = Buffer.from(
     imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
     protocolMajor: 1,
     minGatewayVersion: 'v1.2.0',
-    databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
     secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
     createdAt: '2026-05-02T14:39:10Z',
   })
@@ -152,7 +150,7 @@ describe('update artifact trust', () => {
     );
 
     expect(artifact.imageRef).toBe(`registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`);
-    expect(artifact.databaseConnectorImage).toContain('/database-connector@sha256:');
+    expect('databaseConnectorImage' in artifact).toBe(false);
     expect(artifact.secureLinkConnectorImage).toContain('/secure-link-connector@sha256:');
   });
 
@@ -172,7 +170,7 @@ describe('update artifact trust', () => {
     expect(artifact.protocolMajor).toBe(1);
     expect(artifact.minGatewayVersion).toBe('v1.2.0');
     expect(artifact.imageRef).toContain('/relay@sha256:');
-    expect(artifact.databaseConnectorImage).toContain('/database-connector@sha256:');
+    expect('databaseConnectorImage' in artifact).toBe(false);
     expect(artifact.secureLinkConnectorImage).toContain('/secure-link-connector@sha256:');
   });
 
@@ -313,8 +311,8 @@ describe('update artifact trust', () => {
     ).toThrow(UpdateArtifactTrustError);
   });
 
-  it('accepts only a digest-pinned connector image in the Gateway repository', () => {
-    const repository = 'registry.gitlab.wiolett.net/wiolett/gateway/database-connector';
+  it('accepts only a digest-pinned Secure Link connector image in the Gateway repository', () => {
+    const repository = 'registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector';
     expect(isDigestPinnedImageRef(`${repository}@sha256:${checksum}`, repository)).toBe(true);
     expect(isDigestPinnedImageRef(`${repository}:v2.5.0`, repository)).toBe(false);
     expect(isDigestPinnedImageRef(`registry.example.com/connector@sha256:${checksum}`, repository)).toBe(false);

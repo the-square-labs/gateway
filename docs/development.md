@@ -100,7 +100,6 @@ gateway/
 |       +-- docker/       # Docker management daemon
 |       +-- monitoring/   # host metrics daemon
 |       +-- relay/        # remote Relay Pool supervisor
-|       +-- database-connector/    # managed-database private-network sidecar
 |       +-- secure-link-connector/ # Docker-to-nginx Secure Link sidecar
 |       +-- shared/       # shared Go packages and generated protobuf
 +-- proto/                # protobuf service definitions
@@ -170,7 +169,6 @@ Go daemons live under `packages/daemons`.
 | `packages/daemons/docker` | Docker management daemon. |
 | `packages/daemons/monitoring` | metrics daemon. |
 | `packages/daemons/relay` | remote Relay Pool supervisor. |
-| `packages/daemons/database-connector` | managed-database connector sidecar. |
 | `packages/daemons/secure-link-connector` | Docker-to-nginx Secure Link connector sidecar. |
 | `packages/daemons/shared` | shared Go packages. |
 | `packages/daemons/go.work` | Go workspace. |
@@ -181,7 +179,7 @@ Run daemon tests:
 
 ```bash
 cd packages/daemons
-go test ./docker/... ./monitoring/... ./nginx/... ./relay/... ./shared/... ./database-connector/... ./secure-link-connector/...
+go test ./docker/... ./monitoring/... ./nginx/... ./relay/... ./shared/... ./secure-link-connector/...
 ```
 
 ## Protobuf

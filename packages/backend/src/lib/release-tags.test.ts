@@ -26,7 +26,6 @@ describe('release tag classifier', () => {
     ['v2.10.0-nginx', 'component', 'nginx', 'v2.10.0', 'false'],
     ['v2.10.0-rc.2-nginx', 'component', 'nginx', 'v2.10.0-rc.2', 'true'],
     ['v2.10.0-rc.3-relay', 'component', 'relay', 'v2.10.0-rc.3', 'true'],
-    ['v2.10.0-rc.4-database-connector', 'component', 'database-connector', 'v2.10.0-rc.4', 'true'],
   ])('classifies %s', (tag, kind, component, version, prerelease) => {
     const result = classify(tag);
     expect(result.status).toBe(0);
@@ -36,6 +35,8 @@ describe('release tag classifier', () => {
   it.each([
     'v2.10.0-beta.1',
     'v2.10.0-nginx-rc.1',
+    'v2.10.0-rc.1-database-connector',
+    'v2.10.0-rc.1-secure-link-connector',
     '2.10.0-rc.1',
     'v2.10-rc.1',
   ])('rejects unsupported tag %s', (tag) => {

@@ -15,7 +15,6 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DATABASE_CONNECTOR_IMAGE=${DATABASE_CONNECTOR_IMAGE:-}
       - SECURE_LINK_CONNECTOR_IMAGE=${SECURE_LINK_CONNECTOR_IMAGE:-}
       - DATABASE_URL=postgres://gateway:${DB_PASSWORD}@postgres:5432/gateway
       - REDIS_URL=redis://redis:6379

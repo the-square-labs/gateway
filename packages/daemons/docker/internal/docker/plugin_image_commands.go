@@ -20,7 +20,7 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 		}
 		result.Detail = string(data)
 
-	case "pull", "ensure", "ensure-local":
+	case "pull", "ensure":
 		imageRef := cmd.ImageRef
 		if imageRef == "" {
 			result.Success = false
@@ -32,12 +32,6 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 			result.Error = "image_ref must use an immutable sha256 digest for ensure"
 			return
 		}
-		if cmd.Action == "ensure-local" && imageRef != developmentDatabaseConnectorImage {
-			result.Success = false
-			result.Error = "image_ref must use the fixed development connector image for ensure-local"
-			return
-		}
-
 		registryAuth := cmd.RegistryAuthJson
 		if registryAuth == "" {
 			// Try to resolve from stored credentials
@@ -46,11 +40,10 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 			p.registryMu.RUnlock()
 		}
 
-		// "ensure" is used by the digest-pinned production connector and
-		// "ensure-local" by the one fixed development image. Both avoid a
-		// registry round-trip when the exact reference is already local.
+		// "ensure" avoids a registry round-trip when the exact immutable
+		// reference is already local.
 		var err error
-		if cmd.Action == "ensure" || cmd.Action == "ensure-local" {
+		if cmd.Action == "ensure" {
 			err = p.client.EnsureImage(ctx, imageRef, registryAuth)
 		} else {
 			err = p.client.PullImage(ctx, imageRef, registryAuth)

@@ -2,7 +2,7 @@
 
 classify_release_tag() {
   local tag=${1:?release tag is required}
-  local component_pattern='relay|nginx|docker|monitoring|database-connector|secure-link-connector'
+  local component_pattern='relay|nginx|docker|monitoring'
 
   RELEASE_KIND=''
   RELEASE_COMPONENT=''

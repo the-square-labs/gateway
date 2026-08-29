@@ -36,7 +36,6 @@ type Client struct {
 	cli                      *client.Client
 	logger                   *slog.Logger
 	gpuInventory             gpuInventory
-	databaseTunnelDirectory  string
 	recreateStateDirectory   string
 	runscHealthy             atomic.Bool
 	managedVolumeCreateMutex sync.Mutex
@@ -101,11 +100,10 @@ func NewClient(socketPath string, stateDir string, logger *slog.Logger) (*Client
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
 	return &Client{
-		cli:                     cli,
-		logger:                  logger,
-		gpuInventory:            gpu.NewCollector(logger),
-		databaseTunnelDirectory: filepath.Join(stateDir, DatabaseTunnelSocketDirectory),
-		recreateStateDirectory:  filepath.Join(stateDir, "recreate-state"),
+		cli:                    cli,
+		logger:                 logger,
+		gpuInventory:           gpu.NewCollector(logger),
+		recreateStateDirectory: filepath.Join(stateDir, "recreate-state"),
 	}, nil
 }
 

@@ -390,7 +390,6 @@ describe('UpdateService foundation migration', () => {
     const relayRuntime = {
       setMaintenance: vi.fn().mockResolvedValue(undefined),
       setExpectedArtifact: vi.fn(),
-      updateDatabaseConnectorImage: vi.fn(),
       updateSecureLinkConnectorImage: vi.fn().mockResolvedValue(undefined),
       probeNow: vi.fn().mockResolvedValue(undefined),
     };
@@ -415,15 +414,9 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        Cmd: expect.arrayContaining([
-          '--database-connector-image',
-          relay.databaseConnectorImage,
-          '--secure-link-connector-image',
-          relay.secureLinkConnectorImage,
-        ]),
+        Cmd: expect.arrayContaining(['--secure-link-connector-image', relay.secureLinkConnectorImage]),
       })
     );
-    expect(relayRuntime.updateDatabaseConnectorImage).toHaveBeenCalledWith(relay.databaseConnectorImage);
     expect(relayRuntime.updateSecureLinkConnectorImage).toHaveBeenCalledWith(relay.secureLinkConnectorImage);
     expect(relayRuntime.probeNow).toHaveBeenCalled();
   });
@@ -504,19 +497,19 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runDetached).not.toHaveBeenCalled();
   });
 
-  it('persists the verified database connector image through the foundation migration', async () => {
+  it('does not propagate a legacy database connector image through the foundation migration', async () => {
     const dockerService = makeDockerService();
     const service = makeUpdateService(dockerService);
     const connectorImage = 'registry.example.com/wiolett/gateway/database-connector@sha256:connector-digest';
 
-    await service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', connectorImage));
-
-    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        Cmd: expect.arrayContaining(['--database-connector-image', connectorImage]),
-      })
+    await service.performUpdate(
+      'v2.4.3',
+      makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', undefined, connectorImage)
     );
+
+    const command = dockerService.runOneShot.mock.calls[1]?.[0]?.Cmd ?? [];
+    expect(command).not.toContain('--database-connector-image');
+    expect(command).not.toContain(connectorImage);
   });
 
   it('persists the verified Secure Link connector image through the foundation migration', async () => {
@@ -524,10 +517,7 @@ describe('UpdateService foundation migration', () => {
     const service = makeUpdateService(dockerService);
     const connectorImage = 'registry.example.com/wiolett/gateway/secure-link-connector@sha256:connector-digest';
 
-    await service.performUpdate(
-      'v2.4.3',
-      makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', undefined, connectorImage)
-    );
+    await service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', connectorImage));
 
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
       2,
@@ -617,8 +607,8 @@ function makeDockerService() {
 
 function makeArtifact(
   imageRef: string,
-  databaseConnectorImage?: string,
-  secureLinkConnectorImage?: string
+  secureLinkConnectorImage?: string,
+  legacyDatabaseConnectorImage?: string
 ): TrustedGatewayUpdateArtifact {
   return {
     imageRef,
@@ -631,18 +621,16 @@ function makeArtifact(
       image: 'registry.example.com/wiolett/gateway',
       digest: 'sha256:new',
       imageRef,
-      ...(databaseConnectorImage ? { databaseConnectorImage } : {}),
+      ...(legacyDatabaseConnectorImage ? { databaseConnectorImage: legacyDatabaseConnectorImage } : {}),
       ...(secureLinkConnectorImage ? { secureLinkConnectorImage } : {}),
       createdAt: '2026-06-30T00:00:00.000Z',
     },
-    ...(databaseConnectorImage ? { databaseConnectorImage } : {}),
     ...(secureLinkConnectorImage ? { secureLinkConnectorImage } : {}),
   };
 }
 
 function makeRelayArtifact(): TrustedRelayUpdateArtifact {
   const imageRef = `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`;
-  const databaseConnectorImage = `registry.example.com/wiolett/gateway/database-connector@sha256:${'b'.repeat(64)}`;
   const secureLinkConnectorImage = `registry.example.com/wiolett/gateway/secure-link-connector@sha256:${'c'.repeat(64)}`;
   return {
     imageRef,
@@ -650,7 +638,6 @@ function makeRelayArtifact(): TrustedRelayUpdateArtifact {
     buildVersion: 'v2.4.3',
     protocolMajor: 1,
     minGatewayVersion: 'v2.4.2',
-    databaseConnectorImage,
     secureLinkConnectorImage,
     signedManifest: 'signed-relay',
     payload: {
@@ -662,7 +649,6 @@ function makeRelayArtifact(): TrustedRelayUpdateArtifact {
       imageRef,
       protocolMajor: 1,
       minGatewayVersion: 'v2.4.2',
-      databaseConnectorImage,
       secureLinkConnectorImage,
       createdAt: '2026-06-30T00:00:00.000Z',
     },

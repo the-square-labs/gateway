@@ -38,8 +38,6 @@ describe('managed database binding reconnect reconciliation', () => {
       {} as never,
       {} as never,
       {} as never,
-      'registry.example.test/database-connector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      false,
       undefined,
       undefined,
       { ensureBindingIdentity, finalizeBindingIdentity: vi.fn() } as never

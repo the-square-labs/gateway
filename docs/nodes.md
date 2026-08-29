@@ -312,7 +312,7 @@ VM and bare-metal hosts normally expose the required loop and mount capabilities
 
 The database installer runs `docker-daemon` only as root and shows a local-disk selector in an interactive terminal. Choose an eligible mounted filesystem or a custom path; the selected location becomes the storage root. For automation, pass `--storage-root <path>` (or set `GATEWAY_DATABASE_STORAGE_ROOT`) together with the normal enrollment flags and `--yes`. The preflight runs before enrollment, and `--dry-run` performs no storage preparation or other host mutation.
 
-Managed application bindings also require `DATABASE_CONNECTOR_IMAGE` on Gateway to contain the release-published, immutable `.../database-connector@sha256:<digest>` reference. Gateway refuses to create a binding when this release setting is absent or mutable; the connector itself receives no Gateway endpoint, certificate, or database credentials.
+Managed application bindings use a TCP listener owned directly by the target Docker daemon. Gateway does not deploy a per-binding connector container or require a database connector image. During upgrades, successful listener reconciliation removes any connector containers left by older Gateway versions.
 
 Published managed databases use native direct TLS by default. Gateway issues the server certificate from its independent Database CA and keeps the private key in daemon-owned storage outside the database image. PostgreSQL and Redis publish one TLS endpoint; ClickHouse publishes both HTTPS and its native TLS endpoint. The UI exposes the CA certificate/fingerprint with direct credentials and supports certificate rotation after node IP changes.
 

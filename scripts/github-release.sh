@@ -243,35 +243,11 @@ publish_daemon() {
   complete_release "${assets[@]}"
 }
 
-publish_connector() {
-  local connector_name=$1 dockerfile=$2 context=$3
-  local image="${gateway_image}/${connector_name}:${tag}"
-  prepare_release "${connector_name} ${tag}" "${connector_name} release ${tag}"
-  if [[ "$release_already_published" -eq 1 ]]; then
-    complete_release
-    return
-  fi
-  docker_login
-  ./scripts/sync-update-trust-anchor.sh
-  (
-    cd packages/daemons
-    go test "./${connector_name}/..." ./shared/...
-  )
-  docker build \
-    --file "$dockerfile" \
-    --tag "$image" \
-    --label "org.opencontainers.image.source=${source_url}" \
-    "$context"
-  push_image_with_digest "$image" "${connector_name}.digest" "${connector_name} image"
-  complete_release
-}
-
 publish_relay() {
   local relay_version=${tag%-relay}
   local relay_image="${gateway_image}/relay"
-  local database_image="${gateway_image}/database-connector"
   local secure_link_image="${gateway_image}/secure-link-connector"
-  local relay_digest database_digest secure_link_digest min_gateway_version arch
+  local relay_digest secure_link_digest min_gateway_version arch
   local assets=(relay-image.update.json checksums.txt)
 
   for arch in amd64 arm64; do
@@ -294,7 +270,7 @@ publish_relay() {
   (cd packages/relay && go test ./...)
   (
     cd packages/daemons
-    go test ./relay/... ./shared/... ./database-connector/... ./secure-link-connector/...
+    go test ./relay/... ./shared/... ./secure-link-connector/...
     go vet ./relay/... ./shared/...
   )
 
@@ -307,12 +283,6 @@ publish_relay() {
   push_image_with_digest "${relay_image}:${tag}" relay-image.digest "relay image"
 
   docker build \
-    --tag "${database_image}:${tag}" \
-    --label "org.opencontainers.image.source=${source_url}" \
-    packages/daemons/database-connector
-  push_image_with_digest "${database_image}:${tag}" database-connector.digest "database connector image"
-
-  docker build \
     --file packages/daemons/secure-link-connector/Dockerfile \
     --tag "${secure_link_image}:${tag}" \
     --label "org.opencontainers.image.source=${source_url}" \
@@ -320,7 +290,6 @@ publish_relay() {
   push_image_with_digest "${secure_link_image}:${tag}" secure-link-connector.digest "secure-link connector image"
 
   relay_digest=$(<relay-image.digest)
-  database_digest=$(<database-connector.digest)
   secure_link_digest=$(<secure-link-connector.digest)
   min_gateway_version=$(<config/relay/min-gateway-version)
   (
@@ -333,7 +302,6 @@ publish_relay() {
       --digest "$relay_digest" \
       --relay-protocol-major 1 \
       --min-gateway-version "$min_gateway_version" \
-      --database-connector-image "${database_image}@${database_digest}" \
       --secure-link-connector-image "${secure_link_image}@${secure_link_digest}" \
       --git-commit-sha "$commit_sha" \
       --git-pipeline-id "$run_id" \
@@ -360,10 +328,6 @@ elif [[ "$RELEASE_COMPONENT" == "docker" ]]; then
   publish_daemon docker docker-daemon docker "Docker Daemon" main
 elif [[ "$RELEASE_COMPONENT" == "monitoring" ]]; then
   publish_daemon monitoring monitoring-daemon monitoring "Monitoring Daemon" main
-elif [[ "$RELEASE_COMPONENT" == "database-connector" ]]; then
-  publish_connector database-connector packages/daemons/database-connector/Dockerfile packages/daemons/database-connector
-elif [[ "$RELEASE_COMPONENT" == "secure-link-connector" ]]; then
-  publish_connector secure-link-connector packages/daemons/secure-link-connector/Dockerfile packages/daemons
 else
   printf 'Tag %s is not a supported Gateway release tag\n' "$tag" >&2
   exit 1

@@ -38,15 +38,9 @@ type ContainerCreateConfig struct {
 	PortBindings map[string]string      `json:"port_bindings,omitempty"` // "80/tcp": "8080"
 	Ports        []containerPortMapping `json:"ports,omitempty"`
 	NetworkMode  string                 `json:"network_mode,omitempty"`
-	// NetworkAliases are scoped to NetworkMode. They are used by first-party
-	// database connector sidecars so application containers never need a host
-	// port or a daemon address.
+	// NetworkAliases are scoped to NetworkMode.
 	NetworkAliases []string `json:"network_aliases,omitempty"`
-	// IPv4Address is reserved for first-party managed database connectors.
-	// Their application targets use a stable ExtraHosts entry, so connector
-	// recreation must reclaim the same endpoint address.
-	IPv4Address   string `json:"ipv4_address,omitempty"`
-	RestartPolicy string `json:"restartPolicy,omitempty"` // "no", "always", "unless-stopped", "on-failure"
+	RestartPolicy  string   `json:"restartPolicy,omitempty"` // "no", "always", "unless-stopped", "on-failure"
 	// Backward-compatible alias for older daemon-local config payloads.
 	RestartPolicyLegacy string     `json:"restart_policy,omitempty"`
 	Privileged          bool       `json:"privileged,omitempty"`
@@ -55,9 +49,6 @@ type ContainerCreateConfig struct {
 	ExtraHosts          []string   `json:"extra_hosts,omitempty"`
 	GPU                 *GPUConfig `json:"gpu,omitempty"`
 	RuntimeProfile      string     `json:"runtimeProfile,omitempty"`
-	// InternalWorkload is set only by Gateway-owned backend flows. Public
-	// container creation schemas reject this field.
-	InternalWorkload string `json:"internal_workload,omitempty"`
 }
 
 type containerPortMapping struct {
@@ -390,7 +381,7 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	if cfg.Privileged || len(cfg.CapAdd) > 0 {
 		return "", "", fmt.Errorf("privileged mode and added capabilities are not allowed for user workloads")
 	}
-	if hasHostBind(cfg.Binds) && !c.isManagedDatabaseConnector(cfg) {
+	if hasHostBind(cfg.Binds) {
 		return "", "", fmt.Errorf("host bind mounts are not allowed for new user workloads")
 	}
 	containerCfg := &container.Config{
@@ -472,40 +463,16 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 }
 
 func (c *Client) networkingConfigForCreate(cfg ContainerCreateConfig) (*network.NetworkingConfig, error) {
-	if cfg.IPv4Address == "" && len(cfg.NetworkAliases) == 0 {
+	if len(cfg.NetworkAliases) == 0 {
 		return nil, nil
 	}
 	if cfg.NetworkMode == "" {
 		return nil, errors.New("network mode is required for endpoint configuration")
 	}
 	endpoint := &network.EndpointSettings{Aliases: cfg.NetworkAliases}
-	if cfg.IPv4Address != "" {
-		if !c.isManagedDatabaseConnector(cfg) {
-			return nil, errors.New("static endpoint addresses are reserved for managed database connectors")
-		}
-		address, err := netip.ParseAddr(cfg.IPv4Address)
-		if err != nil || !address.Is4() {
-			return nil, errors.New("managed database connector IPv4 address is invalid")
-		}
-		endpoint.IPAMConfig = &network.EndpointIPAMConfig{IPv4Address: address}
-	}
 	return &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
 		cfg.NetworkMode: endpoint,
 	}}, nil
-}
-
-func (c *Client) isManagedDatabaseConnector(cfg ContainerCreateConfig) bool {
-	if cfg.InternalWorkload != "managed-database-connector" ||
-		!strings.HasPrefix(cfg.Name, "gateway-db-connector-") ||
-		cfg.Labels["wiolett.gateway.managed-database.connector"] != "true" ||
-		len(cfg.Binds) != 1 {
-		return false
-	}
-	parts := strings.Split(cfg.Binds[0], ":")
-	return len(parts) == 3 &&
-		filepath.Clean(parts[0]) == filepath.Clean(c.databaseTunnelDirectory) &&
-		parts[1] == "/run/gateway-db" &&
-		parts[2] == "ro"
 }
 
 func applyUserWorkloadBaseline(hostCfg *container.HostConfig) {

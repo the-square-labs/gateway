@@ -886,8 +886,6 @@ export async function initializeContainer(): Promise<void> {
     dockerManagementService,
     dockerDeploymentService,
     dockerSecretService,
-    getEnv().DATABASE_CONNECTOR_IMAGE,
-    getEnv().NODE_ENV === 'development',
     relayPolicyService,
     dockerComposeService,
     managedDatabaseService
@@ -1330,7 +1328,6 @@ export async function initializeContainer(): Promise<void> {
       },
       updateSecureLinkConnectorImage: (imageRef) =>
         proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve(),
-      updateDatabaseConnectorImage: (imageRef) => managedDatabaseBindingService.updateConnectorImage(imageRef),
       probeNow: () => relaySupervisor.probeNow(),
     },
     generalSettingsService

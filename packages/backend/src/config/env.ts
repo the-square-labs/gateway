@@ -1,8 +1,5 @@
 import { z } from 'zod';
 
-// Development only. Production database bindings require a registry image
-// pinned by manifest digest.
-export const DEVELOPMENT_DATABASE_CONNECTOR_IMAGE = 'gateway-database-connector:dev';
 export const DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE = 'gateway-secure-link-connector:dev';
 export const BUILT_IN_GITHUB_OAUTH_CLIENT_ID = 'Ov23likbDL1gM8asWzfC';
 const IMMUTABLE_CONNECTOR_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/i;
@@ -41,10 +38,8 @@ const envSchema = z.object({
   WEB_TLS_AUTO_DIR: nonEmptyStringWithDefault('/var/lib/gateway/tls'),
   PAGES_STORAGE_DIR: nonEmptyStringWithDefault('/var/lib/gateway/pages'),
 
-  // First-party TCP connector for managed database bindings. Production must
-  // provide an immutable release reference; development receives the fixed
-  // local image after parsing below.
-  DATABASE_CONNECTOR_IMAGE: z.string().trim().default(''),
+  // Node-level transport for Docker Route Secure Links. Production must use
+  // the digest-pinned image bundled with the Relay release.
   SECURE_LINK_CONNECTOR_IMAGE: z.string().trim().default(''),
 
   // Compose project dir (for self-update sidecar)
@@ -134,9 +129,6 @@ export function getEnv(): Env {
     throw new Error('SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest in production');
   }
   cachedEnv = parsedEnv;
-  if (cachedEnv.NODE_ENV === 'development' && !cachedEnv.DATABASE_CONNECTOR_IMAGE) {
-    cachedEnv.DATABASE_CONNECTOR_IMAGE = DEVELOPMENT_DATABASE_CONNECTOR_IMAGE;
-  }
   if (cachedEnv.NODE_ENV === 'development' && !cachedEnv.SECURE_LINK_CONNECTOR_IMAGE) {
     cachedEnv.SECURE_LINK_CONNECTOR_IMAGE = DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE;
   }

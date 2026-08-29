@@ -16,7 +16,6 @@ export interface FoundationMigrationOptions {
   hostDir: string;
   targetVersion?: string;
   imageRef?: string;
-  databaseConnectorImage?: string;
   secureLinkConnectorImage?: string;
   relayBuildVersion?: string;
   relayProtocolMajor?: number;
@@ -70,11 +69,11 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
     'GATEWAY_RELAY_DB_PASSWORD',
     'GATEWAY_RELAY_VERSION',
     'RELAY_DATABASE_URL',
+    'DATABASE_CONNECTOR_IMAGE',
   ]);
   const envPatch = patchEnv(sanitizedEnvContent, {
     ...(options.targetVersion ? { GATEWAY_VERSION: options.targetVersion } : {}),
     ...(options.imageRef ? { GATEWAY_IMAGE_REF: options.imageRef } : {}),
-    ...(options.databaseConnectorImage ? { DATABASE_CONNECTOR_IMAGE: options.databaseConnectorImage } : {}),
     ...(options.secureLinkConnectorImage ? { SECURE_LINK_CONNECTOR_IMAGE: options.secureLinkConnectorImage } : {}),
     GATEWAY_RELAY_IMAGE_REF: effectiveRelayImageRef,
     GATEWAY_RELAY_TARGET: 'relay:9443',

@@ -71,8 +71,6 @@ export class ManagedDatabaseBindingService {
     dockerManagement: DockerManagementService,
     dockerDeployments: DockerDeploymentService,
     dockerSecrets: DockerSecretService,
-    _connectorImage: string,
-    _allowDevelopmentConnectorImage = false,
     private readonly relayPolicy?: Pick<
       RelayPolicyService,
       'ensureBindingRoute' | 'syncNodeGrantBundle' | 'probeManagedDatabaseBindingRoute' | 'revokeOwner'
@@ -133,8 +131,6 @@ export class ManagedDatabaseBindingService {
       relayPolicy
     );
   }
-
-  updateConnectorImage(_connectorImage: string) {}
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;

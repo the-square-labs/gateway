@@ -10,7 +10,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/updateauth"
 )
 
-func TestRelayManifestIncludesBothConnectorImages(t *testing.T) {
+func TestRelayManifestIncludesOnlySecureLinkConnectorImage(t *testing.T) {
 	keyDir := filepath.Join(t.TempDir(), "keys")
 	keygen([]string{"--out-dir", keyDir})
 	encodedKey, err := os.ReadFile(filepath.Join(keyDir, "private.pem.b64"))
@@ -21,7 +21,6 @@ func TestRelayManifestIncludesBothConnectorImages(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "relay-image.update.json")
 	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	databaseConnector := "registry.example/gateway/database-connector@" + digest
 	secureLinkConnector := "registry.example/gateway/secure-link-connector@" + digest
 	sign([]string{
 		"--kind", "relay-image",
@@ -31,7 +30,6 @@ func TestRelayManifestIncludesBothConnectorImages(t *testing.T) {
 		"--digest", digest,
 		"--relay-protocol-major", "1",
 		"--min-gateway-version", "v1.2.3",
-		"--database-connector-image", databaseConnector,
 		"--secure-link-connector-image", secureLinkConnector,
 		"--out", out,
 	})
@@ -52,8 +50,8 @@ func TestRelayManifestIncludesBothConnectorImages(t *testing.T) {
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["databaseConnectorImage"] != databaseConnector {
-		t.Fatalf("database connector image = %v, want %s", payload["databaseConnectorImage"], databaseConnector)
+	if _, exists := payload["databaseConnectorImage"]; exists {
+		t.Fatalf("database connector image must not be published: %v", payload["databaseConnectorImage"])
 	}
 	if payload["secureLinkConnectorImage"] != secureLinkConnector {
 		t.Fatalf("secure-link connector image = %v, want %s", payload["secureLinkConnectorImage"], secureLinkConnector)

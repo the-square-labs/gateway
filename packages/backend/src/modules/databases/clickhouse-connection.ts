@@ -82,7 +82,7 @@ export function createClickHouseDatabaseClient(
     // Keep the transport ceiling above the largest configurable 600s budget.
     request_timeout: 610_000,
     max_open_connections: maxOpenConnections,
-    application: 'gateway-database-connector',
+    application: 'gateway-managed-database',
     clickhouse_settings: {
       output_format_json_quote_64bit_integers: 1,
       cancel_http_readonly_queries_on_client_close: 1,

@@ -69,10 +69,6 @@ var _ lifecycle.ProxySecureLinkPlugin = (*DockerPlugin)(nil)
 const dockerLogsCommandTimeout = 15 * time.Second
 const emergencyKillCancellationTimeout = 30 * time.Second
 
-// This tag exists solely for the local development workflow. Production
-// connector provisioning uses the separate `ensure` action and digest refs.
-const developmentDatabaseConnectorImage = "gateway-database-connector:dev"
-
 func dockerTimeoutProvided(configJSON string) bool {
 	if configJSON == "" {
 		return false

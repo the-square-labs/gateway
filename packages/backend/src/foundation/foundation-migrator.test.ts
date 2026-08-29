@@ -255,7 +255,7 @@ describe('runFoundationMigrations', () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-foundation-migrator-test-'));
     await writeFile(
       path.join(tempDir, '.env'),
-      'GATEWAY_VERSION=v2.4.2\nGATEWAY_RELAY_TARGET=172.18.0.4:9443\nGATEWAY_RELAY_VERSION=1\nGATEWAY_RELAY_DB_PASSWORD=legacy-secret\nRELAY_DATABASE_URL=postgres://legacy\n'
+      'GATEWAY_VERSION=v2.4.2\nGATEWAY_RELAY_TARGET=172.18.0.4:9443\nGATEWAY_RELAY_VERSION=1\nGATEWAY_RELAY_DB_PASSWORD=legacy-secret\nRELAY_DATABASE_URL=postgres://legacy\nDATABASE_CONNECTOR_IMAGE=registry/legacy-database-connector:old\n'
     );
     await writeFile(path.join(tempDir, 'docker-compose.yml'), OLD_COMPOSE);
     const sandboxWorkspaceDir = path.join(tempDir, 'sandbox-workspaces');
@@ -264,7 +264,6 @@ describe('runFoundationMigrations', () => {
       hostDir: tempDir,
       targetVersion: 'v2.4.3',
       imageRef: 'registry/gateway:v2.4.3',
-      databaseConnectorImage: 'registry/gateway/database-connector@sha256:connector',
       secureLinkConnectorImage: 'registry/gateway/secure-link-connector@sha256:secure-connector',
       relayBuildVersion: 'v2.4.3-relay',
       relayProtocolMajor: 1,
@@ -275,7 +274,6 @@ describe('runFoundationMigrations', () => {
       hostDir: tempDir,
       targetVersion: 'v2.4.3',
       imageRef: 'registry/gateway:v2.4.3',
-      databaseConnectorImage: 'registry/gateway/database-connector@sha256:connector',
       secureLinkConnectorImage: 'registry/gateway/secure-link-connector@sha256:secure-connector',
       relayBuildVersion: 'v2.4.3-relay',
       relayProtocolMajor: 1,
@@ -288,9 +286,7 @@ describe('runFoundationMigrations', () => {
     expect(second.changedFiles).toEqual([]);
     expect(second.backupDir).toBeNull();
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_IMAGE_REF=registry/gateway:v2.4.3');
-    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
-      'DATABASE_CONNECTOR_IMAGE=registry/gateway/database-connector@sha256:connector'
-    );
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('DATABASE_CONNECTOR_IMAGE');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
       'SECURE_LINK_CONNECTOR_IMAGE=registry/gateway/secure-link-connector@sha256:secure-connector'
     );

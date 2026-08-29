@@ -63,7 +63,8 @@ export interface RelayImageManifestPayload {
   imageRef: string;
   protocolMajor: number;
   minGatewayVersion?: string;
-  databaseConnectorImage: string;
+  /** Legacy field accepted only so existing Relay manifests remain readable. */
+  databaseConnectorImage?: string;
   secureLinkConnectorImage: string;
   createdAt: string;
   gitCommitSha?: string;
@@ -101,7 +102,6 @@ export interface TrustedGatewayUpdateArtifact {
   signedManifest: string;
   imageRef: string;
   digest: string;
-  databaseConnectorImage?: string;
   secureLinkConnectorImage?: string;
 }
 
@@ -113,7 +113,6 @@ export interface TrustedRelayUpdateArtifact {
   buildVersion: string;
   protocolMajor: number;
   minGatewayVersion: string;
-  databaseConnectorImage: string;
   secureLinkConnectorImage: string;
 }
 
@@ -221,7 +220,6 @@ export function verifyGatewayImageManifest(
     signedManifest,
     imageRef: payload.imageRef,
     digest: payload.digest,
-    ...(payload.databaseConnectorImage ? { databaseConnectorImage: payload.databaseConnectorImage } : {}),
     ...(payload.secureLinkConnectorImage ? { secureLinkConnectorImage: payload.secureLinkConnectorImage } : {}),
   };
 }
@@ -251,9 +249,10 @@ export function verifyRelayImageManifest(
   }
   const gatewayRepository = payload.image.endsWith('/relay') ? payload.image.slice(0, -'/relay'.length) : '';
   if (
-    typeof payload.databaseConnectorImage !== 'string' ||
-    !gatewayRepository ||
-    !isDigestPinnedImageRef(payload.databaseConnectorImage, `${gatewayRepository}/database-connector`)
+    payload.databaseConnectorImage !== undefined &&
+    (typeof payload.databaseConnectorImage !== 'string' ||
+      !gatewayRepository ||
+      !isDigestPinnedImageRef(payload.databaseConnectorImage, `${gatewayRepository}/database-connector`))
   ) {
     throw new UpdateArtifactTrustError('Relay update database connector image reference is not digest pinned');
   }
@@ -273,7 +272,6 @@ export function verifyRelayImageManifest(
     buildVersion: payload.version,
     protocolMajor: payload.protocolMajor,
     minGatewayVersion: payload.minGatewayVersion ?? payload.version,
-    databaseConnectorImage: payload.databaseConnectorImage,
     secureLinkConnectorImage: payload.secureLinkConnectorImage,
   };
 }

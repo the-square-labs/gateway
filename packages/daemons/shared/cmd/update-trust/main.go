@@ -69,7 +69,6 @@ func sign(args []string) {
 	sha256Hex := fs.String("sha256", "", "binary SHA256")
 	image := fs.String("image", "", "gateway image repository")
 	digest := fs.String("digest", "", "gateway image digest")
-	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
 	secureLinkConnectorImage := fs.String("secure-link-connector-image", "", "digest-pinned secure-link connector image reference")
 	relayProtocolMajor := fs.Int("relay-protocol-major", 0, "standalone relay protocol major")
 	minGatewayVersion := fs.String("min-gateway-version", "", "minimum compatible Gateway version")
@@ -127,9 +126,6 @@ func sign(args []string) {
 			"gitCommitSha":  *commitSHA,
 			"gitPipelineId": *pipelineID,
 		}
-		if *databaseConnectorImage != "" {
-			payloadMap["databaseConnectorImage"] = *databaseConnectorImage
-		}
 		if *secureLinkConnectorImage != "" {
 			payloadMap["secureLinkConnectorImage"] = *secureLinkConnectorImage
 		}
@@ -141,7 +137,6 @@ func sign(args []string) {
 			"--image":                       *image,
 			"--digest":                      *digest,
 			"--min-gateway-version":         *minGatewayVersion,
-			"--database-connector-image":    *databaseConnectorImage,
 			"--secure-link-connector-image": *secureLinkConnectorImage,
 		})
 		if *relayProtocolMajor < 1 {
@@ -156,7 +151,6 @@ func sign(args []string) {
 			"imageRef":                 fmt.Sprintf("%s@%s", *image, *digest),
 			"protocolMajor":            *relayProtocolMajor,
 			"minGatewayVersion":        *minGatewayVersion,
-			"databaseConnectorImage":   *databaseConnectorImage,
 			"secureLinkConnectorImage": *secureLinkConnectorImage,
 			"createdAt":                createdAt,
 			"gitCommitSha":             *commitSHA,

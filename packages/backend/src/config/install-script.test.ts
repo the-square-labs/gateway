@@ -107,8 +107,8 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).not.toContain('gateway_update_requires_relay');
     expect(source).toContain('version_is_newer "$relay_version" "$current_relay_version"');
     expect(source).toContain('IMAGE_REF="$image_ref"');
-    expect(source).toContain('databaseConnectorImage');
-    expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
+    expect(source).not.toContain('databaseConnectorImage');
+    expect(source).not.toContain('DATABASE_CONNECTOR_IMAGE');
     expect(source).toContain('secureLinkConnectorImage');
     expect(source).toContain('SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"');
     expect(source).toContain('Signed relay manifest contains an invalid secure-link connector image.');
@@ -136,7 +136,6 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).not.toContain('      - "5000:5000"');
     expect(source).toContain('      - "9443:9443"');
     expect(source).toContain('Gateway recovery helper image pull');
-    expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');
     expect(source).toContain('--secure-link-connector-image "$SECURE_LINK_CONNECTOR_IMAGE_REF"');
     expect(source).toContain('compose pull app');
     expect(source).toContain('compose up -d --no-deps app');
@@ -144,23 +143,22 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('short_digest "$ARTIFACT_DIGEST"');
   });
 
-  it('publishes both connector images with Relay releases instead of Gateway releases', () => {
+  it('publishes only the node-level Secure Link connector with Relay releases', () => {
     const source = readFileSync(githubReleaseScript, 'utf8');
     const relayPublishing = source.slice(source.indexOf('publish_relay()'), source.indexOf('\nif [[ "$RELEASE_KIND"'));
     const gatewayPublishing = source.slice(source.indexOf('publish_gateway()'), source.indexOf('\npublish_daemon()'));
 
-    expect(relayPublishing).toContain('database-connector');
+    expect(relayPublishing).not.toContain('database-connector');
     expect(relayPublishing).toContain('secure-link-connector');
     expect(relayPublishing).toContain('--secure-link-connector-image');
-    expect(relayPublishing).toContain('--database-connector-image');
     expect(relayPublishing).toContain('--min-gateway-version');
     expect(relayPublishing).toContain('config/relay/min-gateway-version');
     expect(gatewayPublishing).not.toContain('--secure-link-connector-image');
     expect(gatewayPublishing).not.toContain('--database-connector-image');
     expect(source).toContain('source scripts/release-tag.sh');
     expect(source).toContain('[[ "$RELEASE_COMPONENT" == "relay" ]]');
-    expect(source).toContain('[[ "$RELEASE_COMPONENT" == "database-connector" ]]');
-    expect(source).toContain('[[ "$RELEASE_COMPONENT" == "secure-link-connector" ]]');
+    expect(source).not.toContain('[[ "$RELEASE_COMPONENT" == "database-connector" ]]');
+    expect(source).not.toContain('[[ "$RELEASE_COMPONENT" == "secure-link-connector" ]]');
     expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+$/);
   });
 

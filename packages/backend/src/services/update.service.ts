@@ -65,7 +65,6 @@ export interface RelayUpdateRuntime {
   setMaintenance(enabled: boolean): Promise<void>;
   setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void;
   updateSecureLinkConnectorImage(imageRef: string): Promise<void>;
-  updateDatabaseConnectorImage(imageRef: string): void;
   probeNow(): Promise<void>;
 }
 
@@ -530,7 +529,6 @@ export class UpdateService {
       tag,
       '--image-ref',
       artifact.imageRef,
-      ...(artifact.databaseConnectorImage ? ['--database-connector-image', artifact.databaseConnectorImage] : []),
       ...(artifact.secureLinkConnectorImage
         ? ['--secure-link-connector-image', artifact.secureLinkConnectorImage]
         : []),
@@ -843,8 +841,6 @@ exit 1`,
         String(artifact.protocolMajor),
         '--relay-image-ref',
         artifact.imageRef,
-        '--database-connector-image',
-        artifact.databaseConnectorImage,
         '--secure-link-connector-image',
         artifact.secureLinkConnectorImage,
       ],
@@ -930,10 +926,8 @@ exit 1`,
 
   private async promoteRelayConnectorImages(artifact: TrustedRelayUpdateArtifact): Promise<void> {
     Object.assign(this.env, {
-      DATABASE_CONNECTOR_IMAGE: artifact.databaseConnectorImage,
       SECURE_LINK_CONNECTOR_IMAGE: artifact.secureLinkConnectorImage,
     });
-    this.relayRuntime?.updateDatabaseConnectorImage(artifact.databaseConnectorImage);
     await this.relayRuntime?.updateSecureLinkConnectorImage(artifact.secureLinkConnectorImage);
   }
 

@@ -251,51 +251,6 @@ func TestCreateContainerRejectsUnknownConfigFields(t *testing.T) {
 	}
 }
 
-func TestManagedDatabaseConnectorBindIsNarrowlyAllowlisted(t *testing.T) {
-	client := &Client{databaseTunnelDirectory: "/var/lib/docker-daemon/database-tunnel"}
-	valid := ContainerCreateConfig{
-		Name:             "gateway-db-connector-binding-1",
-		InternalWorkload: "managed-database-connector",
-		Labels: map[string]string{
-			"wiolett.gateway.managed-database.connector": "true",
-		},
-		Binds: []string{"/var/lib/docker-daemon/database-tunnel:/run/gateway-db:ro"},
-	}
-	if !client.isManagedDatabaseConnector(valid) {
-		t.Fatal("expected the daemon-owned database tunnel bind to be allowed")
-	}
-
-	tests := map[string]ContainerCreateConfig{
-		"wrong source": func() ContainerCreateConfig {
-			cfg := valid
-			cfg.Binds = []string{"/tmp/database-tunnel:/run/gateway-db:ro"}
-			return cfg
-		}(),
-		"writable bind": func() ContainerCreateConfig {
-			cfg := valid
-			cfg.Binds = []string{"/var/lib/docker-daemon/database-tunnel:/run/gateway-db:rw"}
-			return cfg
-		}(),
-		"extra bind": func() ContainerCreateConfig {
-			cfg := valid
-			cfg.Binds = append(append([]string(nil), valid.Binds...), "/tmp:/tmp:ro")
-			return cfg
-		}(),
-		"missing marker": func() ContainerCreateConfig {
-			cfg := valid
-			cfg.InternalWorkload = ""
-			return cfg
-		}(),
-	}
-	for name, cfg := range tests {
-		t.Run(name, func(t *testing.T) {
-			if client.isManagedDatabaseConnector(cfg) {
-				t.Fatal("unexpectedly allowed connector bind")
-			}
-		})
-	}
-}
-
 func TestImportedArchiveUsesImageIDForEnvOnlyRecreateAndLabelForTagUpdate(t *testing.T) {
 	imageID := "sha256:" + repeatHex("a")
 	insp := &container.InspectResponse{
@@ -824,34 +779,6 @@ func TestManagedDatabaseHostEntryUsesDaemonListenerGateway(t *testing.T) {
 	}
 }
 
-func TestManagedDatabaseConnectorCreateUsesStableIPv4Address(t *testing.T) {
-	client := &Client{databaseTunnelDirectory: "/var/lib/docker-daemon/database-tunnel"}
-	config := ContainerCreateConfig{
-		Name:             "gateway-db-connector-0123456789abcdef",
-		NetworkMode:      "gateway-db-0123456789abcdef",
-		NetworkAliases:   []string{"db-0123456789abcdef"},
-		IPv4Address:      "172.22.0.2",
-		RuntimeProfile:   "secure",
-		InternalWorkload: "managed-database-connector",
-		Labels: map[string]string{
-			"wiolett.gateway.managed-database.connector": "true",
-		},
-		Binds: []string{"/var/lib/docker-daemon/database-tunnel:/run/gateway-db:ro"},
-	}
-
-	networking, err := client.networkingConfigForCreate(config)
-	if err != nil {
-		t.Fatalf("unexpected networking config error: %v", err)
-	}
-	endpoint := networking.EndpointsConfig[config.NetworkMode]
-	if endpoint == nil || endpoint.IPAMConfig == nil {
-		t.Fatal("expected managed connector endpoint IPAM config")
-	}
-	if got := endpoint.IPAMConfig.IPv4Address.String(); got != config.IPv4Address {
-		t.Fatalf("expected stable IPv4 address %q, got %q", config.IPv4Address, got)
-	}
-}
-
 func TestManagedConnectorIPAMKeepsStableAddressOutsideDynamicRange(t *testing.T) {
 	config, reservedAddress, err := managedConnectorIPAM("172.22.0.0/24", "172.22.0.1")
 	if err != nil {
@@ -869,18 +796,6 @@ func TestManagedConnectorIPAMKeepsStableAddressOutsideDynamicRange(t *testing.T)
 	}
 	if got := config.Gateway.String(); got != "172.22.0.1" {
 		t.Fatalf("expected gateway 172.22.0.1, got %s", got)
-	}
-}
-
-func TestStaticIPv4AddressIsRejectedForUserWorkload(t *testing.T) {
-	client := &Client{databaseTunnelDirectory: "/var/lib/docker-daemon/database-tunnel"}
-	_, err := client.networkingConfigForCreate(ContainerCreateConfig{
-		Name:        "application",
-		NetworkMode: "application-network",
-		IPv4Address: "172.22.0.2",
-	})
-	if err == nil || !strings.Contains(err.Error(), "reserved for managed database connectors") {
-		t.Fatalf("expected user workload static address rejection, got %v", err)
 	}
 }
 
@@ -1078,20 +993,6 @@ func TestEnsureImageCommandRequiresImmutableDigest(t *testing.T) {
 		(&DockerPlugin{}).handleImageCommand(&pb.DockerImageCommand{Action: "ensure", ImageRef: imageRef}, result)
 		if result.Success || !strings.Contains(result.Error, "immutable sha256 digest") {
 			t.Fatalf("ensure %q result = %#v, want immutable digest rejection", imageRef, result)
-		}
-	}
-}
-
-func TestEnsureLocalImageCommandRequiresFixedDevelopmentImage(t *testing.T) {
-	for _, imageRef := range []string{
-		"registry.example.com/gateway/database-connector:dev",
-		"gateway-database-connector:latest",
-		"gateway-db-connector:managed-db-final",
-	} {
-		result := &pb.CommandResult{}
-		(&DockerPlugin{}).handleImageCommand(&pb.DockerImageCommand{Action: "ensure-local", ImageRef: imageRef}, result)
-		if result.Success || !strings.Contains(result.Error, "fixed development connector image") {
-			t.Fatalf("ensure-local %q result = %#v, want fixed image rejection", imageRef, result)
 		}
 	}
 }
