@@ -6,7 +6,7 @@ AI-first but not AI-dependent self-hosted infrastructure control plane for nginx
 
 ## Why Gateway
 
-Gateway gives small infrastructure teams one product for the daily work that usually lives across nginx configs, shell scripts, Docker hosts, certificate folders, database clients, dashboards, and alert tools.
+Gateway gives infrastructure, platform, and SRE teams one product for the daily work that usually lives across nginx configs, shell scripts, Docker hosts, certificate folders, database clients, dashboards, and alert tools.
 
 AI Workspace is the recommended intent-driven interface: start from a complete Scenario or describe the desired outcome, review a proposed plan, and decide whether to execute it. The Operations Console remains a complete independent interface for the same infrastructure, so installing, operating, automating, and recovering Gateway does not depend on AI.
 
@@ -18,6 +18,14 @@ Use it when you want to:
 - Manage Docker containers, deployments, portable or registry-backed `.gwca` archives, logs, files, consoles, secrets, and registry workflows from one place.
 - Expose controlled automation through API tokens, OAuth, CI/CD webhooks, and MCP clients.
 - Start from an AI Workspace Scenario or use Plan Mode to research and validate a multi-step change before explicitly confirming execution.
+
+## Where Gateway Fits
+
+Gateway is not a lightweight Docker panel for one virtual machine and two containers. At that scale, Docker Compose and direct host administration are usually simpler.
+
+It is also not a replacement for Kubernetes, infrastructure-as-code, a professional observability or SIEM platform, backup and disaster-recovery systems, or specialist database tooling. Gateway works alongside those systems instead of pretending to collapse every infrastructure discipline into one product.
+
+Gateway is the operational control plane between them: one governed place for everyday ingress, workload, certificate, database, node, access, audit, and automation workflows across production fleets—without requiring every operator to assemble those workflows from root shells and disconnected tools.
 
 ## Fastest Install
 
