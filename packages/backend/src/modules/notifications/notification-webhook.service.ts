@@ -13,11 +13,21 @@ const logger = createChildLogger('WebhookService');
 
 type WebhookViewOptions = {
   revealHeaders?: boolean;
+  revealUrl?: boolean;
 };
 
 export function redactWebhookHeaders(headers: unknown): unknown {
   if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return headers;
   return Object.fromEntries(Object.keys(headers).map((key) => [key, '********']));
+}
+
+export function redactWebhookUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    return `${url.protocol}//${url.host}/********`;
+  } catch {
+    return '********';
+  }
 }
 
 export class NotificationWebhookService {
@@ -62,6 +72,7 @@ export class NotificationWebhookService {
 
     const data = rows.map((r) => ({
       ...r,
+      url: options.revealUrl ? r.url : redactWebhookUrl(r.url),
       signingSecret: r.signingSecret ? '********' : null,
       headers: options.revealHeaders ? r.headers : redactWebhookHeaders(r.headers),
     }));
@@ -80,6 +91,7 @@ export class NotificationWebhookService {
     if (!webhook) throw new AppError(404, 'NOT_FOUND', 'Webhook not found');
     return {
       ...webhook,
+      url: options.revealUrl ? webhook.url : redactWebhookUrl(webhook.url),
       signingSecret: webhook.signingSecret ? '********' : null,
       headers: options.revealHeaders ? webhook.headers : redactWebhookHeaders(webhook.headers),
     };

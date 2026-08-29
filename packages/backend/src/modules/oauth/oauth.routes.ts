@@ -190,6 +190,15 @@ async function handleAuthorize(c: Context<AppEnv>, defaultResource?: string) {
     return c.redirect(loginUrl.href, 302);
   }
   if (user.isBlocked) return c.redirect(oauthBrowserErrorUrl('ACCOUNT_BLOCKED', 'Account is blocked'), 302);
+  if (c.get('impersonation')) {
+    return c.redirect(
+      oauthBrowserErrorUrl(
+        'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
+        'OAuth authorization is unavailable while impersonating'
+      ),
+      302
+    );
+  }
 
   let pending: Awaited<ReturnType<OAuthService['createConsentRequest']>>;
   try {
@@ -316,6 +325,13 @@ oauthRoutes.get('/consent/:requestId', async (c) => {
 });
 
 oauthRoutes.post('/consent/:requestId/approve', async (c) => {
+  if (c.get('impersonation')) {
+    throw new AppError(
+      403,
+      'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
+      'OAuth authorization is unavailable while impersonating'
+    );
+  }
   const requestId = z.string().min(1).parse(c.req.param('requestId'));
   const input = OAuthConsentDecisionSchema.parse(await c.req.json().catch(() => ({})));
   const redirectUrl = await oauthService().approveConsent(requestId, c.get('user')!, input.scopes);

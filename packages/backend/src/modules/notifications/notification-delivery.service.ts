@@ -2,6 +2,7 @@ import { and, count, desc, eq, lt, ne, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { notificationDeliveryLog, notificationWebhooks } from '@/db/schema/index.js';
 import { buildWhere } from '@/lib/utils.js';
+import { redactWebhookUrl } from './notification-webhook.service.js';
 
 const DELIVERY_BODY_PREVIEW_CHARS = 2048;
 
@@ -24,7 +25,7 @@ interface DeliveryListQuery {
 export class NotificationDeliveryService {
   constructor(private db: DrizzleClient) {}
 
-  async list(query: DeliveryListQuery) {
+  async list(query: DeliveryListQuery, options: { revealSensitive?: boolean } = {}) {
     const conditions: SQL[] = [];
 
     if (query.webhookId) {
@@ -80,12 +81,13 @@ export class NotificationDeliveryService {
         const response = bodyPreview(row.responseBody);
         return {
           ...row,
+          requestUrl: options.revealSensitive ? row.requestUrl : redactWebhookUrl(row.requestUrl),
           requestBody: undefined,
           responseBody: undefined,
-          requestBodyPreview: request.preview,
-          requestBodyTruncated: request.truncated,
-          responseBodyPreview: response.preview,
-          responseBodyTruncated: response.truncated,
+          requestBodyPreview: options.revealSensitive ? request.preview : null,
+          requestBodyTruncated: options.revealSensitive ? request.truncated : false,
+          responseBodyPreview: options.revealSensitive ? response.preview : null,
+          responseBodyTruncated: options.revealSensitive ? response.truncated : false,
         };
       }),
       total,
@@ -95,13 +97,20 @@ export class NotificationDeliveryService {
     };
   }
 
-  async getById(id: string) {
+  async getById(id: string, options: { revealSensitive?: boolean } = {}) {
     const [row] = await this.db
       .select()
       .from(notificationDeliveryLog)
       .where(eq(notificationDeliveryLog.id, id))
       .limit(1);
-    return row ?? null;
+    if (!row) return null;
+    if (options.revealSensitive) return row;
+    return {
+      ...row,
+      requestUrl: redactWebhookUrl(row.requestUrl),
+      requestBody: null,
+      responseBody: null,
+    };
   }
 
   /** Get deliveries pending retry (nextRetryAt <= now) */

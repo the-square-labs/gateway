@@ -49,20 +49,21 @@ function createApp() {
   return app;
 }
 
-function responseWebhook(revealHeaders: boolean) {
+function responseWebhook(revealSensitive: boolean) {
   return {
     id: WEBHOOK_ID,
-    headers: revealHeaders ? { Authorization: 'Bearer secret' } : { Authorization: '********' },
+    url: revealSensitive ? 'https://hooks.example.test/services/secret-token' : 'https://hooks.example.test/********',
+    headers: revealSensitive ? { Authorization: 'Bearer secret' } : { Authorization: '********' },
   };
 }
 
-describe('notification webhook header visibility', () => {
+describe('notification webhook secret visibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.scopes = [];
     mocks.webhookService.list.mockImplementation((_query, options) =>
       Promise.resolve({
-        data: [responseWebhook(options?.revealHeaders === true)],
+        data: [responseWebhook(options?.revealHeaders === true && options?.revealUrl === true)],
         total: 1,
         page: 1,
         limit: 20,
@@ -70,7 +71,7 @@ describe('notification webhook header visibility', () => {
       })
     );
     mocks.webhookService.getById.mockImplementation((_id, options) =>
-      Promise.resolve(responseWebhook(options?.revealHeaders === true))
+      Promise.resolve(responseWebhook(options?.revealHeaders === true && options?.revealUrl === true))
     );
   });
 
@@ -78,7 +79,7 @@ describe('notification webhook header visibility', () => {
     ['viewer', ['notifications:webhooks:view'], false],
     ['editor', ['notifications:webhooks:edit'], true],
     ['manager', ['notifications:manage'], true],
-  ])('passes %s header visibility to list and detail reads', async (_role, scopes, revealHeaders) => {
+  ])('passes %s secret visibility to list and detail reads', async (_role, scopes, revealSensitive) => {
     mocks.scopes = scopes;
     const app = createApp();
 
@@ -87,9 +88,19 @@ describe('notification webhook header visibility', () => {
 
     expect(listResponse.status).toBe(200);
     expect(detailResponse.status).toBe(200);
-    expect(mocks.webhookService.list).toHaveBeenCalledWith(expect.any(Object), { revealHeaders });
-    expect(mocks.webhookService.getById).toHaveBeenCalledWith(WEBHOOK_ID, { revealHeaders });
-    expect(JSON.stringify(await listResponse.json())).toContain(revealHeaders ? 'Bearer secret' : '********');
-    expect(JSON.stringify(await detailResponse.json())).toContain(revealHeaders ? 'Bearer secret' : '********');
+    expect(mocks.webhookService.list).toHaveBeenCalledWith(expect.any(Object), {
+      revealHeaders: revealSensitive,
+      revealUrl: revealSensitive,
+    });
+    expect(mocks.webhookService.getById).toHaveBeenCalledWith(WEBHOOK_ID, {
+      revealHeaders: revealSensitive,
+      revealUrl: revealSensitive,
+    });
+    const listBody = JSON.stringify(await listResponse.json());
+    const detailBody = JSON.stringify(await detailResponse.json());
+    expect(listBody).toContain(revealSensitive ? 'Bearer secret' : '********');
+    expect(detailBody).toContain(revealSensitive ? 'Bearer secret' : '********');
+    expect(listBody).toContain(revealSensitive ? 'secret-token' : '/********');
+    expect(detailBody).toContain(revealSensitive ? 'secret-token' : '/********');
   });
 });

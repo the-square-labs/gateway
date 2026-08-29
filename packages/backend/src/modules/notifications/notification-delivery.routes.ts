@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
+import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireAnyScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -24,6 +25,10 @@ export const deliveryRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiVali
 
 deliveryRoutes.use('*', authMiddleware);
 
+function canRevealDeliveryPayloads(c: { get(key: 'effectiveScopes'): string[] | undefined }): boolean {
+  return hasScope(c.get('effectiveScopes') ?? [], 'notifications:manage');
+}
+
 // GET / — list deliveries
 deliveryRoutes.openapi(
   {
@@ -38,7 +43,7 @@ deliveryRoutes.openapi(
   async (c) => {
     const service = container.resolve(NotificationDeliveryService);
     const query = DeliveryListQuerySchema.parse(c.req.query());
-    const result = await service.list(query);
+    const result = await service.list(query, { revealSensitive: canRevealDeliveryPayloads(c) });
     return c.json(result);
   }
 );
@@ -75,7 +80,9 @@ deliveryRoutes.openapi(
   },
   async (c) => {
     const service = container.resolve(NotificationDeliveryService);
-    const delivery = await service.getById(c.req.param('id')!);
+    const delivery = await service.getById(c.req.param('id')!, {
+      revealSensitive: canRevealDeliveryPayloads(c),
+    });
     if (!delivery) throw new AppError(404, 'DELIVERY_NOT_FOUND', 'Not found');
     return c.json({ data: delivery });
   }

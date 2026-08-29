@@ -31,6 +31,17 @@ const SESSION: SessionData = {
   expiresAt: Date.now() + 60_000,
 };
 
+const IMPERSONATION_ACTOR: User = {
+  ...USER,
+  id: '33333333-3333-4333-8333-333333333333',
+  oidcSubject: 'oidc-actor',
+  email: 'operator@example.com',
+  name: 'Operator',
+  groupId: '44444444-4444-4444-8444-444444444444',
+  groupName: 'operator',
+  scopes: ['admin:users:impersonate', ...USER.scopes],
+};
+
 function createApp() {
   const app = new Hono<AppEnv>();
   app.onError(errorHandler);
@@ -111,6 +122,55 @@ function registerSession(user: User = USER) {
             parentId: null,
             name: user.groupName,
             scopes: user.scopes,
+          },
+        ]),
+      },
+    },
+  } as unknown as DrizzleClient);
+}
+
+function registerImpersonationSession() {
+  const session: SessionData = {
+    ...SESSION,
+    purpose: 'impersonation',
+    impersonation: {
+      actorUserId: IMPERSONATION_ACTOR.id,
+      originalSessionId: 'original-session',
+    },
+  };
+  container.registerInstance(SessionService, {
+    getSession: vi.fn().mockResolvedValue(session),
+    getOriginalSessionForImpersonation: vi.fn().mockResolvedValue({
+      sessionId: 'original-session',
+      session: {
+        ...SESSION,
+        userId: IMPERSONATION_ACTOR.id,
+        user: IMPERSONATION_ACTOR,
+        purpose: 'user',
+      },
+    }),
+    validateCsrfToken: vi.fn().mockResolvedValue(true),
+    updateSession: vi.fn().mockResolvedValue(undefined),
+    refreshSession: vi.fn().mockResolvedValue(false),
+  } as unknown as SessionService);
+  container.registerInstance(TOKENS.DrizzleClient, {
+    query: {
+      users: {
+        findFirst: vi.fn().mockResolvedValueOnce(USER).mockResolvedValueOnce(IMPERSONATION_ACTOR),
+      },
+      permissionGroups: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: USER.groupId,
+            parentId: null,
+            name: USER.groupName,
+            scopes: USER.scopes,
+          },
+          {
+            id: IMPERSONATION_ACTOR.groupId,
+            parentId: null,
+            name: IMPERSONATION_ACTOR.groupName,
+            scopes: IMPERSONATION_ACTOR.scopes,
           },
         ]),
       },
@@ -303,6 +363,24 @@ describe('OAuth authorization route', () => {
     expect(redirect.pathname).toBe('/oauth/error');
     expect(redirect.searchParams.get('code')).toBe('INVALID_REQUEST');
   });
+
+  it('does not issue OAuth credentials from an impersonation session', async () => {
+    registerImpersonationSession();
+    const createConsentRequest = vi.fn();
+    registerOAuthService({ createConsentRequest });
+
+    const response = await createApp().request(`${authorizePath}&scope=nodes%3Adetails`, {
+      headers: { Cookie: 'session_id=impersonation-session' },
+    });
+    const location = response.headers.get('location');
+
+    expect(response.status).toBe(302);
+    expect(location).toBeTruthy();
+    const redirect = new URL(location!);
+    expect(redirect.pathname).toBe('/oauth/error');
+    expect(redirect.searchParams.get('code')).toBe('IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN');
+    expect(createConsentRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe('OAuth client and token routes', () => {
@@ -415,5 +493,26 @@ describe('OAuth consent routes', () => {
       uri: 'https://client.example.com/callback',
       isExternal: true,
     });
+  });
+
+  it('does not approve consent from an impersonation session', async () => {
+    registerImpersonationSession();
+    const approveConsent = vi.fn();
+    registerOAuthService({ approveConsent });
+
+    const response = await createApp().request('/api/oauth/consent/request-1/approve', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=impersonation-session',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf-token',
+      },
+      body: JSON.stringify({ scopes: ['nodes:details'] }),
+    });
+    const body = (await response.json()) as JsonRecord;
+
+    expect(response.status).toBe(403);
+    expect(body.code).toBe('IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN');
+    expect(approveConsent).not.toHaveBeenCalled();
   });
 });

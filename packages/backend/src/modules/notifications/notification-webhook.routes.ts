@@ -62,7 +62,8 @@ webhookRoutes.openapi(
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
     const query = WebhookListQuerySchema.parse(c.req.query());
-    const result = await service.list(query, { revealHeaders: canRevealWebhookHeaders(c) });
+    const revealSensitive = canRevealWebhookHeaders(c);
+    const result = await service.list(query, { revealHeaders: revealSensitive, revealUrl: revealSensitive });
     return c.json(result);
   }
 );
@@ -80,7 +81,11 @@ webhookRoutes.openapi(
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
-    const webhook = await service.getById(c.req.param('id')!, { revealHeaders: canRevealWebhookHeaders(c) });
+    const revealSensitive = canRevealWebhookHeaders(c);
+    const webhook = await service.getById(c.req.param('id')!, {
+      revealHeaders: revealSensitive,
+      revealUrl: revealSensitive,
+    });
     return c.json({ data: webhook });
   }
 );
