@@ -152,7 +152,7 @@ The result is a PKI-backed trust model: short-lived enrollment tokens get a node
 
 ## Roadmap
 
-Gateway is already focused on production operations rather than a narrow MVP. The active direction is to make it safer, easier to operate, and more useful across medium and small infrastructure fleets.
+Gateway is already focused on production operations rather than a narrow MVP. The active direction is to make it safer, easier to operate, and more capable across complex, distributed, and regulated infrastructure estates.
 
 Completed foundations:
 
