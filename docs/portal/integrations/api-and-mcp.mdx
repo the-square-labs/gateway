@@ -1,0 +1,24 @@
+---
+title: REST API and MCP
+description: Automate Gateway through the same product contracts used by the Console.
+section: Integrations and automation
+order: 3
+audience: [developer, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# REST API and MCP
+
+The REST API exposes documented resource operations with session, API-token, or OAuth authentication as appropriate. Remote MCP provides task-oriented tools over the same scopes, validation, entitlements, and audit trail.
+
+Automation should:
+
+- use a dedicated least-privilege identity;
+- treat `202` or task creation as accepted work, then poll durable state;
+- retry only idempotent operations or use the operation's retry contract;
+- handle `401`, `403`, `409`, `422`, and node-offline failures distinctly;
+- avoid parsing UI text when a structured API field exists;
+- record resource IDs and request IDs without logging secrets.
+
+Use the generated OpenAPI surface for exact request and response schemas. Product guides describe the required resource ordering and operational consequences that schemas alone cannot capture.

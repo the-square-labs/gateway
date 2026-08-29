@@ -1,0 +1,17 @@
+---
+title: Databases overview
+description: Manage external connections and private managed PostgreSQL, Redis, and ClickHouse instances.
+section: Databases
+order: 1
+audience: [database-operator, platform-engineer, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Databases overview
+
+Gateway supports saved external connections and managed PostgreSQL, Redis, and ClickHouse instances. Credentials are encrypted at rest and revealed only through explicit permission.
+
+External connections keep lifecycle ownership outside Gateway. Managed instances run on database-profile nodes and are private by default. Publishing TCP is an explicit opt-in and does not open host firewalls automatically.
+
+The detail page combines health, metrics, Explorer or Console capability, logs, extensions or engine settings, credentials, certificate operations, resizing, pause/unpause, restart, and deletion. Available tabs depend on engine, health, node connectivity, and scopes.

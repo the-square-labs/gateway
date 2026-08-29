@@ -166,6 +166,27 @@ afterEach(() => {
 });
 
 describe('AI websocket authentication', () => {
+  it('rejects setup-purpose sessions outside the setup flow', async () => {
+    registerAiWsDependencies(USER);
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue({
+        userId: USER.id,
+        user: USER,
+        purpose: 'setup',
+        setupSessionId: 'setup-session-1',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      }),
+    } as unknown as SessionService);
+    const ws = createWs();
+    const handlers = createWSHandlers();
+    handlers.onOpen(new Event('open'), ws as any);
+
+    await expect(authenticateWSConnection(ws as any, 'setup-session')).resolves.toBe(false);
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'auth_error', message: 'Invalid or expired session' }));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('rejects blocked session users', async () => {
     registerAiWsDependencies({ ...USER, isBlocked: true });
     const ws = createWs();

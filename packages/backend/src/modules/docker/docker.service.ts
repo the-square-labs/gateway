@@ -1,7 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeployments, dockerManagedVolumes, nodes } from '@/db/schema/index.js';
-import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
@@ -10,6 +9,13 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import { type DockerRuntimeStatus, DockerRuntimeStatusSchema } from './docker.schemas.js';
+import {
+  CONTAINER_LIFECYCLE_TIMEOUT_BUFFER_SECONDS,
+  DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS,
+  type DockerGpuAttachmentUser,
+  GPU_USAGE_INSPECTION_BATCH_SIZE,
+  logger,
+} from './docker.service.shared.js';
 import { type DockerAccessResourceService, hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
   createContainer as createDockerContainer,
@@ -42,7 +48,12 @@ import {
   pullImage as pullDockerImage,
   removeImage as removeDockerImage,
 } from './docker-image-operations.js';
-import { filterGatewayInternalContainers, isGatewayInternalContainer } from './docker-internal-containers.js';
+import {
+  assertUserContainerAccessible,
+  filterGatewayInternalContainers,
+  inspectUserContainer as inspectUserSelectedContainer,
+  isGatewayInternalContainer,
+} from './docker-internal-containers.js';
 import {
   type ContainerAction,
   type DockerLifecycleWatchContext,
@@ -103,19 +114,7 @@ import {
   writeVolumeFile as writeDockerVolumeFile,
 } from './docker-volume-network-operations.js';
 
-const logger = createChildLogger('DockerManagementService');
-const DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS = 20;
-const CONTAINER_LIFECYCLE_TIMEOUT_BUFFER_SECONDS = 30;
-const GPU_USAGE_INSPECTION_BATCH_SIZE = 8;
-
-export type { ContainerTransition } from './docker-container-transitions.js';
-
-export interface DockerGpuAttachmentUser {
-  containerId: string;
-  name: string;
-  scopeResourceId: string | null;
-  deviceIds: string[];
-}
+export * from './docker.service.shared.js';
 
 export class DockerManagementService {
   private static readonly LONG_DOCKER_OPERATION_TIMEOUT_MS = 600000; // 10 minutes
@@ -314,6 +313,8 @@ export class DockerManagementService {
       auditService: this.auditService,
       eventBus: this.eventBus,
       parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
+      assertContainerMutationAllowed: (nodeId: string, containerId: string) =>
+        this.assertContainerMutationAllowed(nodeId, containerId),
     };
   }
 
@@ -457,9 +458,16 @@ export class DockerManagementService {
     return labels?.[DOCKER_DEPLOYMENT_MANAGED_LABEL] === 'true';
   }
 
-  private async assertNotManagedDeploymentInternal(nodeId: string, containerId: string) {
+  async assertContainerMutationAllowed(nodeId: string, containerId: string) {
     const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
     const data = this.parseResult(result);
+    if (isGatewayInternalContainer(data)) {
+      throw new AppError(
+        409,
+        'GATEWAY_INTERNAL_CONTAINER',
+        'This container is managed by Gateway and cannot be modified directly.'
+      );
+    }
     if (this.isManagedDeploymentInternal(data)) {
       throw new AppError(
         409,
@@ -862,6 +870,15 @@ export class DockerManagementService {
     return data;
   }
 
+  assertContainerUserAccessible(data: Record<string, any> | null | undefined): void {
+    assertUserContainerAccessible(data);
+  }
+
+  /** Inspect a container selected through a user-facing Docker or AI API. */
+  async inspectUserContainer(nodeId: string, containerId: string) {
+    return inspectUserSelectedContainer(this, nodeId, containerId);
+  }
+
   private async gpuInventoryForNode(nodeId: string): Promise<unknown[]> {
     const liveHealth = this.nodeRegistry.getNode(nodeId)?.lastHealthReport as Record<string, unknown> | undefined;
     if (Array.isArray(liveHealth?.gpuDevices)) return liveHealth.gpuDevices;
@@ -944,7 +961,7 @@ export class DockerManagementService {
         this.assertDockerRuntimeProfileAvailable(nodeId, profile, currentProfile),
       assertNameAvailable: (nodeId, name) => this.assertNameAvailable(nodeId, name),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
-        this.assertNotManagedDeploymentInternal(nodeId, containerId),
+        this.assertContainerMutationAllowed(nodeId, containerId),
       translateNameConflict: (err, name) => this.translateNameConflict(err, name),
       resolveContainerName: (nodeId, containerId) => this.resolveContainerName(nodeId, containerId),
       resolveExpectedRecreateState: (nodeId, containerId) => this.resolveExpectedRecreateState(nodeId, containerId),
@@ -1080,7 +1097,7 @@ export class DockerManagementService {
 
   async getContainerEnv(nodeId: string, containerId: string) {
     await this.validateDockerNode(nodeId);
-    await this.assertNotManagedDeploymentInternal(nodeId, containerId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     return getDockerContainerEnv(this.envOperationContext(), nodeId, containerId);
   }
 
@@ -1518,6 +1535,7 @@ export class DockerManagementService {
 
   async writeFile(nodeId: string, containerId: string, path: string, content: string | Buffer, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await writeDockerFile(this.readOperationContext(), nodeId, containerId, path, content, userId);
   }
 
@@ -1529,41 +1547,49 @@ export class DockerManagementService {
     userId: string
   ) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await createDockerFile(this.readOperationContext(), nodeId, containerId, path, content, userId);
   }
 
   async initFileUpload(nodeId: string, containerId: string, path: string, totalBytes: number, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     return initDockerFileUpload(this.readOperationContext(), nodeId, containerId, path, totalBytes, userId);
   }
 
   async appendFileUploadChunk(nodeId: string, containerId: string, uploadId: string, offset: number, content: Buffer) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     return appendDockerFileUploadChunk(this.readOperationContext(), nodeId, containerId, uploadId, offset, content);
   }
 
   async completeFileUpload(nodeId: string, containerId: string, uploadId: string, path: string, totalBytes: number) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await completeDockerFileUpload(this.readOperationContext(), nodeId, containerId, uploadId, path, totalBytes);
   }
 
   async abortFileUpload(nodeId: string, containerId: string, uploadId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await abortDockerFileUpload(this.readOperationContext(), nodeId, containerId, uploadId);
   }
 
   async createDirectory(nodeId: string, containerId: string, path: string, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await createDockerDirectory(this.readOperationContext(), nodeId, containerId, path, userId);
   }
 
   async deleteFile(nodeId: string, containerId: string, path: string, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await deleteDockerFile(this.readOperationContext(), nodeId, containerId, path, userId);
   }
 
   async moveFile(nodeId: string, containerId: string, fromPath: string, toPath: string, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertContainerMutationAllowed(nodeId, containerId);
     await moveDockerFile(this.readOperationContext(), nodeId, containerId, fromPath, toPath, userId);
   }
 }

@@ -253,6 +253,7 @@ async function authenticateFromSession(sessionId: string): Promise<LiveSessionUs
   const result = await resolveLiveSessionUser(sessionId);
   if (
     !result ||
+    result.session.purpose === 'setup' ||
     (result.impersonation && !result.impersonation.authorized) ||
     (!result.impersonation && requiresSessionMfaReauthentication(result.user, result.session))
   ) {

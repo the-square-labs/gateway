@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,9 +126,19 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 	if p.cfg.Docker.Mode == "databases" {
 		return "", nil
 	}
+	listenerStatuses := map[string]managedDatabaseHostListenerStatus{}
+	if p.databaseListeners != nil {
+		listenerStatuses = p.databaseListeners.reconcile(context.Background(), p.relayGrants.get())
+	}
 	if p.registryProxy != nil {
 		p.registryProxy.reconcileGrants()
 	}
-	detail, err := json.Marshal(map[string]string{"socketPath": databaseTunnelSocketPath(p.cfg.StateDir)})
+	detail, err := json.Marshal(struct {
+		SocketPath       string                                       `json:"socketPath"`
+		ListenerStatuses map[string]managedDatabaseHostListenerStatus `json:"listenerStatuses"`
+	}{
+		SocketPath:       databaseTunnelSocketPath(p.cfg.StateDir),
+		ListenerStatuses: listenerStatuses,
+	})
 	return string(detail), err
 }

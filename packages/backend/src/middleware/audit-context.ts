@@ -16,6 +16,14 @@ const FALLBACK_AUDIT_SKIP_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   // Personal UI/AI preferences are user state, not an auditable security or
   // administrative mutation.
   { method: 'PATCH', pattern: /^\/auth\/me\/preferences$/ },
+  // Enrollment/challenge initialization only creates short-lived cache state.
+  // Audit the eventual confirm, verify, reset, or credential mutation instead.
+  { method: 'POST', pattern: /^\/auth\/me\/mfa\/totp\/setup$/ },
+  { method: 'POST', pattern: /^\/auth\/me\/passkeys\/options$/ },
+  { method: 'POST', pattern: /^\/auth\/me\/mfa\/recovery-codes\/passkey\/options$/ },
+  { method: 'POST', pattern: /^\/auth\/mfa\/enrollment\/totp\/setup$/ },
+  { method: 'POST', pattern: /^\/auth\/mfa\/enrollment\/passkey\/options$/ },
+  { method: 'POST', pattern: /^\/auth\/(?:mfa\/)?passkeys?\/options$/ },
   { method: 'POST', pattern: /^\/api\/finalize-setup\/mfa-reminder\/hide$/ },
   { method: 'PUT', pattern: /^\/api\/finalize-setup\/steps\/[^/]+$/ },
   { method: 'POST', pattern: /^\/api\/setup\/(?:unlock|wizard\/session)$/ },

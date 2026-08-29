@@ -5,6 +5,7 @@ import type {
   InferenceActivityQuery,
   InferenceLimitInput,
   InferenceLimitPolicy,
+  InferenceLimitResetResult,
   InferenceModel,
   InferenceOAuthSession,
   InferenceProviderCatalogItem,
@@ -12,6 +13,7 @@ import type {
   InferenceSelfUsage,
   InferenceSystemUsage,
   InferenceToken,
+  InferenceUsageOverview,
   InferenceUserUsage,
 } from "@/types/inference";
 import type { ApiClientBaseConstructor } from "./api-mixins";
@@ -37,6 +39,10 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
       const usage = await this.request<InferenceSelfUsage>("/inference/usage/self");
       publishInferenceSelfUsage(usage);
       return usage;
+    }
+
+    getInferenceSelfUsageOverview(): Promise<InferenceUsageOverview> {
+      return this.request("/inference/usage/self/overview");
     }
 
     getInferenceSystemUsage(): Promise<InferenceSystemUsage> {
@@ -193,6 +199,17 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
       await this.request(`/inference/limits/users/${id}`, { method: "DELETE" });
       this.invalidateCache("req:/api/inference/usage");
       this.invalidateCache("req:/api/inference/limits/users");
+    }
+
+    async resetInferenceUserLimits(id: string): Promise<InferenceLimitResetResult> {
+      const result = await this.request<InferenceLimitResetResult>(
+        `/inference/limits/users/${id}/reset`,
+        { method: "POST" }
+      );
+      this.invalidateCache("req:/api/inference/usage");
+      this.invalidateCache("req:/api/inference/usage/users");
+      this.invalidateCache("req:/api/inference/limits/users");
+      return result;
     }
   };
 }

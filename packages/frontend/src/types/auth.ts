@@ -132,6 +132,7 @@ export interface AuthProvisioningSettings {
   };
   generalSettings: {
     publicUrl: string | null;
+    updateChannel: "stable" | "preview";
     hideExternalBranding?: boolean;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;

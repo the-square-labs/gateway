@@ -7,10 +7,11 @@ import {
   pathParamSchema,
   UnknownDataResponseSchema,
 } from '@/lib/openapi.js';
+import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 
 const VersionParamSchema = pathParamSchema('version');
 const UpdateRequestSchema = z.object({
-  version: z.string().regex(/^v?\d+\.\d+\.\d+$/),
+  version: z.string().regex(RELEASE_VERSION_PATTERN),
 });
 
 export const systemVersionRoute = appRoute({

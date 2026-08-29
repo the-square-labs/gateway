@@ -908,7 +908,8 @@ export class DockerDeploymentService {
     deploymentId: string,
     networkName: string,
     enabled: boolean,
-    userId: string | null
+    userId: string | null,
+    forceRollout = false
   ) {
     if (!/^gateway-db-[a-z0-9-]{8,64}$/.test(networkName)) {
       throw new AppError(400, 'INVALID_MANAGED_DATABASE_NETWORK', 'Invalid managed database network');
@@ -919,16 +920,17 @@ export class DockerDeploymentService {
     const networks = enabled
       ? [...new Set([...currentNetworks, networkName])]
       : currentNetworks.filter((name) => name !== networkName);
-    if (
-      networks.length === currentNetworks.length &&
-      currentNetworks.every((name, index) => name === networks[index])
-    ) {
+    const unchanged =
+      networks.length === currentNetworks.length && currentNetworks.every((name, index) => name === networks[index]);
+    if (unchanged && !forceRollout) {
       return current;
     }
-    await this.db
-      .update(dockerDeployments)
-      .set({ desiredConfig: { ...current.desiredConfig, networks }, updatedById: userId, updatedAt: new Date() })
-      .where(eq(dockerDeployments.id, deploymentId));
+    if (!unchanged) {
+      await this.db
+        .update(dockerDeployments)
+        .set({ desiredConfig: { ...current.desiredConfig, networks }, updatedById: userId, updatedAt: new Date() })
+        .where(eq(dockerDeployments.id, deploymentId));
+    }
     this.emit('updated', deploymentId, nodeId, { managedDatabaseNetwork: enabled ? 'attached' : 'detached' });
     return this.deploy(nodeId, deploymentId, {}, userId, 'managed_database_binding');
   }

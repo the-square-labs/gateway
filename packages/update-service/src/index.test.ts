@@ -8,7 +8,7 @@ const env = {
 	GITHUB_INFERENCE_CORE_TOKEN: "private-core-token",
 } as Env;
 
-function release(tag_name: string) {
+function release(tag_name: string, prerelease = tag_name.includes("-rc.")) {
 	return {
 		tag_name,
 		name: tag_name,
@@ -16,7 +16,7 @@ function release(tag_name: string) {
 		html_url: `https://github.com/the-square-labs/gateway/releases/tag/${tag_name}`,
 		published_at: "2026-08-27T00:00:00Z",
 		draft: false,
-		prerelease: false,
+		prerelease,
 		assets: [],
 	};
 }
@@ -123,6 +123,110 @@ describe("gateway update facade", () => {
 			reason,
 			target: { tag_name: target },
 		});
+	});
+
+	it("keeps release candidates out of the stable channel", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(
+				Response.json([release("v1.1.10-rc.2"), release("v1.1.9")]),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v1.1.9",
+			),
+			env,
+			fetcher,
+		);
+		expect(response.status).toBe(204);
+	});
+
+	it("offers the newest release candidate in the preview channel", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(
+				Response.json([
+					release("v1.1.10-rc.1"),
+					release("v1.1.10-rc.3"),
+					release("v1.1.10-rc.2"),
+				]),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v1.1.9&channel=preview",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			target: { tag_name: "v1.1.10-rc.3" },
+		});
+	});
+
+	it("prefers the final stable release over its release candidates", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(
+				Response.json([release("v1.1.10-rc.3"), release("v1.1.10")]),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v1.1.10-rc.2&channel=preview",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			target: { tag_name: "v1.1.10" },
+		});
+	});
+
+	it("offers the final stable release when an RC installation returns to stable", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(Response.json([release("v1.1.10")]));
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v1.1.10-rc.2&channel=stable",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			target: { tag_name: "v1.1.10" },
+		});
+	});
+
+	it("supports preview component tags with the RC segment before the suffix", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(Response.json([release("v1.2.0-rc.4-nginx")]));
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=nginx-daemon&current=v1.1.9-nginx&channel=preview",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			target: { tag_name: "v1.2.0-rc.4-nginx" },
+		});
+	});
+
+	it("rejects unknown update channels without contacting GitHub", async () => {
+		const fetcher = vi.fn<typeof fetch>();
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v1.1.9&channel=nightly",
+			),
+			env,
+			fetcher,
+		);
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toEqual({
+			error: "invalid_channel",
+		});
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it("does not automatically cross a major version", async () => {

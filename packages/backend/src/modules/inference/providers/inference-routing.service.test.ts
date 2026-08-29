@@ -1,7 +1,94 @@
 import 'reflect-metadata';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { __testOnly, canFailOver, InferenceRoutingService } from './inference-routing.service.js';
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+function routingHarness(options: {
+  affinity: string | null;
+  quotas: Array<number | null>;
+  activeThreads?: number[];
+  strategy?: 'balanced' | 'even' | 'sequential';
+  evalResults?: number[];
+  subsequentAffinity?: string;
+}) {
+  const connections = options.quotas.map((_, index) => ({
+    id: `connection-${index + 1}`,
+    providerId: 'openai',
+    enabled: true,
+    deletedAt: null,
+    routingOrder: index,
+    status: 'healthy',
+    healthReason: null,
+    minimumRemainingPercent: 1,
+  }));
+  const selection = Promise.resolve(connections) as Promise<typeof connections> & {
+    from: () => unknown;
+    where: () => unknown;
+  };
+  selection.from = () => selection;
+  selection.where = () => selection;
+  const findMany = vi.fn();
+  for (const [index, remainingFraction] of options.quotas.entries()) {
+    findMany.mockResolvedValueOnce(
+      remainingFraction === null
+        ? []
+        : [
+            {
+              connectionId: connections[index]!.id,
+              status: 'fresh',
+              dimension: '5h',
+              modelBucket: null,
+              remainingFraction: String(remainingFraction),
+              fetchedAt: new Date('2099-08-28T10:00:00Z'),
+              validUntil: new Date('2099-08-28T11:00:00Z'),
+            },
+          ]
+    );
+  }
+  const db = {
+    select: vi.fn().mockReturnValue(selection),
+    update: vi.fn(),
+    query: {
+      inferenceProviderSettings: {
+        findFirst: vi.fn().mockResolvedValue({ routingStrategy: options.strategy ?? 'balanced' }),
+      },
+      inferenceQuotaSnapshots: { findMany },
+    },
+  };
+  const pipeline = {
+    zremrangebyscore: vi.fn().mockReturnThis(),
+    zcard: vi.fn().mockReturnThis(),
+    exec: vi.fn().mockResolvedValue(
+      connections.flatMap((_, index) => [
+        [null, 0],
+        [null, options.activeThreads?.[index] ?? 0],
+      ])
+    ),
+  };
+  const get = vi.fn().mockResolvedValueOnce(options.affinity);
+  if (options.subsequentAffinity !== undefined) get.mockResolvedValueOnce(options.subsequentAffinity);
+  const evalMock = vi.fn();
+  for (const result of options.evalResults ?? [1]) evalMock.mockResolvedValueOnce(result);
+  const redis = {
+    get,
+    exists: vi.fn().mockResolvedValue(0),
+    pipeline: vi.fn().mockReturnValue(pipeline),
+    eval: evalMock,
+    del: vi.fn().mockResolvedValue(1),
+  };
+  return {
+    service: new InferenceRoutingService(db as never, redis as never),
+    connections,
+    db,
+    redis,
+    pipeline,
+  };
+}
 
 describe('inference routing policy', () => {
   const healthy = {
@@ -36,6 +123,384 @@ describe('inference routing policy', () => {
     }
     expect(highWins).toBeGreaterThan(1_700);
     expect(highWins).toBeLessThan(1_900);
+  });
+
+  it('keeps affinity sticky until it has been inactive for more than one hour', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 60 * 60 * 1000 });
+    const { service, connections, pipeline } = routingHarness({ affinity, quotas: [0.2, 0.8] });
+
+    const selected = await service.select({
+      providerId: 'openai',
+      allowedConnectionIds: connections.map(({ id }) => id),
+      affinityKey: 'thread-1',
+      existingThread: true,
+    });
+
+    expect(selected.connectionId).toBe('connection-1');
+    expect(pipeline.exec).not.toHaveBeenCalled();
+  });
+
+  it('rebalances an idle affinity when another account has at least twice the normalized quota headroom', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 60 * 60 * 1000 - 1 });
+    const { service, connections, redis } = routingHarness({
+      affinity,
+      quotas: [0.2, 0.8],
+      activeThreads: [1, 1],
+      evalResults: [0, 1],
+    });
+
+    const selected = await service.select({
+      providerId: 'openai',
+      allowedConnectionIds: connections.map(({ id }) => id),
+      affinityKey: 'thread-quota',
+      existingThread: true,
+    });
+
+    expect(selected.connectionId).toBe('connection-2');
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      3,
+      expect.stringContaining('inference:affinity:'),
+      'inference:active-threads:connection-1',
+      'inference:active-threads:connection-2',
+      affinity,
+      expect.stringContaining('"connectionId":"connection-2"'),
+      expect.any(String),
+      now,
+      86_400
+    );
+  });
+
+  it('rebalances an idle affinity away from an account with twice the active thread load', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 2 * 60 * 60 * 1000 });
+    const { service, connections } = routingHarness({
+      affinity,
+      quotas: [0.5, 0.5],
+      activeThreads: [6, 2],
+      evalResults: [0, 1],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-load',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-2' });
+  });
+
+  it('does not rebalance a single active thread merely because another account has zero', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 2 * 60 * 60 * 1000 });
+    const { service, connections } = routingHarness({
+      affinity,
+      quotas: [0.5, 0.5],
+      activeThreads: [1, 0],
+      evalResults: [0, 1],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-small-load',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-1' });
+  });
+
+  it('does not apply idle affinity rebalancing to sequential routing', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 2 * 60 * 60 * 1000 });
+    const { service, connections, pipeline } = routingHarness({
+      affinity,
+      quotas: [0.1, 0.9],
+      activeThreads: [20, 0],
+      strategy: 'sequential',
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-sequential',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-1' });
+    expect(pipeline.exec).not.toHaveBeenCalled();
+  });
+
+  it('applies a one-hour hysteresis after a normal account switch', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({
+      connectionId: 'connection-1',
+      lastActivityAt: now - 2 * 60 * 60 * 1000,
+      lastRebalancedAt: now - 30 * 60 * 1000,
+    });
+    const { service, connections, pipeline } = routingHarness({
+      affinity,
+      quotas: [0.1, 0.9],
+      activeThreads: [20, 0],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-hysteresis',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-1' });
+    expect(pipeline.exec).not.toHaveBeenCalled();
+  });
+
+  it('allows a normal idle rebalance once the one-hour hysteresis has elapsed', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({
+      connectionId: 'connection-1',
+      lastActivityAt: now - 2 * 60 * 60 * 1000,
+      lastRebalancedAt: now - 60 * 60 * 1000,
+    });
+    const { service, connections } = routingHarness({
+      affinity,
+      quotas: [0.1, 0.9],
+      activeThreads: [20, 0],
+      evalResults: [0, 1],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-hysteresis-elapsed',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-2' });
+  });
+
+  it('bypasses hysteresis when the pinned account reaches its configured reserve', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({
+      connectionId: 'connection-1',
+      lastActivityAt: now - 2 * 60 * 60 * 1000,
+      lastRebalancedAt: now - 5 * 60 * 1000,
+    });
+    const { service, connections, pipeline } = routingHarness({
+      affinity,
+      quotas: [0.01, 0.9],
+      activeThreads: [20, 0],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-emergency',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-2' });
+    expect(pipeline.exec).not.toHaveBeenCalled();
+  });
+
+  it('does not rebalance an idle affinity while the thread still has an in-flight turn', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 2 * 60 * 60 * 1000 });
+    const { service, connections, pipeline } = routingHarness({
+      affinity,
+      quotas: [0.1, 0.9],
+      activeThreads: [20, 0],
+      evalResults: [1, 1],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-in-flight',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-1' });
+    expect(pipeline.exec).not.toHaveBeenCalled();
+  });
+
+  it('adopts a concurrently committed affinity instead of splitting one waking thread', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const affinity = JSON.stringify({ connectionId: 'connection-1', lastActivityAt: now - 2 * 60 * 60 * 1000 });
+    const concurrent = JSON.stringify({ connectionId: 'connection-3', lastActivityAt: now });
+    const { service, connections } = routingHarness({
+      affinity,
+      quotas: [0.1, 0.8, 0.7],
+      activeThreads: [8, 1, 1],
+      evalResults: [0, 0],
+      subsequentAffinity: concurrent,
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: connections.map(({ id }) => id),
+        affinityKey: 'thread-concurrent',
+        existingThread: true,
+      })
+    ).resolves.toMatchObject({ connectionId: 'connection-3' });
+  });
+
+  it('reads legacy plain affinity values without treating them as immediately idle', () => {
+    expect(__testOnly.parseAffinityRecord('connection-legacy')).toEqual({
+      connectionId: 'connection-legacy',
+      lastActivityAt: null,
+      lastRebalancedAt: null,
+    });
+  });
+
+  it('clears affinity only when the stored value still matches the value that was read', async () => {
+    const affinity = JSON.stringify({
+      connectionId: 'connection-1',
+      lastActivityAt: new Date('2026-08-28T12:00:00.000Z').getTime(),
+      lastRebalancedAt: null,
+    });
+    const { service, redis } = routingHarness({ affinity, quotas: [], evalResults: [0] });
+
+    await service.clearAffinity('thread-clear-race');
+
+    expect(redis.del).not.toHaveBeenCalled();
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining('if current ~= ARGV[1] then return 0 end'),
+      2,
+      expect.stringContaining('inference:affinity:'),
+      'inference:active-threads:connection-1',
+      affinity,
+      expect.any(String)
+    );
+  });
+
+  it('holds and releases a renewable per-thread turn lease', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const { service, redis } = routingHarness({ affinity: null, quotas: [], evalResults: [1, 1] });
+
+    const release = await service.beginAffinityTurn('thread-long-running');
+    await release();
+
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("redis.call('ZADD', KEYS[1]"),
+      1,
+      expect.stringContaining('inference:affinity-turns:'),
+      now,
+      now + 5 * 60 * 1000,
+      expect.any(String),
+      6 * 60 * 1000
+    );
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("redis.call('ZREM', KEYS[1]"),
+      1,
+      expect.stringContaining('inference:affinity-turns:'),
+      expect.any(String)
+    );
+  });
+
+  it('retries lease acquisition after a transient Redis failure', async () => {
+    vi.useFakeTimers();
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.setSystemTime(now);
+    const { service, redis } = routingHarness({ affinity: null, quotas: [], evalResults: [] });
+    redis.eval
+      .mockRejectedValueOnce(new Error('temporary Redis outage'))
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(1);
+
+    const release = await service.beginAffinityTurn('thread-retry-acquire');
+    expect(redis.eval).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(redis.eval).toHaveBeenCalledTimes(2);
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("redis.call('ZADD', KEYS[1]"),
+      1,
+      expect.stringContaining('inference:affinity-turns:'),
+      now + 100_000,
+      now + 100_000 + 5 * 60 * 1000,
+      expect.any(String),
+      6 * 60 * 1000
+    );
+
+    await release();
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("redis.call('ZREM', KEYS[1]"),
+      1,
+      expect.stringContaining('inference:affinity-turns:'),
+      expect.any(String)
+    );
+  });
+
+  it('waits for in-flight lease maintenance before releasing and does not reschedule it', async () => {
+    vi.useFakeTimers();
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.setSystemTime(now);
+    const { service, redis } = routingHarness({ affinity: null, quotas: [], evalResults: [] });
+    let finishRenewal!: (result: number) => void;
+    redis.eval
+      .mockResolvedValueOnce(1)
+      .mockReturnValueOnce(
+        new Promise<number>((resolve) => {
+          finishRenewal = resolve;
+        })
+      )
+      .mockResolvedValueOnce(1);
+
+    const release = await service.beginAffinityTurn('thread-release-race');
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(redis.eval).toHaveBeenCalledTimes(2);
+
+    const releasePromise = release();
+    expect(redis.eval).toHaveBeenCalledTimes(2);
+    finishRenewal(1);
+    await releasePromise;
+
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("redis.call('ZREM', KEYS[1]"),
+      1,
+      expect.stringContaining('inference:affinity-turns:'),
+      expect.any(String)
+    );
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(redis.eval).toHaveBeenCalledTimes(3);
+  });
+
+  it('preserves the rebalance timestamp when completion refreshes thread activity', async () => {
+    const now = new Date('2026-08-28T12:00:00.000Z').getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const lastRebalancedAt = now - 30 * 60 * 1000;
+    const affinity = JSON.stringify({
+      connectionId: 'connection-1',
+      lastActivityAt: now - 10 * 60 * 1000,
+      lastRebalancedAt,
+    });
+    const { service, redis } = routingHarness({ affinity, quotas: [] });
+
+    await service.markAffinityActive('thread-completed');
+
+    const persisted = JSON.parse(String(redis.eval.mock.calls[0]?.[6]));
+    expect(persisted).toMatchObject({ connectionId: 'connection-1', lastActivityAt: now, lastRebalancedAt });
   });
 
   it('selects the cross-provider route furthest above its reserve', () => {
@@ -132,7 +597,7 @@ describe('inference routing policy', () => {
     const redis = {
       get: vi.fn().mockResolvedValue('provider-low'),
       exists: vi.fn().mockResolvedValue(0),
-      set: vi.fn().mockResolvedValue('OK'),
+      eval: vi.fn().mockResolvedValue(1),
     };
 
     const selected = await new InferenceRoutingService(db as never, redis as never).select({
@@ -142,10 +607,16 @@ describe('inference routing policy', () => {
     });
 
     expect(selected).toMatchObject({ connectionId: 'provider-high', providerId: 'anthropic' });
-    expect(redis.set).toHaveBeenCalledWith(
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('SET', KEYS[1]"),
+      3,
       expect.stringContaining('inference:affinity:'),
-      'provider-high',
-      'EX',
+      'inference:active-threads:provider-low',
+      'inference:active-threads:provider-high',
+      'provider-low',
+      expect.stringContaining('"connectionId":"provider-high"'),
+      expect.any(String),
+      expect.any(Number),
       86_400
     );
   });

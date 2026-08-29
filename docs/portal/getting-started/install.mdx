@@ -1,0 +1,48 @@
+---
+title: Install Gateway
+description: Install the self-hosted control plane and reach the setup wizard safely.
+section: Start here
+order: 4
+audience: [operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Install Gateway
+
+The supported installation flow uses the Gateway installer and Docker Compose. Follow the exact command from the release channel or product download page rather than copying an old command from a ticket or chat.
+
+## Before installation
+
+- Confirm the host meets [requirements](requirements.mdx).
+- Create DNS for the intended Gateway URL.
+- Decide whether Gateway will serve native HTTPS or sit behind an existing reverse proxy.
+- Prepare durable backup storage.
+- Keep the installer-generated setup code private; it is a one-time bootstrap credential.
+
+## Install
+
+1. Run the current signed installer as an administrator on the selected host.
+2. Review the generated environment file before first production use.
+3. Start the generated Compose project.
+4. Confirm the application, PostgreSQL, Redis, and Relay services are healthy.
+5. Open the canonical Gateway URL and enter the setup code.
+
+<!-- screenshot: id=install-setup-code-terminal; viewport=1280x720; description=Installer completion output showing URL and setup-code location without revealing the code; redact=setup-code,host-ip,filesystem-user -->
+
+## Native HTTPS and reverse proxies
+
+Use one authoritative public URL. If an upstream proxy terminates TLS, forward the original scheme and host correctly and keep the Gateway canonical URL set to the externally visible address. Incorrect canonical URLs break cookies, OAuth/OIDC redirects, WebSocket connections, and generated enrollment commands.
+
+## Installation validation
+
+Before adding nodes:
+
+- the login/setup page loads without browser certificate warnings;
+- the Relay service is healthy and owns public `9443/tcp`;
+- PostgreSQL and Redis are persistent across a Compose restart;
+- the system clock and timezone are correct;
+- the setup wizard can create the first administrator;
+- the host has enough free disk space for the selected retention model.
+
+Continue with [Initial setup](initial-setup.mdx).

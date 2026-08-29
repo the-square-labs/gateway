@@ -78,6 +78,11 @@ import {
   type InspectData,
   STATUS_BADGE,
 } from "./docker-detail/helpers";
+import {
+  type ContainerDatabaseLink,
+  LinkRuntimeTab,
+  loadContainerDatabaseLinks,
+} from "./docker-detail/LinkRuntimeTab";
 import { LogsTab } from "./docker-detail/LogsTab";
 import {
   buildContainerMutationSnapshot,
@@ -206,9 +211,23 @@ export function DockerContainerDetail({
     DockerSourceBinding,
     "repositoryFullPath" | "deployedCommitSha"
   > | null>(null);
+  const [databaseLinks, setDatabaseLinks] = useState<ContainerDatabaseLink[]>([]);
+  const [databaseLinksLoading, setDatabaseLinksLoading] = useState(true);
+  const databaseLinksLoadedRef = useRef(false);
+  const databaseLinksRequestRef = useRef(0);
 
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "source", "logs", "console", "files", "stats", "environment", "settings"],
+    [
+      "overview",
+      "source",
+      "logs",
+      "console",
+      "files",
+      "stats",
+      "link-runtime",
+      "environment",
+      "settings",
+    ],
     "overview",
     (tab) => dockerContainerRoute(nodeSlug, routeContainerName, tab)
   );
@@ -363,6 +382,7 @@ export function DockerContainerDetail({
       ...(canUseConsole ? ["console"] : []),
       ...(canReadFiles ? ["files"] : []),
       ...(canViewContainer ? ["stats"] : []),
+      ...(canViewContainer && databaseLinks.length > 0 ? ["link-runtime"] : []),
       ...(canUseEnvironment || canUseSecrets ? ["environment"] : []),
       ...(canEdit || (composeManagedForTabs && canViewContainer) ? ["settings"] : []),
       ...(canViewContainer ? ["config"] : []),
@@ -375,6 +395,7 @@ export function DockerContainerDetail({
       canUseSecrets,
       canViewContainer,
       composeManagedForTabs,
+      databaseLinks.length,
     ]
   );
   const backendTransition = container?._transition as string | undefined;
@@ -533,6 +554,49 @@ export function DockerContainerDetail({
   // Also handle the recreate ID migration for every open tab.
   const containerName = ((container?.Name ?? "") as string).replace(/^\//, "");
 
+  const refreshDatabaseLinks = useCallback(async () => {
+    const requestId = ++databaseLinksRequestRef.current;
+    if (!canViewContainer || !nodeId || !containerName) {
+      if (requestId !== databaseLinksRequestRef.current) return;
+      databaseLinksLoadedRef.current = true;
+      setDatabaseLinks([]);
+      setDatabaseLinksLoading(false);
+      return;
+    }
+
+    if (!databaseLinksLoadedRef.current) setDatabaseLinksLoading(true);
+    try {
+      const links = await loadContainerDatabaseLinks(nodeId, containerName);
+      if (requestId !== databaseLinksRequestRef.current) return;
+      setDatabaseLinks(links);
+      toast.dismiss("container-database-links");
+    } catch {
+      if (requestId !== databaseLinksRequestRef.current) return;
+      toast.error("Failed to load managed database links", {
+        id: "container-database-links",
+      });
+    } finally {
+      if (requestId === databaseLinksRequestRef.current) {
+        databaseLinksLoadedRef.current = true;
+        setDatabaseLinksLoading(false);
+      }
+    }
+  }, [canViewContainer, containerName, nodeId]);
+
+  useEffect(() => {
+    databaseLinksRequestRef.current += 1;
+    databaseLinksLoadedRef.current = false;
+    setDatabaseLinks([]);
+    void refreshDatabaseLinks();
+    return () => {
+      databaseLinksRequestRef.current += 1;
+    };
+  }, [refreshDatabaseLinks]);
+
+  useRealtime("database.changed", () => {
+    void refreshDatabaseLinks();
+  });
+
   const fetchHealthCheck = useCallback(async () => {
     if (!nodeId || !containerName) return;
 
@@ -594,10 +658,11 @@ export function DockerContainerDetail({
 
   useEffect(() => {
     if (authLoading) return;
+    if (activeTab === "link-runtime" && databaseLinksLoading) return;
     if (!visibleTabs.includes(activeTab)) {
       setActiveTab("overview");
     }
-  }, [activeTab, authLoading, setActiveTab, visibleTabs]);
+  }, [activeTab, authLoading, databaseLinksLoading, setActiveTab, visibleTabs]);
 
   // ── Action helpers ──
   const doAction = async (fn: () => Promise<void>, successMsg: string) => {
@@ -1122,6 +1187,9 @@ export function DockerContainerDetail({
                 Monitoring
               </TabsTrigger>
             )}
+            {canViewContainer && databaseLinks.length > 0 && (
+              <TabsTrigger value="link-runtime">Link Runtime</TabsTrigger>
+            )}
             {(canUseEnvironment || canUseSecrets) && !composeManaged && (
               <TabsTrigger value="environment" disabled={isTabDisabled("environment")}>
                 Environment
@@ -1185,6 +1253,11 @@ export function DockerContainerDetail({
                 containerId={containerId!}
                 data={container}
               />
+            </TabsContent>
+          )}
+          {canViewContainer && databaseLinks.length > 0 && (
+            <TabsContent value="link-runtime" className="pb-0">
+              <LinkRuntimeTab links={databaseLinks} />
             </TabsContent>
           )}
           {(canUseEnvironment || canUseSecrets) && !unavailable && !composeManaged && (

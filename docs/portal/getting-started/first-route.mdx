@@ -1,0 +1,37 @@
+---
+title: Publish your first route
+description: Connect a domain, certificate, and upstream through managed ingress.
+section: Start here
+order: 7
+audience: [operator, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Publish your first route
+
+This quick start assumes an online nginx node and an application reachable from that node.
+
+## Happy path
+
+1. Open **Ingress > Domains** and add the hostname.
+2. Assign it to the nginx node that will receive public traffic.
+3. Configure DNS through Cloudflare integration or update external DNS yourself.
+4. Open **Ingress > SSL Certificates** and issue or upload a certificate.
+5. Open **Ingress > Routes** and create a proxy Route for the domain.
+6. Select a manual upstream or a Gateway-managed Docker/Compose/Deployment target.
+7. Enable TLS and select the certificate.
+8. Save, wait for nginx reconciliation, and test the public URL.
+
+<!-- screenshot: id=first-route-editor; viewport=1440x900; description=Route editor with domain, TLS certificate, and managed upstream selected; redact=domains,node-names,container-names -->
+
+## Verify the result
+
+- DNS resolves to the assigned ingress node.
+- The certificate chain is trusted and covers the hostname.
+- The Route reports healthy.
+- WebSocket traffic works if enabled.
+- Access-list rules behave as intended.
+- The nginx node detail page shows the applied configuration revision.
+
+For a private workload connection, continue with [Secure upstreams](../ingress/secure-upstreams.mdx). For the full multi-resource path, use [Publish an application](../journeys/publish-application.mdx).

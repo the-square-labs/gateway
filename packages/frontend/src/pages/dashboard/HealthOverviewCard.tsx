@@ -12,8 +12,21 @@ interface HealthOverviewCardProps {
   loading?: boolean;
 }
 
+function healthOverviewPriority(host: ProxyHost): number {
+  const status = host.effectiveHealthStatus ?? host.healthStatus;
+  if (status === "offline") return 0;
+  if (status === "degraded" || status === "recovering") return 1;
+  if (status === "unknown") return 2;
+  if (status === "online") return 3;
+  if (status === "disabled") return 4;
+  return 2;
+}
+
 export function sortHealthOverviewHosts(hosts: ProxyHost[]): ProxyHost[] {
   return [...hosts].sort((left, right) => {
+    const priorityDifference = healthOverviewPriority(left) - healthOverviewPriority(right);
+    if (priorityDifference !== 0) return priorityDifference;
+
     const leftDomain = [...left.domainNames].sort().join(", ").toLowerCase();
     const rightDomain = [...right.domainNames].sort().join(", ").toLowerCase();
     return leftDomain.localeCompare(rightDomain) || left.id.localeCompare(right.id);

@@ -102,6 +102,48 @@ describe('effective inference rolling-window policy', () => {
     expect(usage.recoveryAt.credits7d).toEqual(new Date('2026-08-03T12:00:00.000Z'));
     expect(usage.recoveryAt.credits30d).toEqual(new Date('2026-08-09T06:00:00.000Z'));
   });
+
+  it('starts every usage window from a manual reset marker', async () => {
+    const now = new Date('2026-07-31T00:00:00.000Z');
+    const execute = vi.fn().mockResolvedValue({ rows: [{ used: '0', recovery_base: null }] });
+    const select = vi
+      .fn()
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([
+            { dimension: 'credits5h', resetAt: now },
+            { dimension: 'credits7d', resetAt: now },
+            { dimension: 'credits30d', resetAt: now },
+            { dimension: 'apiMonthlyMicrodollars', resetAt: now },
+          ]),
+        })),
+      }))
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ value: 0 }]) })),
+      }));
+    const database = { execute, select };
+    const service = new InferenceBudgetPolicyService(database as never);
+
+    const usage = await service.usage(
+      'cef8fbd8-f149-4cd6-b69f-34bea4a10c52',
+      __testOnly.effectiveLimits(policy({})),
+      now,
+      database as never
+    );
+
+    expect(usage).toMatchObject({
+      credits5h: 0,
+      credits7d: 0,
+      credits30d: 0,
+      apiMonthlyMicrodollars: 0,
+    });
+    expect(usage.recoveryAt).toEqual({
+      credits5h: new Date('2026-07-31T05:00:00.000Z'),
+      credits7d: new Date('2026-08-07T00:00:00.000Z'),
+      credits30d: new Date('2026-08-30T00:00:00.000Z'),
+      apiMonthly: new Date('2026-08-31T00:00:00.000Z'),
+    });
+  });
 });
 
 describe('API token pricing', () => {

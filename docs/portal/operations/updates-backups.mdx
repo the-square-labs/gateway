@@ -1,0 +1,26 @@
+---
+title: Updates, backups, and restore
+description: Upgrade Gateway and daemons while preserving recovery options.
+section: Operations and security
+order: 2
+audience: [operator, sre]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Updates, backups, and restore
+
+Before a Gateway update, read release notes, verify compatibility floors, back up PostgreSQL and persistent files, preserve encryption/master keys, and record the running image references. Update through the supported installer or generated Compose configuration.
+
+Daemon updates are signed and managed per node. Keep mixed-version behavior within the documented compatibility window and verify reconnect, inventory, bindings, logs, and operations after each role update.
+
+Back up:
+
+- PostgreSQL;
+- persistent Gateway artifact/configuration volumes;
+- encryption and PKI master keys;
+- Relay identity volume;
+- engine-native database backups;
+- external DNS, identity-provider, email, registry, and SIEM configuration held outside Gateway.
+
+A restore test must prove sign-in, decryption, node reconnection, Relay authorization, Routes, certificates, managed database bindings, and audit continuity. A backup that has never been restored is not a recovery plan.

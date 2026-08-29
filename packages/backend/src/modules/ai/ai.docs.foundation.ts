@@ -1,0 +1,566 @@
+import { PERMISSIONS_DOC } from './ai.docs.permissions.js';
+
+export const FOUNDATION_DOCS: Record<string, string> = {
+  discovery: `# Resource Discovery
+
+Gateway AI starts conversations with a small base tool surface. Domain-specific tools are discovered by category and then remembered on the backend conversation.
+
+## Base Tools
+- discover_tools: inspect callable tool categories and category-specific tools.
+- read_skill and activate_skill: inspect or load one system or enabled organization skill listed in the assistant's compact prompt catalog. These are AI Workspace-only and are not MCP tools. Do not reactivate a skill while its earlier activation remains in the current context; activate it again after compaction only when it is still relevant.
+- get_current_context: read the current UI route/resource when the user says "this page" or "current item".
+- wait: pause briefly when an operation is pending, then continue by re-checking status.
+- find_resource: globally search readable resources by name, ID, domain, image, etc.
+- internal_documentation: read workflow and argument docs before complex operations in AI Workspace. Remote MCP clients use read_gateway_documentation or the gateway://docs resource tree with the same subsystem scope filtering.
+- ask_question: ask concise clarifying questions.
+- fetch: read a direct HTTP/HTTPS URL through Gateway when sandbox runner is enabled and the user has sandbox access.
+- web_search: available only when enabled by settings.
+
+## Tool Discovery
+- If the needed operation is not available, call discover_tools first.
+- Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
+- Use discover_tools({ categories: ["Logging"], includeTools: true }) before managing logging environments/schemas/logs.
+- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks or inspecting Compose projects.
+- Use discover_tools({ categories: ["Ingress"], includeTools: true }) before managing domains, routes, route folders, nginx templates, or access lists.
+- Use discover_tools({ categories: ["Inference"], includeTools: true }) before configuring inference providers, models, limits, or tokens.
+- Use discover_tools({ query: "certificate" }) when you know the task but not the category.
+- After discovery, use internal_documentation for workflow details and argument shapes.
+
+Use find_resource whenever the user gives a name, domain, hostname, image, container name, certificate name, logging environment/schema name, database name, or other visible identifier and you need the actual ID or nodeId.
+Use find_resource with an empty query and a concrete type when the user asks to list resources by type, for example Docker containers or Page Projects.
+
+## Rule
+- Use get_current_context when the user refers to the page or resource they are currently viewing.
+- Use wait for short pending states such as container startup, image pull completion, DNS/SSL validation, deployments, daemon reloads, or log ingestion. After wait, call the relevant read/status tool again; do not finish the conversation just because the operation is not complete yet.
+- Prefer find_resource before broad list sweeps.
+- For a direct URL, use fetch. Use web_search only when you need search results rather than the exact URL content.
+- Do not list every node and then inspect every node for Docker resources unless find_resource failed, the user explicitly asked for per-node enumeration, or you need a complete inventory.
+- If the result includes nodeId, pass that nodeId to Docker tools.
+- If exactly one result is valid/applicable for the operation, use it without asking. For Docker image/container operations, ignore non-Docker nodes as choices.
+- If multiple applicable results match, use ask_question to disambiguate.
+
+## Examples
+- Find a container named api: find_resource({ query: "api", types: ["docker_container"] })
+- List Docker containers: find_resource({ query: "", types: ["docker_container"], limit: 50 })
+- List Docker nodes: find_resource({ query: "", types: ["node"], limit: 50 })
+- Find an ingress route by domain: find_resource({ query: "example.com", types: ["proxy_host"] })
+- Find a logging schema: find_resource({ query: "nginx", types: ["logging_schema"] })
+- Search all readable resources: find_resource({ query: "production" })`,
+
+  pki: `# PKI (Public Key Infrastructure)
+
+## Certificate Authorities (CAs)
+- **Root CA**: Self-signed, top of the trust chain. Created with create_root_ca. Set pathLengthConstraint to limit CA chain depth (0 = can only issue end-entity certs, 1 = can create one level of intermediate CAs).
+- **Intermediate CA**: Signed by a parent CA. Created with create_intermediate_ca(parentCaId, ...). Recommended for issuing end-entity certificates.
+- Key algorithms: rsa-2048, rsa-4096, ecdsa-p256, ecdsa-p384.
+- CAs can be revoked (permanent) or deleted (only if no certs issued).
+- Each CA has: commonName, keyAlgorithm, validityYears, maxValidityDays (max validity for certs it issues).
+
+## PKI Certificates
+- Issued by a CA using issue_certificate.
+- Types: tls-server (web/SSL), tls-client (client auth), code-signing, email (S/MIME).
+- Fields: caId, commonName, keyAlgorithm, validityDays, type, sans (Subject Alternative Names).
+- SANs: array of PLAIN strings — just the value, NO type prefix. Examples: "example.com", "*.example.com", "10.0.0.1", "user@example.com". The system auto-detects the type (dns/ip/email/url). NEVER use "DNS:", "IP:", or other prefixes — they will cause errors.
+- Certificates can be revoked with a reason (key_compromise, superseded, unspecified, etc.).
+- Private keys are generated server-side and encrypted at rest.
+
+## System PKI Audit
+- System CAs and their leaves are hidden from ordinary PKI tools.
+- Use \`audit_system_pki_leaves\` only when the user explicitly asks to inspect Gateway system PKI. It requires both PKI view permission and \`admin:details:certificates\`.
+- The report is read-only: \`current\` and \`retired\` reflect persisted lifecycle ownership; \`unknown\` means ownership cannot be proven and must never be mutated automatically.
+- Never use generic revoke/delete operations for system certificates or CAs: server policy rejects them. This tool cannot revoke, delete, issue, export keys, or clean up certificates.
+
+## PKI → SSL Workflow
+PKI certificates live in a separate store from SSL certificates. To use a PKI cert with an ingress route:
+1. issue_certificate → returns { certificate, message }
+2. link_internal_cert(internalCertId: certificate.id) → creates an SSL certificate entry
+3. Use the SSL certificate ID (from step 2) when creating/updating routes through the route tools.
+NEVER use a PKI certificate ID directly as sslCertificateId on a route.`,
+
+  ssl: `# SSL Certificates
+
+SSL certificates in Gateway enable HTTPS on ingress routes. Three types exist:
+
+## Types
+1. **ACME** (Let's Encrypt): Automated free certificates via request_acme_cert. Requires domain verification. Auto-renewable.
+2. **Upload**: Manually uploaded PEM certificate + private key via manage_ssl_certificate({ operation: "upload", ... }). No auto-renewal — must be re-uploaded before expiry.
+3. **Internal**: Linked from PKI store via link_internal_cert(internalCertId). Uses the PKI cert's key material. Renewed by re-issuing the PKI cert and re-linking.
+
+## ACME Certificates (Let's Encrypt)
+- request_acme_cert({ domains: ["example.com", "www.example.com"], challengeType: "http-01" })
+- **http-01**: Gateway deploys each challenge to the Nginx ingress assigned to that registered domain. The assigned node must be online and publicly reachable on port 80.
+- **dns-01 with Cloudflare**: For wildcard certs or when port 80 is blocked and a matching Cloudflare connector/zone is configured. Use request_acme_cert({ domains, challengeType: "dns-01", dnsProvider: "cloudflare" }). Gateway creates the TXT records, waits for propagation, verifies the ACME order, cleans up created TXT records, and returns the issued certificate.
+- **manual dns-01**: If no Cloudflare connector/zone is available, omit dnsProvider. The tool returns { domain, recordName, recordValue }; user must create a DNS TXT record manually, then confirm with manage_ssl_certificate({ operation: "verify_dns", sslCertificateId }).
+- Auto-renew: checked daily at 3 AM. Renews certificates 30 days before expiry.
+- DNS-01 auto-renew requires Cloudflare. Enable or disable it with manage_ssl_certificate({ operation: "set_auto_renew", sslCertificateId, enabled: true, provider: "cloudflare" }) or enabled: false.
+- Staging mode available for testing (certs not browser-trusted).
+
+## Uploading Custom Certificates
+- manage_ssl_certificate({ operation: "upload", certificatePem, privateKeyPem, chainPem? })
+- Chain PEM is optional (intermediate CA chain).
+- Expiry is parsed from the certificate — no auto-renewal.
+
+## Using PKI Certificates as SSL
+To use a PKI-issued certificate with an ingress route:
+1. Issue a PKI certificate: issue_certificate(...) → returns cert with id
+2. Link it: link_internal_cert(internalCertId: cert.id) → creates an SSL certificate entry with a separate ID
+3. Use the SSL certificate ID (from step 2) as sslCertificateId on the route
+IMPORTANT: Never use a PKI certificate ID directly as sslCertificateId — you must link it first.
+
+## Using SSL Certs with Routes
+- Set sslCertificateId on the route to the SSL certificate UUID.
+- Set sslEnabled: true to enable HTTPS.
+- sslForced: true redirects all HTTP traffic to HTTPS (301 redirect).
+- http2Support: true enables HTTP/2 (recommended with SSL).
+
+## Certificate Deployment
+When an enabled TLS route uses an SSL certificate, Gateway:
+1. Keeps the canonical encrypted certificate material in the Gateway control plane
+2. Deploys a node-local replica only to the route's nginx ingress node
+3. Applies the certificate and route config atomically, tests the config (nginx -t), and reloads nginx
+4. Tracks per-node deployment state and removes unused replicas after the cleanup grace period
+
+Certificate issuance itself is not tied to a machine. HTTP-01 validation is served by the registered domain's assigned ingress node; DNS-01 validation does not require HTTP ingress.`,
+
+  proxy: `# Ingress Routes
+
+The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route, create_route, update_route, set_route_maintenance, and delete_route. Existing REST paths, internal resource types, and persisted identifiers retain the proxy-host name for compatibility.
+
+## Types
+- **proxy**: Forward requests to a backend server (forwardHost:forwardPort).
+- **redirect**: Redirect to a URL (redirectUrl, redirectStatusCode: 301/302).
+- **404**: Return 404 for all requests (used to block domains).
+
+## Key Fields
+- nodeId: the nginx ingress node this route is deployed on (required when creating).
+- domainNames: array of domains this route serves. Registered domains must be assigned to the same nginx node.
+- forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
+- upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a standalone container name, a Compose project/service identity, or a deployment ID plus a TCP application port; Pages stores a Page Project and mutable Tag target.
+- sslEnabled: enable HTTPS. Requires sslCertificateId (SSL cert UUID, NOT PKI cert UUID).
+- sslForced: redirect HTTP to HTTPS.
+- http2Support: enable HTTP/2.
+- websocketSupport: enable WebSocket proxying.
+- accessListId: attach an access list for IP/auth restrictions.
+- healthCheckEnabled: monitor backend availability.
+- advancedConfig: raw nginx config snippet (advanced users only).
+- rawConfigEnabled: bypass template rendering and use rawConfig directly.
+- rawConfig: custom nginx configuration content (used when rawConfigEnabled is true).
+- enabled: toggle the route on/off without deleting.
+- folderId: organize into folders.
+- nginxTemplateId: use a custom nginx template.
+
+Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled. Raw content is only available through explicit route raw-config tools with raw-read permission.
+
+## Maintenance Mode
+- Maintenance mode is available for enabled managed routes that are not using raw config. It keeps the configured HTTP/HTTPS vhosts but returns HTTP 503 and pauses managed health checks until maintenance ends.
+- Maintenance state is audited and can feed notification rules and status pages.
+- Use \`set_route_maintenance({ routeId, enabled })\`. Do not emulate maintenance by disabling the route or rewriting its config.
+
+## Docker Upstreams
+- The UI, REST API, AI Workspace, and remote MCP Ingress toolset can bind a route to a standalone Docker container, a Compose service, or a blue/green deployment. Compose targets persist project/service identity and automatically re-resolve the current container after Compose recreates it.
+- For a standalone \`docker_container\`, pass \`dockerNodeId\`, \`dockerContainerName\`, and \`dockerContainerPort\`. For a Compose service, still use \`upstreamKind: "docker_container"\`, but pass \`dockerNodeId\`, \`dockerComposeProjectId\`, \`dockerComposeServiceName\`, and \`dockerContainerPort\` without \`dockerContainerName\`. For \`docker_deployment\`, pass \`dockerNodeId\`, \`dockerDeploymentId\`, and \`dockerContainerPort\`. The caller must hold the matching container, Compose-project, or deployment view scope enforced by the REST API.
+
+## Pages Upstreams
+- Use \`upstreamKind: "pages"\` with \`pageProjectId\` and \`pageTagId\`. Routes target a mutable ready Tag, never an immutable Deployment.
+- Pages route creation and retargeting require the Pages feature and profile plus view access to the selected Project.
+
+## Additional Routes And Secure Links
+- Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, standalone Docker containers, Compose services, Docker deployments, or a ready Pages Tag. Compose targets use \`dockerComposeProjectId\` plus \`dockerComposeServiceName\` and are re-resolved after container recreation. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
+- Custom proxy templates support Additional Routes when the template includes \`{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}\` inside the intended \`server\` block.
+- Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config and pass the parent \`routeId\`. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
+
+## Nginx Config
+Each route generates an nginx server block on its selected ingress node. Changes are applied by reloading nginx.
+Config templates can customize the generated config (see templates topic).
+
+## Raw Config Mode
+When rawConfigEnabled is true, the template rendering is bypassed and rawConfig is used directly as the nginx server block. Use get_route_rendered_config to view the current config, toggle_route_raw_mode to enable/disable, and update_route_raw_config to write raw config.`,
+
+  domains: `# Domains
+
+Domains are registered public hostnames with an explicit nginx ingress assignment. DNS may be operator-managed externally or managed through a configured Cloudflare connector.
+
+## Purpose
+- Track the A/AAAA target expected from the assigned nginx ingress node public service address
+- With external DNS, validate the operator-managed records without mutating the DNS provider
+- With Cloudflare, create and reconcile managed A/AAAA records
+- Adopt existing matching Cloudflare A/AAAA records without changing their target
+- Detect target mismatches before creating routes
+- Required for ACME HTTP-01 challenges (domain must resolve to its assigned Nginx ingress)
+
+## Lifecycle
+1. Register a domain with an eligible nginx node: create_domain({ domain: "example.com", nginxNodeId: "..." })
+2. Gateway resolves the node's effective public ingress address
+3. Without Cloudflare, the operator points external DNS to that address and Gateway validates the resolved records
+4. With Cloudflare, Gateway resolves the matching zone; it creates missing records or adopts existing matching A/AAAA records as matched_existing
+5. If Cloudflare has different A/AAAA records, create_domain returns conflict metadata; overwrite or adopt only after explicit user approval
+6. Use manage_domain({ operation: "check_dns", domainId }) to manually re-check resolved DNS
+7. Moving ingress is an explicit migration: the domain and its routes move together. Cloudflare-managed DNS is updated during cutover; external DNS must be changed by the operator before completion.
+
+## DNS Records Tracked
+- **A**: assigned Nginx node public IPv4 address
+- **AAAA**: assigned Nginx node public IPv6 address
+- Other record types are not created or overwritten by Gateway domain tools in v1
+
+## Rules
+- Domains used by routes cannot be deleted (remove them from routes first)
+- isSystem domains (management domains) cannot be deleted
+- Wildcard domains (*.example.com) can be registered
+- nginxNodeId is optional only when exactly one Nginx node has a detected public address
+- Registered domains and their routes must use the same nginx node
+- create_domain requires domains:create, and delete_domain requires domains:delete. Those domain permissions include the managed DNS records for the domain
+- For matched_existing domains, pass deleteDns=false to keep DNS and remove only the Gateway mapping, or deleteDns=true to remove the adopted Cloudflare records`,
+
+  'access-lists': `# Access Lists
+
+Access lists provide IP-based access control and HTTP basic authentication for ingress routes.
+
+## How It Works
+1. Create an access list with IP rules and/or basic auth users
+2. Attach it to one or more routes via accessListId
+3. Nginx enforces the rules on every request to those routes
+
+## IP Rules
+- Array of rules: { type: "allow"|"deny", value: "CIDR or IP" }
+- Examples: { type: "allow", value: "10.0.0.0/8" }, { type: "deny", value: "0.0.0.0/0" }
+- Rules are evaluated in order — first match wins
+- Common pattern: allow specific IPs/ranges, deny all others
+
+## Basic Authentication
+- basicAuthEnabled: true to enable HTTP basic auth
+- basicAuthUsers: array of { username, password }
+- Passwords are hashed with bcrypt before storage in htpasswd format
+- Htpasswd files are deployed to nginx nodes via daemon
+
+## Tool Argument Shapes
+- create_access_list accepts allowIps and denyIps as string arrays plus basicAuthUsers.
+- manage_access_list({ operation: "update", accessListId, ... }) accepts ipRules as ordered { type, value } objects and basicAuthUsers as { username, password } objects.
+- Use basicAuthEnabled to turn HTTP basic auth on or off. If it is enabled, provide at least one basic auth user.
+
+## Usage
+- One access list can be shared across multiple routes
+- Changing an access list automatically updates all routes using it
+- Deleting an access list detaches it from all hosts first`,
+
+  templates: `# Certificate Templates
+
+Templates define preset configurations for issuing PKI certificates. They save time and enforce consistency.
+
+## How Templates Work
+1. Admin creates a template with desired settings (cert type, key algorithm, validity, key usage, etc.)
+2. When issuing a certificate, select the template — its settings become defaults
+3. Settings can still be overridden per-certificate at issue time
+
+## Template Fields
+- **certType**: tls-server, tls-client, code-signing, email
+- **keyAlgorithm**: rsa-2048, rsa-4096, ecdsa-p256, ecdsa-p384
+- **validityDays**: default validity period (1-3650 days)
+- **keyUsage**: digitalSignature, keyEncipherment, dataEncipherment, keyAgreement, nonRepudiation
+- **extKeyUsage**: serverAuth, clientAuth, codeSigning, emailProtection, timeStamping, ocspSigning (plus custom OIDs)
+- **requireSans**: whether SANs are mandatory when issuing
+- **sanTypes**: allowed SAN types (dns, ip, email, uri)
+- **subjectDnFields**: default Organization, OU, Locality, State, Country for the certificate subject
+- **crlDistributionPoints**: URLs for CRL download
+- **authorityInfoAccess**: OCSP responder URL and CA Issuers URL
+- **certificatePolicies**: policy OIDs with optional CPS qualifier URLs
+- **customExtensions**: arbitrary X.509 extensions by OID (hex-encoded DER values)
+
+## Built-in Templates
+- isBuiltin: true — provided by default, cannot be edited or deleted
+- Common presets: TLS Server, TLS Client, Code Signing, Email
+
+## Nginx Config Templates
+Separate from certificate templates — these define nginx server block templates for routes.
+- Each template has a type: proxy, redirect, or 404.
+- Templates use variable syntax ({{variableName}}) for dynamic values
+- Can be cloned and customized
+- Assigned to routes via nginxTemplateId`,
+
+  acme: `# ACME (Automated Certificate Management)
+
+Let's Encrypt integration for free, automated SSL certificates.
+
+## Issuing an ACME Certificate
+1. request_acme_cert({ domains: ["example.com", "www.example.com"], challengeType: "http-01" })
+2. Gateway contacts Let's Encrypt, receives a challenge
+3. For http-01: Gateway deploys each challenge to the registered domain's assigned Nginx ingress, then Let's Encrypt verifies it
+4. For Cloudflare dns-01: use request_acme_cert({ domains, challengeType: "dns-01", dnsProvider: "cloudflare" }); Gateway creates TXT records, verifies, cleans up, and can enable Cloudflare auto-renew.
+5. For manual dns-01: Gateway returns { domain, recordName, recordValue } — user creates DNS TXT record, then confirms
+6. Certificate is issued and stored as an SSL certificate
+
+## Challenge Types
+- **http-01**: Automatic for registered domains with an assigned, online Nginx ingress. Gateway deploys the challenge to that node at \`/.well-known/acme-challenge/\`; the domain must resolve to the node and port 80 must be publicly accessible.
+- **dns-01 with Cloudflare**: Automatic when a matching Cloudflare connector/zone is configured. Use dnsProvider: "cloudflare".
+- **manual dns-01**: For wildcard certificates (*.example.com) or when port 80 is blocked. Manual step: add a TXT record at \`_acme-challenge.example.com\`. Supports wildcard issuance.
+
+## Auto-Renewal
+- Checked daily at 3 AM (configurable via ACME_RENEWAL_CRON setting)
+- Renews certificates 30 days before expiry
+- Uses the same challenge type as the original issuance
+- DNS-01 auto-renew requires Cloudflare and is controlled with manage_ssl_certificate({ operation: "set_auto_renew", sslCertificateId, enabled, provider: "cloudflare" })
+- Renewal failures are logged and alerted
+
+## Staging Mode
+- Choose the Let's Encrypt staging provider in the certificate form when testing issuance
+- Certificates are NOT trusted by browsers (for testing only)
+- Useful for testing ACME flow without hitting rate limits
+- Rate limits: 50 certs per registered domain per week (production)
+
+## Troubleshooting
+- **Challenge fails**: Verify domain resolves to your nginx node IP (check Domains page). Ensure port 80 is open and not blocked by firewall.
+- **DNS-01 fails**: Verify TXT record is propagated (use dig or nslookup). TTL must be low enough for timely propagation.
+- **Rate limited**: Switch to staging for testing. Production limit: 5 duplicate certs per week, 50 per domain per week.
+- **Renewal fails**: For HTTP-01, check the assigned ingress node and daemon logs. For Cloudflare DNS-01, check the connector, zone access, and TXT propagation.`,
+
+  users: `# User Management
+
+## Authentication
+Gateway can enable OIDC, password, and email one-time-code sign-in independently. Email-based sign-in requires verified SMTP. Users can add passkeys after they sign in; passkeys are not a first-run primary method.
+- The browser setup wizard creates exactly one deliberate first administrator in the built-in system-admin group. It does not promote an arbitrary first OIDC login.
+- OIDC is configured under Settings > Advanced with an issuer URL, client ID, client secret, auto-provisioning policy, default group, and optional verified-email requirement.
+- When OIDC auto-provisioning is enabled, later valid OIDC logins can create users in the configured default group. Existing OIDC users are bound to the provider subject; Gateway may refresh their name and avatar from the provider.
+- Password and email-code configuration, recovery flows, passkeys, and first-run choices are described in the authentication topic. Do not claim that OIDC is the only sign-in method.
+
+## Permission Groups
+- Every user belongs to exactly one permission group
+- Groups define which scopes (permissions) the user has
+- **Built-in groups** (cannot be modified): system-admin, admin, operator, viewer, guest
+- **Custom groups**: created by admins with any combination of scopes
+- **Group nesting**: a group can inherit from one parent group (single level only). Inherited scopes are automatically added to the user's effective scopes.
+- Nesting limit: only top-level groups can be parents — a nested group cannot itself have children
+
+## Managing Users
+- View all users: list_users
+- Change a user's group: update_user_role(userId, groupId) — changes their permissions immediately
+- Replace a user's exact additional per-user scopes: set_user_additional_permissions(userId, additionalScopes). Pass [] to reset all additional permissions without changing the user's group. Only grant scopes the acting administrator already has.
+- Block or unblock users from the Administration UI, API, or AI Workspace.
+- Deleting a user is a soft-delete: their access and tokens are revoked, they are hidden from operational user lists, and historical audit/usage data remains intact. Only a system administrator can restore a deleted user, and restore leaves them blocked until explicitly unblocked.
+
+## User Fields
+- id, email, name, avatarUrl, groupId, groupName, groupScopes, additionalScopes, scopes, isBlocked, isDeleted
+- lastLoginAt, loginCount, createdAt`,
+
+  audit: `# Audit Log
+
+All significant actions are logged.
+- Fields: userId, action, resourceType, resourceId, details (JSON), ipAddress, userAgent, createdAt.
+- Actions follow pattern: "resource.action" (e.g., "ca.create", "cert.revoke", "proxy.update").
+- AI-initiated actions have details.ai_initiated: true.
+- Query with get_audit_log: filter by action, resourceType, pagination.
+- Housekeeping can auto-delete old entries (configurable retention).
+- SIEM audit export is a separate privacy-reduced delivery stream. Its receiver never receives full audit details, user agents, resource names, secrets, or collector response bodies. See the siem topic for its lifecycle and tools.`,
+
+  siem: `# SIEM Audit Export
+
+## Purpose
+When enabled in Gateway general settings, Gateway can export privacy-reduced audit events to up to five active HTTPS SIEM collectors. This is an outbound push integration: Gateway sends batches to the collector; it does not expose a webhook for the collector to call.
+
+## Safe Event Contract
+Each event contains an id, a stable Gateway installation source identifier, type \`com.wiolett.gateway.audit.v1\`, ISO timestamp, action, optional actor id/email, resource type/id, and source IP. Never claim that full audit \`details\`, resource display names, user agents, secrets, credentials, raw request payloads, or collector response bodies are exported.
+
+## Destination Security
+- Endpoint URLs must be HTTPS and must not include userinfo, query parameters, or fragments.
+- The existing outbound-webhook network policy validates and pins DNS addresses to protect against SSRF and rebinding. Redirects are not followed.
+- Every destination uses a bearer token, HMAC-SHA256, or one validated custom HTTP header. The secret or custom header value is encrypted at rest and is never returned by API, UI, tools, logs, audit entries, or assistant responses.
+- Custom headers cannot replace Gateway transport headers such as \`Host\`, \`Content-Type\`, or the \`X-Gateway-*\` headers. A custom Authorization header is allowed when a collector requires a non-Bearer scheme.
+- HMAC sends \`X-Gateway-Timestamp\` and \`X-Gateway-Signature-256\` for \`timestamp + "." + rawBody\`; bearer uses the standard Authorization header.
+
+## Delivery Lifecycle
+- Audit writes and queued SIEM records are created in one database transaction; the request path never sends HTTP.
+- The in-process scheduler claims rows with database leases and sends a JSON body \`{ schemaVersion: 1, events: [...] }\`.
+- 2xx completes delivery. Network errors, 408, 429, and 5xx retry at 30s, 2m, 8m, 30m, 2h, 6h, and 12h, for at most eight attempts. Other 4xx responses fail terminally.
+- Disabling SIEM in Gateway general settings prevents new outbox rows and pauses delivery; destinations, history, and queued records stay intact until SIEM is enabled again.
+- Disabling a destination pauses outstanding work; enabling resumes it. Deleting a destination soft-deletes configuration and discards outstanding work. Only failed deliveries can be manually requeued.
+- A test sends a synthetic \`com.wiolett.gateway.audit.test.v1\` event only: it creates no audit row and no queued delivery.
+- Terminal delivery history follows Audit Log retention. Do not use notification-webhook delivery semantics for SIEM.
+
+## AI Tools
+- SIEM tools are unavailable while \`generalSettings.features.siemEnabled\` is false.
+- Read: \`list_siem_destinations\`, \`get_siem_destination\`, \`list_siem_deliveries\`, \`get_siem_delivery\` require \`audit:siem:view\`.
+- Change: \`create_siem_destination\`, \`update_siem_destination\`, \`delete_siem_destination\`, \`test_siem_destination\`, and \`requeue_siem_delivery\` require \`audit:siem:manage\` and go through normal tool approval.
+- Request a secret only when the caller explicitly wants to create or replace a destination. Treat it as one-time input and never echo it.`,
+
+  nginx: `# Nginx Ingress Management
+
+Gateway manages public ingress through nginx daemon nodes running on remote servers. The Gateway relay on port 9443 is the daemon control-plane transport; it is not an HTTP/TLS ingress for published applications.
+
+## Architecture
+- Each nginx node runs a Go daemon (\`nginx-daemon\`) alongside the host's native nginx installation
+- A dedicated Gateway relay communicates with daemons over gRPC (port 9443) with mutual TLS; the application uses an internal service-mTLS control-plane hop
+- Domains and routes are assigned to specific nginx nodes. A registered domain and every route using it must share the same node.
+- Each route config is generated by Gateway and pushed to its selected ingress daemon
+- The daemon writes the config files, tests with \`nginx -t\`, and reloads nginx gracefully
+
+## Config Management
+- Route configs are generated from templates and written to the nginx \`conf.d/sites/\` directory
+- Each route becomes one nginx server block file
+- Changes are atomic: write → test → reload (rollback on test failure)
+- Global nginx.conf can be viewed and edited from the node detail page (Configuration tab)
+
+## Config Templates
+- Nginx templates define the server block structure for routes
+- Built-in templates for common patterns (reverse proxy, redirect, etc.)
+- Custom templates support variables: \`{{variableName}}\` replaced at render time
+- Assigned to routes via nginxTemplateId — default template used if none specified
+
+## Raw Config Mode
+- When rawConfigEnabled is true on a route, the template rendering is bypassed entirely
+- The rawConfig field is used directly as the nginx server block content
+- Useful for complex configurations that templates can't express
+- Ordinary route list/detail responses omit rawConfig and rawConfigEnabled
+- Raw content can only be read through explicit raw config read/render paths with raw-read permission
+- Requires proxy:raw:toggle and proxy:raw:write scopes
+- proxy:raw:bypass can bypass dangerous raw directive validation for the same route
+- Use get_route_rendered_config to see the current generated config before switching to raw mode
+
+## Monitoring
+- **Stub status**: nginx stub_status module provides active connections, accepts, handled, requests, reading, writing, waiting
+- **Access log parsing**: traffic stats by status code, response times, bandwidth
+- **Health checks**: per-route backend health monitoring (configurable URL, interval, expected status)
+- **Nginx logs**: access and error logs streamed via daemon, viewable per route or per node
+
+## SSL/TLS
+- SSL certificates are stored canonically by Gateway and deployed as node-local replicas only to ingress nodes with enabled TLS routes using them
+- Config includes ssl_certificate and ssl_certificate_key directives
+- HTTP/2 support togglable per route
+- OCSP stapling enabled by default when CA chain is available`,
+
+  nodes: `# Nodes (Daemon Management)
+
+Nodes are remote servers running Gateway daemons. Each daemon type manages different infrastructure.
+
+## Node Types
+- **nginx**: Ingress node — runs nginx and manages route configs, TLS replicas, access lists, public traffic, logs, and stats. Requires nginx installed on the server.
+- **monitoring**: Lightweight system monitoring agent — reports CPU, memory, disk, load, network. No nginx required. Useful for any server you want to monitor.
+- **docker**: Container runtime node — manages Docker containers, deployments, images, volumes, and networks. Requires Docker Engine. Provides console, files, logs, environment, and secret management.
+- **builder**: Restricted Build Worker profile of the existing \`docker-daemon\`. It has no Docker Engine socket and accepts only Git build, cancellation, and registry-binding commands. It supervises dedicated BuildKit and containerd services on a separate worker host or outer unprivileged container and must advertise execution, dedicated-runtime, and enforced-resource-profile capabilities before Repository mode is admitted.
+- **databases**: Restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse only. It runs as root, validates ext4 image storage before enrollment, and rejects generic Docker workloads.
+
+## How to Enroll a New Node (Step by Step)
+
+### Step 1: Create the node in Gateway UI
+Go to **Nodes** page → click **Enroll Node** → select the node type (nginx, docker, builder, databases, or monitoring) → optionally set a display name → click **Create**. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands.
+
+### Step 2: Run the setup script on the target server
+The UI shows ready-to-copy commands. Run one of these on the target server as root:
+
+For **nginx** nodes:
+\`\`\`bash
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-node.sh | sudo bash -s -- \\
+  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
+\`\`\`
+
+For **docker** nodes:
+\`\`\`bash
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-docker-node.sh | sudo bash -s -- \\
+  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
+\`\`\`
+
+For **builder** nodes, use the same installer with \`--mode builder\`. The host must use systemd. The installer downloads pinned upstream releases of \`containerd\`, \`buildkitd\`, \`buildctl\`, \`runc\`, CNI plugins, \`syft\`, and \`grype\`, verifies their embedded SHA-256 checksums, and installs required system packages such as \`git\` and \`iptables\`. It fails closed when the runtime is incomplete; do not add a Docker socket or convert it to a generic Docker profile as a workaround.
+
+For **database** nodes, run setup-database-node.sh with the generated Gateway address, enrollment token, and certificate fingerprint. The interactive installer selects an eligible local storage root before enrollment. For automation, pass --storage-root <path> and --yes; database nodes always run the restricted docker-daemon profile as root. Before enrollment, the installer verifies the local Docker Engine and the complete fixed-size ext4 image lifecycle, including loop attach, mount/write, growth, resize, unmount, and detach. An LXC host must receive loop-control, a loop-device pool, and mount permission from its outer host; there is no unbounded-volume fallback.
+
+For **monitoring** nodes:
+\`\`\`bash
+curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-monitoring-node.sh | sudo bash -s -- \\
+  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
+\`\`\`
+
+The setup script:
+1. Downloads the daemon binary to \`/usr/local/bin/<type>-daemon\`
+2. On a fresh generic Docker node, preflights and attempts to install the optional Secure Runtime before enrollment. Database-profile nodes skip this generic-workload runtime.
+3. Creates config at \`/etc/<type>-daemon/config.yaml\` with the gateway address, token, and certificate fingerprint
+4. Creates a systemd service and enables it
+5. Starts the daemon — it connects to the gateway and completes mTLS enrollment automatically
+
+### Step 3: Verify connection
+The node status changes from **pending** to **online** in the Nodes list once the daemon connects. The enrollment token is invalidated after first use.
+
+## Assistant Tools
+- list_nodes: list daemon nodes visible to the current user.
+- get_node: inspect one node.
+- execute_node_console_command: run one argv-style command on a node console. Use { nodeId, command: ["sh","-lc","..."] }. This is destructive, requires nodes:console, is available to MCP only when that OAuth scope is explicitly granted, and catastrophic patterns such as rm -rf / are blocked.
+- create_node, rename_node, delete_node: manage node records.
+- manage_node_config: read/update/test nginx node config. Use { operation: "read"|"update"|"test", nodeId, content? }. read requires nodes:config:view:<nodeId>; update/test require nodes:config:edit:<nodeId>. This tool is browser-session-only and is not available to MCP tokens.
+- manage_node_file: manage node filesystem paths. This tool is browser-session-only and is not available to MCP tokens.
+
+### Alternative: Manual installation
+If you cannot use the setup script, you can install manually. Database nodes are the exception: they use docker-daemon in its databases profile and require the database installer storage preflight.
+1. Download the daemon binary and place it at \`/usr/local/bin/<type>-daemon\`
+2. Run: \`<type>-daemon install --gateway <host>:9443 --token <token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>\`
+   This creates the config file and systemd service automatically.
+3. Enable and start: \`systemctl enable --now <type>-daemon\`
+
+## Connection & Communication
+- Daemons connect to the gateway via **gRPC on port 9443** with mutual TLS (mTLS).
+- The gateway pushes commands to daemons: apply config, deploy certs, health check, log streaming, exec, etc.
+- The daemon sends back: health reports (every 30s), command results, log entries, exec output.
+- Daemons auto-reconnect on disconnect with exponential backoff (1s → 60s).
+- mTLS certificates auto-renew when within 7 days of expiry.
+
+## Console (Interactive Shell)
+All node types support an interactive console — a PTY shell session on the host OS.
+- Accessed via the **Console** tab on the node detail page.
+- Requires \`nodes:console\` scope.
+- Supports popout window, reconnection with output replay, and terminal resize.
+- Shell auto-detected from \`/etc/shells\` (prefers bash > zsh > ash > sh).
+- Can be configured to run as a specific OS user via \`console.user\` in daemon config.
+- The assistant has a separate one-shot \`execute_node_console_command\` tool for command execution when regular Gateway read/manage tools cannot answer the request. Prefer argv commands such as \`["sh","-lc","systemctl status nginx"]\`.
+- Treat every console command as destructive: risky commands require explicit approval and obviously host-breaking commands are blocked before reaching the daemon.
+- Use console tools for host-level inspection or repair only after identifying the exact node with get_current_context or find_resource. Do not guess node IDs from chat text.
+
+## System Information
+Daemons report hardware/OS info on registration:
+- CPU model, core count, architecture (amd64, arm64)
+- Kernel version, hostname, OS info
+- Uptime, file descriptor usage
+- Disk mounts with usage percentages
+- Network interfaces with RX/TX stats
+
+## Monitoring & Health
+- **Health reports** (every 30s): CPU%, memory, disk, load average, swap, network I/O, open FDs.
+- Daemons report localIpAddresses and publicIpAddresses. Docker nodes may set serviceAddress explicitly; otherwise Gateway uses the first reported local address and then a public address for cross-node/proxy-upstream traffic.
+- **Nginx nodes** additionally report: nginx status, uptime, worker count, error rates (4xx/5xx), stub status stats.
+- **Docker nodes** additionally report: container count (running/stopped/total), per-container CPU/memory/network stats, Docker version.
+- Generic Docker nodes report Secure Runtime state, version, setup progress, and compatibility. Existing nodes expose manual Setup in Node Details to administrators with \`admin:update\`; do not attempt remote installation through a console unless the user explicitly asks for host-level repair.
+- **Traffic stats** (nginx only): parsed from access logs — status code distribution, response times.
+- Background polling at 10s intervals; 5s when a user is actively viewing the node detail page.
+
+## Node Management
+- **Rename**: change display name (does not affect hostname).
+- **Delete**: removes the node from Gateway. The daemon will fail to reconnect (mTLS cert becomes invalid).
+- **Pin to sidebar**: quick-access link in the sidebar navigation.
+- **Default node**: one nginx node can be marked as default — used for proxy operations when no specific node is selected.
+
+## Key Fields
+- id, hostname, displayName, type, status (pending/online/offline/error)
+- serviceAddress (optional Docker reachability override)
+- lastSeenAt, capabilities (daemon version, features, system info)
+- certificateSerial (mTLS cert), enrollmentTokenHash
+- metadata (extensible metadata object)`,
+
+  housekeeping: `# Housekeeping
+
+Automated cleanup tasks, configurable in Settings.
+- Schedule: cron expression (default: "0 2 * * *" — 2 AM daily).
+- Tasks:
+  - Nginx Logs: rotate/compress/delete old log files. Retention in days.
+  - Audit Log: delete entries older than retention days.
+  - Dismissed Alerts: remove old dismissed alerts.
+  - Delivery Log: delete old notification delivery attempts.
+  - Structured Logs: cap ClickHouse application logs by total rows and approximate disk size while preserving the newest daily partition.
+  - ClickHouse Internals: monitor high-volume system logs and, when enabled, trim supported internal tables during manual Housekeeping runs and the five-minute health guard. Enable it only for a ClickHouse instance dedicated to Gateway.
+  - Orphaned AI Artifacts: delete files no longer attached to a chat.
+  - Orphaned Certs: remove unreferenced certificate files.
+  - ACME Challenges: clean up old validation tokens.
+  - Docker Prune: remove unused Docker images.
+- Can be triggered manually from Settings page.
+- Run history tracked (last N runs with per-category results).
+
+## Permissions
+- \`housekeeping:view\` — read config, stats, and run history.
+- \`housekeeping:run\` — trigger a manual run.
+- \`housekeeping:configure\` — edit config and schedule.`,
+
+  permissions: PERMISSIONS_DOC,
+};

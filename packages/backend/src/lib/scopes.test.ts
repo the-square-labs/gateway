@@ -24,21 +24,23 @@ import {
 } from './scopes.js';
 
 function frontendResourceScopableScopes(): string[] {
-  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scopes.ts'), 'utf8');
+  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scope-resource-restrictions.ts'), 'utf8');
   const match = source.match(/export const RESOURCE_SCOPABLE_SCOPES = \[([\s\S]*?)\] as const;/);
   if (!match) throw new Error('RESOURCE_SCOPABLE_SCOPES not found');
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
 function frontendSelectableScopes(): string[] {
-  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scopes.ts'), 'utf8');
-  const match = source.match(/const RAW_TOKEN_SCOPES = \[([\s\S]*?)\] as const;/);
-  if (!match) throw new Error('RAW_TOKEN_SCOPES not found');
-  return [...match[1].matchAll(/value: "([^"]+)"/g)].map((entry) => entry[1]);
+  const source = ['scope-token-core.ts', 'scope-token-platform.ts', 'scope-token-infrastructure.ts']
+    .map((file) => readFileSync(join(process.cwd(), '../frontend/src/types', file), 'utf8'))
+    .join('\n');
+  const matches = [...source.matchAll(/export const [A-Z_]+_TOKEN_SCOPES = \[([\s\S]*?)\] as const;/g)];
+  if (matches.length !== 3) throw new Error('TOKEN_SCOPES source modules not found');
+  return matches.flatMap((match) => [...match[1].matchAll(/value: "([^"]+)"/g)].map((entry) => entry[1]));
 }
 
 function frontendProgrammaticDeniedScopes(): string[] {
-  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scopes.ts'), 'utf8');
+  const source = readFileSync(join(process.cwd(), '../frontend/src/types/scope-token-catalog.ts'), 'utf8');
   const match = source.match(/const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>\(\[([\s\S]*?)\]\);/);
   if (!match) throw new Error('PROGRAMMATIC_DENIED_SCOPE_VALUES not found');
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);

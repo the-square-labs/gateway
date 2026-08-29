@@ -42,6 +42,7 @@ import {
   DockerDeploymentSwitchSchema,
 } from '@/modules/docker/docker-deployment.schemas.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
+import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -182,7 +183,7 @@ export async function executeDockerTool(
     }
     case 'get_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
-      return context.dockerService.inspectContainer(a.nodeId, a.containerId);
+      return inspectUserContainer(context.dockerService, a.nodeId, a.containerId);
     case 'execute_docker_container_console_command':
       return executeDockerContainerConsoleCommand(context, user, args);
     case 'list_docker_deployments': {
@@ -628,7 +629,7 @@ async function ensureDockerContainerScope(
   nodeId: string,
   containerId: string
 ): Promise<void> {
-  const inspected = await context.dockerService.inspectContainer(nodeId, containerId);
+  const inspected = await inspectUserContainer(context.dockerService, nodeId, containerId);
   const resourceId = String(inspected?.scopeResourceId ?? '');
   if (!resourceId) throw new Error('PERMISSION_DENIED: Container authorization identity is unavailable');
   context.ensureToolScopeForResource(user, baseScope, `${nodeId}/${resourceId}`);

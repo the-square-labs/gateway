@@ -76,13 +76,89 @@ import {
   type Node,
   type ProxyHost,
 } from "@/types";
+import type { InferenceSelfUsage, InferenceUsageOverview } from "@/types/inference";
 import { InferenceTokensSection } from "./inference/InferenceTokensSection";
 import { InferenceUsage } from "./inference/InferenceUsagePanels";
 import { ApiTokensSection } from "./settings/ApiTokensSection";
+import { InferenceHarnessDialog } from "./settings/inference/InferenceEndpointSettingsPanel";
 import { OAuthApplicationsSection } from "./settings/OAuthApplicationsSection";
 
 const PROFILE_TABS = ["preferences", "authorizations"] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number];
+
+const DEV_INFERENCE_USAGE: InferenceSelfUsage = {
+  enabled: true,
+  api: {
+    configured: true,
+    percentage: 41,
+    recoveryAt: new Date(Date.now() + 86400000).toISOString(),
+  },
+  subscription: {
+    "5h": {
+      configured: true,
+      percentage: 37,
+      recoveryAt: new Date(Date.now() + 3600000).toISOString(),
+    },
+    "7d": {
+      configured: true,
+      percentage: 58,
+      recoveryAt: new Date(Date.now() + 3 * 86400000).toISOString(),
+    },
+    "30d": {
+      configured: true,
+      percentage: 22,
+      recoveryAt: new Date(Date.now() + 12 * 86400000).toISOString(),
+    },
+  },
+};
+
+function createDevInferenceOverview(): InferenceUsageOverview {
+  const dailyUsage = Array.from({ length: 30 }, (_, index) => {
+    const date = new Date();
+    date.setUTCHours(0, 0, 0, 0);
+    date.setUTCDate(date.getUTCDate() - (29 - index));
+    const activity = index < 20 ? 0 : (index - 19) * 3;
+    return {
+      date: date.toISOString().slice(0, 10),
+      requests: activity,
+      credits: activity * 0.34,
+      apiMicrodollars: activity * 1250,
+      tokens: activity * 4800,
+    };
+  });
+  const totals = dailyUsage.reduce(
+    (sum, row) => ({
+      requests: sum.requests + row.requests,
+      credits: sum.credits + row.credits,
+      apiMicrodollars: sum.apiMicrodollars + row.apiMicrodollars,
+      tokens: sum.tokens + row.tokens,
+    }),
+    { requests: 0, credits: 0, apiMicrodollars: 0, tokens: 0 }
+  );
+  return {
+    windowDays: 30,
+    requestTotals: [
+      {
+        status: "completed",
+        requests: totals.requests,
+        credits: String(totals.credits),
+        apiMicrodollars: totals.apiMicrodollars,
+        tokens: totals.tokens,
+      },
+    ],
+    ledgerTotals: [
+      {
+        budgetType: "subscription",
+        credits: String(totals.credits),
+        apiMicrodollars: totals.apiMicrodollars,
+        tokens: totals.tokens,
+      },
+    ],
+    dailyUsage,
+  };
+}
+
+const DEV_INFERENCE_OVERVIEW = createDevInferenceOverview();
 
 function isProfileTab(value: string | null | undefined): value is ProfileTab {
   return PROFILE_TABS.includes(value as ProfileTab);
@@ -107,6 +183,8 @@ export function Profile() {
   const [loggingSchemasList, setLoggingSchemasList] = useState<LoggingSchema[]>([]);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [inferenceHarnessDevOpen, setInferenceHarnessDevOpen] = useState(false);
+  const [inferenceProfileDevPreview, setInferenceProfileDevPreview] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const activeTab: ProfileTab = isProfileTab(tabParam) ? tabParam : "preferences";
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
@@ -122,6 +200,26 @@ export function Profile() {
       navigate("/profile", { replace: true });
     }
   }, [navigate, tabParam]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || typeof window === "undefined") return;
+    const gatewayDev = (window.gatewayDev ??= {});
+    const openInferenceHarnessModal = () => setInferenceHarnessDevOpen(true);
+    const showInferenceProfile = () => {
+      setInferenceProfileDevPreview(true);
+      navigate("/profile");
+    };
+    gatewayDev.openInferenceHarnessModal = openInferenceHarnessModal;
+    gatewayDev.showInferenceProfile = showInferenceProfile;
+    return () => {
+      if (gatewayDev.openInferenceHarnessModal === openInferenceHarnessModal) {
+        delete gatewayDev.openInferenceHarnessModal;
+      }
+      if (gatewayDev.showInferenceProfile === showInferenceProfile) {
+        delete gatewayDev.showInferenceProfile;
+      }
+    };
+  }, [navigate]);
 
   useEffect(() => {
     if (activeTab !== "authorizations") return;
@@ -252,10 +350,16 @@ export function Profile() {
                   <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
                     <button
                       type="button"
-                      aria-label="Change avatar"
+                      aria-label={user.avatarUrl ? "Remove avatar" : "Change avatar"}
                       className="group relative h-10 w-10 shrink-0 outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       disabled={avatarUploading}
-                      onClick={() => avatarInputRef.current?.click()}
+                      onClick={() => {
+                        if (user.avatarUrl) {
+                          void updateAvatar(null);
+                          return;
+                        }
+                        avatarInputRef.current?.click();
+                      }}
                     >
                       <Avatar className="h-10 w-10">
                         <AvatarImage src={user.avatarUrl ?? undefined} />
@@ -272,6 +376,8 @@ export function Profile() {
                       >
                         {avatarUploading ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : user.avatarUrl ? (
+                          <Trash2 className="h-4 w-4" />
                         ) : (
                           <Pencil className="h-4 w-4" />
                         )}
@@ -285,18 +391,6 @@ export function Profile() {
                       <Badge variant="secondary" size="inline">
                         {user.groupName}
                       </Badge>
-                      {user.avatarUrl && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          disabled={avatarUploading}
-                          onClick={() => void updateAvatar(null)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Remove
-                        </Button>
-                      )}
                     </div>
                   </div>
                 )}
@@ -314,7 +408,12 @@ export function Profile() {
 
               {user?.authMethod !== "oidc" && <LocalAccountSecurityPanel />}
 
-              {canUseInference && <InferenceUsage />}
+              {(canUseInference || inferenceProfileDevPreview) && (
+                <InferenceUsage
+                  previewUsage={inferenceProfileDevPreview ? DEV_INFERENCE_USAGE : undefined}
+                  previewOverview={inferenceProfileDevPreview ? DEV_INFERENCE_OVERVIEW : undefined}
+                />
+              )}
 
               <PanelShell title="Preferences" icon={<SlidersHorizontal className="h-4 w-4" />}>
                 <div className="divide-y divide-border">
@@ -409,6 +508,10 @@ export function Profile() {
 
         <PoweredByFooter />
       </div>
+      <InferenceHarnessDialog
+        open={inferenceHarnessDevOpen}
+        onOpenChange={setInferenceHarnessDevOpen}
+      />
     </PageTransition>
   );
 }

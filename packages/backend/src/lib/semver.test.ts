@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { isMinorCompatible } from './semver.js';
+import { compareSemver, isMinorCompatible, isNewerVersion, parseSemver } from './semver.js';
+
+describe('release candidate semver ordering', () => {
+  it('orders RC increments before the final stable release', () => {
+    expect(compareSemver('v2.10.0-rc.2', 'v2.10.0-rc.1')).toBe(1);
+    expect(compareSemver('v2.10.0', 'v2.10.0-rc.9')).toBe(1);
+    expect(compareSemver('v2.10.0-rc.1', 'v2.10.0')).toBe(-1);
+    expect(isNewerVersion('v2.10.0', 'v2.10.0-rc.2')).toBe(true);
+  });
+
+  it('parses component suffixes after the RC version', () => {
+    expect(parseSemver('v2.10.0-rc.3-nginx')).toEqual({
+      major: 2,
+      minor: 10,
+      patch: 0,
+      rc: 3,
+    });
+  });
+});
 
 describe('isMinorCompatible', () => {
   it('treats patch differences within the same minor as compatible', () => {

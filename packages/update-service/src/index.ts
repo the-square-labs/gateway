@@ -35,12 +35,14 @@ interface NormalizedRelease {
 }
 
 type UpdateComponent = keyof typeof TAG_PATTERNS;
+type UpdateChannel = "stable" | "preview";
 
 interface ParsedReleaseVersion {
 	major: number;
 	minor: number;
 	patch: number;
 	build: number;
+	rc: number | null;
 }
 
 interface NextUpdateResponse {
@@ -51,12 +53,12 @@ interface NextUpdateResponse {
 }
 
 const TAG_PATTERNS: Readonly<Record<string, RegExp>> = {
-	gateway: /^v\d+\.\d+\.\d+$/,
-	relay: /^v\d+\.\d+\.\d+-relay$/,
-	"nginx-daemon": /^v\d+\.\d+\.\d+-nginx$/,
-	"docker-daemon": /^v\d+\.\d+\.\d+-docker$/,
-	"monitoring-daemon": /^v\d+\.\d+\.\d+-monitoring$/,
-	"relay-supervisor": /^v\d+\.\d+\.\d+-relay$/,
+	gateway: /^v\d+\.\d+\.\d+(?:-rc\.\d+)?$/,
+	relay: /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-relay$/,
+	"nginx-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-nginx$/,
+	"docker-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-docker$/,
+	"monitoring-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-monitoring$/,
+	"relay-supervisor": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-relay$/,
 	"inference-core": /^v\d+\.\d+\.\d+-wiolett\.\d+$/,
 };
 
@@ -174,6 +176,7 @@ function parseReleaseVersion(
 			minor: Number(match[2]),
 			patch: Number(match[3]),
 			build: Number(match[4]),
+			rc: null,
 		};
 	}
 	const suffix =
@@ -187,15 +190,16 @@ function parseReleaseVersion(
 						? "-docker"
 						: "-monitoring";
 	const optionalSuffix = suffix ? `(?:${suffix})?` : "";
-	const match = new RegExp(`^(\\d+)\\.(\\d+)\\.(\\d+)${optionalSuffix}$`).exec(
-		clean,
-	);
+	const match = new RegExp(
+		`^(\\d+)\\.(\\d+)\\.(\\d+)(?:-rc\\.(\\d+))?${optionalSuffix}$`,
+	).exec(clean);
 	if (!match) return null;
 	return {
 		major: Number(match[1]),
 		minor: Number(match[2]),
 		patch: Number(match[3]),
 		build: 0,
+		rc: match[4] === undefined ? null : Number(match[4]),
 	};
 }
 
@@ -206,20 +210,37 @@ function compareReleaseVersions(
 	for (const key of ["major", "minor", "patch", "build"] as const) {
 		if (a[key] !== b[key]) return a[key] - b[key];
 	}
-	return 0;
+	if (a.rc === b.rc) return 0;
+	if (a.rc === null) return 1;
+	if (b.rc === null) return -1;
+	return a.rc - b.rc;
+}
+
+function parseUpdateChannel(value: string | null): UpdateChannel | null {
+	if (value === null || value === "stable") return "stable";
+	if (value === "preview") return "preview";
+	return null;
+}
+
+function releaseMatchesChannel(
+	channel: UpdateChannel,
+	release: GitHubRelease,
+	version: ParsedReleaseVersion,
+): boolean {
+	if (version.rc === null) return !release.prerelease;
+	return channel === "preview" && release.prerelease;
 }
 
 function selectNextRelease(
 	component: UpdateComponent,
 	current: string | null,
 	releases: GitHubRelease[],
+	channel: UpdateChannel,
 ): { release: GitHubRelease; reason: NextUpdateResponse["reason"] } | null {
 	const candidates = releases
 		.filter(
 			(release) =>
-				!release.draft &&
-				!release.prerelease &&
-				TAG_PATTERNS[component].test(release.tag_name),
+				!release.draft && TAG_PATTERNS[component].test(release.tag_name),
 		)
 		.map((release) => ({
 			release,
@@ -232,6 +253,9 @@ function selectNextRelease(
 				release: GitHubRelease;
 				version: ParsedReleaseVersion;
 			} => candidate.version !== null,
+		)
+		.filter((candidate) =>
+			releaseMatchesChannel(channel, candidate.release, candidate.version),
 		);
 	if (candidates.length === 0) return null;
 
@@ -258,9 +282,9 @@ function selectNextRelease(
 			(candidate) =>
 				candidate.version.major === currentVersion.major &&
 				candidate.version.minor === currentVersion.minor &&
-				candidate.version.patch > currentVersion.patch,
+				compareReleaseVersions(candidate.version, currentVersion) > 0,
 		)
-		.sort((a, b) => b.version.patch - a.version.patch)[0];
+		.sort((a, b) => compareReleaseVersions(b.version, a.version))[0];
 	if (patch) return { release: patch.release, reason: "patch" };
 
 	const higherMinor = candidates.filter(
@@ -272,9 +296,15 @@ function selectNextRelease(
 	const nextMinor = Math.min(
 		...higherMinor.map((candidate) => candidate.version.minor),
 	);
-	const baseline = higherMinor
-		.filter((candidate) => candidate.version.minor === nextMinor)
-		.sort((a, b) => a.version.patch - b.version.patch)[0];
+	const nextMinorCandidates = higherMinor.filter(
+		(candidate) => candidate.version.minor === nextMinor,
+	);
+	const baselinePatch = Math.min(
+		...nextMinorCandidates.map((candidate) => candidate.version.patch),
+	);
+	const baseline = nextMinorCandidates
+		.filter((candidate) => candidate.version.patch === baselinePatch)
+		.sort((a, b) => compareReleaseVersions(b.version, a.version))[0];
 	return baseline
 		? { release: baseline.release, reason: "minor-baseline" }
 		: null;
@@ -286,6 +316,8 @@ async function handleReleaseList(
 	fetcher: Fetcher,
 ): Promise<Response> {
 	const url = new URL(request.url);
+	const channel = parseUpdateChannel(url.searchParams.get("channel"));
+	if (!channel) return jsonResponse({ error: "invalid_channel" }, 400);
 	const componentValue = url.searchParams.get("component");
 	if (componentValue) {
 		if (!(componentValue in TAG_PATTERNS))
@@ -304,6 +336,7 @@ async function handleReleaseList(
 				component,
 				current,
 				await readBoundedJson<GitHubRelease[]>(upstream),
+				component === "inference-core" ? "stable" : channel,
 			);
 			if (!selected) {
 				return new Response(null, {
@@ -347,15 +380,18 @@ async function handleReleaseList(
 		);
 		return jsonResponse({ error: "release_source_unavailable" }, 502);
 	}
-	const releases = (
-		await Promise.all(
-			upstreams.map((upstream) => readBoundedJson<GitHubRelease[]>(upstream)),
-		)
-	).flat();
+	const releasesByRepository = await Promise.all(
+		upstreams.map((upstream) => readBoundedJson<GitHubRelease[]>(upstream)),
+	);
+	const releases = releasesByRepository.flatMap((releases, index) =>
+		releases.filter(
+			(release) =>
+				!release.draft &&
+				(index === 1 || channel === "stable" ? !release.prerelease : true),
+		),
+	);
 	return jsonResponse(
-		releases
-			.filter((release) => !release.draft && !release.prerelease)
-			.map(normalizeRelease),
+		releases.map(normalizeRelease),
 		200,
 		"public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
 	);

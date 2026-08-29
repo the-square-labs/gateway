@@ -30,6 +30,22 @@ import {
 } from './auth.docs.js';
 import { authMiddleware, CSRF_HEADER_NAME, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
+import {
+  EmailCodeSchema,
+  EmailSchema,
+  ErrorSchema,
+  LocalPasswordLoginSchema,
+  MfaEnrollmentConfirmSchema,
+  MfaEnrollmentPasskeyConfirmSchema,
+  MfaEnrollmentTokenSchema,
+  MfaPasskeyOptionsSchema,
+  MfaPasskeyVerifySchema,
+  MfaVerifySchema,
+  PasskeyAuthenticationSchema,
+  PasskeyRegistrationSchema,
+  PasswordCompleteSchema,
+  PasswordResetTokenSchema,
+} from './auth-route-schemas.js';
 import { AvatarStorageService } from './avatar-storage.service.js';
 import { requiresSessionMfaReauthentication } from './live-session-user.js';
 import { LocalAuthService } from './local-auth.service.js';
@@ -44,40 +60,6 @@ import {
 } from './session-cookie.js';
 
 export const authRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
-
-const ErrorSchema = z.object({
-  code: z.string(),
-  message: z.string(),
-});
-
-const LocalPasswordLoginSchema = z.object({ email: z.string().email().max(255), password: z.string().min(1).max(72) });
-const EmailSchema = z.object({ email: z.string().email().max(255) });
-const EmailCodeSchema = z.object({ challengeId: z.string().min(1).max(64), code: z.string().regex(/^\d{6}$/) });
-const PasswordResetTokenSchema = z.object({ token: z.string().min(1).max(256) });
-const PasswordCompleteSchema = z.object({ token: z.string().min(1).max(256), password: z.string().min(1).max(72) });
-const MfaVerifySchema = z
-  .object({
-    challengeId: z.string().min(1).max(64),
-    totpCode: z
-      .string()
-      .regex(/^\d{6}$/)
-      .optional(),
-    recoveryCode: z.string().min(6).max(64).optional(),
-  })
-  .refine((value) => Number(Boolean(value.totpCode)) + Number(Boolean(value.recoveryCode)) === 1, {
-    message: 'Provide exactly one verification method',
-  });
-const MfaEnrollmentTokenSchema = z.object({ token: z.string().min(16).max(128) });
-const MfaEnrollmentConfirmSchema = MfaEnrollmentTokenSchema.extend({ code: z.string().regex(/^\d{6}$/) });
-const PasskeyResponseSchema = z.object({ response: z.any() });
-const PasskeyRegistrationSchema = PasskeyResponseSchema.extend({ name: z.string().trim().max(100).optional() });
-const MfaEnrollmentPasskeyConfirmSchema = MfaEnrollmentTokenSchema.merge(PasskeyRegistrationSchema);
-const PasskeyAuthenticationSchema = PasskeyResponseSchema.extend({ challenge: z.string().min(16).max(256) });
-const MfaPasskeyOptionsSchema = z.object({ challengeId: z.string().min(16).max(64) });
-const MfaPasskeyVerifySchema = PasskeyResponseSchema.extend({
-  challengeId: z.string().min(16).max(64),
-  passkeyChallenge: z.string().min(16).max(256),
-});
 
 async function setLocalSession(
   c: any,

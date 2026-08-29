@@ -1,0 +1,17 @@
+---
+title: Node updates and offline behavior
+description: Update daemons and recover nodes without losing desired state.
+section: Nodes and Relay
+order: 3
+audience: [operator, sre]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Node updates and offline behavior
+
+Check compatibility before updating Gateway, Relay, and daemons. Apply signed daemon updates through the Node lifecycle and verify reconnect, version, inventory, logs, health, and managed bindings.
+
+When a node goes offline, workloads may continue locally but Gateway mutations are disabled. Diagnose host availability, daemon service, system time, certificate identity, DNS, and outbound Relay access. Avoid deleting the Node record while the old daemon may reconnect.
+
+After recovery, verify desired-state reconciliation for Routes, workloads, database bindings, certificate material, and monitoring. A green connection alone does not prove every dependent resource recovered.

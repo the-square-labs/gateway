@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
+import type { InferenceUsageOverview } from "@/types/inference";
 import {
   CompactInferenceUsage,
   DashboardInferenceUsage,
@@ -12,14 +13,53 @@ import {
 } from "./InferenceUsagePanels";
 
 vi.mock("@/services/api", () => ({
-  api: { getCached: vi.fn(), getInferenceSelfUsage: vi.fn(), getInferenceSystemUsage: vi.fn() },
+  api: {
+    getCached: vi.fn(),
+    getInferenceSelfUsage: vi.fn(),
+    getInferenceSelfUsageOverview: vi.fn(),
+    getInferenceSystemUsage: vi.fn(),
+  },
 }));
 
+const PERSONAL_OVERVIEW: InferenceUsageOverview = {
+  windowDays: 30,
+  requestTotals: [
+    { status: "completed", requests: 12, credits: "3", apiMicrodollars: 0, tokens: 0 },
+  ],
+  ledgerTotals: [{ budgetType: "api", credits: "3", apiMicrodollars: 420_000, tokens: 24_000 }],
+  dailyUsage: Array.from({ length: 30 }, (_, index) => ({
+    date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+    requests: index,
+    credits: index / 10,
+    apiMicrodollars: index * 1_000,
+    tokens: index * 100,
+  })),
+};
+
 describe("InferenceUsage", () => {
+  it("stretches a single configured usage card across the panel", async () => {
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: true, percentage: 25, recoveryAt: "2026-08-30T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: false, percentage: 0, recoveryAt: "2026-08-30T00:00:00.000Z" },
+        "7d": { configured: false, percentage: 0, recoveryAt: "2026-09-05T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2026-09-28T00:00:00.000Z" },
+      },
+    });
+
+    const { container } = render(<InferenceUsage />);
+
+    expect(await screen.findByText("API usage")).toBeInTheDocument();
+    const grid = container.querySelector(".grid.grid-cols-1.gap-px.bg-border");
+    expect(grid).not.toHaveClass("sm:grid-cols-2");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
     vi.mocked(api.getCached).mockReturnValue(undefined);
+    vi.mocked(api.getInferenceSelfUsageOverview).mockResolvedValue(PERSONAL_OVERVIEW);
     useDashboardBootstrapStore.getState().clear();
     // Most compact-usage cases exercise the post-bootstrap fallback path.
     // The dedicated test below covers the initial shared-bootstrap wait.
@@ -32,7 +72,7 @@ describe("InferenceUsage", () => {
     });
   });
 
-  it("shows percentages and recovery only without raw credits, dollars, tokens, or providers", async () => {
+  it("shows personal 30-day totals above percentages and recovery windows", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
       enabled: true,
       api: { configured: true, percentage: 25.4, recoveryAt: "2026-08-01T00:00:00.000Z" },
@@ -62,15 +102,23 @@ describe("InferenceUsage", () => {
     expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
     expect(screen.getByText("90%")).not.toHaveClass("text-warning");
     expect(screen.getByText("96%")).not.toHaveClass("text-warning");
+    expect(screen.getByText("Inference API usage")).toBeInTheDocument();
+    expect(screen.getByText("$0.42")).toBeInTheDocument();
+    expect(screen.getByText("24,000")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
+    expect(screen.getAllByText("Last 30 days")).toHaveLength(4);
     const panel = screen.getByText("Inference usage").closest(".border.border-border.bg-card");
     expect(panel).toBeInTheDocument();
-    expect(within(panel as HTMLElement).getByText("Base URL")).toBeInTheDocument();
+    const endpointDivider = within(panel as HTMLElement)
+      .getByText("Base URL")
+      .closest(".border-t");
+    expect(endpointDivider).toHaveClass("border-border");
     expect(within(panel as HTMLElement).getByText(/\/api\/inference\/v1/)).toBeInTheDocument();
     expect(
       within(panel as HTMLElement).getByRole("button", { name: "Set up a harness" })
     ).toBeInTheDocument();
     const text = usageCard?.parentElement?.textContent ?? "";
-    expect(text).not.toMatch(/\$|credits|tokens|openai|anthropic|kimi/i);
+    expect(text).not.toMatch(/openai|anthropic|kimi/i);
   });
 
   it("uses the warning color below 20 percent remaining", async () => {
@@ -115,7 +163,7 @@ describe("InferenceUsage", () => {
     expect(screen.queryByText("API usage")).not.toBeInTheDocument();
   });
 
-  it("hides the profile panel when no billable model type is available", async () => {
+  it("keeps personal totals visible when no quota window is configured", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
       enabled: true,
       api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
@@ -126,10 +174,11 @@ describe("InferenceUsage", () => {
       },
     });
 
-    const { container } = render(<InferenceUsage />);
+    render(<InferenceUsage />);
 
     await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
-    expect(container).toBeEmptyDOMElement();
+    expect(await screen.findByText("Inference API usage")).toBeInTheDocument();
+    expect(screen.getByText("24,000")).toBeInTheDocument();
     expect(screen.queryByText("Base URL")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Set up a harness" })).not.toBeInTheDocument();
   });
@@ -318,7 +367,7 @@ describe("InferenceUsage", () => {
     expect(document.querySelectorAll('svg[preserveAspectRatio="none"]')).toHaveLength(4);
     expect(screen.getByText("4")).toBeInTheDocument();
     expect(screen.queryByText("Error rate")).not.toBeInTheDocument();
-    expect(screen.getByText("Tokens")).toHaveClass("text-sm");
+    expect(screen.getByText("Inference tokens")).toHaveClass("text-sm");
     expect(screen.getByText("14,564,765,420")).toHaveClass("text-2xl");
     expect(screen.queryByText("Upstream health")).not.toBeInTheDocument();
   });

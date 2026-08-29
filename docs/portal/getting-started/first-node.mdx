@@ -1,0 +1,38 @@
+---
+title: Add your first node
+description: Enroll a managed host and verify its identity, capabilities, and update path.
+section: Start here
+order: 6
+audience: [operator, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Add your first node
+
+Managed daemons initiate outbound authenticated connections to Gateway. You do not copy reusable API credentials to a node.
+
+<!-- screenshot: id=node-create-dialog; viewport=1440x900; description=Create Node dialog with role selection and generated installation command; redact=enrollment-token,certificate-fingerprint,hostnames,addresses -->
+
+## Happy path
+
+1. Open **Nodes** and create a node.
+2. Select the intended role and runtime profile.
+3. Copy the generated one-time installer command.
+4. Run it on the target Linux host.
+5. Wait for the node to appear **Online**.
+6. Open the node detail page and verify hostname, version, capabilities, service address, and recent metrics.
+7. Use the built-in update check to confirm the daemon can reach the release channel.
+
+The installer pins the Gateway identity. Do not remove the generated certificate fingerprint to bypass a connection problem.
+
+## Role-specific checks
+
+- **nginx:** confirm nginx config validation, public service address, ports 80/443, and log access.
+- **Docker:** confirm Docker Engine access, inventory synchronization, runtime capabilities, and optional GPU discovery.
+- **database:** confirm storage prerequisites and that the host is dedicated to managed database workloads.
+- **builder:** confirm BuildKit/containerd health, resource enforcement, and the selected egress profile.
+
+## Failure handling
+
+If enrollment fails, check the daemon service logs, system time, DNS, outbound reachability to the Gateway Relay, and the exact generated command. Delete and recreate the pending node only when you intentionally want a new identity; do not reuse an old enrollment token.

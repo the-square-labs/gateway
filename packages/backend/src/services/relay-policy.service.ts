@@ -1,5 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import type { RelayManagedDatabaseListenerConfig } from '@/db/schema/relay.js';
 import {
   managedDatabaseInstances,
   relayEndpointAssignmentGenerations,
@@ -35,7 +36,7 @@ import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
 
-export interface ProxyRouteRuntime {
+export interface RelayRouteRuntime {
   routeId: string;
   activeStreams: number;
   openedTotal: string;
@@ -50,11 +51,33 @@ export interface ProxyRouteRuntime {
   metricsSince: string;
 }
 
+export type ProxyRouteRuntime = RelayRouteRuntime;
+
 const logger = createChildLogger('RelayPolicyService');
 const INTERNAL_REGISTRY_ID = 'gateway-internal-registry';
 const INTERNAL_REGISTRY_CERTIFICATE_ID = 'local:gateway-internal-registry';
 const REGISTRY_ROUTE_OWNER_KINDS = ['registry_secure_link', 'registry_ingress'] as const;
 type RegistryRouteOwnerKind = (typeof REGISTRY_ROUTE_OWNER_KINDS)[number];
+
+export function managedDatabaseListenerConfigsEqual(
+  current: RelayManagedDatabaseListenerConfig | null | undefined,
+  desired: RelayManagedDatabaseListenerConfig | null | undefined
+): boolean {
+  if (!current || !desired) return current == null && desired == null;
+  if (
+    current.networkName !== desired.networkName ||
+    current.listenAddress !== desired.listenAddress ||
+    current.listenPort !== desired.listenPort ||
+    !Array.isArray(current.allowedSources) ||
+    !Array.isArray(desired.allowedSources) ||
+    current.allowedSources.length !== desired.allowedSources.length
+  ) {
+    return false;
+  }
+  const currentSources = [...current.allowedSources].sort();
+  const desiredSources = [...desired.allowedSources].sort();
+  return currentSources.every((source, index) => source === desiredSources[index]);
+}
 
 function relayRoutePolicy(ownerKind: string): {
   disableIdleTimeout: boolean;
@@ -80,6 +103,11 @@ export class RelayPolicyService {
   private readonly grantKeys: RelayGrantKeyService;
   private readonly policyKeys: RelayPolicySigningKeyService;
   private relaySettingsSync: Promise<void> = Promise.resolve();
+  private readonly nodeGrantSyncs = new Map<
+    string,
+    Promise<Awaited<ReturnType<NodeDispatchService['sendRelayGrantBundle']>>>
+  >();
+  private readonly lastNodeGrantBundles = new Map<string, RelayGrantBundle>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -199,6 +227,39 @@ export class RelayPolicyService {
     if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
     const result = await this.dispatch.probeRelayCandidate(nodeId, input);
     if (!result.success) throw new Error(result.error || 'Relay candidate probe failed');
+  }
+
+  async probeManagedDatabaseBindingRoute(nodeId: string, bindingId: string): Promise<void> {
+    const bundle = this.lastNodeGrantBundles.get(nodeId) ?? (await this.getNodeGrantBundle(nodeId));
+    const assignment = bundle.grants.find(
+      (grant) =>
+        grant.role === 'connect' &&
+        grant.ownerKind === 'managed_database_binding' &&
+        grant.ownerId === bindingId
+    );
+    if (!assignment) throw new Error('Managed database binding relay grant is unavailable');
+    if (!assignment.routeId || !assignment.targetEndpointId) {
+      throw new Error('Managed database binding relay route is incomplete');
+    }
+    const candidates = assignment.candidates ?? [];
+    if (candidates.length === 0) return;
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        await this.probeRelayCandidate(nodeId, {
+          probeId: bindingId,
+          role: 'source',
+          endpointId: assignment.targetEndpointId,
+          routeId: assignment.routeId,
+          assignmentGeneration: candidate.assignmentGeneration,
+          candidate,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Managed database binding relay route is unavailable');
   }
 
   async syncSnapshot(): Promise<number> {
@@ -375,7 +436,8 @@ export class RelayPolicyService {
     bindingId: string,
     managedDatabaseId: string,
     sourceNodeId: string,
-    targetNodeId: string
+    targetNodeId: string,
+    managedDatabaseListener?: RelayManagedDatabaseListenerConfig
   ): Promise<string> {
     const endpointId = await this.ensureManagedDatabaseEndpoint(managedDatabaseId, targetNodeId);
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
@@ -385,7 +447,8 @@ export class RelayPolicyService {
       'daemon',
       sourceNodeId,
       source.certificateFingerprint,
-      endpointId
+      endpointId,
+      managedDatabaseListener
     );
     await this.syncSnapshot();
     await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
@@ -444,11 +507,11 @@ export class RelayPolicyService {
     return routeId;
   }
 
-  async getProxyRouteRuntime(linkId: string): Promise<ProxyRouteRuntime | null> {
+  private async getOwnedRouteRuntime(ownerKind: string, ownerId: string): Promise<RelayRouteRuntime | null> {
     const [route] = await this.db
       .select({ id: relayRoutes.id })
       .from(relayRoutes)
-      .where(and(eq(relayRoutes.ownerKind, 'proxy_host_secure_link'), eq(relayRoutes.ownerId, linkId)))
+      .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
       .limit(1);
     if (!route) return null;
 
@@ -469,6 +532,14 @@ export class RelayPolicyService {
       lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
       metricsSince: new Date(metricsSinceMillis > 0 ? metricsSinceMillis : Date.now()).toISOString(),
     };
+  }
+
+  async getProxyRouteRuntime(linkId: string): Promise<ProxyRouteRuntime | null> {
+    return this.getOwnedRouteRuntime('proxy_host_secure_link', linkId);
+  }
+
+  async getManagedDatabaseBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {
+    return this.getOwnedRouteRuntime('managed_database_binding', bindingId);
   }
 
   async ensureGatewayRoute(
@@ -646,9 +717,26 @@ export class RelayPolicyService {
     );
   }
 
+  async syncNodeGrantBundle(nodeId: string) {
+    if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
+    const previous = this.nodeGrantSyncs.get(nodeId) ?? Promise.resolve(undefined);
+    const current = previous.catch(() => undefined).then(async () => {
+      const bundle = await this.getNodeGrantBundle(nodeId);
+      const result = await this.dispatch!.sendRelayGrantBundle(nodeId, bundle);
+      if (result.success) this.lastNodeGrantBundles.set(nodeId, bundle);
+      return result;
+    });
+    this.nodeGrantSyncs.set(nodeId, current);
+    try {
+      return await current;
+    } finally {
+      if (this.nodeGrantSyncs.get(nodeId) === current) this.nodeGrantSyncs.delete(nodeId);
+    }
+  }
+
   async syncNodeGrants(nodeId: string): Promise<void> {
     if (!this.dispatch) return;
-    const result = await this.dispatch.sendRelayGrantBundle(nodeId, await this.getNodeGrantBundle(nodeId));
+    const result = await this.syncNodeGrantBundle(nodeId);
     if (!result.success) throw new Error(result.error || `Daemon ${nodeId} rejected relay grants`);
   }
 
@@ -684,7 +772,8 @@ export class RelayPolicyService {
     sourceKind: string,
     sourceId: string,
     sourceCertificateSha256: string,
-    targetEndpointId: string
+    targetEndpointId: string,
+    managedDatabaseListener?: RelayManagedDatabaseListenerConfig
   ): Promise<string> {
     return this.db.transaction(async (tx) => {
       const [current] = await tx
@@ -703,6 +792,7 @@ export class RelayPolicyService {
             sourceCertificateSha256,
             targetEndpointId,
             maxFrameBytes: RELAY_MAX_FRAME_BYTES,
+            managedDatabaseListener,
           })
           .returning({ id: relayRoutes.id });
         await bumpRelayPolicyRevision(tx);
@@ -711,7 +801,8 @@ export class RelayPolicyService {
       if (
         current.sourceId !== sourceId ||
         current.sourceCertificateSha256 !== sourceCertificateSha256 ||
-        current.targetEndpointId !== targetEndpointId
+        current.targetEndpointId !== targetEndpointId ||
+        !managedDatabaseListenerConfigsEqual(current.managedDatabaseListener, managedDatabaseListener)
       ) {
         await tx
           .update(relayRoutes)
@@ -720,6 +811,7 @@ export class RelayPolicyService {
             sourceId,
             sourceCertificateSha256,
             targetEndpointId,
+            managedDatabaseListener: managedDatabaseListener ?? null,
             generation: current.generation + 1,
             updatedAt: new Date(),
           })

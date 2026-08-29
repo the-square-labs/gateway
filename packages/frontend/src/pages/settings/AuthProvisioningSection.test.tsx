@@ -21,6 +21,7 @@ const SETTINGS: AuthProvisioningSettings = {
   mcpExtendedCompatibility: false,
   generalSettings: {
     publicUrl: "https://gateway.example.com",
+    updateChannel: "stable",
     fileUploadMaxBytes: 100 * 1024 * 1024,
     fileOpenMaxBytes: 10 * 1024 * 1024,
     gatewayGrpcPublicTarget: null,
@@ -107,6 +108,79 @@ describe("AuthProvisioningSection inference setting", () => {
       expect(transition).toHaveStyle({ visibility: "visible" });
       expect(screen.getByText(/Powered by/)).toBeVisible();
     });
+  });
+
+  it("splits General settings into two six-row panels", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+
+    render(<AuthProvisioningSection canEdit section="general" />);
+
+    const accessPanel = (await screen.findByText("Access and limits")).closest(
+      "div.border"
+    ) as HTMLElement;
+    const featuresPanel = screen
+      .getByText("Features and updates")
+      .closest("div.border") as HTMLElement;
+
+    for (const label of [
+      "Public URL",
+      "Relay grant lifetime",
+      "File upload limit",
+      "File open limit",
+      "gRPC public target",
+      "gRPC local IP",
+    ]) {
+      expect(within(accessPanel).getByText(label)).toBeInTheDocument();
+    }
+    for (const label of [
+      "Hide external branding",
+      "Internal HTTPS on port 3000",
+      "PKI",
+      "SIEM audit export",
+      "Inference",
+      "Update channel",
+    ]) {
+      expect(within(featuresPanel).getByText(label)).toBeInTheDocument();
+    }
+    expect(within(accessPanel).queryByText("Update channel")).not.toBeInTheDocument();
+    expect(within(featuresPanel).queryByText("Public URL")).not.toBeInTheDocument();
+  });
+
+  it("shows update channel descriptions in the menu and persists Preview", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi
+      .spyOn(api, "updateAuthProvisioningSettings")
+      .mockImplementation(async (input) => ({
+        ...SETTINGS,
+        generalSettings: { ...SETTINGS.generalSettings, ...input.generalSettings },
+      }));
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit section="general" />);
+
+    await user.click(await screen.findByRole("combobox", { name: "Update channel" }));
+    expect(
+      screen.getByText("Production-ready releases only. Recommended for production environments.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Upcoming versions before general availability. Preview versions may contain unresolved issues."
+      )
+    ).toBeInTheDocument();
+    await user.click(screen.getByText("Preview"));
+
+    const featuresPanel = screen
+      .getByText("Features and updates")
+      .closest("div.border") as HTMLElement;
+    await user.click(within(featuresPanel).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        generalSettings: expect.objectContaining({ updateChannel: "preview" }),
+      })
+    );
   });
 
   it("persists the existing-session MFA grace period", async () => {

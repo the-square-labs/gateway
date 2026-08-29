@@ -1,0 +1,25 @@
+---
+title: Migrations and container archives
+description: Move eligible workloads between nodes or export them as portable GWCA archives.
+section: Docker
+order: 6
+audience: [operator, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Migrations and container archives
+
+Cross-node migration performs capacity preflight, artifact and volume transfer, target verification, cutover, and cleanup recovery. Eligible resource grants move with the workload. GPU-attached workloads, Secure runtime workloads, host bind mounts, and Compose Projects are not portable in the current workflow.
+
+GWCA archives can be self-contained or registry-backed. They include supported configuration and ordinary environment values, can optionally include secrets and writable-layer changes, and never include volume contents. Restore volumes separately and remap networks or occupied ports during import.
+
+Before migration or export:
+
+- record dependencies and maintenance expectations;
+- verify target capacity and registry reachability;
+- back up stateful volumes;
+- confirm the target supports the runtime profile;
+- retain the source until target health and artifacts are verified.
+
+Use cancellation and cleanup recovery actions rather than deleting intermediate resources manually.

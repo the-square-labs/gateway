@@ -254,6 +254,9 @@ proxyRoutes.openapi(
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
     const input = CreateAdditionalRouteSchema.parse(await c.req.json());
+    if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
+      throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required');
+    }
     if (input.targetKind === 'pages') {
       await container.resolve(LicensePolicyService).requireFeature('pages');
       await container.resolve(PageProfileService).requireEnabled();

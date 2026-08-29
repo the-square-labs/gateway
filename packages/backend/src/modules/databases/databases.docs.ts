@@ -216,6 +216,15 @@ export const deleteManagedDatabaseBindingRoute = appRoute({
   responses: okJson(z.object({ success: z.boolean() })),
 });
 
+export const getManagedDatabaseBindingRuntimeRoute = appRoute({
+  method: 'get',
+  path: '/managed/{id}/bindings/{bindingId}/runtime',
+  tags: ['Databases'],
+  summary: 'Get managed database binding Relay runtime',
+  request: { params: IdParamSchema.extend({ bindingId: z.string().uuid() }) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const revealManagedDatabaseBindingCredentialsRoute = appRoute({
   method: 'get',
   path: '/managed/{id}/bindings/{bindingId}/reveal-credentials',

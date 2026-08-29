@@ -14,6 +14,41 @@ import {
 } from './update.service.js';
 
 describe('UpdateService release selection', () => {
+  it('passes the persisted Preview channel to Gateway and Relay resolution', async () => {
+    const db = {
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn() })) })),
+      delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
+    };
+    const generalSettings = { getConfig: vi.fn().mockResolvedValue({ updateChannel: 'preview' }) };
+    const service = new UpdateService(
+      db as never,
+      makeDockerService() as never,
+      {
+        APP_VERSION: 'v2.9.15',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        GATEWAY_RELAY_BUILD_VERSION: 'v2.9.12',
+      } as never,
+      undefined,
+      generalSettings as never
+    );
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await service.checkForUpdates();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(
+        expect.arrayContaining([
+          'https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v2.9.15&channel=preview',
+          'https://updates.thesqlabs.com/gateway/releases?component=relay&current=v2.9.12&channel=preview',
+        ])
+      );
+      expect(db.delete).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('builds provider-neutral Gateway and Relay manifest URLs when configured', () => {
     const service = new UpdateService(
       {} as never,
@@ -169,6 +204,47 @@ describe('UpdateService release selection', () => {
     expect((await service.getCachedStatus()).relay.updateAvailable).toBe(false);
     rows[1]!.value = 'v2.4.2';
     expect((await service.getCachedStatus()).relay.updateAvailable).toBe(true);
+  });
+
+  it('hides cached Gateway and Relay release candidates immediately after switching back to Stable', async () => {
+    const rows = [
+      { key: 'update:latest_version', value: 'v2.5.0-rc.2' },
+      { key: 'update:release_notes', value: 'Preview notes' },
+      { key: 'update:release_url', value: 'https://example.com/gateway-rc' },
+      { key: 'update:relay:latest_version', value: 'v2.5.0-rc.3' },
+      { key: 'update:relay:release_notes', value: 'Relay preview notes' },
+      { key: 'update:relay:release_url', value: 'https://example.com/relay-rc' },
+      { key: 'update:relay:min_gateway_version', value: 'v2.4.0' },
+    ];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
+      })),
+    } as never;
+    const service = new UpdateService(
+      db,
+      makeDockerService() as never,
+      {
+        APP_VERSION: 'v2.4.0',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        GATEWAY_RELAY_BUILD_VERSION: 'v2.4.0',
+      } as never,
+      undefined,
+      { getConfig: vi.fn().mockResolvedValue({ updateChannel: 'stable' }) } as never
+    );
+
+    await expect(service.getCachedStatus()).resolves.toMatchObject({
+      latestVersion: null,
+      updateAvailable: false,
+      releaseNotes: null,
+      releaseUrl: null,
+      relay: {
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+      },
+    });
   });
 });
 

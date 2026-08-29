@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CODEX_ACCOUNT_LOGIN_WARNING, CodexIntegrationService } from './codex-integration.js';
+import { CODEX_ACCOUNT_LOGIN_WARNING, CodexIntegrationService, resolveCommandLaunch } from './codex-integration.js';
 import type { CredentialStore } from './credentials.js';
 import { inferenceProxyBaseUrl } from './inference-proxy.js';
 import type { InferenceProxyDaemonManager } from './inference-proxy-daemon.js';
@@ -47,6 +47,21 @@ const CATALOG = {
     },
   ],
 };
+
+describe('command launch', () => {
+  it('runs Windows npm command shims through cmd.exe', () => {
+    expect(
+      resolveCommandLaunch('win32', 'codex', ['--version'], { ComSpec: 'C:\\Windows\\System32\\cmd.exe' })
+    ).toEqual({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', 'codex --version'],
+    });
+    expect(resolveCommandLaunch('win32', 'C:\\Program Files\\npm\\codex.cmd', ['login', 'status'], {})).toEqual({
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', '"C:\\Program Files\\npm\\codex.cmd" login status'],
+    });
+  });
+});
 
 const NOOP_PROXY_DAEMON: InferenceProxyDaemonManager = {
   ensure: vi.fn(async ({ paths, profileName }) => ({ baseUrl: inferenceProxyBaseUrl(paths, profileName) })),

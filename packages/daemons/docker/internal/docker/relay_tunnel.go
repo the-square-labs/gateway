@@ -368,9 +368,19 @@ func (p *DockerPlugin) openSidecar(connection net.Conn) {
 	if err != nil {
 		return
 	}
+	p.openManagedDatabaseBinding(connection, bindingID, 0)
+}
+
+func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64) {
 	assignment := findRelayAssignment(p.relayGrants.get(), "connect", "managed_database_binding", bindingID)
 	if assignment == nil {
 		return
+	}
+	if routeGeneration != 0 {
+		listener := assignment.GetManagedDatabaseListener()
+		if listener == nil || listener.GetRouteGeneration() != routeGeneration {
+			return
+		}
 	}
 	candidates := relaybridge.PoolCandidates(assignment, false)
 	if len(candidates) == 0 {

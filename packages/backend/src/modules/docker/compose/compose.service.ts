@@ -703,11 +703,13 @@ export class DockerComposeService {
     targetResourceId: string,
     bindingId: string,
     networkName: string,
+    hostAlias: string,
+    hostAddress: string | undefined,
     environment: Record<string, string>,
     userId: string
   ) {
     const target = await this.resolveServiceTarget(nodeId, targetResourceId);
-    const patch = { bindingId, networkName, environment };
+    const patch = { bindingId, networkName, hostAlias, hostAddress, environment };
     const updated = addManagedDatabaseBindingToYaml(target.revision.originalYaml, target.serviceName, patch);
     const createdSecretKeys: string[] = [];
     try {
@@ -759,11 +761,13 @@ export class DockerComposeService {
     targetResourceId: string,
     bindingId: string,
     networkName: string,
+    hostAlias: string,
+    hostAddress: string | undefined,
     environment: Record<string, string>,
     userId: string
   ) {
     const target = await this.resolveServiceTarget(nodeId, targetResourceId);
-    const patch = { bindingId, networkName, environment };
+    const patch = { bindingId, networkName, hostAlias, hostAddress, environment };
     const updated = removeManagedDatabaseBindingFromYaml(target.revision.originalYaml, target.serviceName, patch);
     const revision = await this.findOrCreateManagedRevision(
       target.project,

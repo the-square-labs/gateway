@@ -19,12 +19,19 @@ function createService(dispatch: {
   sendDockerFileCommand?: ReturnType<typeof vi.fn>;
   sendDockerLogsCommand?: ReturnType<typeof vi.fn>;
 }) {
+  const effectiveDispatch = {
+    sendDockerContainerCommand: vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify({ Config: { Labels: {} } }),
+    }),
+    ...dispatch,
+  };
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const eventBus = { publish: vi.fn() };
   const service = new DockerManagementService(
     dbWithOnlineDockerNode() as never,
     audit as never,
-    dispatch as never,
+    effectiveDispatch as never,
     { getNode: vi.fn().mockReturnValue({ id: 'node-1' }) } as never
   );
   service.setEventBus(eventBus as never);

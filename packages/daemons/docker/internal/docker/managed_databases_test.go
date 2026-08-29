@@ -1,12 +1,17 @@
 package docker
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validManagedDatabaseInput() managedDatabaseCommand {
@@ -91,6 +96,25 @@ func TestManagedDatabaseRequiresRecreateWhenClickHouseConfigChanges(t *testing.T
 	}
 }
 
+func TestPortBindingNeedsPinning(t *testing.T) {
+	port, err := network.ParsePort("5432/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !portBindingNeedsPinning(network.PortMap{}, port, 32768) {
+		t.Fatal("expected a missing publication to require pinning")
+	}
+	if !portBindingNeedsPinning(network.PortMap{port: {{HostPort: ""}}}, port, 32768) {
+		t.Fatal("expected an auto-assigned Docker publication to require pinning")
+	}
+	if portBindingNeedsPinning(network.PortMap{port: {{HostPort: "32768"}}}, port, 32768) {
+		t.Fatal("expected the recorded explicit publication to remain stable")
+	}
+	if !portBindingNeedsPinning(network.PortMap{port: {{HostPort: "32769"}}}, port, 32768) {
+		t.Fatal("expected a mismatched explicit publication to require reconciliation")
+	}
+}
+
 func TestManagedDatabaseRecreatesLegacyClickHouseForRuntimeProfile(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.Type = "clickhouse"
@@ -153,6 +177,16 @@ func TestWriteClickHouseConfigConvergesReadableMode(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0644 {
 		t.Fatalf("expected ClickHouse config mode 0644, got %o", info.Mode().Perm())
+	}
+}
+
+func TestClickHouseOwnerOverrideReplacesTheEntrypointPassword(t *testing.T) {
+	config := clickHouseOwnerOverrideConfig("clickhouse_owner", `owner-<&-password-123456`)
+	if !strings.Contains(config, `<password replace="replace">owner-&lt;&amp;-password-123456</password>`) {
+		t.Fatalf("ClickHouse owner override must replace and escape the entrypoint password: %q", config)
+	}
+	if !strings.Contains(config, "<clickhouse_owner>") || !strings.Contains(config, "<access_management>1</access_management>") {
+		t.Fatalf("ClickHouse owner override must preserve the managed access-management user: %q", config)
 	}
 }
 
@@ -547,6 +581,205 @@ func TestValidateManagedDatabaseBindingInputRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestValidateManagedDatabasePrincipalV2InputRejectsUnsafeValues(t *testing.T) {
+	input := managedDatabasePrincipalV2Command{
+		OperationID:              "11111111-1111-4111-8111-111111111111",
+		PrincipalName:            "gw_b_123",
+		Password:                 "a-long-random-secret-password",
+		DatabaseName:             "app_database",
+		ApplicationPrincipalName: "app_owner",
+		OwnerUsername:            "gateway_admin",
+		OwnerPassword:            "another-long-owner-secret",
+	}
+	if err := validateManagedDatabasePrincipalV2Input(input); err != nil {
+		t.Fatalf("expected valid identity-v2 input: %v", err)
+	}
+	input.ApplicationPrincipalName = "unsafe-role"
+	if err := validateManagedDatabasePrincipalV2Input(input); err == nil {
+		t.Fatal("expected unsafe application role to be rejected")
+	}
+}
+
+func TestManagedDatabaseRuntimePreparationPreservesLifecycleOperationID(t *testing.T) {
+	record := managedDatabaseRecord{OperationID: "11111111-1111-4111-8111-111111111111"}
+	applyManagedDatabaseOperationID(&record, managedDatabaseCommand{
+		OperationID:                  "binding-identity-database-1",
+		PreserveLifecycleOperationID: true,
+	})
+	if record.OperationID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("identity runtime preparation replaced lifecycle operation ID with %q", record.OperationID)
+	}
+
+	applyManagedDatabaseOperationID(&record, managedDatabaseCommand{
+		OperationID: "22222222-2222-4222-8222-222222222222",
+	})
+	if record.OperationID != "22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("ordinary lifecycle update did not advance operation ID: %q", record.OperationID)
+	}
+}
+
+func TestPostgresBindingPrincipalV2UsesStableApplicationOwner(t *testing.T) {
+	input := managedDatabasePrincipalV2Command{
+		OperationID:              "11111111-1111-4111-8111-111111111111",
+		PrincipalName:            "gw_b_123",
+		Password:                 "a-long-random-secret-password",
+		DatabaseName:             "app_database",
+		ApplicationPrincipalName: "app_owner",
+		OwnerUsername:            "gateway_admin",
+		OwnerPassword:            "another-long-owner-secret",
+	}
+	applySQL := postgresBindingPrincipalV2ApplySQL(input)
+	for _, expected := range []string{
+		`LOGIN NOINHERIT PASSWORD`,
+		`GRANT "app_owner" TO "gw_b_123"`,
+		`ALTER ROLE "gw_b_123" IN DATABASE "app_database" SET role TO 'app_owner'`,
+	} {
+		if !strings.Contains(applySQL, expected) {
+			t.Fatalf("PostgreSQL identity-v2 apply must contain %q: %q", expected, applySQL)
+		}
+	}
+	dropSQL := postgresBindingPrincipalV2DropSQL(input)
+	for _, expected := range []string{"NOLOGIN", "pg_terminate_backend", "REASSIGN OWNED", "DROP OWNED", "DROP ROLE"} {
+		if !strings.Contains(dropSQL, expected) {
+			t.Fatalf("PostgreSQL identity-v2 drop must contain %q: %q", expected, dropSQL)
+		}
+	}
+}
+
+func TestPostgresOwnerSeparationPreservesLegacyOwnerRole(t *testing.T) {
+	input := managedDatabaseOwnerSeparationCommand{
+		OperationID:              "11111111-1111-4111-8111-111111111111",
+		DatabaseName:             "app_database",
+		ApplicationPrincipalName: "gw_app_123",
+		CurrentOwnerUsername:     "legacy_owner",
+		CurrentOwnerPassword:     "a-long-current-owner-password",
+		PendingOwnerUsername:     "gateway_admin",
+		PendingOwnerPassword:     "a-long-pending-owner-password",
+	}
+	sql := postgresOwnerSeparationPrepareSQL(input)
+	if !strings.Contains(sql, `CREATE ROLE %I NOLOGIN NOSUPERUSER`) {
+		t.Fatalf("owner separation must create a stable application role: %q", sql)
+	}
+	for _, expected := range []string{
+		`CREATE ROLE %I LOGIN SUPERUSER PASSWORD %L`,
+		`ALTER DATABASE %I OWNER TO %I`,
+		`ALTER ROUTINE %I.%I(%s) OWNER TO %I`,
+		`ALTER TYPE %I.%I OWNER TO %I`,
+		`ALTER ROLE %I IN DATABASE %I SET role TO %L`,
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("owner separation must contain %q: %q", expected, sql)
+		}
+	}
+}
+
+func TestPostgresOwnerSeparationLive(t *testing.T) {
+	images := strings.TrimSpace(os.Getenv("GATEWAY_POSTGRES_IDENTITY_TEST_IMAGES"))
+	if images == "" {
+		t.Skip("set GATEWAY_POSTGRES_IDENTITY_TEST_IMAGES to run disposable PostgreSQL identity tests")
+	}
+	for _, image := range strings.Split(images, ",") {
+		image = strings.TrimSpace(image)
+		if image == "" {
+			continue
+		}
+		t.Run(strings.ReplaceAll(image, ":", "-"), func(t *testing.T) {
+			name := fmt.Sprintf("gateway-pg-identity-%d", time.Now().UnixNano())
+			runDockerTestCommand(t, "run", "-d", "--rm", "--name", name,
+				"-e", "POSTGRES_USER=legacy_owner",
+				"-e", "POSTGRES_PASSWORD=legacy-password-123456",
+				"-e", "POSTGRES_DB=app",
+				image,
+			)
+			t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+			deadline := time.Now().Add(30 * time.Second)
+			for {
+				if exec.Command("docker", "exec", "-e", "PGPASSWORD=legacy-password-123456", name,
+					"pg_isready", "-q", "-h", "127.0.0.1", "-U", "legacy_owner", "-d", "app").Run() == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("PostgreSQL did not become ready")
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+
+			seed := `CREATE SCHEMA app_extra;
+CREATE TYPE app_extra.app_status AS ENUM ('ready');
+CREATE DOMAIN app_extra.positive_int AS integer CHECK (VALUE > 0);
+CREATE TABLE app_extra.existing_table(id app_extra.positive_int, status app_extra.app_status);
+CREATE SEQUENCE app_extra.existing_sequence;
+CREATE VIEW app_extra.existing_view AS SELECT id FROM app_extra.existing_table;
+CREATE MATERIALIZED VIEW app_extra.existing_materialized_view AS SELECT id FROM app_extra.existing_table;
+CREATE FUNCTION app_extra.existing_function(value integer) RETURNS integer LANGUAGE sql AS $$ SELECT value + 1 $$;
+CREATE PROCEDURE app_extra.existing_procedure() LANGUAGE sql AS $$ SELECT 1 $$;
+CREATE STATISTICS app_extra.existing_statistics ON id, status FROM app_extra.existing_table;`
+			runPostgresTestSQL(t, name, "legacy_owner", "legacy-password-123456", seed)
+
+			separation := managedDatabaseOwnerSeparationCommand{
+				OperationID:              "11111111-1111-4111-8111-111111111111",
+				DatabaseName:             "app",
+				ApplicationPrincipalName: "gw_app_123",
+				CurrentOwnerUsername:     "legacy_owner",
+				CurrentOwnerPassword:     "legacy-password-123456",
+				PendingOwnerUsername:     "gateway_admin",
+				PendingOwnerPassword:     "admin-password-123456",
+			}
+			runPostgresTestSQL(t, name, "legacy_owner", "legacy-password-123456", postgresOwnerSeparationPrepareSQL(separation))
+
+			binding := managedDatabasePrincipalV2Command{
+				OperationID:              "22222222-2222-4222-8222-222222222222",
+				PrincipalName:            "gw_b_one",
+				Password:                 "binding-password-123456",
+				DatabaseName:             "app",
+				ApplicationPrincipalName: "gw_app_123",
+				OwnerUsername:            "gateway_admin",
+				OwnerPassword:            "admin-password-123456",
+			}
+			runPostgresTestSQL(t, name, "gateway_admin", "admin-password-123456", postgresBindingPrincipalV2ApplySQL(binding))
+			runPostgresTestSQL(t, name, "gw_b_one", "binding-password-123456", `ALTER TABLE app_extra.existing_table ADD COLUMN name text;
+CREATE OR REPLACE FUNCTION app_extra.existing_function(value integer) RETURNS integer LANGUAGE sql AS $$ SELECT value + 2 $$;
+CREATE TABLE app_extra.binding_table(id integer);`)
+
+			owners := runPostgresTestQuery(t, name, "gateway_admin", "admin-password-123456", `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app_extra' AND c.relkind IN ('r','S','v','m') AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname='gw_app_123')`)
+			if strings.TrimSpace(owners) != "0" {
+				t.Fatalf("expected application relations to have stable owner, got %q", owners)
+			}
+
+			runPostgresTestSQL(t, name, "gateway_admin", "admin-password-123456", `ALTER ROLE legacy_owner NOLOGIN PASSWORD NULL;`)
+			if exec.Command("docker", "exec", "-e", "PGPASSWORD=legacy-password-123456", name,
+				"psql", "-h", "127.0.0.1", "-U", "legacy_owner", "-d", "app", "-c", "SELECT 1").Run() == nil {
+				t.Fatal("legacy owner login remained usable after finalization")
+			}
+		})
+	}
+}
+
+func runDockerTestCommand(t *testing.T, args ...string) string {
+	t.Helper()
+	output, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return string(output)
+}
+
+func runPostgresTestSQL(t *testing.T, containerName, username, password, sql string) {
+	t.Helper()
+	command := exec.Command("docker", "exec", "-i", "-e", "PGPASSWORD="+password, containerName,
+		"psql", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-U", username, "-d", "app")
+	command.Stdin = strings.NewReader(sql)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute PostgreSQL SQL as %s: %v: %s", username, err, strings.TrimSpace(string(output)))
+	}
+}
+
+func runPostgresTestQuery(t *testing.T, containerName, username, password, sql string) string {
+	t.Helper()
+	return runDockerTestCommand(t, "exec", "-e", "PGPASSWORD="+password, containerName,
+		"psql", "-h", "127.0.0.1", "-U", username, "-d", "app", "-tAc", sql)
+}
+
 func TestBindingPrincipalSQLUsesRealLineTermination(t *testing.T) {
 	input := managedDatabaseBindingCommand{
 		BindingID:     "binding_123",
@@ -770,6 +1003,253 @@ func TestRedisBindingACLRulesKeepRedis62Compatible(t *testing.T) {
 	}
 	if len(redisBindingACLModernRules()) != 10 {
 		t.Fatalf("expected all Redis-7-only ACL rules to be gated, got %v", redisBindingACLModernRules())
+	}
+}
+
+func TestRedisIdentityV2PersistsACLChangesAndDoesNotHideDeleteErrors(t *testing.T) {
+	apply := redisBindingPrincipalV2ApplyCommand()
+	drop := redisBindingPrincipalV2DropCommand()
+	if !strings.Contains(apply, "ACL SAVE") || !strings.Contains(drop, "ACL SAVE") {
+		t.Fatal("Redis identity-v2 apply and drop must persist ACL changes")
+	}
+	if strings.Contains(drop, "|| true") {
+		t.Fatal("Redis identity-v2 drop must not suppress ACL deletion failures")
+	}
+	if !strings.Contains(drop, "0|1") {
+		t.Fatal("Redis identity-v2 drop must accept only missing or one deleted user")
+	}
+	snapshot := redisACLFileSnapshotCommand()
+	restore := redisACLFileRestoreCommand()
+	if !strings.Contains(snapshot, `ACL LIST >"$tmp"`) || !strings.Contains(snapshot, "mv \"$tmp\" /data/users.acl") {
+		t.Fatal("legacy Redis ACL migration must snapshot the live user set atomically")
+	}
+	if !strings.Contains(restore, "ACL SETUSER") || strings.Contains(restore, "|| true") {
+		t.Fatal("legacy Redis ACL rollback must restore every snapshotted user without suppressing failures")
+	}
+}
+
+func TestManagedRedisConfigUsesPersistentACLFile(t *testing.T) {
+	config := managedRedisConfigText(managedDatabaseCommand{Type: "redis", MemoryBytes: 1024 * 1024})
+	if !strings.Contains(config, "aclfile /data/users.acl\n") {
+		t.Fatalf("managed Redis must load its ACL file from persistent storage: %q", config)
+	}
+}
+
+func TestRedisIdentityV2Live(t *testing.T) {
+	images := strings.TrimSpace(os.Getenv("GATEWAY_REDIS_IDENTITY_TEST_IMAGES"))
+	if images == "" {
+		t.Skip("set GATEWAY_REDIS_IDENTITY_TEST_IMAGES to run disposable Redis identity tests")
+	}
+	for _, image := range strings.Split(images, ",") {
+		image = strings.TrimSpace(image)
+		if image == "" {
+			continue
+		}
+		t.Run(strings.ReplaceAll(image, ":", "-"), func(t *testing.T) {
+			dataDir := t.TempDir()
+			uid, gid, err := managedDatabaseTLSOwner("redis")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(dataDir, uid, gid); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dataDir, 0750); err != nil {
+				t.Fatal(err)
+			}
+			ownerPassword := "owner-password-123456"
+			digest := sha256.Sum256([]byte(ownerPassword))
+			aclPath := filepath.Join(dataDir, "users.acl")
+			if err := os.WriteFile(
+				aclPath,
+				[]byte(fmt.Sprintf("user default on #%x ~* &* +@all\n", digest)),
+				0600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(aclPath, uid, gid); err != nil {
+				t.Fatal(err)
+			}
+			name := fmt.Sprintf("gateway-redis-identity-%d", time.Now().UnixNano())
+			runDockerTestCommand(t, "run", "-d", "--rm", "--name", name,
+				"-v", dataDir+":/data",
+				image,
+				"redis-server", "--dir", "/data", "--aclfile", "/data/users.acl",
+			)
+			t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+			deadline := time.Now().Add(30 * time.Second)
+			for {
+				if exec.Command("docker", "exec", "-e", "REDISCLI_AUTH="+ownerPassword, name,
+					"redis-cli", "--no-auth-warning", "--user", "default", "PING").Run() == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("Redis did not become ready")
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+
+			runDockerTestCommand(t, "exec",
+				"-e", "REDISCLI_AUTH="+ownerPassword,
+				"-e", "GATEWAY_DB_PRINCIPAL=gw_b_one",
+				"-e", "GATEWAY_DB_PRINCIPAL_PASSWORD=binding-password-123456",
+				name, "sh", "-ec", redisBindingPrincipalV2ApplyCommand(),
+			)
+			runDockerTestCommand(t, "exec", "-e", "REDISCLI_AUTH=binding-password-123456", name,
+				"redis-cli", "--no-auth-warning", "--user", "gw_b_one", "PING")
+			runDockerTestCommand(t, "restart", name)
+			runDockerTestCommand(t, "exec", "-e", "REDISCLI_AUTH=binding-password-123456", name,
+				"redis-cli", "--no-auth-warning", "--user", "gw_b_one", "PING")
+
+			runDockerTestCommand(t, "exec",
+				"-e", "REDISCLI_AUTH="+ownerPassword,
+				"-e", "GATEWAY_DB_PRINCIPAL=gw_b_one",
+				name, "sh", "-ec", redisBindingPrincipalV2DropCommand(),
+			)
+			runDockerTestCommand(t, "restart", name)
+			deletedProbe, _ := exec.Command("docker", "exec", "-e", "REDISCLI_AUTH=binding-password-123456", name,
+				"redis-cli", "--no-auth-warning", "--user", "gw_b_one", "PING").CombinedOutput()
+			if strings.TrimSpace(string(deletedProbe)) == "PONG" {
+				t.Fatal("deleted Redis binding principal survived restart")
+			}
+
+			runDockerTestCommand(t, "exec",
+				"-e", "GATEWAY_DB_CURRENT_OWNER_PASSWORD="+ownerPassword,
+				"-e", "GATEWAY_DB_PENDING_OWNER_PASSWORD=rotated-owner-password-123456",
+				name, "sh", "-ec", redisOwnerRotateCommand(),
+			)
+			// A lost ACK must be safely retryable with the persisted old and pending
+			// credentials even though the external password has already changed.
+			runDockerTestCommand(t, "exec",
+				"-e", "GATEWAY_DB_CURRENT_OWNER_PASSWORD="+ownerPassword,
+				"-e", "GATEWAY_DB_PENDING_OWNER_PASSWORD=rotated-owner-password-123456",
+				name, "sh", "-ec", redisOwnerRotateCommand(),
+			)
+			runDockerTestCommand(t, "restart", name)
+			oldOwnerProbe, _ := exec.Command("docker", "exec", "-e", "REDISCLI_AUTH="+ownerPassword, name,
+				"redis-cli", "--no-auth-warning", "--user", "default", "PING").CombinedOutput()
+			if strings.TrimSpace(string(oldOwnerProbe)) == "PONG" {
+				t.Fatal("old Redis owner password remained valid")
+			}
+			runDockerTestCommand(t, "exec", "-e", "REDISCLI_AUTH=rotated-owner-password-123456", name,
+				"redis-cli", "--no-auth-warning", "--user", "default", "PING")
+		})
+	}
+}
+
+func TestClickHouseBindingPrincipalV2UsesStableRole(t *testing.T) {
+	sql := clickHouseBindingPrincipalV2ApplySQL(managedDatabasePrincipalV2Command{
+		OperationID:              "11111111-1111-4111-8111-111111111111",
+		PrincipalName:            "gw_b_123",
+		Password:                 "a-long-random-secret-password",
+		DatabaseName:             "app_database",
+		ApplicationPrincipalName: "gw_app_123",
+		OwnerUsername:            "app_owner",
+		OwnerPassword:            "another-long-owner-secret",
+	})
+	for _, expected := range []string{
+		`CREATE ROLE IF NOT EXISTS "gw_app_123"`,
+		`GRANT ALL ON "app_database".* TO "gw_app_123"`,
+		`GRANT "gw_app_123" TO "gw_b_123"`,
+		`SET DEFAULT ROLE "gw_app_123" TO "gw_b_123"`,
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("ClickHouse identity-v2 SQL must contain %q: %q", expected, sql)
+		}
+	}
+}
+
+func TestClickHouseIdentityV2Live(t *testing.T) {
+	images := strings.TrimSpace(os.Getenv("GATEWAY_CLICKHOUSE_IDENTITY_TEST_IMAGES"))
+	if images == "" {
+		t.Skip("set GATEWAY_CLICKHOUSE_IDENTITY_TEST_IMAGES to run disposable ClickHouse identity tests")
+	}
+	for _, image := range strings.Split(images, ",") {
+		image = strings.TrimSpace(image)
+		if image == "" {
+			continue
+		}
+		t.Run(strings.NewReplacer(":", "-", "/", "-").Replace(image), func(t *testing.T) {
+			name := fmt.Sprintf("gateway-clickhouse-identity-%d", time.Now().UnixNano())
+			ownerUsername := strings.TrimSpace(os.Getenv("GATEWAY_CLICKHOUSE_IDENTITY_TEST_OWNER"))
+			if ownerUsername == "" {
+				ownerUsername = "clickhouse_owner"
+			}
+			ownerPassword := "owner-password-123456"
+			pendingPassword := "rotated-owner-password-123456"
+			overridePath := filepath.Join(t.TempDir(), filepath.Base(clickHouseOwnerOverrideContainerPath))
+			if err := writeClickHouseOwnerOverride(overridePath, clickHouseOwnerOverrideConfig(ownerUsername, ownerPassword)); err != nil {
+				t.Fatal(err)
+			}
+			runDockerTestCommand(t, "run", "-d", "--rm", "--name", name,
+				"-e", "CLICKHOUSE_DB=app",
+				"-e", "CLICKHOUSE_USER="+ownerUsername,
+				"-e", "CLICKHOUSE_PASSWORD="+ownerPassword,
+				"-e", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+				"-v", overridePath+":"+clickHouseOwnerOverrideContainerPath+":ro",
+				image,
+			)
+			t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+			waitClickHouseReady(t, name, ownerUsername, ownerPassword)
+
+			binding := managedDatabasePrincipalV2Command{
+				OperationID:              "22222222-2222-4222-8222-222222222222",
+				PrincipalName:            "gw_b_one",
+				Password:                 "binding-password-123456",
+				DatabaseName:             "app",
+				ApplicationPrincipalName: "gw_app_123",
+				OwnerUsername:            ownerUsername,
+				OwnerPassword:            ownerPassword,
+			}
+			runClickHouseTestSQL(t, name, ownerUsername, ownerPassword, clickHouseBindingPrincipalV2ApplySQL(binding))
+			runClickHouseTestSQL(t, name, "gw_b_one", binding.Password, "CREATE TABLE app.binding_table (id UInt64) ENGINE = MergeTree ORDER BY id; INSERT INTO app.binding_table VALUES (1);")
+			runDockerTestCommand(t, "restart", name)
+			waitClickHouseReady(t, name, "gw_b_one", binding.Password)
+			runDockerTestCommand(t, "exec", "-e", "CLICKHOUSE_PASSWORD="+binding.Password, name,
+				"clickhouse-client", "--user", binding.PrincipalName, "--database", "app", "--query", "SELECT count() FROM binding_table")
+
+			for range 2 {
+				if err := writeClickHouseOwnerOverride(overridePath, clickHouseOwnerOverrideConfig(ownerUsername, pendingPassword)); err != nil {
+					t.Fatal(err)
+				}
+				runDockerTestCommand(t, "restart", name)
+				waitClickHouseReady(t, name, ownerUsername, pendingPassword)
+			}
+			if exec.Command("docker", "exec", "-e", "CLICKHOUSE_PASSWORD="+ownerPassword, name,
+				"clickhouse-client", "--user", ownerUsername, "--database", "app", "--query", "SELECT 1").Run() == nil {
+				t.Fatal("old ClickHouse owner password remained valid")
+			}
+			runDockerTestCommand(t, "exec", "-e", "CLICKHOUSE_PASSWORD="+pendingPassword, name,
+				"clickhouse-client", "--user", ownerUsername, "--database", "app", "--query", "SELECT 1")
+			runClickHouseTestSQL(t, name, ownerUsername, pendingPassword, "DROP USER IF EXISTS \"gw_b_one\";")
+		})
+	}
+}
+
+func runClickHouseTestSQL(t *testing.T, containerName, username, password, sql string) {
+	t.Helper()
+	command := exec.Command("docker", "exec", "-i", "-e", "CLICKHOUSE_PASSWORD="+password, containerName,
+		"clickhouse-client", "--user", username, "--database", "app", "--multiquery")
+	command.Stdin = strings.NewReader(sql)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute ClickHouse SQL as %s: %v: %s", username, err, strings.TrimSpace(string(output)))
+	}
+}
+
+func waitClickHouseReady(t *testing.T, containerName, username, password string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if exec.Command("docker", "exec", "-e", "CLICKHOUSE_PASSWORD="+password, containerName,
+			"clickhouse-client", "--user", username, "--database", "app", "--query", "SELECT 1").Run() == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			logs, _ := exec.Command("docker", "logs", "--tail", "80", containerName).CombinedOutput()
+			errLog, _ := exec.Command("docker", "exec", containerName, "sh", "-ec", "tail -80 /var/log/clickhouse-server/clickhouse-server.err.log; cat "+clickHouseOwnerOverrideContainerPath).CombinedOutput()
+			t.Fatalf("ClickHouse did not become ready: %s\n%s", strings.TrimSpace(string(logs)), strings.TrimSpace(string(errLog)))
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 

@@ -4,15 +4,6 @@ import { container, TOKENS } from '@/container.js';
 import { createDrizzleClient } from '@/db/client.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
-import { ACMERenewalJob } from '@/jobs/acme-renewal.job.js';
-import { DaemonUpdateCheckJob } from '@/jobs/daemon-update-check.job.js';
-import { DnsCheckJob } from '@/jobs/dns-check.job.js';
-import { ExpiryAlertJob } from '@/jobs/expiry-alert.job.js';
-import { HealthCheckJob } from '@/jobs/health-check.job.js';
-import { HousekeepingJob } from '@/jobs/housekeeping.job.js';
-import { NotificationRetryJob } from '@/jobs/notification-retry.job.js';
-import { SiemDeliveryJob } from '@/jobs/siem-delivery.job.js';
-import { UpdateCheckJob } from '@/jobs/update-check.job.js';
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AccessListService } from '@/modules/access-lists/access-list.service.js';
@@ -81,7 +72,6 @@ import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-recon
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { DockerTaskService } from '@/modules/docker/docker-task.service.js';
 import { DockerWebhookService } from '@/modules/docker/docker-webhook.service.js';
-import { detectPublicIP, initDnsResolver } from '@/modules/domains/dns.utils.js';
 import { DomainsService } from '@/modules/domains/domain.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
@@ -116,7 +106,6 @@ import { ExternalSshService } from '@/modules/integrations/external-ssh.service.
 import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
-import { LICENSE_SCHEDULER_INTERVAL_MS } from '@/modules/license/license.types.js';
 import { LicenseEntitlementReconcilerService } from '@/modules/license/license-entitlement-reconciler.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LicenseQuotaService } from '@/modules/license/license-quota.service.js';
@@ -140,12 +129,11 @@ import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import { DashboardReadModelService } from '@/modules/monitoring/dashboard-read-model.service.js';
 import { MonitoringService } from '@/modules/monitoring/monitoring.service.js';
 import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
-import { NODE_MONITORING_CADENCE_MS, NodeMonitoringService } from '@/modules/nodes/node-monitoring.service.js';
+import { NodeMonitoringService } from '@/modules/nodes/node-monitoring.service.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { NotificationAlertRuleService } from '@/modules/notifications/notification-alert-rule.service.js';
 import { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import { NotificationDispatcherService } from '@/modules/notifications/notification-dispatcher.service.js';
-import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
@@ -186,7 +174,6 @@ import { SetupWizardService } from '@/modules/setup/setup-wizard.service.js';
 import { ACMEService } from '@/modules/ssl/acme.service.js';
 import { resolveHttp01Ingress } from '@/modules/ssl/http01-ingress.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
-import { StatusIncidentEvaluatorService } from '@/modules/status-page/status-incident-evaluator.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { UIBootstrapService } from '@/modules/ui-bootstrap/ui-bootstrap.service.js';
@@ -215,13 +202,14 @@ import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
-import { SchedulerService } from '@/services/scheduler.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
+
+import { initializeBackgroundServices } from './bootstrap-background.js';
 
 export { container };
 
@@ -880,6 +868,11 @@ export async function initializeContainer(): Promise<void> {
     } catch (error) {
       logger.warn('Failed to warm managed PostgreSQL extension catalogs', { error });
     }
+    try {
+      await managedDatabaseService.reconcileBindingIdentities();
+    } catch (error) {
+      logger.warn('Failed to reconcile managed database identities during startup', { error });
+    }
   })();
   void managedDatabaseService.reconcileDatabaseCertificates().catch((error) => {
     logger.warn('Failed to backfill managed database TLS certificates', { error });
@@ -896,7 +889,8 @@ export async function initializeContainer(): Promise<void> {
     getEnv().DATABASE_CONNECTOR_IMAGE,
     getEnv().NODE_ENV === 'development',
     relayPolicyService,
-    dockerComposeService
+    dockerComposeService,
+    managedDatabaseService
   );
   managedDatabaseBindingService.setEventBus(eventBus);
   managedDatabaseBindingService.setLicensePolicyService(licensePolicyService);
@@ -1324,17 +1318,23 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(RelaySupervisorService, relaySupervisor);
 
   // Update service
-  const updateService = new UpdateService(db, dockerService, env, {
-    setMaintenance: (enabled) => relaySupervisor.setMaintenance(enabled),
-    setExpectedArtifact: (imageRef, buildVersion, protocolMajor) => {
-      relayDockerRecovery.setExpectedImage(imageRef);
-      relaySupervisor.setExpectedArtifact(imageRef, buildVersion, protocolMajor);
+  const updateService = new UpdateService(
+    db,
+    dockerService,
+    env,
+    {
+      setMaintenance: (enabled) => relaySupervisor.setMaintenance(enabled),
+      setExpectedArtifact: (imageRef, buildVersion, protocolMajor) => {
+        relayDockerRecovery.setExpectedImage(imageRef);
+        relaySupervisor.setExpectedArtifact(imageRef, buildVersion, protocolMajor);
+      },
+      updateSecureLinkConnectorImage: (imageRef) =>
+        proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve(),
+      updateDatabaseConnectorImage: (imageRef) => managedDatabaseBindingService.updateConnectorImage(imageRef),
+      probeNow: () => relaySupervisor.probeNow(),
     },
-    updateSecureLinkConnectorImage: (imageRef) =>
-      proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve(),
-    updateDatabaseConnectorImage: (imageRef) => managedDatabaseBindingService.updateConnectorImage(imageRef),
-    probeNow: () => relaySupervisor.probeNow(),
-  });
+    generalSettingsService
+  );
   container.registerInstance(UpdateService, updateService);
 
   const loggingSettingsService = new LoggingSettingsService(db, cryptoService);
@@ -1422,7 +1422,7 @@ export async function initializeContainer(): Promise<void> {
   const loggingSearchService = new LoggingSearchService(loggingEnvironmentService, loggingClickHouseService);
   container.registerInstance(LoggingSearchService, loggingSearchService);
 
-  const daemonUpdateService = new DaemonUpdateService(db, env);
+  const daemonUpdateService = new DaemonUpdateService(db, env, generalSettingsService);
   daemonUpdateService.setEventBus(eventBus);
   daemonUpdateService.setNodeRegistry(nodeRegistry);
   container.registerInstance(DaemonUpdateService, daemonUpdateService);
@@ -1566,207 +1566,7 @@ export async function initializeContainer(): Promise<void> {
   }
   await aiRunService.recoverInterruptedRuns((userId) => authService.getUserById(userId));
 
-  // Configure DNS resolvers and detect public IP
-  initDnsResolver(
-    env.DNS_RESOLVERS.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-  );
-  await detectPublicIP(env.PUBLIC_IPV4, env.PUBLIC_IPV6);
-
-  const notifEvaluatorService = new NotificationEvaluatorService(
-    db,
-    notifRuleService,
-    notifWebhookService,
-    notifDispatcherService,
-    cacheService,
-    nodeRegistry
-  );
-  notifEvaluatorService.setEventBus(eventBus);
-  notifEvaluatorService.setLoggingServices(loggingEnvironmentService, loggingClickHouseService);
-  dockerManagementService.setEvaluator(notifEvaluatorService);
-  dockerHealthCheckService.setEvaluator(notifEvaluatorService);
-  databaseMonitoringService.setEvaluator(notifEvaluatorService);
-  nodeRegistry.setEvaluator(notifEvaluatorService);
-  proxyService.setEvaluator(notifEvaluatorService);
-  notifEvaluatorService.start();
-  container.registerInstance(NotificationEvaluatorService, notifEvaluatorService);
-  await licenseEntitlementReconciler.start();
-
-  housekeepingService.setNotifDeliveryService(notifDeliveryService);
-  housekeepingService.setSiemDeliveryService(siemDeliveryService);
-
-  // Seed built-in templates
-  await templatesService.seedBuiltinTemplates();
-  await nginxTemplateService.seedBuiltinTemplates();
-
-  // Background jobs
-  const scheduler = new SchedulerService();
-  container.registerInstance(SchedulerService, scheduler);
-  scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
-    await systemCertificateLifecycleService.retryPendingCRLs();
-  });
-  if (relayPolicyService) {
-    scheduler.registerInterval('relay-policy-sync', 30_000, () =>
-      relayPolicyService!.reconcileAndSync().then(() => undefined)
-    );
-    scheduler.registerInterval('relay-grant-refresh', 15 * 60 * 1000, () =>
-      relayPolicyService!.refreshAllNodeGrantsIfDue().then(() => undefined)
-    );
-    scheduler.registerInterval('relay-signing-key-rotation', 60 * 60 * 1000, () =>
-      relayPolicyService!.rotateIfDue().then(() => undefined)
-    );
-    scheduler.registerInterval('relay-pool-policy-lease-refresh', 5 * 60 * 1000, () =>
-      relayPoolService!.refreshRemotePolicies()
-    );
-    // Same baseline cadence as ordinary node monitoring. Link Runtime pages
-    // add focused 2s samples, but history does not depend on a page being open.
-    scheduler.registerInterval('secure-link-runtime-monitoring', NODE_MONITORING_CADENCE_MS.background, () =>
-      proxyService.collectSecureLinkRuntimeSnapshots()
-    );
-  }
-  scheduler.registerInterval('nginx-tls-certificate-integrity', 6 * 60 * 60 * 1000, async () => {
-    await nginxCertificateDistribution.reconcileIntegrity();
-    await nginxCertificateDistribution.cleanupDueReplicas();
-  });
-
-  const acmeRenewalJob = new ACMERenewalJob(db, sslService, alertService);
-  acmeRenewalJob.setEventBus(eventBus);
-  const healthCheckJob = new HealthCheckJob(db, nodeDispatch);
-  healthCheckJob.setEventBus(eventBus);
-  healthCheckJob.setEvaluator(notifEvaluatorService);
-  const expiryAlertJob = new ExpiryAlertJob(db, alertService);
-  expiryAlertJob.setEventBus(eventBus);
-
-  const dnsCheckJob = new DnsCheckJob(domainsService);
-  scheduler.registerInterval('dns-check', env.DNS_CHECK_INTERVAL_SECONDS * 1000, () => dnsCheckJob.run());
-
-  scheduler.register('acme-renewal', env.ACME_RENEWAL_CRON, () => acmeRenewalJob.run());
-  // Scan at the minimum supported per-host cadence; the job itself evaluates
-  // each host's configured interval and skips hosts that are not due.
-  scheduler.registerInterval('health-check', Math.min(Math.max(env.HEALTH_CHECK_INTERVAL_SECONDS, 1), 5) * 1000, () =>
-    healthCheckJob.run()
-  );
-  scheduler.registerInterval('proxy-maintenance-alerts', env.HEALTH_CHECK_INTERVAL_SECONDS * 1000, () =>
-    notifEvaluatorService.reconcileProxyMaintenance()
-  );
-  scheduler.registerInterval('docker-health-check', 10000, () => dockerHealthCheckService.runDueChecks());
-  scheduler.registerInterval('docker-build-lease-recovery', 15000, async () => {
-    await dockerBuildService.recoverExpiredLeases();
-  });
-  if (dockerBuildRunnerService) {
-    scheduler.registerInterval('docker-build-runner', 5000, () => dockerBuildRunnerService.reconcile());
-  }
-  const runDockerSourceAutomation = async (task: () => Promise<unknown>): Promise<void> => {
-    try {
-      await task();
-    } catch (error) {
-      if (error instanceof AppError && error.code === 'LICENSE_ENTITLEMENT_REQUIRED') return;
-      throw error;
-    }
-  };
-  scheduler.registerInterval('docker-source-poll', 60_000, async () => {
-    await runDockerSourceAutomation(() => dockerSourceService.pollDue());
-  });
-  scheduler.registerInterval('docker-source-webhooks', 15 * 60_000, async () => {
-    await runDockerSourceAutomation(() => dockerSourceService.reconcileWebhooks());
-  });
-  scheduler.registerInterval('docker-internal-registry-health', 10_000, async () => {
-    await dockerInternalRegistryService.probeHealth();
-  });
-  scheduler.registerInterval('managed-database-reconcile', 30000, () =>
-    managedDatabaseService.reconcilePendingOperations()
-  );
-  scheduler.registerInterval('docker-snapshot-containers', 10000, async () => {
-    dockerSnapshotReconciler.enqueueConnected('containers');
-  });
-  scheduler.registerInterval('docker-snapshot-inventory', 60000, async () => {
-    dockerSnapshotReconciler.enqueueConnected('images');
-    dockerSnapshotReconciler.enqueueConnected('volumes');
-    dockerSnapshotReconciler.enqueueConnected('networks');
-  });
-  scheduler.registerInterval('docker-snapshot-details', 5000, () => dockerSnapshotReconciler.enqueueDueDetails());
-  scheduler.registerInterval('docker-snapshot-housekeeping', 60 * 60 * 1000, () =>
-    dockerSnapshotService.purgeOrphans()
-  );
-  scheduler.registerInterval('pages-maintenance', 15 * 60 * 1000, async () => {
-    await pageMaintenanceService.run();
-  });
-  scheduler.registerInterval('pages-profile-reconcile', 60 * 1000, async () => {
-    await pageProfileService.reconcile();
-  });
-  scheduler.registerInterval('pages-route-reconcile', 60 * 1000, async () => {
-    await pageRouteService.reconcile();
-  });
-  scheduler.registerInterval('additional-route-reconcile', 60 * 1000, async () => {
-    await additionalRouteService.reconcile();
-  });
-  scheduler.register('expiry-alerts', env.EXPIRY_CHECK_CRON, async () => {
-    await Promise.all([expiryAlertJob.run(), notifEvaluatorService.evaluateCertificateExpiry()]);
-  });
-
-  const updateCheckJob = new UpdateCheckJob(updateService, eventBus);
-  scheduler.registerInterval('update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () => updateCheckJob.run());
-  setTimeout(() => void updateCheckJob.run(), 0);
-  scheduler.registerInterval('license-heartbeat', LICENSE_SCHEDULER_INTERVAL_MS, () => licenseService.heartbeat());
-
-  const daemonUpdateCheckJob = new DaemonUpdateCheckJob(daemonUpdateService);
-  scheduler.registerInterval('daemon-update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () =>
-    daemonUpdateCheckJob.run()
-  );
-
-  const housekeepingJob = new HousekeepingJob(housekeepingService);
-  const hkConfig = await housekeepingService.getConfig();
-  scheduler.register('housekeeping', hkConfig.cronExpression, () => housekeepingJob.run());
-  scheduler.registerInterval('clickhouse-health-guard', 5 * 60 * 1000, async () => {
-    const config = await housekeepingService.getConfig();
-    await loggingMaintenanceService.runGuard(
-      config.enabled ? config.structuredLogs : undefined,
-      config.enabled ? config.clickHouseInternals : undefined
-    );
-    await notifEvaluatorService.evaluateLoggingRatios();
-  });
-
-  // Stale node detection (every 60 seconds) + missed health report detection (every 30 seconds)
-  scheduler.registerInterval('stale-node-check', 60000, () => nodeRegistry.markStaleNodesOffline());
-  scheduler.registerInterval('node-health-record', 30000, () => nodeRegistry.recordHealthChecks());
-
-  const statusIncidentEvaluator = new StatusIncidentEvaluatorService(db, statusPageService);
-  container.registerInstance(StatusIncidentEvaluatorService, statusIncidentEvaluator);
-  scheduler.registerInterval('status-page-incidents', 30000, () => statusIncidentEvaluator.run());
-
-  // Notification webhook retry job (every 30 seconds)
-  const notifRetryJob = new NotificationRetryJob(notifDeliveryService, notifDispatcherService);
-  scheduler.registerInterval('notification-retry', 30000, () => notifRetryJob.run());
-  const siemDeliveryJob = new SiemDeliveryJob(siemDeliveryService, generalSettingsService);
-  scheduler.registerInterval('siem-delivery', 30000, () => siemDeliveryJob.run());
-  scheduler.registerInterval('gitlab-integration-sync', 60000, () => integrationsService.runDueGitLabSyncs());
-  scheduler.registerInterval('github-integration-health', 60000, () => integrationsService.runDueGitHubHealthChecks());
-  scheduler.registerInterval('ssh-integration-health', 60000, () => externalSshService.runDueHealthChecks());
-  scheduler.registerInterval('cloudflare-integration-sync', 60000, () => integrationsService.runDueCloudflareSyncs());
-
-  setTimeout(() => {
-    licenseService.heartbeat().catch((error) => {
-      logger.warn('Initial license heartbeat failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }, 1000);
-  setTimeout(() => {
-    housekeepingService
-      .getConfig()
-      .then((config) =>
-        loggingMaintenanceService.runGuard(
-          config.enabled ? config.structuredLogs : undefined,
-          config.enabled ? config.clickHouseInternals : undefined
-        )
-      )
-      .catch((error) => logger.warn('Initial ClickHouse health guard failed', { error }));
-  }, 1000);
-
-  // Read models warm asynchronously. Gateway readiness and request handlers
-  // never wait for a node or external resource to answer this initial pass.
-  readModelCoordinator.start();
+  await initializeBackgroundServices();
 
   logger.info('Dependency injection container initialized');
 }

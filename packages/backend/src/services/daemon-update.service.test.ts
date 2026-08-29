@@ -4,8 +4,66 @@ import type { DrizzleClient } from '@/db/client.js';
 import { DaemonUpdateService, daemonTypeForNodeType } from './daemon-update.service.js';
 
 describe('DaemonUpdateService update artifact URLs', () => {
+  it('passes the persisted Preview channel to daemon release resolution', async () => {
+    const nodes = [{ id: 'node-1', type: 'nginx', daemonVersion: 'v2.9.15', hostname: 'edge' }];
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn().mockResolvedValue(nodes) })),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn() })) })),
+      delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+    };
+    const service = new DaemonUpdateService(
+      db as never,
+      {
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+      } as Env,
+      { getConfig: vi.fn().mockResolvedValue({ updateChannel: 'preview' }) } as never
+    );
+    vi.spyOn(service, 'getCachedStatus').mockResolvedValue([]);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await service.checkForUpdates();
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+        'https://updates.thesqlabs.com/gateway/releases?component=nginx-daemon&current=v2.9.15&channel=preview'
+      );
+      expect(db.delete).toHaveBeenCalledTimes(12);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('updates builder nodes with the existing docker-daemon artifact family', () => {
     expect(daemonTypeForNodeType('builder')).toBe('docker');
+  });
+
+  it('hides a cached daemon release candidate immediately after switching back to Stable', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn().mockResolvedValue([{ id: 'node-1', type: 'nginx', daemonVersion: 'v2.9.15', hostname: 'edge' }]),
+      })),
+    } as never;
+    const service = new DaemonUpdateService(
+      db,
+      {
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+      } as Env,
+      { getConfig: vi.fn().mockResolvedValue({ updateChannel: 'stable' }) } as never
+    );
+    vi.spyOn(service as any, 'getSetting').mockImplementation(async (...args: unknown[]) => {
+      const key = args[0];
+      if (key === 'daemon-update:nginx:latest_version') return 'v2.10.0-rc.1';
+      if (key === 'daemon-update:nginx:latest_tag') return 'v2.10.0-rc.1-nginx';
+      return null;
+    });
+
+    const status = await service.getCachedStatus();
+    expect(status.find((item) => item.daemonType === 'nginx')).toMatchObject({
+      latestVersion: null,
+      nodes: [expect.objectContaining({ updateAvailable: false })],
+    });
+    await expect(service.getLatestRelease('nginx')).resolves.toBeNull();
   });
 
   it('builds signed artifact URLs from the GitHub update facade', () => {

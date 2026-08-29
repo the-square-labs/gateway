@@ -597,12 +597,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             subtitle="Secure Link traffic"
           />
           <StatCard
-            label="Database tunnels"
+            label="Active DB tunnels"
             value={metric(status?.activeDatabaseTunnels).toLocaleString()}
             icon={Database}
             history={history.map((sample) => metric(sample.activeDatabaseTunnels))}
             color="#8b5cf6"
-            subtitle="Priority traffic class"
+            subtitle="Gateway and binding streams"
           />
           <StatCard
             label="Registered endpoints"

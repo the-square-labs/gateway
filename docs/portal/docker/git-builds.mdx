@@ -1,0 +1,17 @@
+---
+title: Git sources and Build Workers
+description: Build immutable Docker and Pages artifacts in a dedicated execution boundary.
+section: Docker
+order: 5
+audience: [platform-engineer, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Git sources and Build Workers
+
+Connect an allowlisted source integration, resolve an exact branch commit, and build on an online dedicated Build Worker. The current builder accepts one build at a time, uses isolated BuildKit/containerd state, applies fixed resource limits, denies insecure entitlements, and clears cache between jobs.
+
+Build Secrets are source-scoped and mounted as secrets. Do not use build arguments for credentials. Review log redaction, vulnerability findings, policy outcome, worker assignment, commit, and artifact digest before deployment.
+
+Automatic build and automatic deploy are independent. Keep automatic deployment disabled until the health and rollback path is proven. When source automation is unavailable because of entitlement or integration state, existing history remains useful for diagnosis but new builds must not be assumed to run.

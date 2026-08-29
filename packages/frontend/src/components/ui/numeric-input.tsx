@@ -14,7 +14,7 @@ interface NumericInputProps
  * resetting to a default value. Reports both the parsed number
  * and the raw string so the parent can track validity.
  *
- * Shows a red border when the value is empty or out of range.
+ * Shows a single red border when the value is empty or out of range.
  */
 const NumericInput = React.forwardRef<HTMLInputElement, NumericInputProps>(
   ({ className, value, onChange, min, max, ...props }, ref) => {
@@ -54,10 +54,11 @@ const NumericInput = React.forwardRef<HTMLInputElement, NumericInputProps>(
         onChange={handleChange}
         min={min}
         max={max}
+        aria-invalid={isInvalid || undefined}
         className={cn(
           "flex h-9 w-full border bg-background px-3 py-1 text-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50",
           isInvalid
-            ? "border-destructive focus-visible:ring-destructive"
+            ? "border-destructive focus-visible:border-destructive focus-visible:ring-0"
             : "border-input focus-visible:ring-ring",
           className
         )}

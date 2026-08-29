@@ -1,0 +1,21 @@
+---
+title: Compose Projects
+description: Discover, adopt, deploy, revise, and operate single-node Compose applications.
+section: Docker
+order: 4
+audience: [platform-engineer, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Compose Projects
+
+Gateway discovers external Compose projects from canonical Docker labels. External projects are read-only until adopted with their complete single-file YAML; Gateway does not read host Compose files from label paths.
+
+Managed projects support immutable revisions, validation, Pull & Apply, start/stop/restart/down, operation history, aggregated logs, folders, masked secrets, drift reporting, resource limits, Routes, and managed database bindings.
+
+Manual YAML is intentionally constrained. Host bind mounts, privileged/device access, Swarm-only fields, and unsupported lifecycle features are rejected before mutation. Project-owned containers, named volumes, and non-external networks are hidden from standalone lifecycle APIs.
+
+Before applying a revision, review diagnostics, required variables, image changes, port conflicts, and database bindings. If drift is reported, decide whether to reconcile to Gateway desired state or intentionally adopt a new revision.
+
+<!-- screenshot: id=compose-project-revision; viewport=1440x900; description=Compose Project revision diff and validation diagnostics before Pull and Apply; redact=project-name,image-registry,environment-values -->

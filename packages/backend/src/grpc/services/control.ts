@@ -603,8 +603,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               setImmediate(async () => {
                 try {
                   if (!isClaimedStreamCurrent(claimedNodeId)) return;
-                  const bundle = await deps.relayPolicy!.getNodeGrantBundle(claimedNodeId);
-                  await deps.dispatch.sendRelayGrantBundle(claimedNodeId, bundle);
+                  await deps.relayPolicy!.syncNodeGrants(claimedNodeId);
                 } catch (error) {
                   logger.warn('Failed to sync relay grants after daemon reconnect', {
                     nodeId: claimedNodeId,

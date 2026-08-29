@@ -1,0 +1,19 @@
+---
+title: SSL certificates
+description: Issue, upload, renew, distribute, and troubleshoot public TLS certificates.
+section: Certificates and PKI
+order: 1
+audience: [operator, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# SSL certificates
+
+Gateway supports ACME certificates and uploaded certificates. ACME can use HTTP-01 or DNS-01. Uploaded material should include the complete chain and matching private key.
+
+Attach certificates to Routes rather than copying files to nginx hosts manually. Gateway distributes node-local replicas only where enabled TLS Routes use them. Monitor expiry and renewal status, and test renewal before the remaining lifetime becomes operationally urgent.
+
+For HTTP-01 failures, verify Domain placement, public port 80, DNS, and challenge routing. For uploaded certificates, verify hostname coverage, chain order, key match, and supported encoding.
+
+<!-- screenshot: id=certificate-detail-renewal; viewport=1440x900; description=Certificate detail with issuer, expiry, linked Routes, and renewal state; redact=domains,serial-number,certificate-body -->

@@ -130,6 +130,18 @@ export interface ManagedDatabasePendingOperation {
   action: 'create' | 'update' | 'restart' | 'pause' | 'unpause' | 'delete';
 }
 
+export type ManagedDatabaseOwnerSeparationState = 'legacy' | 'preparing' | 'active' | 'error';
+export type ManagedDatabaseBindingDesiredState = 'active' | 'deleted';
+export type ManagedDatabaseBindingObservedState =
+  | 'legacy'
+  | 'preparing'
+  | 'principal_ready'
+  | 'target_applied'
+  | 'active'
+  | 'disabled'
+  | 'absent'
+  | 'error';
+
 export interface DatabaseBindingEnvironment {
   connectionUri?: string;
   host?: string;
@@ -171,6 +183,17 @@ export const managedDatabaseInstances = pgTable(
     // ClickHouse reader and writer principals. Non-admin access fails closed
     // until this marker is present.
     clickhouseQueryPrincipalVersion: integer('clickhouse_query_principal_version'),
+    // Identity v2 separates the Gateway control account from the stable
+    // application role used by direct-access and binding principals.
+    bindingIdentityVersion: integer('binding_identity_version').notNull().default(0),
+    applicationPrincipalName: varchar('application_principal_name', { length: 128 }),
+    ownerSeparationState: varchar('owner_separation_state', { length: 32 })
+      .$type<ManagedDatabaseOwnerSeparationState>()
+      .notNull()
+      .default('legacy'),
+    ownerSeparationOperationId: uuid('owner_separation_operation_id'),
+    encryptedPendingOwnerCredentials: text('encrypted_pending_owner_credentials'),
+    directPrincipalVersion: integer('direct_principal_version').notNull().default(0),
     storageSizeBytes: bigint('storage_size_bytes', { mode: 'number' }).notNull(),
     runtimeConfig: jsonb('runtime_config').$type<ManagedDatabaseRuntimeConfig>().notNull().default({}),
     // Database TLS material exists independently from the direct-publication
@@ -211,7 +234,7 @@ export const managedDatabaseBindings = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     managedDatabaseId: uuid('managed_database_id')
       .notNull()
-      .references(() => managedDatabaseInstances.id, { onDelete: 'cascade' }),
+      .references(() => managedDatabaseInstances.id, { onDelete: 'restrict' }),
     targetNodeId: uuid('target_node_id')
       .notNull()
       .references(() => nodes.id, { onDelete: 'restrict' }),
@@ -220,8 +243,25 @@ export const managedDatabaseBindings = pgTable(
     networkName: varchar('network_name', { length: 128 }).notNull(),
     connectorName: varchar('connector_name', { length: 128 }).notNull(),
     connectorAlias: varchar('connector_alias', { length: 128 }).notNull(),
+    // Stable endpoint identity for the connector on its dedicated binding
+    // network. Target containers resolve connectorAlias through ExtraHosts,
+    // so connector recreation must reclaim this exact address.
+    connectorAddress: varchar('connector_address', { length: 45 }),
     environment: jsonb('environment').$type<DatabaseBindingEnvironment>().notNull(),
     encryptedCredentials: text('encrypted_credentials').notNull(),
+    pendingEncryptedCredentials: text('pending_encrypted_credentials'),
+    principalName: varchar('principal_name', { length: 128 }),
+    principalModelVersion: integer('principal_model_version').notNull().default(0),
+    credentialGeneration: integer('credential_generation').notNull().default(0),
+    principalOperationId: uuid('principal_operation_id'),
+    desiredState: varchar('desired_state', { length: 32 })
+      .$type<ManagedDatabaseBindingDesiredState>()
+      .notNull()
+      .default('active'),
+    observedState: varchar('observed_state', { length: 32 })
+      .$type<ManagedDatabaseBindingObservedState>()
+      .notNull()
+      .default('legacy'),
     status: databaseBindingStatusEnum('status').notNull().default('creating'),
     lastError: text('last_error'),
     createdById: uuid('created_by_id')

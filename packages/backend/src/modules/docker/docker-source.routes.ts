@@ -1,8 +1,11 @@
 import type { OpenAPIHono as OpenAPIHonoType } from '@hono/zod-openapi';
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { eq } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { z } from 'zod';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { dockerComposeProjects, dockerDeployments } from '@/db/schema/index.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
@@ -13,7 +16,7 @@ import { LicensePolicyService } from '@/modules/license/license-policy.service.j
 import type { AppEnv, User } from '@/types.js';
 import { createDockerSourceResourceRoute, getDockerBuildAdmissionRoute } from './docker.docs.js';
 import { DockerManagementService } from './docker.service.js';
-import { requireDockerContainerScope, requireDockerDeploymentScope } from './docker-access.middleware.js';
+import { requireDockerContainerScope } from './docker-access.middleware.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
   DockerBuildCreateSchema,
@@ -71,11 +74,52 @@ function composeTarget(c: { req: { param(name: string): string | undefined } }):
   return { kind: 'compose_project', composeProjectId: c.req.param('projectId')! };
 }
 
+export function assertDockerSourceTargetNode(
+  requestedNodeId: string,
+  actualNodeId: string | undefined,
+  resource: 'compose' | 'deployment'
+): void {
+  if (actualNodeId === requestedNodeId) return;
+  if (resource === 'compose') {
+    throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+  }
+  throw new AppError(404, 'NOT_FOUND', 'Deployment not found');
+}
+
 function requireComposeSourceScope(scope: string): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const nodeId = c.req.param('nodeId');
     const projectId = c.req.param('projectId');
-    if (!nodeId || !projectId || !hasDockerResourceScope(c.get('effectiveScopes') || [], scope, nodeId, projectId)) {
+    if (!nodeId || !projectId) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
+    }
+    const [project] = await (container.resolve(TOKENS.DrizzleClient) as DrizzleClient)
+      .select({ nodeId: dockerComposeProjects.nodeId })
+      .from(dockerComposeProjects)
+      .where(eq(dockerComposeProjects.id, projectId))
+      .limit(1);
+    assertDockerSourceTargetNode(nodeId, project?.nodeId, 'compose');
+    if (!hasDockerResourceScope(c.get('effectiveScopes') || [], scope, nodeId, projectId)) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
+    }
+    await next();
+  };
+}
+
+function requireDeploymentSourceScope(scope: string): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const nodeId = c.req.param('nodeId');
+    const deploymentId = c.req.param('deploymentId');
+    if (!nodeId || !deploymentId) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
+    }
+    const [deployment] = await (container.resolve(TOKENS.DrizzleClient) as DrizzleClient)
+      .select({ nodeId: dockerDeployments.nodeId })
+      .from(dockerDeployments)
+      .where(eq(dockerDeployments.id, deploymentId))
+      .limit(1);
+    assertDockerSourceTargetNode(nodeId, deployment?.nodeId, 'deployment');
+    if (!hasDockerResourceScope(c.get('effectiveScopes') || [], scope, nodeId, deploymentId)) {
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
     }
     await next();
@@ -226,12 +270,12 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
 
   router.get(
     '/nodes/:nodeId/deployments/:deploymentId/source',
-    requireDockerDeploymentScope('docker:containers:view'),
+    requireDeploymentSourceScope('docker:containers:view'),
     async (c) => c.json({ data: await container.resolve(DockerSourceService).get(deploymentTarget(c)) })
   );
   router.put(
     '/nodes/:nodeId/deployments/:deploymentId/source',
-    requireDockerDeploymentScope('docker:containers:edit'),
+    requireDeploymentSourceScope('docker:containers:edit'),
     async (c) => {
       const config = DockerSourceBindingConfigSchema.parse(await c.req.json());
       const data = await container
@@ -242,13 +286,13 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.post(
     '/nodes/:nodeId/deployments/:deploymentId/source/resolve',
-    requireDockerDeploymentScope('docker:containers:edit'),
+    requireDeploymentSourceScope('docker:containers:edit'),
     async (c) =>
       c.json({ data: await container.resolve(DockerSourceService).resolveCurrent(deploymentTarget(c), actorFor(c)) })
   );
   router.post(
     '/nodes/:nodeId/deployments/:deploymentId/source/builds',
-    requireDockerDeploymentScope('docker:containers:manage'),
+    requireDeploymentSourceScope('docker:containers:manage'),
     async (c) => {
       const input = DockerBuildCreateSchema.parse(await c.req.json().catch(() => ({})));
       const data = await container.resolve(DockerSourceService).createBuild(deploymentTarget(c), input, actorFor(c));
@@ -257,12 +301,12 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.get(
     '/nodes/:nodeId/deployments/:deploymentId/source/build-secrets',
-    requireDockerDeploymentScope('docker:containers:view'),
+    requireDeploymentSourceScope('docker:containers:view'),
     async (c) => c.json({ data: await container.resolve(DockerSourceService).listBuildSecrets(deploymentTarget(c)) })
   );
   router.put(
     '/nodes/:nodeId/deployments/:deploymentId/source/build-secrets/:secretName',
-    requireDockerDeploymentScope('docker:containers:edit'),
+    requireDeploymentSourceScope('docker:containers:edit'),
     async (c) => {
       const name = DockerBuildSecretNameSchema.parse(decodeURIComponent(c.req.param('secretName')));
       const { value } = DockerBuildSecretValueSchema.parse(await c.req.json());
@@ -274,7 +318,7 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.delete(
     '/nodes/:nodeId/deployments/:deploymentId/source/build-secrets/:secretName',
-    requireDockerDeploymentScope('docker:containers:edit'),
+    requireDeploymentSourceScope('docker:containers:edit'),
     async (c) => {
       const name = DockerBuildSecretNameSchema.parse(decodeURIComponent(c.req.param('secretName')));
       const removed = await container
@@ -285,7 +329,7 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.delete(
     '/nodes/:nodeId/deployments/:deploymentId/source',
-    requireDockerDeploymentScope('docker:containers:edit'),
+    requireDeploymentSourceScope('docker:containers:edit'),
     async (c) => {
       const removed = await container.resolve(DockerSourceService).remove(deploymentTarget(c), actorFor(c).id);
       return c.json({ success: true, removed });

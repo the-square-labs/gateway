@@ -11,9 +11,10 @@ import {
   releaseArtifactSource,
   releaseNotes,
 } from '@/lib/release-artifacts.js';
-import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
+import { compareSemver, isNewerVersion, isReleaseCandidateVersion, parseSemver } from '@/lib/semver.js';
 import { type TrustedDaemonUpdateArtifact, verifyDaemonUpdateManifest } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { GeneralSettingsService, UpdateChannel } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
@@ -93,15 +94,21 @@ export class DaemonUpdateService {
 
   constructor(
     private readonly db: DrizzleClient,
-    private readonly env: Env
+    private readonly env: Env,
+    private readonly generalSettings?: GeneralSettingsService
   ) {
     this.releasesUrl = this.env.RELEASES_API_URL;
   }
 
-  private async fetchNextRelease(packageName: string, currentVersion: string): Promise<ReleaseRecord | null> {
+  private async fetchNextRelease(
+    packageName: string,
+    currentVersion: string,
+    channel: UpdateChannel
+  ): Promise<ReleaseRecord | null> {
     const url = new URL(this.releasesUrl);
     url.searchParams.set('component', packageName);
     url.searchParams.set('current', currentVersion);
+    url.searchParams.set('channel', channel);
     const response = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
@@ -135,6 +142,7 @@ export class DaemonUpdateService {
 
     try {
       const allNodes = await this.db.select().from(nodes);
+      const updateChannel = (await this.generalSettings?.getConfig())?.updateChannel ?? 'stable';
 
       // Resolve one staged target for the oldest compatible cohort of each type.
       for (const type of DAEMON_TYPES) {
@@ -144,12 +152,20 @@ export class DaemonUpdateService {
           .map((node) => node.daemonVersion ?? '')
           .filter((version) => version !== 'dev' && version !== 'unknown' && parseSemver(version) !== null)
           .sort(compareSemver)[0];
-        const release = currentVersion ? await this.fetchNextRelease(DAEMON_PACKAGE_MAP[type], currentVersion) : null;
+        const release = currentVersion
+          ? await this.fetchNextRelease(DAEMON_PACKAGE_MAP[type], currentVersion, updateChannel)
+          : null;
         const latest = release ? { ...release, version: release.tag_name.replace(suffix, '') } : null;
         if (latest) {
           await this.upsertSetting(`daemon-update:${type}:latest_version`, latest.version);
           await this.upsertSetting(`daemon-update:${type}:latest_tag`, latest.tag_name);
           await this.upsertSetting(`daemon-update:${type}:release_notes`, releaseNotes(latest));
+        } else {
+          await this.deleteSettings([
+            `daemon-update:${type}:latest_version`,
+            `daemon-update:${type}:latest_tag`,
+            `daemon-update:${type}:release_notes`,
+          ]);
         }
         await this.upsertSetting(`daemon-update:${type}:last_checked_at`, lastCheckedAt);
       }
@@ -162,12 +178,17 @@ export class DaemonUpdateService {
 
   async getCachedStatus(): Promise<DaemonUpdateStatus[]> {
     const result: DaemonUpdateStatus[] = [];
+    const updateChannel = (await this.generalSettings?.getConfig())?.updateChannel ?? 'stable';
 
     // Fetch all nodes
     const allNodes = await this.db.select().from(nodes);
 
     for (const type of DAEMON_TYPES) {
-      const latestVersion = await this.getSetting(`daemon-update:${type}:latest_version`);
+      const cachedLatestVersion = await this.getSetting(`daemon-update:${type}:latest_version`);
+      const latestVersion =
+        updateChannel === 'stable' && cachedLatestVersion && isReleaseCandidateVersion(cachedLatestVersion)
+          ? null
+          : cachedLatestVersion;
       const lastCheckedAt = await this.getSetting(`daemon-update:${type}:last_checked_at`);
 
       const typeNodes = allNodes
@@ -199,6 +220,8 @@ export class DaemonUpdateService {
     const tag = await this.getSetting(`daemon-update:${daemonType}:latest_tag`);
     const notes = await this.getSetting(`daemon-update:${daemonType}:release_notes`);
     if (!version || !tag) return null;
+    const updateChannel = (await this.generalSettings?.getConfig())?.updateChannel ?? 'stable';
+    if (updateChannel === 'stable' && isReleaseCandidateVersion(version)) return null;
     return {
       daemonType,
       tagName: tag,
@@ -392,5 +415,9 @@ export class DaemonUpdateService {
         target: settings.key,
         set: { value, updatedAt: new Date() },
       });
+  }
+
+  private async deleteSettings(keys: string[]): Promise<void> {
+    await Promise.all(keys.map((key) => this.db.delete(settings).where(eq(settings.key, key))));
   }
 }

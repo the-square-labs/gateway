@@ -4,13 +4,14 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   inferenceLimitPolicies,
+  inferenceLimitUsageResets,
   inferenceModelSources,
   inferenceProviderConnections,
   inferenceRequests,
   inferenceUsageLedger,
   users,
 } from '@/db/schema/index.js';
-import type { InferenceRequestStatus } from '@/db/schema/inference-usage.js';
+import type { InferenceLimitDimension, InferenceRequestStatus } from '@/db/schema/inference-usage.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -126,10 +127,24 @@ export class InferenceUsageService {
     };
   }
 
+  async selfOverview(user: User) {
+    return this.overview(user.id);
+  }
+
   async adminOverview() {
+    return this.overview();
+  }
+
+  private async overview(userId?: string) {
     const windowStart = systemUsageWindowStart();
     const requestDay = sql<string>`to_char(date_trunc('day', ${inferenceRequests.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`;
     const ledgerDay = sql<string>`to_char(date_trunc('day', ${inferenceUsageLedger.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD')`;
+    const requestFilter = userId
+      ? and(eq(inferenceRequests.userId, userId), gte(inferenceRequests.createdAt, windowStart))
+      : gte(inferenceRequests.createdAt, windowStart);
+    const ledgerFilter = userId
+      ? and(eq(inferenceUsageLedger.userId, userId), gte(inferenceUsageLedger.occurredAt, windowStart))
+      : gte(inferenceUsageLedger.occurredAt, windowStart);
     const [requestTotals, ledgerTotals, requestDaily, ledgerDaily] = await Promise.all([
       this.db
         .select({
@@ -137,20 +152,20 @@ export class InferenceUsageService {
           requests: sql<number>`COUNT(*)::int`,
           credits: sql<string>`COALESCE(SUM(${inferenceRequests.creditsCharged}), 0)`,
           apiMicrodollars: sql<number>`COALESCE(SUM(${inferenceRequests.apiMicrodollarsCharged}), 0)`,
-          tokens: sql<number>`COALESCE(SUM(${inferenceRequests.uncachedInputTokens} + ${inferenceRequests.cachedInputTokens} + ${inferenceRequests.outputTokens} + ${inferenceRequests.reasoningTokens}), 0)`,
+          tokens: sql<number>`COALESCE(SUM(${inferenceRequests.uncachedInputTokens} + ${inferenceRequests.cachedInputTokens} + ${inferenceRequests.cacheWriteTokens} + ${inferenceRequests.outputTokens} + ${inferenceRequests.reasoningTokens}), 0)`,
         })
         .from(inferenceRequests)
-        .where(gte(inferenceRequests.createdAt, windowStart))
+        .where(requestFilter)
         .groupBy(inferenceRequests.status),
       this.db
         .select({
           budgetType: inferenceUsageLedger.budgetType,
           credits: sql<string>`COALESCE(SUM(${inferenceUsageLedger.credits}), 0)`,
           apiMicrodollars: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)`,
-          tokens: sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`,
+          tokens: sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.cacheWriteTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`,
         })
         .from(inferenceUsageLedger)
-        .where(gte(inferenceUsageLedger.occurredAt, windowStart))
+        .where(ledgerFilter)
         .groupBy(inferenceUsageLedger.budgetType),
       this.db
         .select({
@@ -158,7 +173,7 @@ export class InferenceUsageService {
           requests: sql<number>`COUNT(*)::int`,
         })
         .from(inferenceRequests)
-        .where(gte(inferenceRequests.createdAt, windowStart))
+        .where(requestFilter)
         .groupBy(requestDay)
         .orderBy(requestDay),
       this.db
@@ -166,10 +181,10 @@ export class InferenceUsageService {
           date: ledgerDay,
           credits: sql<string>`COALESCE(SUM(${inferenceUsageLedger.credits}), 0)`,
           apiMicrodollars: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)`,
-          tokens: sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`,
+          tokens: sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.cacheWriteTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`,
         })
         .from(inferenceUsageLedger)
-        .where(gte(inferenceUsageLedger.occurredAt, windowStart))
+        .where(ledgerFilter)
         .groupBy(ledgerDay)
         .orderBy(ledgerDay),
     ]);
@@ -381,6 +396,39 @@ export class InferenceUsageService {
       resourceId: targetUserId,
     });
     publishInferenceUsageChanged(this.eventBus, { targetUserId, reason: 'limits' });
+  }
+
+  async resetUserLimits(userId: string, targetUserId: string) {
+    const target = await this.db.query.users.findFirst({
+      where: and(eq(users.id, targetUserId), isNull(users.deletedAt)),
+    });
+    if (!target) throw new AppError(404, 'INFERENCE_LIMIT_USER_NOT_FOUND', 'User not found');
+    const resetAt = new Date();
+    const dimensions: InferenceLimitDimension[] = ['credits5h', 'credits7d', 'credits30d', 'apiMonthlyMicrodollars'];
+    await this.db.transaction(async (tx) => {
+      for (const dimension of dimensions) {
+        await tx
+          .insert(inferenceLimitUsageResets)
+          .values({ userId: targetUserId, dimension, resetAt, createdBy: userId })
+          .onConflictDoUpdate({
+            target: [inferenceLimitUsageResets.userId, inferenceLimitUsageResets.dimension],
+            set: { resetAt, createdBy: userId },
+          });
+      }
+    });
+    await this.audit.log({
+      userId,
+      action: 'inference.limit.reset',
+      resourceType: 'inference_limit_policy',
+      resourceId: targetUserId,
+      details: { dimensions },
+    });
+    publishInferenceUsageChanged(this.eventBus, { targetUserId, reason: 'limits' });
+    const limits = await this.policies.effective(targetUserId);
+    return {
+      resetAt: resetAt.toISOString(),
+      usage: publicUsage(await this.policies.usage(targetUserId, limits)),
+    };
   }
 
   private async changed(userId: string, target: string, input: InferenceLimitPolicyInput) {

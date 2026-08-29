@@ -1,7 +1,5 @@
 import crypto from 'node:crypto';
-import path from 'node:path';
 import { and, asc, eq } from 'drizzle-orm';
-import { DEVELOPMENT_DATABASE_CONNECTOR_IMAGE } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -17,15 +15,24 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { CreateManagedDatabaseBindingInput } from './databases.schemas.js';
+import { ManagedDatabaseBindingAdmission } from './managed-database-binding-admission.js';
+import { ManagedDatabaseBindingIdentityRuntime } from './managed-database-binding-identity-runtime.js';
+import {
+  managedDatabaseBindingEncryptedPayload,
+  managedDatabaseBindingPort,
+  managedDatabaseBindingView,
+  newManagedDatabaseBindingCredentials,
+} from './managed-database-binding-model.js';
+import {
+  ManagedDatabaseBindingTargetRuntime,
+  type ManagedDatabaseBindingCredentials,
+} from './managed-database-binding-target-runtime.js';
+import { reconcileManagedDatabaseBindingLifecycle } from './managed-database-binding-lifecycle.js';
 
 type ManagedDatabaseRow = typeof managedDatabaseInstances.$inferSelect;
 type ManagedDatabaseBindingRow = typeof managedDatabaseBindings.$inferSelect;
 
-interface BindingCredentials {
-  username: string;
-  password: string;
-  databaseName?: string;
-}
+type BindingCredentials = ManagedDatabaseBindingCredentials;
 
 interface OwnerCredentials {
   username: string;
@@ -33,64 +40,28 @@ interface OwnerCredentials {
   databaseName?: string;
 }
 
-const immutableImageReference = /^[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:[a-f0-9]{64}$/;
+interface ManagedDatabaseIdentityManager {
+  ensureBindingIdentity(managedDatabaseId: string, userId: string | null): Promise<ManagedDatabaseRow>;
+  finalizeBindingIdentity(managedDatabaseId: string, userId: string | null): Promise<ManagedDatabaseRow>;
+  runBindingLifecycleOperation<T>(managedDatabaseId: string, operation: () => Promise<T>): Promise<T>;
+}
+
+const BINDING_PRINCIPAL_MODEL_VERSION = 2;
+
 const logger = createChildLogger('ManagedDatabaseBindings');
-
-function enginePort(type: ManagedDatabaseRow['type']): number {
-  switch (type) {
-    case 'postgres':
-      return 5432;
-    case 'redis':
-      return 6379;
-    case 'clickhouse':
-      return 8123;
-  }
-}
-
-function bindingView(row: ManagedDatabaseBindingRow) {
-  return {
-    id: row.id,
-    managedDatabaseId: row.managedDatabaseId,
-    targetNodeId: row.targetNodeId,
-    targetType: row.targetType,
-    targetResourceId: row.targetResourceId,
-    environment: row.environment,
-    status: row.status,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function encryptedPayload(value: string): { encryptedKey: string; encryptedDek: string } {
-  try {
-    const parsed = JSON.parse(value) as { encryptedKey?: string; encryptedDek?: string };
-    if (typeof parsed.encryptedKey === 'string' && typeof parsed.encryptedDek === 'string') {
-      return { encryptedKey: parsed.encryptedKey, encryptedDek: parsed.encryptedDek };
-    }
-  } catch {
-    // Return the generic corruption error below.
-  }
-  throw new AppError(500, 'MANAGED_DATABASE_BINDING_CREDENTIALS_CORRUPT', 'Binding credentials are unavailable');
-}
-
-function isMissingContainerError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /(?:no such container|container not found)/i.test(message);
-}
-
-function isMissingContainerResult(result: { success: boolean; error?: string }) {
-  return !result.success && /(?:no such container|container not found)/i.test(result.error ?? '');
-}
+const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
   private licensePolicy?: LicensePolicyService;
+  private readonly targetRuntime: ManagedDatabaseBindingTargetRuntime;
+  private readonly identityRuntime: ManagedDatabaseBindingIdentityRuntime;
+  private readonly admission: ManagedDatabaseBindingAdmission;
   private targetRuntimeReconciler?: {
     reconcileTargetNode(nodeId: string): Promise<void>;
     releaseTargetNetwork(nodeId: string, networkName: string): Promise<void>;
   };
-  private readonly bindingPrincipalReconciliationNodes = new Set<string>();
-  private readonly bindingRuntimeReconciliationBindings = new Set<string>();
+  private readonly targetLifecycleOperations = new Map<string, Promise<void>>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -100,18 +71,70 @@ export class ManagedDatabaseBindingService {
     private readonly dockerManagement: DockerManagementService,
     private readonly dockerDeployments: DockerDeploymentService,
     private readonly dockerSecrets: DockerSecretService,
-    private connectorImage: string,
-    private readonly allowDevelopmentConnectorImage = false,
+    _connectorImage: string,
+    _allowDevelopmentConnectorImage = false,
     private readonly relayPolicy?: Pick<
       RelayPolicyService,
-      'ensureBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner'
-    >,
-    private readonly dockerCompose?: DockerComposeService
-  ) {}
-
-  updateConnectorImage(connectorImage: string) {
-    this.connectorImage = connectorImage;
+      'ensureBindingRoute' | 'syncNodeGrantBundle' | 'probeManagedDatabaseBindingRoute' | 'revokeOwner'
+    > &
+      Partial<Pick<RelayPolicyService, 'getManagedDatabaseBindingRouteRuntime'>>,
+    private readonly dockerCompose?: DockerComposeService,
+    private readonly identityManager?: ManagedDatabaseIdentityManager
+  ) {
+    this.targetRuntime = new ManagedDatabaseBindingTargetRuntime(
+      db,
+      nodeDispatch,
+      dockerManagement,
+      dockerDeployments,
+      dockerSecrets,
+      relayPolicy,
+      dockerCompose
+    );
+    this.admission = new ManagedDatabaseBindingAdmission(
+      db,
+      dockerManagement,
+      dockerDeployments,
+      dockerSecrets,
+      dockerCompose
+    );
+    this.identityRuntime = new ManagedDatabaseBindingIdentityRuntime(
+      db,
+      cryptoService,
+      nodeDispatch,
+      {
+        getBinding: (managedDatabaseId, bindingId) => this.getBinding(managedDatabaseId, bindingId),
+        getDatabase: (managedDatabaseId) => this.getDatabase(managedDatabaseId),
+        assertTargetReady: (nodeId) => this.assertBindingTargetMigrationReady(nodeId),
+        markError: (database, binding, error) => this.markBindingReconciliationError(database, binding, error),
+        deprovision: (database, binding) => this.deprovisionBinding(database, binding, SYSTEM_USER_ID, {}),
+        reconcileDesired: async (database, binding) => {
+          await this.reconcileDesiredBinding(database, binding, SYSTEM_USER_ID, {}, 'reconciliation');
+        },
+        reconcileRuntime: (database, binding) => this.reconcileBindingRuntime(database, binding),
+        applyTarget: (database, binding, credentials) =>
+          this.applyTargetBinding(database, binding, credentials, SYSTEM_USER_ID, { forceDeploymentRollout: true }),
+        verifyTarget: (database, binding, credentials) =>
+          this.verifyTargetBindingValues(database, binding, credentials),
+        reconcileTargetNode: async (nodeId) => this.targetRuntimeReconciler?.reconcileTargetNode(nodeId),
+        emitReady: (database, binding) =>
+          this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' }),
+        emitDeleted: (database, binding) =>
+          this.emitBinding(database, binding, 'binding.deleted', { failurePhase: 'reconciliation' }),
+        runDatabaseOperation: (managedDatabaseId, operation) =>
+          this.runDatabaseBindingOperation(managedDatabaseId, operation),
+        runTargetOperation: (binding, operation) => this.runTargetLifecycleOperation(binding, operation),
+        bindingCredentials: (binding) => this.bindingCredentials(binding),
+        pendingBindingCredentials: (binding) => this.pendingBindingCredentials(binding),
+        ownerCredentials: (database) => this.ownerCredentials(database),
+        bindingPrincipalPayload: (database, binding, credentials, owner) =>
+          this.bindingPrincipalPayload(database, binding, credentials, owner),
+      },
+      identityManager,
+      relayPolicy
+    );
   }
+
+  updateConnectorImage(_connectorImage: string) {}
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
@@ -121,6 +144,19 @@ export class ManagedDatabaseBindingService {
       this.reconcileBindingPrincipalsForNode(event.id).catch((error) => {
         logger.warn('Failed to reconcile managed database binding principals after daemon connect', {
           nodeId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+    bus.subscribe('docker.container.changed', (payload) => {
+      const event = payload as { nodeId?: unknown; action?: unknown; transition?: unknown } | null;
+      if (typeof event?.nodeId !== 'string') return;
+      const action = typeof event.action === 'string' ? event.action : '';
+      if (action.startsWith('database.')) return;
+      if (event.transition !== null && !['recreated', 'updated', 'started'].includes(action)) return;
+      this.reconcileBindingPrincipalsForNode(event.nodeId).catch((error) => {
+        logger.warn('Failed to reconcile managed database bindings after container lifecycle completion', {
+          nodeId: event.nodeId,
           error: error instanceof Error ? error.message : String(error),
         });
       });
@@ -136,6 +172,7 @@ export class ManagedDatabaseBindingService {
     releaseTargetNetwork(nodeId: string, networkName: string): Promise<void>;
   }): void {
     this.targetRuntimeReconciler = reconciler;
+    this.targetRuntime.setReconciler(reconciler);
   }
 
   async list(managedDatabaseId: string) {
@@ -145,7 +182,7 @@ export class ManagedDatabaseBindingService {
       .from(managedDatabaseBindings)
       .where(eq(managedDatabaseBindings.managedDatabaseId, managedDatabaseId))
       .orderBy(asc(managedDatabaseBindings.createdAt));
-    return rows.map(bindingView);
+    return rows.map(managedDatabaseBindingView);
   }
 
   async getTarget(managedDatabaseId: string, bindingId: string) {
@@ -157,278 +194,136 @@ export class ManagedDatabaseBindingService {
     };
   }
 
-  /** Reapply idempotent binding principals after a database daemon reconnect. */
-  async reconcileBindingPrincipals(nodeId?: string) {
-    const rows = await this.db
-      .select({ database: managedDatabaseInstances, binding: managedDatabaseBindings })
-      .from(managedDatabaseBindings)
-      .innerJoin(managedDatabaseInstances, eq(managedDatabaseInstances.id, managedDatabaseBindings.managedDatabaseId));
-    let failures = 0;
-    for (const { database, binding } of rows) {
-      const recoveringFailedDelete =
-        binding.status === 'error' && binding.lastError?.startsWith('Binding removal failed') === true;
-      const cleaningFailedProvision =
-        binding.status === 'error' && binding.lastError?.startsWith('Binding preparation failed') === true;
-      if (
-        database.status !== 'ready' ||
-        database.pendingOperation ||
-        (binding.status !== 'ready' && !recoveringFailedDelete && !cleaningFailedProvision) ||
-        (nodeId !== undefined && database.nodeId !== nodeId && binding.targetNodeId !== nodeId)
-      ) {
-        continue;
-      }
-      try {
-        if (cleaningFailedProvision) {
-          await this.relayPolicy?.revokeOwner('managed_database_binding', binding.id);
-          await this.deprovisionBinding(database, binding, 'system', {});
-          await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, binding.id));
-          this.emitBinding(database, binding, 'binding.deleted', { failurePhase: 'reconciliation' });
-          continue;
-        }
-        if (recoveringFailedDelete) {
-          await this.restoreBindingAfterFailedDelete(database, binding, 'system', {});
-          const [ready] = await this.db
-            .update(managedDatabaseBindings)
-            .set({ status: 'ready', lastError: null, updatedAt: new Date() })
-            .where(eq(managedDatabaseBindings.id, binding.id))
-            .returning();
-          this.emitBinding(database, ready!, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
-          continue;
-        }
-        const credentials = this.bindingCredentials(binding);
-        const owner = this.ownerCredentials(database);
-        if (credentials.username !== owner.username && database.type !== 'redis') {
-          if (database.type === 'clickhouse') {
-            await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
-          } else {
-            this.requireSuccess(
-              await this.nodeDispatch.sendDockerDatabaseCommand(
-                database.nodeId,
-                'binding_create',
-                database.id,
-                JSON.stringify({
-                  bindingId: binding.id,
-                  username: credentials.username,
-                  password: credentials.password,
-                  databaseName: credentials.databaseName ?? 'app',
-                  ownerUsername: owner.username,
-                  ownerPassword: owner.password,
-                })
-              )
-            );
-          }
-        }
-        const runtimeChanged = await this.reconcileBindingRuntime(database, binding);
-        if (runtimeChanged) {
-          await this.applyTargetBinding(database, binding, credentials, 'system', {});
-          await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
-        }
-        this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
-      } catch (error) {
-        failures += 1;
-        this.emitBinding(database, binding, 'binding.reconciliation_failed', {
-          failurePhase: 'reconciliation',
-          failureCode: this.failureCode(error),
-        });
-      }
+  async getRuntime(managedDatabaseId: string, bindingId: string) {
+    const binding = await this.getBinding(managedDatabaseId, bindingId);
+    if (!this.relayPolicy?.getManagedDatabaseBindingRouteRuntime) {
+      throw new AppError(503, 'RELAY_POLICY_UNAVAILABLE', 'Managed database link runtime is unavailable');
     }
-    if (failures > 0) {
-      throw new Error(`Failed to reconcile ${failures} managed database binding principal(s)`);
-    }
-  }
-
-  private async reconcileBindingPrincipalsForNode(nodeId: string) {
-    if (this.bindingPrincipalReconciliationNodes.has(nodeId)) return;
-    this.bindingPrincipalReconciliationNodes.add(nodeId);
-    try {
-      await this.reconcileBindingPrincipals(nodeId);
-    } finally {
-      this.bindingPrincipalReconciliationNodes.delete(nodeId);
-    }
-  }
-
-  private async reconcileBindingRuntime(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
-    if (!this.relayPolicy) return false;
-    if (this.bindingRuntimeReconciliationBindings.has(binding.id)) return false;
-    this.bindingRuntimeReconciliationBindings.add(binding.id);
-    try {
-      await this.relayPolicy.ensureBindingRoute(
-        binding.id,
-        binding.managedDatabaseId,
-        binding.targetNodeId,
-        database.nodeId
-      );
-      const targetPrepared = this.requireSuccess(
-        await this.nodeDispatch.sendRelayGrantBundle(
-          binding.targetNodeId,
-          await this.relayPolicy.getNodeGrantBundle(binding.targetNodeId)
-        )
-      );
-      if (database.nodeId !== binding.targetNodeId) {
-        this.requireSuccess(
-          await this.nodeDispatch.sendRelayGrantBundle(
-            database.nodeId,
-            await this.relayPolicy.getNodeGrantBundle(database.nodeId)
-          )
-        );
-      }
-      return await this.ensureBindingConnector(database, binding, targetPrepared.detail);
-    } finally {
-      this.bindingRuntimeReconciliationBindings.delete(binding.id);
-    }
-  }
-
-  private async ensureBindingConnector(
-    database: ManagedDatabaseRow,
-    binding: ManagedDatabaseBindingRow,
-    relayGrantDetail: string | undefined
-  ) {
-    const socketMount = this.tunnelSocketMount(relayGrantDetail);
-    const networkCreated = await this.ensureBindingNetwork(binding);
-
-    const inspected = await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'inspect', {
-      containerId: binding.connectorName,
-    });
-    if (inspected.success) {
-      const state = this.connectorRuntimeState(database, binding, socketMount, inspected.detail);
-      if (!state.owned) {
-        throw new Error(`container ${binding.connectorName} is not owned by managed database binding ${binding.id}`);
-      }
-      if (state.matches) {
-        this.requireSuccess(
-          await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'restart', {
-            containerId: binding.connectorName,
-          })
-        );
-        return networkCreated;
-      }
-      this.requireSuccessOrMissing(
-        await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
-          containerId: binding.connectorName,
-          force: true,
-        })
-      );
-    } else if (!isMissingContainerResult(inspected)) {
-      this.requireSuccess(inspected);
-    }
-
-    await this.createBindingConnector(database, binding, socketMount);
-    return true;
-  }
-
-  private async ensureBindingNetwork(binding: ManagedDatabaseBindingRow) {
-    const listed = this.requireSuccess(
-      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'list', {})
-    );
-    let networks: Array<{ Name?: unknown; name?: unknown; Driver?: unknown; driver?: unknown }>;
-    try {
-      const parsed = JSON.parse(listed.detail ?? '');
-      if (!Array.isArray(parsed)) throw new Error('network list is not an array');
-      networks = parsed;
-    } catch {
-      throw new Error('managed database network inventory is unavailable');
-    }
-    const existing = networks.find((network) => (network.Name ?? network.name) === binding.networkName);
-    if (existing) {
-      const driver = existing.Driver ?? existing.driver;
-      if (typeof driver === 'string' && driver !== 'bridge') {
-        throw new Error(`network ${binding.networkName} exists with an unexpected driver`);
-      }
-      return false;
-    }
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'create', {
-        networkId: binding.networkName,
-        driver: 'bridge',
-      })
-    );
-    return true;
-  }
-
-  private connectorRuntimeState(
-    database: ManagedDatabaseRow,
-    binding: ManagedDatabaseBindingRow,
-    socketMount: { hostDirectory: string; connectorPath: string },
-    detail: string | undefined
-  ) {
-    let inspect: any;
-    try {
-      inspect = JSON.parse(detail ?? '');
-    } catch {
-      throw new Error('managed database connector inspection is unavailable');
-    }
-    const labels = (inspect?.Config?.Labels ?? {}) as Record<string, unknown>;
-    const owned =
-      labels['wiolett.gateway.managed-database.binding'] === binding.id &&
-      labels['wiolett.gateway.managed-database.connector'] === 'true';
-    if (!owned) return { owned: false, matches: false };
-
-    const expectedBind = `${socketMount.hostDirectory}:/run/gateway-db:ro`;
-    const binds = Array.isArray(inspect?.HostConfig?.Binds) ? inspect.HostConfig.Binds : [];
-    const env = new Set(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
-    const aliases = inspect?.NetworkSettings?.Networks?.[binding.networkName]?.Aliases;
     return {
-      owned: true,
-      matches:
-        inspect?.Config?.Image === this.connectorImage &&
-        binds.includes(expectedBind) &&
-        env.has(`GATEWAY_DB_BINDING_ID=${binding.id}`) &&
-        env.has(`GATEWAY_DB_SOCKET=${socketMount.connectorPath}`) &&
-        env.has(`GATEWAY_DB_LISTEN=:${enginePort(database.type)}`) &&
-        inspect?.HostConfig?.NetworkMode === binding.networkName &&
-        Array.isArray(aliases) &&
-        aliases.includes(binding.connectorAlias) &&
-        inspect?.HostConfig?.RestartPolicy?.Name === 'unless-stopped',
+      binding: managedDatabaseBindingView(binding),
+      runtime: await this.relayPolicy.getManagedDatabaseBindingRouteRuntime(binding.id),
     };
   }
 
-  private async createBindingConnector(
+  /** Reapply idempotent binding principals after a database daemon reconnect. */
+  async reconcileBindingPrincipals(nodeId?: string) {
+    return this.identityRuntime.reconcile(nodeId);
+  }
+
+  private async reconcileBindingPrincipalsForNode(nodeId: string) {
+    return this.identityRuntime.reconcileForNode(nodeId);
+  }
+
+  private runDatabaseBindingOperation<T>(managedDatabaseId: string, operation: () => Promise<T>): Promise<T> {
+    return this.identityManager?.runBindingLifecycleOperation
+      ? this.identityManager.runBindingLifecycleOperation(managedDatabaseId, operation)
+      : operation();
+  }
+
+  private runTargetLifecycleOperation<T>(
+    target: Pick<ManagedDatabaseBindingRow, 'targetNodeId' | 'targetType' | 'targetResourceId'>,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const key = `${target.targetNodeId}:${target.targetType}:${target.targetResourceId}`;
+    const previous = this.targetLifecycleOperations.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    const tail = current.then(
+      () => undefined,
+      () => undefined
+    );
+    this.targetLifecycleOperations.set(key, tail);
+    return current.finally(() => {
+      if (this.targetLifecycleOperations.get(key) === tail) this.targetLifecycleOperations.delete(key);
+    });
+  }
+
+  private async reconcileDesiredBinding(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    socketMount: { hostDirectory: string; connectorPath: string }
+    userId: string,
+    options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {},
+    source: 'request' | 'reconciliation' = 'request'
   ) {
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerImageCommand(binding.targetNodeId, this.connectorImageAction(), {
-        imageRef: this.connectorImage,
-      })
-    );
-    const connector = this.requireSuccess(
-      await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'create', {
-        configJson: JSON.stringify({
-          name: binding.connectorName,
-          image: this.connectorImage,
-          env: [
-            `GATEWAY_DB_BINDING_ID=${binding.id}`,
-            `GATEWAY_DB_SOCKET=${socketMount.connectorPath}`,
-            `GATEWAY_DB_LISTEN=:${enginePort(database.type)}`,
-          ],
-          binds: [`${socketMount.hostDirectory}:/run/gateway-db:ro`],
-          network_mode: binding.networkName,
-          network_aliases: [binding.connectorAlias],
-          restartPolicy: 'unless-stopped',
-          internal_workload: 'managed-database-connector',
-          labels: {
-            'wiolett.gateway.managed-database.binding': binding.id,
-            'wiolett.gateway.managed-database.connector': 'true',
+    return reconcileManagedDatabaseBindingLifecycle(binding, binding, {
+      markDeleting: async () => {
+        const [row] = await this.db
+          .update(managedDatabaseBindings)
+          .set({ status: 'deleting', lastError: null, updatedById: userId, updatedAt: new Date() })
+          .where(eq(managedDatabaseBindings.id, binding.id))
+          .returning();
+        return row ?? binding;
+      },
+      revokeAccess: async (row) => this.relayPolicy?.revokeOwner('managed_database_binding', row.id),
+      deprovision: async (row) => this.deprovisionBinding(database, row, userId, options),
+      deleteRecord: async (row) => {
+        await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, row.id));
+        await this.auditService.log({
+          userId,
+          action: 'database.managed.binding.delete',
+          resourceType: 'managed_database_binding',
+          resourceId: row.id,
+          details: {
+            managedDatabaseId: database.id,
+            targetNodeId: row.targetNodeId,
+            targetType: row.targetType,
+            targetResourceId: row.targetResourceId,
           },
-        }),
-      })
-    );
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'start', {
-        containerId: this.containerID(connector.detail),
-      })
-    );
+        });
+        this.emitBinding(database, row, 'binding.deleted', {
+          ...(source === 'reconciliation' ? { failurePhase: 'reconciliation' } : {}),
+        });
+      },
+      ensurePrincipal: async (row) => this.identityRuntime.ensurePrincipal(database, row),
+      markPrincipalReady: async (row) => {
+        if (row.status === 'ready' && row.observedState === 'active') return row;
+        const [updated] = await this.db
+          .update(managedDatabaseBindings)
+          .set({ status: 'creating', observedState: 'principal_ready', lastError: null, updatedAt: new Date() })
+          .where(eq(managedDatabaseBindings.id, row.id))
+          .returning();
+        return updated ?? row;
+      },
+      ensureRuntime: async (row) => this.reconcileBindingRuntime(database, row),
+      markReady: async (row) => {
+        const [ready] = await this.db
+          .update(managedDatabaseBindings)
+          .set({ status: 'ready', observedState: 'active', lastError: null, updatedAt: new Date() })
+          .where(eq(managedDatabaseBindings.id, row.id))
+          .returning();
+        this.emitBinding(database, ready!, source === 'request' ? 'binding.ready' : 'binding.reconciliation_ready', {
+          ...(source === 'reconciliation' ? { failurePhase: 'reconciliation' } : {}),
+        });
+        return ready!;
+      },
+    });
+  }
+
+  private async reconcileBindingRuntime(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
+    return this.targetRuntime.reconcile(database, binding, this.bindingCredentials(binding));
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
     // LICENSE ENFORCEMENT: Shared REST/AI binding creation must remain behind the Personal entitlement.
     await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('managed-databases');
-    await this.getReadyDatabase(managedDatabaseId);
+    let readyDatabase = await this.getReadyDatabase(managedDatabaseId);
+    await this.assertBindingTargetMigrationReady(input.targetNodeId);
+    if (this.identityManager) {
+      readyDatabase = await this.identityManager.ensureBindingIdentity(managedDatabaseId, userId);
+    }
+    if (
+      readyDatabase.bindingIdentityVersion !== undefined &&
+      readyDatabase.bindingIdentityVersion !== BINDING_PRINCIPAL_MODEL_VERSION
+    ) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_IDENTITY_UNAVAILABLE',
+        'Managed database binding identity is not ready'
+      );
+    }
     await this.assertDockerNode(input.targetNodeId);
-    this.assertConnectorImage();
-    const targetResourceId = await this.resolveBindingTarget(input);
-    await this.assertEnvironmentNamesAvailable(
+    await this.assertBindingTargetMigrationReady(input.targetNodeId);
+    const targetResourceId = await this.admission.resolveTarget(input);
+    await this.admission.assertEnvironmentNamesAvailable(
       input.targetNodeId,
       input.targetType,
       targetResourceId,
@@ -437,59 +332,98 @@ export class ManagedDatabaseBindingService {
     );
     const id = crypto.randomUUID();
     const shortId = id.replaceAll('-', '').slice(0, 16);
-    // Bindings provision external resources after this transaction. Lock the
-    // managed database row while inserting so lifecycle deletion cannot race
-    // past an empty binding list and cascade-delete an in-flight binding.
-    const { database, row } = await this.db.transaction(async (tx) => {
-      const [locked] = await tx
-        .select()
-        .from(managedDatabaseInstances)
-        .where(eq(managedDatabaseInstances.id, managedDatabaseId))
-        .for('update');
-      if (!locked) throw new AppError(404, 'MANAGED_DATABASE_NOT_FOUND', 'Managed database not found');
-      if (locked.status !== 'ready' || locked.pendingOperation) {
-        throw new AppError(409, 'MANAGED_DATABASE_NOT_READY', 'Managed database is not ready for bindings');
-      }
-      const [created] = await tx
-        .insert(managedDatabaseBindings)
-        .values({
-          id,
+    const operationId = crypto.randomUUID();
+    const provision = async () => {
+      // Bindings provision external resources after this transaction. Lock the
+      // managed database row while inserting so lifecycle deletion cannot race
+      // past an empty binding list and cascade-delete an in-flight binding.
+      const { database, row } = await this.db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select()
+          .from(managedDatabaseInstances)
+          .where(eq(managedDatabaseInstances.id, managedDatabaseId))
+          .for('update');
+        if (!locked) throw new AppError(404, 'MANAGED_DATABASE_NOT_FOUND', 'Managed database not found');
+        if (locked.status !== 'ready' || locked.pendingOperation) {
+          throw new AppError(409, 'MANAGED_DATABASE_NOT_READY', 'Managed database is not ready for bindings');
+        }
+        if (
+          locked.bindingIdentityVersion !== undefined &&
+          locked.bindingIdentityVersion !== BINDING_PRINCIPAL_MODEL_VERSION
+        ) {
+          throw new AppError(
+            409,
+            'MANAGED_DATABASE_IDENTITY_UNAVAILABLE',
+            'Managed database binding identity is not ready'
+          );
+        }
+        const owner = this.ownerCredentials(locked);
+        const credentials = newManagedDatabaseBindingCredentials(locked.type, id, owner.databaseName);
+        const [created] = await tx
+          .insert(managedDatabaseBindings)
+          .values({
+            id,
+            managedDatabaseId,
+            targetNodeId: input.targetNodeId,
+            targetType: input.targetType,
+            targetResourceId,
+            networkName: `gateway-db-${shortId}`,
+            connectorName: `gateway-db-connector-${shortId}`,
+            connectorAlias: `db-${shortId}`,
+            environment: input.environment,
+            encryptedCredentials: JSON.stringify(this.cryptoService.encryptString(JSON.stringify(credentials))),
+            principalName: credentials.username,
+            principalModelVersion: BINDING_PRINCIPAL_MODEL_VERSION,
+            credentialGeneration: 1,
+            principalOperationId: operationId,
+            desiredState: 'active',
+            observedState: 'preparing',
+            status: 'creating',
+            createdById: userId,
+            updatedById: userId,
+          })
+          .returning();
+        return { database: locked, row: created! };
+      });
+      await this.auditService.log({
+        userId,
+        action: 'database.managed.binding.create',
+        resourceType: 'managed_database_binding',
+        resourceId: row.id,
+        details: {
           managedDatabaseId,
-          targetNodeId: input.targetNodeId,
-          targetType: input.targetType,
-          targetResourceId,
-          networkName: `gateway-db-${shortId}`,
-          connectorName: `gateway-db-connector-${shortId}`,
-          connectorAlias: `db-${shortId}`,
-          environment: input.environment,
-          // A link is transport, not a database identity. All links to one
-          // managed database use its existing owner account so link recreation
-          // cannot split object ownership across short-lived roles.
-          encryptedCredentials: locked.encryptedOwnerCredentials,
-          status: 'creating',
-          createdById: userId,
-          updatedById: userId,
-        })
-        .returning();
-      return { database: locked, row: created! };
-    });
-    await this.auditService.log({
-      userId,
-      action: 'database.managed.binding.create',
-      resourceType: 'managed_database_binding',
-      resourceId: row.id,
-      details: {
-        managedDatabaseId,
-        targetNodeId: row.targetNodeId,
-        targetType: row.targetType,
-        targetResourceId: row.targetResourceId,
-      },
-    });
-    this.emitBinding(database, row, 'binding.created');
-    return this.provisionBinding(database, row, userId, {
-      replaceExistingEnvironment: input.replaceExistingEnvironment === true,
-      targetEnvironment: input.targetEnvironment,
-    });
+          targetNodeId: row.targetNodeId,
+          targetType: row.targetType,
+          targetResourceId: row.targetResourceId,
+        },
+      });
+      this.emitBinding(database, row, 'binding.created');
+      try {
+        const reconciled = await this.reconcileDesiredBinding(
+          database,
+          row,
+          userId,
+          {
+            replaceExistingEnvironment: input.replaceExistingEnvironment === true,
+            targetEnvironment: input.targetEnvironment,
+          },
+          'request'
+        );
+        if (reconciled.deleted) throw new Error('active binding reconciliation deleted its tracking row');
+        return managedDatabaseBindingView(reconciled.binding);
+      } catch (error) {
+        await this.markBindingReconciliationError(database, row, error);
+        return managedDatabaseBindingView(await this.getBinding(database.id, row.id));
+      }
+    };
+    const result = await this.runDatabaseBindingOperation(managedDatabaseId, () =>
+      this.runTargetLifecycleOperation(
+        { targetNodeId: input.targetNodeId, targetType: input.targetType, targetResourceId },
+        provision
+      )
+    );
+    await this.identityManager?.finalizeBindingIdentity(managedDatabaseId, userId);
+    return result;
   }
 
   async delete(
@@ -498,58 +432,48 @@ export class ManagedDatabaseBindingService {
     userId: string,
     options: { targetEnvironment?: Record<string, string> } = {}
   ) {
-    const database = await this.getDatabase(managedDatabaseId);
-    const row = await this.getBinding(managedDatabaseId, bindingId);
-    const [deleting] = await this.db
-      .update(managedDatabaseBindings)
-      .set({ status: 'deleting', updatedById: userId, updatedAt: new Date() })
-      .where(eq(managedDatabaseBindings.id, bindingId))
-      .returning();
-    // Close existing relay sessions before any fallible cleanup. The status
-    // transition prevents new opens while the source daemon persists revocation.
-    try {
-      await this.relayPolicy?.revokeOwner('managed_database_binding', deleting!.id);
-    } catch (error) {
-      logger.warn('Managed database binding deletion stopped before target mutation because relay revocation failed', {
-        bindingId: deleting!.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return this.markBindingError(database, deleting!, 'delete', error);
+    if (this.identityManager) {
+      const currentDatabase = await this.getDatabase(managedDatabaseId);
+      if (currentDatabase.bindingIdentityVersion !== BINDING_PRINCIPAL_MODEL_VERSION) {
+        await this.identityManager.ensureBindingIdentity(currentDatabase.id, userId);
+      }
     }
-    try {
-      await this.deprovisionBinding(database, deleting!, userId, options);
-    } catch (error) {
-      await this.restoreBindingAfterFailedDelete(database, deleting!, userId, options).catch((restoreError) => {
-        logger.error('Failed to restore managed database binding after deletion error', {
-          bindingId: deleting!.id,
-          error: restoreError instanceof Error ? restoreError.message : String(restoreError),
-        });
+    const remove = async () => {
+      const database = await this.getDatabase(managedDatabaseId);
+      if (database.pendingOperation) {
+        throw new AppError(
+          409,
+          'MANAGED_DATABASE_OPERATION_PENDING',
+          'Managed database operation is still being reconciled'
+        );
+      }
+      const row = await this.getBinding(managedDatabaseId, bindingId);
+      return this.runTargetLifecycleOperation(row, async () => {
+        const [deleting] = await this.db
+          .update(managedDatabaseBindings)
+          .set({ status: 'deleting', desiredState: 'deleted', updatedById: userId, updatedAt: new Date() })
+          .where(eq(managedDatabaseBindings.id, bindingId))
+          .returning();
+        try {
+          await this.reconcileDesiredBinding(database, deleting!, userId, options, 'request');
+          return { success: true };
+        } catch (error) {
+          await this.markBindingReconciliationError(database, deleting!, error);
+          return managedDatabaseBindingView(await this.getBinding(database.id, deleting!.id));
+        }
       });
-      return this.markBindingError(database, deleting!, 'delete', error);
-    }
-    await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, bindingId));
-    await this.auditService.log({
-      userId,
-      action: 'database.managed.binding.delete',
-      resourceType: 'managed_database_binding',
-      resourceId: bindingId,
-      details: {
-        managedDatabaseId,
-        targetNodeId: row.targetNodeId,
-        targetType: row.targetType,
-        targetResourceId: row.targetResourceId,
-      },
-    });
-    this.emitBinding(database, deleting!, 'binding.deleted');
-    return { success: true };
+    };
+    const result = await this.runDatabaseBindingOperation(managedDatabaseId, remove);
+    await this.identityManager?.finalizeBindingIdentity(managedDatabaseId, userId);
+    return result;
   }
 
   async revealCredentials(managedDatabaseId: string, bindingId: string) {
     const database = await this.getReadyDatabase(managedDatabaseId);
     const binding = await this.getBinding(managedDatabaseId, bindingId);
-    const plaintext = this.cryptoService.decryptString(encryptedPayload(binding.encryptedCredentials));
+    const plaintext = this.cryptoService.decryptString(managedDatabaseBindingEncryptedPayload(binding.encryptedCredentials));
     const credentials = JSON.parse(plaintext) as BindingCredentials;
-    const port = enginePort(database.type);
+    const port = managedDatabaseBindingPort(database.type);
     const host = binding.connectorAlias;
     const databaseName = credentials.databaseName;
     const connectionUri =
@@ -586,157 +510,6 @@ export class ManagedDatabaseBindingService {
     return database;
   }
 
-  private async provisionBinding(
-    database: ManagedDatabaseRow,
-    binding: ManagedDatabaseBindingRow,
-    userId: string,
-    options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {}
-  ) {
-    let principalCreated = false;
-    let policyPrepared = false;
-    let networkCreated = false;
-    let connectorCreated = false;
-    let targetApplyAttempted = false;
-    try {
-      const credentials = this.bindingCredentials(binding);
-      const owner = this.ownerCredentials(database);
-      if (credentials.username !== owner.username) {
-        if (database.type === 'clickhouse') {
-          await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
-        } else {
-          this.requireSuccess(
-            await this.nodeDispatch.sendDockerDatabaseCommand(
-              database.nodeId,
-              'binding_create',
-              database.id,
-              JSON.stringify({
-                bindingId: binding.id,
-                username: credentials.username,
-                password: credentials.password,
-                databaseName: credentials.databaseName ?? 'app',
-                ownerUsername: owner.username,
-                ownerPassword: owner.password,
-              })
-            )
-          );
-        }
-        principalCreated = true;
-      }
-
-      if (!this.relayPolicy) throw new Error('Gateway relay policy is unavailable');
-      await this.relayPolicy.ensureBindingRoute(
-        binding.id,
-        binding.managedDatabaseId,
-        binding.targetNodeId,
-        database.nodeId
-      );
-      policyPrepared = true;
-      // The command ACK proves that the source daemon persisted its connect
-      // grant. Its detail also exposes the daemon-owned Unix socket mounted by
-      // the first-party connector.
-      const prepared = await this.nodeDispatch.sendRelayGrantBundle(
-        binding.targetNodeId,
-        await this.relayPolicy.getNodeGrantBundle(binding.targetNodeId)
-      );
-      this.requireSuccess(prepared);
-      const socketMount = this.tunnelSocketMount(prepared.detail);
-
-      this.requireSuccess(
-        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'create', {
-          networkId: binding.networkName,
-          driver: 'bridge',
-        })
-      );
-      networkCreated = true;
-      this.requireSuccess(
-        await this.nodeDispatch.sendDockerImageCommand(binding.targetNodeId, this.connectorImageAction(), {
-          imageRef: this.connectorImage,
-        })
-      );
-      const connector = await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'create', {
-        configJson: JSON.stringify({
-          name: binding.connectorName,
-          image: this.connectorImage,
-          env: [
-            `GATEWAY_DB_BINDING_ID=${binding.id}`,
-            `GATEWAY_DB_SOCKET=${socketMount.connectorPath}`,
-            `GATEWAY_DB_LISTEN=:${enginePort(database.type)}`,
-          ],
-          binds: [`${socketMount.hostDirectory}:/run/gateway-db:ro`],
-          network_mode: binding.networkName,
-          network_aliases: [binding.connectorAlias],
-          restartPolicy: 'unless-stopped',
-          internal_workload: 'managed-database-connector',
-          labels: {
-            'wiolett.gateway.managed-database.binding': binding.id,
-            'wiolett.gateway.managed-database.connector': 'true',
-          },
-        }),
-      });
-      this.requireSuccess(connector);
-      const connectorId = this.containerID(connector.detail);
-      connectorCreated = true;
-      this.requireSuccess(
-        await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'start', { containerId: connectorId })
-      );
-
-      // Mark this before the first target write. Compensation is credential
-      // value-aware, so it removes only values that this binding actually set.
-      targetApplyAttempted = true;
-      await this.applyTargetBinding(database, binding, credentials, userId, options);
-    } catch (error) {
-      let reportedError = error;
-      try {
-        await this.compensateProvisioning(database, binding, {
-          principalCreated,
-          policyPrepared,
-          networkCreated,
-          connectorCreated,
-          targetApplyAttempted,
-        });
-      } catch (cleanupError) {
-        logger.error('Managed database binding compensation stopped before unsafe cleanup', {
-          bindingId: binding.id,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-        });
-        const original = error instanceof Error ? error.message : String(error);
-        const cleanup = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-        reportedError = new Error(`${original}; compensation failed safely: ${cleanup}`);
-      }
-      return this.markBindingError(database, binding, 'prepare', reportedError);
-    }
-
-    const [ready] = await this.db
-      .update(managedDatabaseBindings)
-      .set({ status: 'ready', lastError: null, updatedAt: new Date() })
-      .where(eq(managedDatabaseBindings.id, binding.id))
-      .returning();
-    this.emitBinding(database, ready!, 'binding.ready');
-    return bindingView(ready!);
-  }
-
-  private async provisionClickHouseBindingPrincipal(
-    database: ManagedDatabaseRow,
-    owner: OwnerCredentials,
-    credentials: BindingCredentials
-  ) {
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerDatabaseCommand(
-        database.nodeId,
-        'clickhouse_principal_apply_v1',
-        database.id,
-        JSON.stringify({
-          principalType: 'binding',
-          username: credentials.username,
-          password: credentials.password,
-          databaseName: credentials.databaseName ?? 'app',
-          ownerUsername: owner.username,
-          ownerPassword: owner.password,
-        })
-      )
-    );
-  }
-
   private async deprovisionBinding(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
@@ -744,31 +517,13 @@ export class ManagedDatabaseBindingService {
     options: { targetEnvironment?: Record<string, string> } = {}
   ) {
     const credentials = this.bindingCredentials(binding);
+    const principalCredentials = this.pendingBindingCredentials(binding) ?? credentials;
     const owner = this.ownerCredentials(database);
     await this.prepareTargetNetworkRemoval(binding);
     await this.removeTargetBinding(database, binding, userId, options);
     await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
-    const connectorDisconnected = await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
-      networkId: binding.networkName,
-      containerId: binding.connectorName,
-    });
-    this.requireSuccessOrMissing(connectorDisconnected);
-    try {
-      this.requireSuccessOrMissing(
-        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
-          networkId: binding.networkName,
-        })
-      );
-    } catch (error) {
-      if (connectorDisconnected.success) {
-        await this.nodeDispatch
-          .sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
-            networkId: binding.networkName,
-            containerId: binding.connectorName,
-          })
-          .catch(() => undefined);
-      }
-      throw error;
+    if (this.relayPolicy) {
+      this.requireSuccess(await this.relayPolicy.syncNodeGrantBundle(binding.targetNodeId));
     }
     this.requireSuccessOrMissing(
       await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
@@ -776,7 +531,36 @@ export class ManagedDatabaseBindingService {
         force: true,
       })
     );
-    if (credentials.username !== owner.username) {
+    this.requireSuccessOrMissing(
+      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
+        networkId: binding.networkName,
+      })
+    );
+    if (
+      binding.principalModelVersion === BINDING_PRINCIPAL_MODEL_VERSION ||
+      (binding.principalModelVersion !== undefined && binding.principalName !== null)
+    ) {
+      this.requireSuccess(
+        await this.nodeDispatch.sendDockerDatabaseCommand(
+          database.nodeId,
+          'binding_principal_drop_v2',
+          database.id,
+          this.bindingPrincipalPayload(database, binding, principalCredentials, owner)
+        )
+      );
+    } else if (
+      binding.principalModelVersion !== undefined &&
+      !this.legacyBindingUsesOwner(database, credentials, owner)
+    ) {
+      this.requireSuccess(
+        await this.nodeDispatch.sendDockerDatabaseCommand(
+          database.nodeId,
+          'binding_principal_drop_v2',
+          database.id,
+          this.bindingPrincipalPayload(database, binding, credentials, owner)
+        )
+      );
+    } else if (binding.principalModelVersion === undefined && credentials.username !== owner.username) {
       this.requireSuccess(
         await this.nodeDispatch.sendDockerDatabaseCommand(
           database.nodeId,
@@ -793,26 +577,25 @@ export class ManagedDatabaseBindingService {
         )
       );
     }
+    await this.db
+      .update(managedDatabaseBindings)
+      .set({ observedState: 'absent', updatedAt: new Date() })
+      .where(eq(managedDatabaseBindings.id, binding.id));
   }
 
-  private async restoreBindingAfterFailedDelete(
+  private legacyBindingUsesOwner(
     database: ManagedDatabaseRow,
-    binding: ManagedDatabaseBindingRow,
-    userId: string,
-    options: { targetEnvironment?: Record<string, string> }
+    credentials: BindingCredentials,
+    owner: OwnerCredentials
   ) {
-    await this.reconcileBindingRuntime(database, binding);
-    await this.applyTargetBinding(database, binding, this.bindingCredentials(binding), userId, options);
-    await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
+    if (credentials.username === owner.username) return true;
+    if (database.type !== 'postgres') return false;
+    const bootstrapOwner = (database.engineConfig as unknown as Record<string, unknown>).ownerUsername;
+    return typeof bootstrapOwner === 'string' && bootstrapOwner.length > 0 && credentials.username === bootstrapOwner;
   }
 
   private async prepareTargetNetworkRemoval(binding: ManagedDatabaseBindingRow): Promise<void> {
-    if (!this.targetRuntimeReconciler) return;
-    // Remove every managed Secure Link connector endpoint from the
-    // binding-owned network before mutating any target type. Desired links
-    // remain persisted and are reconciled onto a remaining target network
-    // immediately after the target drops this database network.
-    await this.targetRuntimeReconciler.releaseTargetNetwork(binding.targetNodeId, binding.networkName);
+    return this.targetRuntime.prepareNetworkRemoval(binding);
   }
 
   private async applyTargetBinding(
@@ -820,70 +603,13 @@ export class ManagedDatabaseBindingService {
     binding: ManagedDatabaseBindingRow,
     credentials: BindingCredentials,
     userId: string,
-    options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {}
+    options: {
+      replaceExistingEnvironment?: boolean;
+      targetEnvironment?: Record<string, string>;
+      forceDeploymentRollout?: boolean;
+    } = {}
   ) {
-    const values = this.bindingEnvironmentValues(database, binding, credentials);
-    if (binding.targetType === 'compose_service') {
-      await this.requireComposeService().applyManagedDatabaseBinding(
-        binding.targetNodeId,
-        binding.targetResourceId,
-        binding.id,
-        binding.networkName,
-        values,
-        userId
-      );
-      return;
-    }
-    if (binding.targetType === 'deployment') {
-      const secretContainer = `deployment:${binding.targetResourceId}`;
-      for (const [key, value] of Object.entries(values)) {
-        await this.dockerSecrets.create(binding.targetNodeId, secretContainer, key, value, userId, { managed: true });
-      }
-      try {
-        await this.dockerDeployments.setManagedDatabaseBindingNetwork(
-          binding.targetNodeId,
-          binding.targetResourceId,
-          binding.networkName,
-          true,
-          userId
-        );
-      } catch (error) {
-        await this.removeDeploymentSecrets(binding, Object.keys(values), userId);
-        throw error;
-      }
-      return;
-    }
-
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
-        networkId: binding.networkName,
-        containerId: binding.targetResourceId,
-      })
-    );
-    const current = this.environmentMap(
-      await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
-    );
-    const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
-    const managedNames = Object.keys(values);
-    for (const name of managedNames) {
-      // Managed credentials live in Docker secrets. This keeps them out of
-      // the ordinary Environment editor while updateContainerEnv still merges
-      // them into the recreated container configuration.
-      await this.dockerSecrets.create(binding.targetNodeId, binding.targetResourceId, name, values[name]!, userId, {
-        managed: true,
-      });
-      delete ordinaryEnvironment[name];
-    }
-    const removeEnv = Object.keys(current).filter(
-      (name) => !Object.hasOwn(ordinaryEnvironment, name) || managedNames.includes(name)
-    );
-    await this.dockerManagement.updateContainerEnv(
-      binding.targetNodeId,
-      binding.targetResourceId,
-      ordinaryEnvironment,
-      removeEnv,
-      userId
-    );
+    return this.targetRuntime.apply(database, binding, credentials, userId, options);
   }
 
   private async removeTargetBinding(
@@ -892,181 +618,35 @@ export class ManagedDatabaseBindingService {
     userId: string,
     options: { targetEnvironment?: Record<string, string> } = {}
   ) {
-    const expected = this.bindingEnvironmentValues(database, binding, this.bindingCredentials(binding));
-    const variableNames = Object.keys(expected);
-    if (binding.targetType === 'compose_service') {
-      await this.requireComposeService().removeManagedDatabaseBinding(
-        binding.targetNodeId,
-        binding.targetResourceId,
-        binding.id,
-        binding.networkName,
-        expected,
-        userId
-      );
-      return;
-    }
-    if (binding.targetType === 'deployment') {
-      const secretContainer = `deployment:${binding.targetResourceId}`;
-      const values = await this.matchingDeploymentSecretValues(binding, expected);
-      await this.removeDeploymentSecrets(binding, Object.keys(values), userId);
-      try {
-        await this.dockerDeployments.setManagedDatabaseBindingNetwork(
-          binding.targetNodeId,
-          binding.targetResourceId,
-          binding.networkName,
-          false,
-          userId
-        );
-      } catch (error) {
-        for (const [key, value] of Object.entries(values)) {
-          await this.dockerSecrets.create(binding.targetNodeId, secretContainer, key, value, userId);
-        }
-        throw error;
-      }
-      const deployment = await this.dockerDeployments.get(binding.targetNodeId, binding.targetResourceId);
-      for (const slot of deployment.slots) {
-        if (slot.containerName) {
-          await this.nodeDispatch
-            .sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
-              networkId: binding.networkName,
-              containerId: slot.containerName,
-            })
-            .catch(() => undefined);
-        }
-      }
-      return;
-    }
-
-    try {
-      const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true, true);
-      for (const secret of secrets) {
-        if (variableNames.includes(secret.key) && secret.value === expected[secret.key]) {
-          await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
-        }
-      }
-      const current = this.environmentMap(
-        await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
-      );
-      const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
-      for (const name of variableNames) delete ordinaryEnvironment[name];
-      const removeEnv = Array.from(
-        new Set([...variableNames, ...Object.keys(current).filter((name) => !Object.hasOwn(ordinaryEnvironment, name))])
-      );
-      await this.dockerManagement.updateContainerEnv(
-        binding.targetNodeId,
-        binding.targetResourceId,
-        ordinaryEnvironment,
-        removeEnv,
-        userId
-      );
-    } catch (error) {
-      // The target may have been removed while a failed binding was being
-      // reconciled. Its sidecar, tunnel lane and database principal still
-      // need cleanup; only the no-longer-possible env update is optional.
-      if (!isMissingContainerError(error)) throw error;
-    }
-    await this.nodeDispatch
-      .sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
-        networkId: binding.networkName,
-        containerId: binding.targetResourceId,
-      })
-      .catch(() => undefined);
+    return this.targetRuntime.remove(database, binding, this.bindingCredentials(binding), userId, options);
   }
 
-  private async compensateProvisioning(
+  private async verifyTargetBindingValues(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    state: {
-      principalCreated: boolean;
-      policyPrepared: boolean;
-      networkCreated: boolean;
-      connectorCreated: boolean;
-      targetApplyAttempted: boolean;
-    }
+    credentials: BindingCredentials
   ) {
-    if (state.policyPrepared) {
-      await this.relayPolicy?.revokeOwner('managed_database_binding', binding.id);
-    }
-    if (state.targetApplyAttempted) {
-      await this.prepareTargetNetworkRemoval(binding);
-      await this.removeTargetBinding(database, binding, 'system');
-      await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
-    }
-    if (state.connectorCreated) {
-      this.requireSuccessOrMissing(
-        await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
-          containerId: binding.connectorName,
-          force: true,
-        })
-      );
-    }
-    if (state.networkCreated) {
-      this.requireSuccessOrMissing(
-        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
-          networkId: binding.networkName,
-        })
-      );
-    }
-    if (state.principalCreated) {
-      const credentials = this.bindingCredentials(binding);
-      const owner = this.ownerCredentials(database);
-      await this.nodeDispatch
-        .sendDockerDatabaseCommand(
-          database.nodeId,
-          'binding_remove_v2',
-          database.id,
-          JSON.stringify({
-            bindingId: binding.id,
-            username: credentials.username,
-            password: credentials.password,
-            databaseName: credentials.databaseName ?? 'app',
-            ownerUsername: owner.username,
-            ownerPassword: owner.password,
-          })
-        )
-        .catch(() => undefined);
-    }
+    return this.targetRuntime.verifyValues(database, binding, credentials);
   }
 
-  private async markBindingError(
+  private async markBindingReconciliationError(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    operation: 'prepare' | 'delete',
-    error?: unknown
+    error: unknown
   ) {
-    const operationLabel = operation === 'prepare' ? 'Binding preparation failed' : 'Binding removal failed';
     const detail = error instanceof Error ? error.message.replace(/\s+/g, ' ').trim() : '';
+    const lastError = detail
+      ? `Binding reconciliation failed: ${detail}`.slice(0, 1_000)
+      : 'Binding reconciliation failed';
     const [failed] = await this.db
       .update(managedDatabaseBindings)
-      .set({
-        status: 'error',
-        lastError: detail ? `${operationLabel}: ${detail}`.slice(0, 1_000) : operationLabel,
-        updatedAt: new Date(),
-      })
+      .set({ status: 'error', observedState: 'error', lastError, updatedAt: new Date() })
       .where(eq(managedDatabaseBindings.id, binding.id))
       .returning();
-    this.emitBinding(database, failed!, 'binding.error', {
-      failurePhase: operation === 'prepare' ? 'provisioning' : 'deprovisioning',
+    this.emitBinding(database, failed!, 'binding.reconciliation_failed', {
+      failurePhase: 'reconciliation',
       failureCode: this.failureCode(error),
     });
-    return bindingView(failed!);
-  }
-
-  private assertConnectorImage() {
-    if (immutableImageReference.test(this.connectorImage) || this.usesDevelopmentConnectorImage()) return;
-    throw new AppError(
-      503,
-      'MANAGED_DATABASE_CONNECTOR_UNAVAILABLE',
-      'Managed database connector image is not configured with an immutable digest'
-    );
-  }
-
-  private usesDevelopmentConnectorImage() {
-    return this.allowDevelopmentConnectorImage && this.connectorImage === DEVELOPMENT_DATABASE_CONNECTOR_IMAGE;
-  }
-
-  private connectorImageAction(): 'ensure' | 'ensure-local' {
-    return this.usesDevelopmentConnectorImage() ? 'ensure-local' : 'ensure';
   }
 
   private requireSuccess(result: { success: boolean; detail?: string; error?: string }) {
@@ -1080,225 +660,41 @@ export class ManagedDatabaseBindingService {
     throw new Error(`daemon operation failed${result.error ? `: ${result.error}` : ''}`);
   }
 
-  private tunnelSocketPath(detail: string | undefined) {
-    try {
-      const parsed = JSON.parse(detail ?? '') as { socketPath?: unknown };
-      if (
-        typeof parsed.socketPath === 'string' &&
-        /^\/[A-Za-z0-9._/-]+$/.test(parsed.socketPath) &&
-        parsed.socketPath !== '/'
-      ) {
-        return parsed.socketPath;
-      }
-    } catch {
-      // Convert malformed daemon details to a generic provisioning error.
-    }
-    throw new Error('database tunnel socket is unavailable');
-  }
-
-  private tunnelSocketMount(detail: string | undefined) {
-    const socketPath = this.tunnelSocketPath(detail);
-    const hostDirectory = path.posix.dirname(socketPath);
-    const socketName = path.posix.basename(socketPath);
-    if (hostDirectory === '/' || !socketName || socketName === '.' || socketName === '..') {
-      throw new Error('database tunnel socket directory is unavailable');
-    }
-    return {
-      hostDirectory,
-      connectorPath: path.posix.join('/run/gateway-db', socketName),
-    };
-  }
-
-  private containerID(detail: string | undefined) {
-    try {
-      const parsed = JSON.parse(detail ?? '') as { id?: unknown; Id?: unknown };
-      const id = typeof parsed.id === 'string' ? parsed.id : parsed.Id;
-      if (typeof id === 'string' && /^[a-f0-9]{12,128}$/i.test(id)) return id;
-    } catch {
-      // Convert malformed daemon details to a generic provisioning error.
-    }
-    throw new Error('connector container was not created');
-  }
-
   private bindingCredentials(binding: ManagedDatabaseBindingRow): BindingCredentials {
-    const plaintext = this.cryptoService.decryptString(encryptedPayload(binding.encryptedCredentials));
+    const plaintext = this.cryptoService.decryptString(managedDatabaseBindingEncryptedPayload(binding.encryptedCredentials));
     return JSON.parse(plaintext) as BindingCredentials;
   }
 
-  private ownerCredentials(database: ManagedDatabaseRow): OwnerCredentials {
-    const plaintext = this.cryptoService.decryptString(encryptedPayload(database.encryptedOwnerCredentials));
-    return JSON.parse(plaintext) as OwnerCredentials;
+  private pendingBindingCredentials(binding: ManagedDatabaseBindingRow): BindingCredentials | null {
+    if (!binding.pendingEncryptedCredentials) return null;
+    const plaintext = this.cryptoService.decryptString(
+      managedDatabaseBindingEncryptedPayload(binding.pendingEncryptedCredentials)
+    );
+    return JSON.parse(plaintext) as BindingCredentials;
   }
 
-  private bindingEnvironmentValues(
+  private bindingPrincipalPayload(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    credentials: BindingCredentials
-  ): Record<string, string> {
-    const host = binding.connectorAlias;
-    const port = enginePort(database.type);
-    const databaseName = credentials.databaseName;
-    const connectionUri =
-      database.type === 'redis'
-        ? `redis://${encodeURIComponent(credentials.username)}:${encodeURIComponent(credentials.password)}@${host}:${port}`
-        : database.type === 'clickhouse'
-          ? `http://${encodeURIComponent(credentials.username)}:${encodeURIComponent(credentials.password)}@${host}:${port}/?database=${encodeURIComponent(databaseName ?? 'default')}`
-          : `postgresql://${encodeURIComponent(credentials.username)}:${encodeURIComponent(credentials.password)}@${host}:${port}/${encodeURIComponent(databaseName ?? 'app')}`;
-    const values: Record<string, string> = {};
-    if (binding.environment.connectionUri) values[binding.environment.connectionUri] = connectionUri;
-    if (binding.environment.host) values[binding.environment.host] = host;
-    if (binding.environment.port) values[binding.environment.port] = String(port);
-    if (binding.environment.database && databaseName) values[binding.environment.database] = databaseName;
-    if (binding.environment.username) values[binding.environment.username] = credentials.username;
-    if (binding.environment.password) values[binding.environment.password] = credentials.password;
-    return values;
-  }
-
-  private environmentMap(entries: unknown): Record<string, string> {
-    if (!Array.isArray(entries)) return {};
-    return Object.fromEntries(
-      entries
-        .filter((entry): entry is string => typeof entry === 'string')
-        .map((entry) => {
-          const separator = entry.indexOf('=');
-          return separator < 0 ? [entry, ''] : [entry.slice(0, separator), entry.slice(separator + 1)];
-        })
-    );
-  }
-
-  private async resolveBindingTarget(input: CreateManagedDatabaseBindingInput): Promise<string> {
-    if (input.targetType === 'compose_service') {
-      const target = await this.requireComposeService().resolveServiceTarget(
-        input.targetNodeId,
-        input.targetResourceId,
-        true
-      );
-      return target.targetResourceId;
-    }
-    if (input.targetType === 'deployment') {
-      await this.dockerDeployments.get(input.targetNodeId, input.targetResourceId);
-      return input.targetResourceId;
-    }
-    const inspect = await this.dockerManagement.inspectContainer(input.targetNodeId, input.targetResourceId);
-    const labels = (inspect?.Config?.Labels ?? {}) as Record<string, string>;
-    if (labels['wiolett.gateway.deployment.managed'] === 'true') {
-      throw new AppError(409, 'MANAGED_DEPLOYMENT_CONTAINER', 'Use a deployment target for a blue/green container');
-    }
-    if (labels['wiolett.gateway.managed-database.connector'] === 'true') {
-      throw new AppError(
-        409,
-        'MANAGED_DATABASE_CONNECTOR_TARGET',
-        'A managed database connector cannot be a binding target'
-      );
-    }
-    const name = typeof inspect?.Name === 'string' ? inspect.Name.replace(/^\/+/, '') : '';
-    if (!name) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
-    return name;
-  }
-
-  private async assertEnvironmentNamesAvailable(
-    targetNodeId: string,
-    targetType: ManagedDatabaseBindingRow['targetType'],
-    targetResourceId: string,
-    environment: ManagedDatabaseBindingRow['environment'],
-    replaceExistingEnvironment = false
+    credentials: BindingCredentials,
+    owner = this.ownerCredentials(database)
   ) {
-    const requested = new Set(Object.values(environment).filter((value): value is string => Boolean(value)));
-    if (requested.size === 0) {
-      throw new AppError(
-        400,
-        'MANAGED_DATABASE_BINDING_ENV_REQUIRED',
-        'At least one application environment variable is required'
-      );
-    }
-    const rows = await this.db
-      .select({ environment: managedDatabaseBindings.environment })
-      .from(managedDatabaseBindings)
-      .where(
-        and(
-          eq(managedDatabaseBindings.targetNodeId, targetNodeId),
-          eq(managedDatabaseBindings.targetType, targetType),
-          eq(managedDatabaseBindings.targetResourceId, targetResourceId)
-        )
-      );
-    for (const row of rows) {
-      if (Object.values(row.environment).some((name) => name && requested.has(name))) {
-        throw new AppError(
-          409,
-          'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
-          'A managed database binding already uses an environment variable'
-        );
-      }
-    }
-
-    if (targetType === 'deployment') {
-      const deployment = await this.dockerDeployments.get(targetNodeId, targetResourceId);
-      const secretKeys = await this.dockerSecrets.getSecretKeys(targetNodeId, `deployment:${targetResourceId}`);
-      const existing = new Set([...Object.keys(deployment.desiredConfig.env ?? {}), ...secretKeys]);
-      if ([...requested].some((name) => existing.has(name))) {
-        throw new AppError(
-          409,
-          'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
-          'The deployment already uses an environment variable'
-        );
-      }
-      return;
-    }
-
-    if (targetType === 'compose_service') {
-      const existing = await this.requireComposeService().getServiceEnvironmentNames(targetNodeId, targetResourceId);
-      if ([...requested].some((name) => existing.has(name))) {
-        throw new AppError(
-          409,
-          'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
-          'The Compose service already uses an environment variable'
-        );
-      }
-      return;
-    }
-
-    const inspect = await this.dockerManagement.inspectContainer(targetNodeId, targetResourceId);
-    const name = typeof inspect?.Name === 'string' ? inspect.Name.replace(/^\/+/, '') : '';
-    const envKeys = new Set(
-      (Array.isArray(inspect?.Config?.Env) ? (inspect.Config.Env as unknown[]) : [])
-        .filter((entry): entry is string => typeof entry === 'string')
-        .map((entry) => entry.split('=', 1)[0]!)
-    );
-    if (name) {
-      for (const key of await this.dockerSecrets.getSecretKeys(targetNodeId, name)) envKeys.add(key);
-    }
-    if ([...requested].some((key) => envKeys.has(key)) && !(targetType === 'container' && replaceExistingEnvironment)) {
-      throw new AppError(
-        409,
-        'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
-        'The container already uses an environment variable'
-      );
-    }
+    return JSON.stringify({
+      operationId: binding.principalOperationId ?? binding.id,
+      principalName: binding.principalName ?? credentials.username,
+      password: credentials.password,
+      databaseName: credentials.databaseName ?? 'redis',
+      applicationPrincipalName: database.applicationPrincipalName ?? owner.username,
+      ownerUsername: owner.username,
+      ownerPassword: owner.password,
+    });
   }
 
-  private async matchingDeploymentSecretValues(binding: ManagedDatabaseBindingRow, expected: Record<string, string>) {
-    const all = await this.dockerSecrets.getDecryptedMap(
-      binding.targetNodeId,
-      `deployment:${binding.targetResourceId}`
+  private ownerCredentials(database: ManagedDatabaseRow): OwnerCredentials {
+    const plaintext = this.cryptoService.decryptString(
+      managedDatabaseBindingEncryptedPayload(database.encryptedOwnerCredentials)
     );
-    return Object.fromEntries(Object.entries(expected).filter(([key, value]) => all[key] === value)) as Record<
-      string,
-      string
-    >;
-  }
-
-  private async removeDeploymentSecrets(binding: ManagedDatabaseBindingRow, keys: string[], userId: string) {
-    const rows = await this.dockerSecrets.list(
-      binding.targetNodeId,
-      `deployment:${binding.targetResourceId}`,
-      false,
-      true
-    );
-    for (const row of rows) {
-      if (keys.includes(row.key)) {
-        await this.dockerSecrets.delete(row.id, binding.targetNodeId, userId, `deployment:${binding.targetResourceId}`);
-      }
-    }
+    return JSON.parse(plaintext) as OwnerCredentials;
   }
 
   private async getBinding(managedDatabaseId: string, id: string): Promise<ManagedDatabaseBindingRow> {
@@ -1322,11 +718,17 @@ export class ManagedDatabaseBindingService {
     if (node.status !== 'online') throw new AppError(409, 'NODE_OFFLINE', 'Binding target node is offline');
   }
 
-  private requireComposeService() {
-    if (!this.dockerCompose) {
-      throw new AppError(503, 'COMPOSE_SERVICE_UNAVAILABLE', 'Compose service integration is unavailable');
+  private async assertBindingTargetMigrationReady(nodeId: string) {
+    await this.assertDockerNode(nodeId);
+    const [node] = await this.db.select({ capabilities: nodes.capabilities }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    const capabilities = (node?.capabilities as { capabilities?: unknown } | null)?.capabilities;
+    if (!Array.isArray(capabilities) || !capabilities.includes('managed_database_binding_listener_v1')) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_TARGET_DAEMON_UPDATE_REQUIRED',
+        'Update the target Docker daemon before creating or migrating managed database listeners'
+      );
     }
-    return this.dockerCompose;
   }
 
   private emitBinding(

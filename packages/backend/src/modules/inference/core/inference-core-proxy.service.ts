@@ -231,6 +231,14 @@ export class InferenceCoreProxyService {
     return this.coreTarget();
   }
 
+  async markAffinityActive(affinityKey: string): Promise<void> {
+    await this.routing.markAffinityActive(affinityKey);
+  }
+
+  async beginAffinityTurn(affinityKey: string): Promise<() => Promise<void>> {
+    return this.routing.beginAffinityTurn(affinityKey);
+  }
+
   async proxy(c: Context<AppEnv>, operation: CoreProxyOperation): Promise<Response> {
     const { user, tokenId } = requireAuth(c);
     const prepared = await this.prepareBody(c, operation);
@@ -287,6 +295,27 @@ export class InferenceCoreProxyService {
         })
       ).requestId;
     }
+    const releaseAffinityTurn = prepared.affinityKey
+      ? await this.routing.beginAffinityTurn(prepared.affinityKey)
+      : undefined;
+    let affinityTurnFinalized = false;
+    const finalizeAffinityTurn = prepared.affinityKey
+      ? async () => {
+          if (affinityTurnFinalized) return;
+          affinityTurnFinalized = true;
+          try {
+            await this.routing.markAffinityActive(prepared.affinityKey!);
+          } finally {
+            await releaseAffinityTurn?.();
+          }
+        }
+      : undefined;
+    const finalizeRequest = onceAsync(async (outcome, error) => {
+      const finalizers: Promise<unknown>[] = [];
+      if (coreAdmitted) finalizers.push(this.coreAccounting.finalizeCoreRequest(rootRequestId, outcome, error));
+      if (finalizeAffinityTurn) finalizers.push(finalizeAffinityTurn());
+      await Promise.allSettled(finalizers);
+    });
     const excludedConnectionIds: string[] = [];
     try {
       for (;;) {
@@ -323,22 +352,18 @@ export class InferenceCoreProxyService {
           target,
           claims,
           rootRequestId,
-          coreAdmitted,
           `/v1/${operation}`,
           { method: 'POST', headers: prepared.headers, body },
           allowFailover,
-          imagesOperation
+          imagesOperation,
+          finalizeRequest
         );
         if (forwarded.kind === 'response') return forwarded.response;
         excludedConnectionIds.push(resolved.selected.connection.id);
       }
     } catch (error) {
-      if (coreAdmitted) {
-        const cancelled = c.req.raw.signal.aborted || (error instanceof InferenceProtocolError && error.status === 499);
-        await this.coreAccounting
-          .finalizeCoreRequest(rootRequestId, cancelled ? 'cancelled' : 'failed', error)
-          .catch(() => undefined);
-      }
+      const cancelled = c.req.raw.signal.aborted || (error instanceof InferenceProtocolError && error.status === 499);
+      await finalizeRequest(cancelled ? 'cancelled' : 'failed', error);
       throw error;
     }
   }
@@ -357,11 +382,12 @@ export class InferenceCoreProxyService {
     target: { baseUrl: string; credential: string },
     claims: Parameters<typeof coreRequestHeaders>[0],
     requestId: string,
-    accounted: boolean,
     path: string,
     init: { method: string; headers: Record<string, string>; body: ProxyRequestBody },
     allowFailover = false,
-    nonRetryableDispatch = false
+    nonRetryableDispatch = false,
+    finalizeRequest: (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => Promise<void> = async () =>
+      undefined
   ): Promise<{ kind: 'response'; response: Response } | { kind: 'retry' }> {
     const controller = new AbortController();
     let clientGone = false;
@@ -376,11 +402,6 @@ export class InferenceCoreProxyService {
         { once: true }
       );
     }
-    const finalize = once((outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => {
-      if (!accounted) return;
-      void this.coreAccounting.finalizeCoreRequest(requestId, outcome, error).catch(() => undefined);
-    });
-
     let upstream: Response;
     try {
       upstream = await fetch(`${target.baseUrl}${path}`, {
@@ -390,9 +411,8 @@ export class InferenceCoreProxyService {
         signal: controller.signal,
         duplex: 'half',
       });
-    } catch (error) {
+    } catch {
       if (allowFailover && !clientGone) return { kind: 'retry' };
-      finalize(clientGone ? 'cancelled' : 'failed', error);
       if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
       if (nonRetryableDispatch) {
         throw new InferenceProtocolError(
@@ -411,7 +431,7 @@ export class InferenceCoreProxyService {
     if (nonRetryableDispatch) {
       const headers = publicResponseHeaders(upstream.headers);
       if (!upstream.body) {
-        finalize(status < 400 ? 'completed' : 'failed');
+        void finalizeRequest(status < 400 ? 'completed' : 'failed');
         if (status >= 500) return { kind: 'response', response: ambiguousImageResponse() };
         return { kind: 'response', response: new Response(null, { status, headers }) };
       }
@@ -421,12 +441,16 @@ export class InferenceCoreProxyService {
           MAX_CORE_IMAGE_BODY_BYTES,
           'Inference core image response exceeded the safe body limit'
         );
-        finalize(status < 400 ? 'completed' : 'failed');
+        void finalizeRequest(status < 400 ? 'completed' : 'failed');
         if (status >= 500) return { kind: 'response', response: ambiguousImageResponse() };
         return { kind: 'response', response: new Response(body, { status, headers }) };
       } catch (error) {
-        finalize(clientGone ? 'cancelled' : 'failed', error);
-        if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+        if (clientGone) {
+          const mapped = new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+          void finalizeRequest('cancelled', mapped);
+          throw mapped;
+        }
+        void finalizeRequest('failed', error);
         return { kind: 'response', response: ambiguousImageResponse() };
       }
     }
@@ -434,11 +458,15 @@ export class InferenceCoreProxyService {
       const headers = publicResponseHeaders(upstream.headers);
       try {
         const body = await readBoundedCoreErrorBody(upstream.body);
-        finalize('failed');
+        void finalizeRequest('failed');
         return { kind: 'response', response: new Response(body, { status, headers }) };
       } catch (error) {
-        finalize(clientGone ? 'cancelled' : 'failed', error);
-        if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+        if (clientGone) {
+          const mapped = new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
+          void finalizeRequest('cancelled', mapped);
+          throw mapped;
+        }
+        void finalizeRequest('failed', error);
         return {
           kind: 'response',
           response: Response.json(
@@ -455,7 +483,7 @@ export class InferenceCoreProxyService {
       }
     }
     if (!upstream.body) {
-      finalize(status < 400 ? 'completed' : 'failed');
+      void finalizeRequest(status < 400 ? 'completed' : 'failed');
       return {
         kind: 'response',
         response: new Response(null, { status, headers: publicResponseHeaders(upstream.headers) }),
@@ -467,7 +495,7 @@ export class InferenceCoreProxyService {
       contentType: headers.get('content-type') ?? '',
       abortUpstream: (reason) => controller.abort(reason),
       clientGone: () => clientGone,
-      finalize,
+      finalize: (outcome, error) => void finalizeRequest(outcome, error),
       upstreamStatus: status,
     });
     return {
@@ -1164,12 +1192,13 @@ function zeroUsage() {
   };
 }
 
-function once(fn: (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => void) {
-  let called = false;
+function onceAsync(
+  fn: (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => Promise<void>
+): (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => Promise<void> {
+  let result: Promise<void> | undefined;
   return (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => {
-    if (called) return;
-    called = true;
-    fn(outcome, error);
+    result ??= fn(outcome, error);
+    return result;
   };
 }
 

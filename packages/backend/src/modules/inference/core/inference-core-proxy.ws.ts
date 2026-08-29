@@ -56,6 +56,7 @@ interface ActiveTurn {
   emittedOutput: boolean;
   pendingPreludeFrames: string[];
   finalized: boolean;
+  refreshAffinity?: () => Promise<void>;
   /** Per-user concurrency lease; released exactly once when the turn ends. */
   release: () => Promise<void>;
 }
@@ -74,7 +75,7 @@ const UPSTREAM_CLOSE_BEFORE_RETRY_MS = 1_000;
  */
 export function createCoreResponsesWSHandlers(
   auth: InferenceCoreWebSocketAuth | null,
-  maxPayloadBytes: number | (() => number | Promise<number>) = 50 * 1024 * 1024
+  maxPayloadBytes: number | (() => number | Promise<number>) = 128 * 1024 * 1024
 ): WSEvents {
   const state: ConnectionState = { active: null, unsubscribe: null, closedForRevocation: false };
   return {
@@ -218,6 +219,19 @@ async function startTurn(
     ...(affinityKey ? { affinityKey } : {}),
     ...(isCompaction ? { isCompaction: true } : {}),
   });
+  const releaseAffinityTurn = affinityKey ? await proxy.beginAffinityTurn(affinityKey) : undefined;
+  let affinityTurnFinalized = false;
+  const refreshAffinity = affinityKey
+    ? async () => {
+        if (affinityTurnFinalized) return;
+        affinityTurnFinalized = true;
+        try {
+          await proxy.markAffinityActive(affinityKey);
+        } finally {
+          await releaseAffinityTurn?.();
+        }
+      }
+    : undefined;
   const turn: ActiveTurn = {
     upstream: null,
     requestId,
@@ -229,6 +243,7 @@ async function startTurn(
     emittedOutput: false,
     pendingPreludeFrames: [],
     finalized: false,
+    ...(refreshAffinity ? { refreshAffinity } : {}),
     release,
   };
   state.active = turn;
@@ -251,6 +266,7 @@ async function startTurn(
     });
   } catch (error) {
     state.active = null;
+    if (turn.refreshAffinity) await turn.refreshAffinity().catch(() => undefined);
     await accounting.finalizeCoreRequest(requestId, 'failed', error).catch(() => undefined);
     throw error;
   }
@@ -493,6 +509,7 @@ function finalizeTurn(
   if (turn.finalized) return;
   turn.finalized = true;
   void turn.release().catch(() => undefined);
+  if (turn.refreshAffinity) void turn.refreshAffinity().catch(() => undefined);
   const finalized = error
     ? accounting.finalizeCoreRequest(turn.requestId, outcome, error)
     : accounting.finalizeCoreRequest(turn.requestId, outcome);

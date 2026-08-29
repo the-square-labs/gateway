@@ -2,7 +2,7 @@ import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
-import { inferenceLimitPolicies, inferenceUsageLedger } from '@/db/schema/index.js';
+import { inferenceLimitPolicies, inferenceLimitUsageResets, inferenceUsageLedger } from '@/db/schema/index.js';
 import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
 import { tokenPricingForInputTokens } from '../inference-pricing.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
@@ -78,13 +78,22 @@ export class InferenceBudgetPolicyService {
     now = new Date(),
     database: DrizzleExecutor = this.db
   ): Promise<InferenceBudgetUsage> {
-    const month = calendarMonthWindow(now, limits.billingTimezone);
+    const resetRows = await database
+      .select({ dimension: inferenceLimitUsageResets.dimension, resetAt: inferenceLimitUsageResets.resetAt })
+      .from(inferenceLimitUsageResets)
+      .where(eq(inferenceLimitUsageResets.userId, userId));
+    const resets = new Map(resetRows.map((row) => [row.dimension, row.resetAt]));
+    const apiReset = resets.get('apiMonthlyMicrodollars');
+    const month = apiReset
+      ? anchoredCalendarMonthWindow(now, apiReset, limits.billingTimezone)
+      : calendarMonthWindow(now, limits.billingTimezone);
     const cutoffs = {
       credits5h: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['5h']),
       credits7d: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['7d']),
       credits30d: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['30d']),
     };
-    const rollingWindowUsage = async (cutoff: Date, durationMs: number, limit: number) => {
+    const rollingWindowUsage = async (naturalCutoff: Date, durationMs: number, limit: number, resetAt?: Date) => {
+      const cutoff = resetAt && resetAt > naturalCutoff ? resetAt : naturalCutoff;
       const result = await database.execute(
         sql<{
           used: string;
@@ -123,16 +132,22 @@ export class InferenceBudgetPolicyService {
         `
       );
       const row = result.rows[0] as { used: string; recovery_base: Date | string | null } | undefined;
-      const recoveryBase = row?.recovery_base ? new Date(row.recovery_base) : now;
+      const recoveryBase = row?.recovery_base
+        ? new Date(row.recovery_base)
+        : resetAt && resetAt > naturalCutoff
+          ? resetAt
+          : now;
       return {
         used: Number(row?.used ?? 0),
-        recoveryAt: new Date(recoveryBase.getTime() + (row?.recovery_base ? durationMs : 0)),
+        recoveryAt: new Date(
+          recoveryBase.getTime() + (row?.recovery_base || (resetAt && resetAt > naturalCutoff) ? durationMs : 0)
+        ),
       };
     };
     const [credits5h, credits7d, credits30d, apiRow] = await Promise.all([
-      rollingWindowUsage(cutoffs.credits5h, SUBSCRIPTION_WINDOWS['5h'], limits.credits5h),
-      rollingWindowUsage(cutoffs.credits7d, SUBSCRIPTION_WINDOWS['7d'], limits.credits7d),
-      rollingWindowUsage(cutoffs.credits30d, SUBSCRIPTION_WINDOWS['30d'], limits.credits30d),
+      rollingWindowUsage(cutoffs.credits5h, SUBSCRIPTION_WINDOWS['5h'], limits.credits5h, resets.get('credits5h')),
+      rollingWindowUsage(cutoffs.credits7d, SUBSCRIPTION_WINDOWS['7d'], limits.credits7d, resets.get('credits7d')),
+      rollingWindowUsage(cutoffs.credits30d, SUBSCRIPTION_WINDOWS['30d'], limits.credits30d, resets.get('credits30d')),
       database
         .select({ value: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)` })
         .from(inferenceUsageLedger)
@@ -288,6 +303,26 @@ export function calendarMonthWindow(now: Date, timezone: string): { start: Date;
   return { start, end: zonedDateToUtc(nextYear, nextMonth, 1, timezone) };
 }
 
+function anchoredCalendarMonthWindow(now: Date, anchor: Date, timezone: string): { start: Date; end: Date } {
+  const anchorParts = localParts(anchor, timezone);
+  const nowParts = localParts(now, timezone);
+  let offset = (nowParts.year - anchorParts.year) * 12 + nowParts.month - anchorParts.month;
+  let start = shiftedLocalMonth(anchorParts, offset, timezone);
+  if (start > now) {
+    offset -= 1;
+    start = shiftedLocalMonth(anchorParts, offset, timezone);
+  }
+  return { start, end: shiftedLocalMonth(anchorParts, offset + 1, timezone) };
+}
+
+function shiftedLocalMonth(parts: ReturnType<typeof localParts>, offset: number, timezone: string): Date {
+  const monthIndex = parts.year * 12 + (parts.month - 1) + offset;
+  const year = Math.floor(monthIndex / 12);
+  const month = (((monthIndex % 12) + 12) % 12) + 1;
+  const day = Math.min(parts.day, new Date(Date.UTC(year, month, 0)).getUTCDate());
+  return zonedDateToUtc(year, month, day, timezone, parts.hour, parts.minute, parts.second);
+}
+
 function quotaWindowDuration(dimension: string): number {
   if (dimension.startsWith('5h')) return SUBSCRIPTION_WINDOWS['5h'];
   if (dimension.startsWith('7d')) return SUBSCRIPTION_WINDOWS['7d'];
@@ -317,11 +352,19 @@ function localParts(date: Date, timezone: string) {
   };
 }
 
-function zonedDateToUtc(year: number, month: number, day: number, timezone: string): Date {
-  let candidate = new Date(Date.UTC(year, month - 1, day));
+function zonedDateToUtc(
+  year: number,
+  month: number,
+  day: number,
+  timezone: string,
+  hour = 0,
+  minute = 0,
+  second = 0
+): Date {
+  let candidate = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   for (let index = 0; index < 3; index += 1) {
     const actual = localParts(candidate, timezone);
-    const desired = Date.UTC(year, month - 1, day);
+    const desired = Date.UTC(year, month - 1, day, hour, minute, second);
     const rendered = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
     candidate = new Date(candidate.getTime() + desired - rendered);
   }

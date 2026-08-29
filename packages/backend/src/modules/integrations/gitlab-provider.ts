@@ -1,6 +1,24 @@
 import type { IntegrationConnectorCapabilities } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { GitLabClient } from './gitlab-client.js';
+import {
+  CAPABILITY_KEYS,
+  type GitLabBranch,
+  type GitLabCiLintResponse,
+  type GitLabCommit,
+  type GitLabDeployToken,
+  type GitLabGroup,
+  type GitLabJob,
+  type GitLabPipeline,
+  type GitLabProject,
+  type GitLabProjectHook,
+  type GitLabRegistryRepository,
+  type GitLabRepositoryFile,
+  type GitLabRepositoryTreeEntry,
+  type GitLabTokenSelf,
+  type GitLabUser,
+  type GitLabVariable,
+} from './gitlab-provider.types.js';
 import type {
   VcsAllowlistSearchResult,
   VcsArchiveResult,
@@ -32,157 +50,6 @@ import type {
   VcsTreeEntry,
   VcsUserTokenIdentity,
 } from './integration-provider.types.js';
-
-interface GitLabUser {
-  id: number;
-  username: string;
-}
-
-interface GitLabTokenSelf {
-  scopes?: string[];
-  expires_at?: string | null;
-}
-
-interface GitLabProject {
-  id: number;
-  path_with_namespace: string;
-  name: string;
-  web_url?: string;
-  visibility?: string;
-  default_branch?: string | null;
-  archived?: boolean;
-  container_registry_access_level?: string | null;
-  permissions?: {
-    project_access?: { access_level?: number | null } | null;
-    group_access?: { access_level?: number | null } | null;
-  } | null;
-}
-
-interface GitLabGroup {
-  id: number;
-  full_path: string;
-  name: string;
-  web_url?: string;
-}
-
-interface GitLabRegistryRepository {
-  id: number;
-  path?: string;
-  location?: string;
-  name?: string;
-}
-
-interface GitLabRepositoryTreeEntry {
-  id?: string;
-  name: string;
-  type: 'tree' | 'blob' | 'commit';
-  path: string;
-  mode?: string;
-}
-
-interface GitLabRepositoryFile {
-  file_path: string;
-  ref: string;
-  blob_id?: string;
-  commit_id?: string;
-  size: number;
-  encoding: 'base64' | string;
-  content: string;
-}
-
-interface GitLabCommit {
-  id: string;
-  web_url?: string;
-}
-
-interface GitLabBranch {
-  can_push?: boolean;
-  commit?: {
-    id?: string;
-  } | null;
-}
-
-interface GitLabCiLintResponse {
-  valid: boolean;
-  errors?: string[];
-  warnings?: string[];
-  merged_yaml?: string | null;
-}
-
-interface GitLabPipeline {
-  id: number;
-  iid?: number;
-  ref?: string;
-  sha?: string;
-  status?: string;
-  source?: string;
-  web_url?: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-interface GitLabJob {
-  id: number;
-  name: string;
-  stage?: string;
-  status?: string;
-  ref?: string;
-  web_url?: string;
-  created_at?: string;
-  started_at?: string;
-  finished_at?: string;
-}
-
-interface GitLabVariable {
-  key: string;
-  variable_type?: string;
-  protected?: boolean;
-  masked?: boolean;
-  raw?: boolean;
-  environment_scope?: string;
-  description?: string;
-}
-
-interface GitLabProjectHook {
-  id: number;
-  url: string;
-  push_events?: boolean;
-  merge_requests_events?: boolean;
-  tag_push_events?: boolean;
-  job_events?: boolean;
-  pipeline_events?: boolean;
-  enable_ssl_verification?: boolean;
-  created_at?: string;
-}
-
-interface GitLabDeployToken {
-  id: number | string;
-  name: string;
-  username: string;
-  token: string;
-  scopes?: string[];
-  expires_at?: string | null;
-}
-
-const CAPABILITY_KEYS = [
-  'apiReachable',
-  'tokenSelf',
-  'projectsView',
-  'groupsView',
-  'repoRead',
-  'repoWrite',
-  'ciView',
-  'ciLint',
-  'ciEdit',
-  'pipelineRead',
-  'variablesView',
-  'variablesEdit',
-  'variablesDelete',
-  'registryView',
-  'registryUse',
-  'webhooksManage',
-  'deployTokensManage',
-] as const;
 
 export class GitLabProvider implements VcsConnectorProvider {
   readonly provider = 'gitlab' as const;

@@ -107,6 +107,7 @@ async function resolveWebSocketCredentialContext(
       ? await resolveLiveSessionUser(credential.value).then((value) => {
           if (
             !value ||
+            value.session.purpose === 'setup' ||
             (value.impersonation && !value.impersonation.authorized) ||
             (!value.impersonation && requiresSessionMfaReauthentication(value.user, value.session))
           ) {

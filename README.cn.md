@@ -102,7 +102,7 @@ curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts
 | Integrations | GitLab project、repository、CI/CD、variable、webhook、registry 和 sandbox workflows；GitHub repository 与 Actions workflows；generic Git connectors；external SSH connectors；以及 Cloudflare DNS/ACME automation。Connector credentials 会加密保存，访问受 scopes 限制。 |
 | Relay | Long-lived local relay 负责公开 `9443/tcp` 上的 daemon control 与 managed tunnel traffic。Relay Pool 可增加 remote supervisor/worker pairs、显式 placement/rebalancing、drain 与 rolling signed updates，同时保持一个逻辑 Secure Link。 |
 | AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
-| Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@sqgateway/inference` 管理的 Codex 或 Claude Code 配置。 |
+| Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、仅在 output 开始前进行的 capability-compatible cross-provider fallback、OpenAI/Anthropic-compatible APIs，以及通过 `@sqgateway/inference` 管理且可选 user-session auto-start 的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
 ## 工作方式

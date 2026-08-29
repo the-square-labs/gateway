@@ -1,0 +1,21 @@
+---
+title: Containers
+description: Create, update, observe, recreate, duplicate, and remove standalone containers safely.
+section: Docker
+order: 2
+audience: [operator, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Containers
+
+Configure image, command, entrypoint, environment, encrypted secrets, labels, ports, restart policy, runtime limits, health checks, and managed local volumes. New host bind mounts are rejected; existing legacy mounts are preserved during ordinary updates but cannot be reintroduced after removal.
+
+Use **Recreate** to apply runtime configuration while preserving the stable Gateway identity. Use **Duplicate** to create a separate resource. Use **Rename** only when dependent routes, bindings, and permissions have been reviewed.
+
+The Default runtime is available everywhere. Secure gVisor runtime requires a healthy reported capability and is incompatible with GPUs, devices, host binds, migration, and archive export.
+
+Before deletion, inspect Routes, database bindings, grants, volumes, and source settings. Explicit deletion removes resource grants so a later same-name container starts without inherited access.
+
+<!-- screenshot: id=container-detail-tabs; viewport=1440x900; description=Container detail with overview, logs, environment, files, console, links, and settings tabs; redact=container-name,node-name,environment-values -->

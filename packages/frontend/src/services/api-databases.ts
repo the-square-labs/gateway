@@ -4,6 +4,7 @@ import type {
   ManagedDatabaseBinding,
   ManagedDatabaseBindingCreateInput,
   ManagedDatabaseBindingDeleteInput,
+  ManagedDatabaseBindingRuntimeStatus,
   ManagedDatabaseCatalogEntry,
   ManagedDatabaseCreateInput,
   ManagedPostgresExtension,
@@ -236,6 +237,17 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
       await this.request<void>(
         `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`,
         { method: "DELETE", ...(data ? { body: JSON.stringify(data) } : {}) }
+      );
+    }
+
+    async getManagedDatabaseBindingRuntime(
+      id: string,
+      bindingId: string
+    ): Promise<ManagedDatabaseBindingRuntimeStatus> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseBindingRuntimeStatus }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}/runtime`
+        )
       );
     }
 

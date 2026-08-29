@@ -24,12 +24,20 @@ function dbWithOnlineDockerNode() {
 function createService(dispatch: {
   sendDockerVolumeCommand?: ReturnType<typeof vi.fn>;
   sendDockerNetworkCommand?: ReturnType<typeof vi.fn>;
+  sendDockerContainerCommand?: ReturnType<typeof vi.fn>;
 }) {
+  const effectiveDispatch = {
+    sendDockerContainerCommand: vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify({ Config: { Labels: {} } }),
+    }),
+    ...dispatch,
+  };
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const service = new DockerManagementService(
     dbWithOnlineDockerNode() as never,
     audit as never,
-    dispatch as never,
+    effectiveDispatch as never,
     { getNode: vi.fn().mockReturnValue({ id: 'node-1' }) } as never
   );
   const eventBus = { publish: vi.fn() };

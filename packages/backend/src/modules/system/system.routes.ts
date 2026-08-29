@@ -4,6 +4,7 @@ import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { hasScope } from '@/lib/permissions.js';
+import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
@@ -135,7 +136,7 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
   const body = await c.req.json();
   const { version } = z
     .object({
-      version: z.string().regex(/^v?\d+\.\d+\.\d+$/, 'Invalid version format'),
+      version: z.string().regex(RELEASE_VERSION_PATTERN, 'Invalid version format'),
     })
     .parse(body);
 
@@ -176,7 +177,7 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const { version } = z
-    .object({ version: z.string().regex(/^v?\d+\.\d+\.\d+$/, 'Invalid version format') })
+    .object({ version: z.string().regex(RELEASE_VERSION_PATTERN, 'Invalid version format') })
     .parse(await c.req.json());
   const updateService = container.resolve(UpdateService);
   const eventBus = container.resolve(EventBusService);
@@ -217,7 +218,7 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
 // GET /release-notes/:version — fetch release notes for a specific version
 systemRoutes.openapi({ ...releaseNotesForVersionRoute, middleware: requireScope('admin:update') }, async (c) => {
   const version = c.req.param('version')!;
-  if (!/^v?\d+\.\d+\.\d+$/.test(version)) {
+  if (!RELEASE_VERSION_PATTERN.test(version)) {
     return c.json({ code: 'INVALID_VERSION', message: 'Invalid version format' }, 400);
   }
   const updateService = container.resolve(UpdateService);

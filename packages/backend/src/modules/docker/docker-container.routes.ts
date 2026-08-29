@@ -86,6 +86,7 @@ import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { envListToMap } from './docker-env-operations.js';
 import { DockerEnvironmentService } from './docker-environment.service.js';
 import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
+import { assertUserContainerAccessible, inspectUserContainer } from './docker-internal-containers.js';
 import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
 import { DockerRegistryService } from './docker-registry.service.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
@@ -97,6 +98,10 @@ import { assertDockerMountChangeAllowed } from './docker-socket-mount.guard.js';
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_CONTAINER_PORT_PREVIEW_MAX = 64;
 const ARCHIVE_IMAGE_REFERENCE_LABEL = 'wiolett.gateway.archive.image.reference';
+
+function assertUserContainerSnapshot(data: Record<string, any> | null | undefined): void {
+  assertUserContainerAccessible(data);
+}
 
 function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string) {
   return {
@@ -273,7 +278,9 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...inspectContainerByNameRoute,
-      middleware: requireDockerContainerScope('docker:containers:view', 'containerName'),
+      middleware: requireDockerContainerScope('docker:containers:view', 'containerName', {
+        allowBroadWithoutResolve: true,
+      }),
     },
     async (c) => {
       const snapshots = container.resolve(DockerSnapshotService);
@@ -290,6 +297,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         nodeId,
         c.req.param('containerName')!
       );
+      assertUserContainerSnapshot(resolved);
       const data = await service.decorateContainerDetailSnapshot(nodeId, resolved);
       return c.json({
         data: {
@@ -302,7 +310,12 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...inspectContainerRoute, middleware: requireDockerContainerScope('docker:containers:view') },
+    {
+      ...inspectContainerRoute,
+      middleware: requireDockerContainerScope('docker:containers:view', 'containerId', {
+        allowBroadWithoutResolve: true,
+      }),
+    },
     async (c) => {
       const snapshots = container.resolve(DockerSnapshotService);
       const service = container.resolve(DockerManagementService);
@@ -312,6 +325,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         await container.resolve(DockerSnapshotReconciler).refreshNow(nodeId, 'container-detail', containerId);
       }
       const detail = await snapshots.getContainerDetailSnapshot(nodeId, containerId);
+      assertUserContainerSnapshot(detail.data);
       const data = await service.decorateContainerDetailSnapshot(nodeId, detail.data);
       return c.json({
         data: {
@@ -447,7 +461,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const query = ContainerArchiveExportQuerySchema.parse(c.req.query());
       const actorScopes = c.get('effectiveScopes') || [];
       const docker = container.resolve(DockerManagementService);
-      const inspected = await docker.inspectContainer(nodeId, containerId);
+      const inspected = await inspectUserContainer(docker, nodeId, containerId);
       if (dockerGpuAttachmentFromInspect(inspected).mode !== 'none') {
         throw new AppError(
           409,

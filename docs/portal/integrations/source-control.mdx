@@ -1,0 +1,17 @@
+---
+title: Source-control integrations
+description: Connect GitLab, GitHub, generic Git, and External SSH safely.
+section: Integrations and automation
+order: 1
+audience: [platform-engineer, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Source-control integrations
+
+Configure source integrations under **Settings > Integrations**. Supported paths include GitLab, GitHub, generic Git, and External SSH according to the current connector and plan availability.
+
+Use a dedicated machine or application identity with read-only repository access unless a workflow explicitly requires more. Restrict allowed repositories and hosts. Verify webhook authenticity, branch selection, commit resolution, and credential rotation.
+
+Repository URLs must not contain embedded credentials. SSH host keys and HTTPS certificate validation must fail closed. Remove an integration only after dependent Docker, Compose, and Pages sources are identified and migrated.

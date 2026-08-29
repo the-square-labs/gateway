@@ -168,7 +168,7 @@ Domain workflows:
 
 Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes. Enrolling database nodes is available in every plan; creating managed database instances requires Personal or higher.
 
-AI Workspace and the remote MCP Databases toolset can read the managed catalog, provision/retry/delete instances, and create or remove standalone-container, deployment, or Compose-service bindings under the same license and database/Docker scopes as the Operations Console.
+AI Workspace and the remote MCP Databases toolset can read the managed catalog, provision/retry/delete instances, and create or remove standalone-container, deployment, or Compose-service bindings under the same license and database/Docker scopes as the Operations Console. The Operations Console also exposes per-binding Relay runtime telemetry for linked standalone containers, including active streams, throughput, setup latency, completion health, and admission rejects.
 
 Managed instances are private by default. Gateway binds applications through a private connector and authenticated tunnel, with a separate engine identity per binding. Publishing TCP for external infrastructure is an explicit opt-in; it requires database authentication, Gateway does not open host firewalls automatically, and the path is not tunnel-encrypted unless native database TLS is configured.
 
@@ -306,14 +306,15 @@ Gateway Inference is an optional model gateway available in every product plan. 
 Inference features:
 
 - Connect multiple API-key, local, device-code, and supported subscription providers.
-- Publish logical models with access rules, reasoning mappings, pricing, context limits, and one or more compatible account sources.
+- Publish logical models with access rules, reasoning mappings, pricing, context limits, and one or more capability-compatible account or cross-provider fallback sources.
 - Order published models and reasoning levels for data-plane catalogs, Codex manifests, and AI Workspace selectors.
-- Route requests across healthy accounts while keeping continuation and conversation affinity.
+- Route requests across healthy compatible sources while keeping active-turn continuation and affinity. Gateway may rebalance an idle affinity toward materially better quota/load capacity and retries another compatible source only before client output begins.
 - Group multiple accounts of the same provider in the administration table and reorder them within that provider for Sequential routing.
 - Enforce default and per-user five-hour, weekly, monthly, and API-spend budgets.
+- Show each user a 30-day usage overview and let administrators reset one user's usage baselines without deleting immutable accounting history.
 - Expose a base OpenAI-compatible API plus optional Codex- and Anthropic-specific adapters.
 - Issue dedicated `gwi_` runtime tokens that are accepted only by inference data-plane routes.
-- Configure Codex CLI/Desktop and Claude Code through the interactive [`@sqgateway/inference`](../packages/gateway-inference) companion.
+- Configure Codex CLI/Desktop and Claude Code through the interactive [`@sqgateway/inference`](../packages/gateway-inference) companion, including optional macOS/Linux user-session startup for the Codex helper.
 
 Inference is disabled by default. See the [inference guide](inference.md) for provider, model, limit, token, and client setup.
 

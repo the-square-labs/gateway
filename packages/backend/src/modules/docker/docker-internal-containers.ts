@@ -27,3 +27,21 @@ export function isGatewayInternalContainer(container: Record<string, any>): bool
 export function filterGatewayInternalContainers<T extends Record<string, any>>(containers: T[]): T[] {
   return containers.filter((container) => !isGatewayInternalContainer(container));
 }
+
+export function assertUserContainerAccessible(container: Record<string, any> | null | undefined): void {
+  if (container && isGatewayInternalContainer(container)) {
+    throw new AppError(404, 'GATEWAY_INTERNAL_CONTAINER', 'Container not found');
+  }
+}
+
+export async function inspectUserContainer(
+  inspector: { inspectContainer(nodeId: string, containerId: string): Promise<any> },
+  nodeId: string,
+  containerId: string
+) {
+  const data = await inspector.inspectContainer(nodeId, containerId);
+  assertUserContainerAccessible(data);
+  return data;
+}
+
+import { AppError } from '@/middleware/error-handler.js';

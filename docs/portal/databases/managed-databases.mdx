@@ -1,0 +1,19 @@
+---
+title: Managed databases
+description: Provision, resize, pause, restart, publish, and retire managed database instances.
+section: Databases
+order: 2
+audience: [database-operator, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Managed databases
+
+Choose the engine and a supported version from the runtime catalog, select a database node, size storage and memory conservatively, and keep network publication disabled unless external clients require it.
+
+Wait for **Ready** before creating bindings. Use pause/unpause to stop compute while retaining data. Resize only within engine and storage constraints, and back up before substantial changes. Restart is an operational action, not a repair for unresolved storage or identity failures.
+
+Direct-access credential rotation affects external clients but not Secure Link binding identities. TLS certificate rotation recreates the database briefly; clients must continue trusting the same Gateway Database CA.
+
+Deletion is destructive. Remove or migrate dependent bindings, confirm backup retention, and wait for identity/storage cleanup to finish.

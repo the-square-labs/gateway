@@ -53,6 +53,13 @@ export interface RelayGrantAssignment {
   grant: SignedRelayGrant;
   schemaVersion?: number;
   candidates?: RelayDataCandidate[];
+  managedDatabaseListener?: {
+    networkName: string;
+    listenAddress: string;
+    listenPort: number;
+    allowedSources: string[];
+    routeGeneration: number;
+  };
 }
 
 export interface RelayDataCandidate {
@@ -195,6 +202,9 @@ export class RelayGrantIssuerService {
         grant,
         schemaVersion: candidates.length ? 2 : 1,
         candidates,
+        managedDatabaseListener: route.managedDatabaseListener
+          ? { ...route.managedDatabaseListener, routeGeneration: route.generation }
+          : undefined,
       });
     }
     this.lastBundleGeneratedAtMs = Math.max(Date.now(), this.lastBundleGeneratedAtMs + 1);

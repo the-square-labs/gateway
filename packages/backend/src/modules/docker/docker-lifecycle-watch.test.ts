@@ -147,7 +147,7 @@ describe('watchDockerRecreateByName finalization', () => {
     expect(context.emitContainer).not.toHaveBeenCalled();
   });
 
-  it('waits for daemon success before accepting a replacement container', async () => {
+  it('accepts an actually running replacement while daemon task bookkeeping is still running', async () => {
     vi.useFakeTimers();
     const { context, taskService } = recreateWatchContext();
     context.nodeDispatch.sendDockerContainerCommand
@@ -159,14 +159,7 @@ describe('watchDockerRecreateByName finalization', () => {
         success: true,
         detail: JSON.stringify({ id: 'daemon-task-1', status: 'running' }),
       })
-      .mockResolvedValueOnce({
-        success: true,
-        detail: JSON.stringify([{ id: 'container-2', name: 'api', state: 'running' }]),
-      })
-      .mockResolvedValueOnce({
-        success: true,
-        detail: JSON.stringify({ id: 'daemon-task-1', status: 'succeeded' }),
-      });
+      ;
 
     watchDockerRecreateByName(
       context as never,
@@ -181,10 +174,10 @@ describe('watchDockerRecreateByName finalization', () => {
       'daemon-task-1'
     );
     await vi.advanceTimersByTimeAsync(2000);
-    expect(taskService.update).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(2000);
     expect(taskService.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
+    expect(context.emitContainer).toHaveBeenCalledWith('node-1', 'api', 'container-2', 'recreated', {
+      oldId: 'container-1',
+    });
   });
 
   it('falls back to replacement inspection when an older daemon does not support task status', async () => {

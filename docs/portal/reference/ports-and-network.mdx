@@ -1,0 +1,24 @@
+---
+title: Ports and network paths
+description: Plan the minimum required connectivity for Gateway and managed nodes.
+section: Reference
+order: 3
+audience: [network-engineer, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Ports and network paths
+
+| Path | Purpose |
+| --- | --- |
+| Client -> Gateway HTTPS | Console, REST, OAuth, MCP, WebSockets, inference proxy |
+| Managed daemon -> Relay `9443/tcp` | Authenticated outbound control and supported tunnel traffic |
+| Internet -> nginx `80/tcp` | HTTP and ACME HTTP-01 where used |
+| Internet -> nginx `443/tcp` | Public HTTPS Routes and Pages |
+| Gateway/daemon -> external providers | DNS, OIDC, email, Git, registries, updates, ACME, AI providers |
+| Internal Gateway services | PostgreSQL, Redis, internal gRPC, inference-core callbacks |
+
+The Relay—not the Gateway application—is the public owner of `9443/tcp`. Gateway does not open host firewalls or provide NAT traversal. Remote Relay workers must advertise data endpoints reachable from assigned managed hosts.
+
+Keep PostgreSQL, Redis, internal gRPC, inference core, database owner ports, and connector administration interfaces private.

@@ -1,5 +1,5 @@
 import { startRegistration } from "@simplewebauthn/browser";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,12 @@ import { Profile } from "./Profile";
 vi.mock("@simplewebauthn/browser", () => ({ startRegistration: vi.fn() }));
 
 vi.mock("@/pages/inference/InferenceUsagePanels", () => ({
-  InferenceUsage: () => <section>Inference usage panel</section>,
+  InferenceUsage: ({ previewOverview }: { previewOverview?: unknown }) => (
+    <section>
+      Inference usage panel
+      {previewOverview ? <span>Personal inference overview</span> : null}
+    </section>
+  ),
 }));
 vi.mock("@/pages/inference/InferenceTokensSection", () => ({
   InferenceTokensSection: () => <section>Inference token authorizations</section>,
@@ -28,6 +33,7 @@ describe("Profile", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.mocked(startRegistration).mockReset();
+    window.gatewayDev = {};
     useAuthStore.setState({
       user: makeUser({
         name: "Alex Gateway",
@@ -62,6 +68,46 @@ describe("Profile", () => {
       pagination: { page: 1, limit: 200, total: 0, totalPages: 0 },
     });
     vi.spyOn(api, "listCurrentUserSessions").mockResolvedValue([]);
+  });
+
+  it("exposes the setup harness modal through the dev console command", async () => {
+    renderProfile("/profile");
+
+    const openInferenceHarnessModal = window.gatewayDev?.openInferenceHarnessModal as
+      | (() => void)
+      | undefined;
+    expect(openInferenceHarnessModal).toBeTypeOf("function");
+    act(() => openInferenceHarnessModal?.());
+    expect(
+      await screen.findByRole("dialog", { name: "Set up an inference harness" })
+    ).toBeInTheDocument();
+  });
+
+  it("shows the inference profile block with preview usage through the dev console command", () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: [] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useSystemConfigStore.setState({
+      config: {
+        ...DEFAULT_SYSTEM_CONFIG,
+        features: { ...DEFAULT_SYSTEM_CONFIG.features, inferenceEnabled: false },
+      },
+      loaded: true,
+      isLoading: false,
+    });
+    renderProfile("/profile");
+
+    expect(screen.queryByText("Inference usage panel")).not.toBeInTheDocument();
+    const showInferenceProfile = window.gatewayDev?.showInferenceProfile as
+      | (() => void)
+      | undefined;
+    expect(showInferenceProfile).toBeTypeOf("function");
+    act(() => showInferenceProfile?.());
+
+    expect(screen.getByText("Inference usage panel")).toBeInTheDocument();
+    expect(screen.getByText("Personal inference overview")).toBeInTheDocument();
   });
 
   it("keeps personal preferences and inference limits on the Preferences tab", () => {
@@ -131,6 +177,35 @@ describe("Profile", () => {
 
     await waitFor(() => expect(updateAvatar).toHaveBeenCalledWith(expect.any(Blob)));
     expect(useAuthStore.getState().user?.avatarUrl).toBe(updatedUser.avatarUrl);
+  });
+
+  it("removes a custom avatar from the avatar hover action", async () => {
+    const avatarUrl = "/auth/avatars/11111111-1111-4111-8111-111111111111.webp";
+    useAuthStore.setState({
+      user: makeUser({
+        name: "Alex Gateway",
+        avatarUrl,
+        scopes: ["ai:workspace:use"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const updatedUser = makeUser({
+      name: "Alex Gateway",
+      avatarUrl: null,
+      scopes: ["ai:workspace:use"],
+    });
+    const updateAvatar = vi.spyOn(api, "updateCurrentUserAvatar").mockResolvedValue(updatedUser);
+
+    renderProfile("/profile");
+
+    expect(screen.queryByRole("button", { name: "Change avatar" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Remove")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Remove avatar" }));
+
+    await waitFor(() => expect(updateAvatar).toHaveBeenCalledWith(null));
+    expect(useAuthStore.getState().user?.avatarUrl).toBeNull();
+    expect(screen.getByRole("button", { name: "Change avatar" })).toBeInTheDocument();
   });
 
   it("hides inference usage when the user cannot use inference", () => {

@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { relayEndpoints, relayGrantSigningKeys, relayPolicyState, relayRoutes } from '@/db/schema/index.js';
-import { RelayPolicyService } from './relay-policy.service.js';
+import { managedDatabaseListenerConfigsEqual, RelayPolicyService } from './relay-policy.service.js';
 
-function createService(db: unknown, relay: { applySnapshot: ReturnType<typeof vi.fn> }) {
+function createService(
+  db: unknown,
+  relay: {
+    applySnapshot: ReturnType<typeof vi.fn>;
+    getRouteRuntime?: ReturnType<typeof vi.fn>;
+  }
+) {
   return new RelayPolicyService(
     db as never,
     {} as never,
@@ -22,6 +28,79 @@ function createService(db: unknown, relay: { applySnapshot: ReturnType<typeof vi
     relay as never
   );
 }
+
+describe('managed database listener equality', () => {
+  it('treats JSONB key and source ordering as semantically unchanged', () => {
+    const persisted = {
+      listenPort: 8123,
+      networkName: 'gateway-db-binding',
+      listenAddress: '172.28.0.1',
+      allowedSources: ['container:worker', 'container:api'],
+    };
+    const desired = {
+      networkName: 'gateway-db-binding',
+      listenAddress: '172.28.0.1',
+      listenPort: 8123,
+      allowedSources: ['container:api', 'container:worker'],
+    };
+
+    expect(managedDatabaseListenerConfigsEqual(persisted, desired)).toBe(true);
+  });
+
+  it('detects a listener routing change', () => {
+    const current = {
+      networkName: 'gateway-db-binding',
+      listenAddress: '172.28.0.1',
+      listenPort: 5432,
+      allowedSources: ['container:api'],
+    };
+
+    expect(managedDatabaseListenerConfigsEqual(current, { ...current, listenPort: 6379 })).toBe(false);
+    expect(
+      managedDatabaseListenerConfigsEqual(current, { ...current, allowedSources: ['container:other'] })
+    ).toBe(false);
+  });
+});
+
+describe('RelayPolicyService route runtime', () => {
+  it('reads managed database binding runtime from its owned Relay route', async () => {
+    const limit = vi.fn().mockResolvedValue([{ id: 'route-binding-1' }]);
+    const where = vi.fn(() => ({ limit }));
+    const from = vi.fn(() => ({ where }));
+    const db = { select: vi.fn(() => ({ from })) };
+    const getRouteRuntime = vi.fn().mockResolvedValue({
+      routeId: 'route-binding-1',
+      activeTunnels: '3',
+      openedTotal: '9',
+      completedTotal: '7',
+      failedTotal: '1',
+      throttledTotal: '2',
+      sourceToTargetBytes: '1024',
+      targetToSourceBytes: '2048',
+      setupLatencyP95Microseconds: '12500',
+      averageDurationMilliseconds: '350',
+      lastActivityUnixMilliseconds: '1787932800000',
+      metricsSinceUnixMilliseconds: '1787929200000',
+    });
+    const service = createService(db, { applySnapshot: vi.fn(), getRouteRuntime });
+
+    await expect(service.getManagedDatabaseBindingRouteRuntime('binding-1')).resolves.toEqual({
+      routeId: 'route-binding-1',
+      activeStreams: 3,
+      openedTotal: '9',
+      completedTotal: '7',
+      failedTotal: '1',
+      throttledTotal: '2',
+      sourceToTargetBytes: '1024',
+      targetToSourceBytes: '2048',
+      setupLatencyP95Ms: 12.5,
+      averageDurationMs: 350,
+      lastActivityAt: '2026-08-28T16:00:00.000Z',
+      metricsSince: '2026-08-28T15:00:00.000Z',
+    });
+    expect(getRouteRuntime).toHaveBeenCalledWith('route-binding-1');
+  });
+});
 
 describe('RelayPolicyService snapshots', () => {
   it('reads the complete snapshot in one read-only repeatable-read transaction', async () => {
@@ -136,6 +215,69 @@ describe('RelayPolicyService snapshots', () => {
     await service.refreshAllNodeGrantsIfDue();
 
     expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
+  });
+
+  it('serializes grant bundle generation and dispatch per node', async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() });
+    let releaseFirst!: () => void;
+    const firstDispatch = new Promise<{ success: true }>((resolve) => {
+      releaseFirst = () => resolve({ success: true });
+    });
+    const sendRelayGrantBundle = vi
+      .fn()
+      .mockReturnValueOnce(firstDispatch)
+      .mockResolvedValueOnce({ success: true });
+    service.setNodeDispatch({ sendRelayGrantBundle } as never);
+    const bundles = vi
+      .spyOn(service, 'getNodeGrantBundle')
+      .mockResolvedValueOnce({ revision: '7', generatedAtUnixMs: '100', grants: [] })
+      .mockResolvedValueOnce({ revision: '7', generatedAtUnixMs: '101', grants: [] });
+
+    const first = service.syncNodeGrantBundle('node-1');
+    await vi.waitFor(() => expect(sendRelayGrantBundle).toHaveBeenCalledOnce());
+    const second = service.syncNodeGrantBundle('node-1');
+    await Promise.resolve();
+
+    expect(bundles).toHaveBeenCalledOnce();
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(sendRelayGrantBundle.mock.calls.map((call) => call[1].generatedAtUnixMs)).toEqual(['100', '101']);
+  });
+
+  it('probes the managed database source route before declaring the binding usable', async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() });
+    const sendRelayGrantBundle = vi.fn().mockResolvedValue({ success: true });
+    const probeRelayCandidate = vi.fn().mockResolvedValue({ success: true });
+    service.setNodeDispatch({ sendRelayGrantBundle, probeRelayCandidate } as never);
+    const candidate = { relayInstanceId: 'relay-1', assignmentGeneration: '3' } as any;
+    const getNodeGrantBundle = vi.spyOn(service, 'getNodeGrantBundle').mockResolvedValue({
+      revision: '7',
+      generatedAtUnixMs: '100',
+      grants: [
+        {
+          role: 'connect',
+          ownerKind: 'managed_database_binding',
+          ownerId: '11111111-1111-4111-8111-111111111111',
+          routeId: 'route-1',
+          targetEndpointId: 'endpoint-1',
+          grant: 'signed-grant',
+          candidates: [candidate],
+        },
+      ],
+    } as any);
+
+    await service.syncNodeGrantBundle('node-1');
+    await service.probeManagedDatabaseBindingRoute('node-1', '11111111-1111-4111-8111-111111111111');
+
+    expect(getNodeGrantBundle).toHaveBeenCalledOnce();
+    expect(probeRelayCandidate).toHaveBeenCalledWith('node-1', {
+      probeId: '11111111-1111-4111-8111-111111111111',
+      role: 'source',
+      endpointId: 'endpoint-1',
+      routeId: 'route-1',
+      assignmentGeneration: '3',
+      candidate,
+    });
   });
 
   it('checks Relay Pool support without treating the internal registry local service as a node', async () => {

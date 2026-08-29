@@ -2,6 +2,15 @@ import { z } from '@hono/zod-openapi';
 
 const positiveInt = (min: number, max: number) => z.number().int().min(min).max(max);
 
+export const REQUEST_LIMIT_MAXIMUMS = {
+  requestBodyMaxBytes: 32 * 1024 * 1024,
+  oauthBodyMaxBytes: 1024 * 1024,
+  inferenceHttpBodyMaxBytes: 2048 * 1024 * 1024,
+  inferenceWebSocketMaxPayloadBytes: 512 * 1024 * 1024,
+  inferenceMaxConcurrentRequestsPerToken: 128,
+  inferenceConcurrencyLeaseSeconds: 2_400,
+} as const;
+
 export const RateLimitSettingsSchema = z
   .object({
     windowMs: positiveInt(1_000, 3_600_000),
@@ -39,12 +48,18 @@ export const LoggingIngestSettingsSchema = z
 
 export const RequestLimitSettingsSchema = z
   .object({
-    requestBodyMaxBytes: positiveInt(64 * 1024, 256 * 1024 * 1024),
-    oauthBodyMaxBytes: positiveInt(8 * 1024, 4 * 1024 * 1024),
-    inferenceHttpBodyMaxBytes: positiveInt(1024 * 1024, 256 * 1024 * 1024),
-    inferenceWebSocketMaxPayloadBytes: positiveInt(1024 * 1024, 50 * 1024 * 1024),
-    inferenceMaxConcurrentRequestsPerToken: positiveInt(1, 1_024),
-    inferenceConcurrencyLeaseSeconds: positiveInt(30, 3_600),
+    requestBodyMaxBytes: positiveInt(64 * 1024, REQUEST_LIMIT_MAXIMUMS.requestBodyMaxBytes),
+    oauthBodyMaxBytes: positiveInt(8 * 1024, REQUEST_LIMIT_MAXIMUMS.oauthBodyMaxBytes),
+    inferenceHttpBodyMaxBytes: positiveInt(1024 * 1024, REQUEST_LIMIT_MAXIMUMS.inferenceHttpBodyMaxBytes),
+    inferenceWebSocketMaxPayloadBytes: positiveInt(
+      1024 * 1024,
+      REQUEST_LIMIT_MAXIMUMS.inferenceWebSocketMaxPayloadBytes
+    ),
+    inferenceMaxConcurrentRequestsPerToken: positiveInt(
+      1,
+      REQUEST_LIMIT_MAXIMUMS.inferenceMaxConcurrentRequestsPerToken
+    ),
+    inferenceConcurrencyLeaseSeconds: positiveInt(30, REQUEST_LIMIT_MAXIMUMS.inferenceConcurrencyLeaseSeconds),
   })
   .strict();
 

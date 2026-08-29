@@ -13,6 +13,26 @@ interface NodesCardProps {
   loading?: boolean;
 }
 
+function dashboardNodePriority(node: Node): number {
+  const status = effectiveNodeStatus(node);
+  if (status === "offline" || status === "error") return 0;
+  if (status === "degraded") return 1;
+  if (status === "pending") return 2;
+  if (status === "online") return 3;
+  return 2;
+}
+
+export function sortDashboardNodes(nodes: Node[]): Node[] {
+  return [...nodes].sort((left, right) => {
+    const priorityDifference = dashboardNodePriority(left) - dashboardNodePriority(right);
+    if (priorityDifference !== 0) return priorityDifference;
+
+    const leftName = (left.displayName || left.hostname).toLowerCase();
+    const rightName = (right.displayName || right.hostname).toLowerCase();
+    return leftName.localeCompare(rightName) || left.id.localeCompare(right.id);
+  });
+}
+
 export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardProps) {
   // Keep the panel's geometry while its permitted data resolves, then omit it
   // entirely when there is nothing useful to show on the dashboard.
@@ -35,41 +55,43 @@ export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardPro
         </div>
       ) : nodesList.length > 0 ? (
         <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-          {nodesList.slice(0, 8).map((node) => (
-            <Link
-              key={node.id}
-              to={nodeRoute(node.slug)}
-              className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors"
-            >
-              <span className="text-sm font-medium truncate flex-1">
-                {node.displayName || node.hostname}
-              </span>
-              <Badge variant="secondary" size="inline" className="uppercase">
-                {nodeTypeLabel(node.type)}
-              </Badge>
-              {node.daemonVersion && (
-                <Badge variant="outline" size="inline" className="uppercase">
-                  {node.daemonVersion}
+          {sortDashboardNodes(nodesList)
+            .slice(0, 8)
+            .map((node) => (
+              <Link
+                key={node.id}
+                to={nodeRoute(node.slug)}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors"
+              >
+                <span className="text-sm font-medium truncate flex-1">
+                  {node.displayName || node.hostname}
+                </span>
+                <Badge variant="secondary" size="inline" className="uppercase">
+                  {nodeTypeLabel(node.type)}
                 </Badge>
-              )}
-              {(() => {
-                const s = effectiveNodeStatus(node);
-                const v =
-                  s === "online"
-                    ? "success"
-                    : s === "degraded"
-                      ? "warning"
-                      : s === "pending"
-                        ? "secondary"
-                        : "destructive";
-                return (
-                  <Badge variant={v} size="inline" className="uppercase">
-                    {s}
+                {node.daemonVersion && (
+                  <Badge variant="outline" size="inline" className="uppercase">
+                    {node.daemonVersion}
                   </Badge>
-                );
-              })()}
-            </Link>
-          ))}
+                )}
+                {(() => {
+                  const s = effectiveNodeStatus(node);
+                  const v =
+                    s === "online"
+                      ? "success"
+                      : s === "degraded"
+                        ? "warning"
+                        : s === "pending"
+                          ? "secondary"
+                          : "destructive";
+                  return (
+                    <Badge variant={v} size="inline" className="uppercase">
+                      {s}
+                    </Badge>
+                  );
+                })()}
+              </Link>
+            ))}
         </div>
       ) : null}
     </PanelShell>

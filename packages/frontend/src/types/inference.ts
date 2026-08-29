@@ -27,6 +27,30 @@ export interface InferenceSelfUsage {
   };
 }
 
+export interface InferenceUsageOverview {
+  windowDays: number;
+  requestTotals: Array<{
+    status: string;
+    requests: number;
+    credits: string;
+    apiMicrodollars: number;
+    tokens: number;
+  }>;
+  ledgerTotals: Array<{
+    budgetType: string;
+    credits: string;
+    apiMicrodollars: number;
+    tokens: number;
+  }>;
+  dailyUsage: Array<{
+    date: string;
+    requests: number;
+    credits: number;
+    apiMicrodollars: number;
+    tokens: number;
+  }>;
+}
+
 export interface InferenceProviderCatalogItem {
   id: string;
   label: string;
@@ -209,6 +233,11 @@ export interface InferenceLimitPolicy {
   billingTimezone: string;
 }
 
+export interface InferenceLimitResetResult {
+  resetAt: string;
+  usage: NonNullable<InferenceUserUsage["usage"]>;
+}
+
 export interface InferenceUserUsage {
   id: string;
   email: string;
@@ -284,29 +313,7 @@ export interface InferenceActivityFilters {
   models: string[];
 }
 
-export interface InferenceSystemUsage {
-  windowDays: number;
-  requestTotals: Array<{
-    status: string;
-    requests: number;
-    credits: string;
-    apiMicrodollars: number;
-    tokens: number;
-  }>;
-  ledgerTotals: Array<{
-    budgetType: string;
-    credits: string;
-    apiMicrodollars: number;
-    tokens: number;
-  }>;
-  dailyUsage: Array<{
-    date: string;
-    requests: number;
-    credits: number;
-    apiMicrodollars: number;
-    tokens: number;
-  }>;
-}
+export type InferenceSystemUsage = InferenceUsageOverview;
 
 export interface InferenceLimitInput {
   enabled: boolean;

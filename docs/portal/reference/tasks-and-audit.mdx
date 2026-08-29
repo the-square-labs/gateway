@@ -1,0 +1,19 @@
+---
+title: Tasks, events, and audit
+description: Interpret long-running operation state and immutable security history.
+section: Reference
+order: 4
+audience: [operator, security-admin, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Tasks, events, and audit
+
+**Tasks** represent durable long-running work such as builds, deployments, migrations, imports, provisioning, and updates. Follow status, progress, logs, error code, and retry/cancel availability. Do not start duplicates merely because a browser disconnected.
+
+**Events** update live UI state and trigger supported operational workflows. Consumers must revalidate authorization and tolerate reconnect or replay boundaries.
+
+**Audit records** attribute security- and configuration-relevant actions to users or system actors. User blocking or deletion does not remove historical attribution. Export to SIEM when independent retention or correlation is required.
+
+Audit details should identify the action and resource without storing secrets, raw credentials, private keys, prompts, or model output.

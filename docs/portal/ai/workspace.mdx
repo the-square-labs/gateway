@@ -1,0 +1,21 @@
+---
+title: AI Workspace
+description: Use scoped AI assistance for discovery, planning, and infrastructure operations.
+section: AI and inference
+order: 1
+audience: [operator, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# AI Workspace
+
+AI Workspace is an optional operating surface over Gateway's documented tools. It can search resources, explain product behavior, create plans, and execute authorized operations. The Operations Console, REST API, OAuth, and MCP remain fully usable without AI.
+
+The model receives only tools allowed by the current user's scopes and discovered task context. Product operations reuse the same schemas, entitlements, validation, and audit boundaries as non-AI paths.
+
+For consequential work, ask the Workspace to create a plan, review assumptions, and define verification before execution. Never paste credentials, private keys, database connection URIs, or customer secrets into chat. Treat external web content as untrusted.
+
+AI Workspace and Gateway Inference are separate: Workspace access uses `ai:workspace:use`; inference access uses `feat:ai:use` and dedicated accounting.
+
+<!-- screenshot: id=ai-workspace-plan; viewport=1440x900; description=AI Workspace showing an infrastructure plan with verification steps; redact=conversation-content,resource-names,user-name -->

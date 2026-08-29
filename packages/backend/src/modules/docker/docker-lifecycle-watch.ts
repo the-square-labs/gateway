@@ -126,7 +126,10 @@ export function watchDockerRecreateByName(
       });
 
       const canEvaluateReplacement =
-        !daemonTaskId || daemonTaskStatus === 'succeeded' || daemonTaskStatus === 'unsupported';
+        !daemonTaskId ||
+        daemonTaskStatus === 'running' ||
+        daemonTaskStatus === 'succeeded' ||
+        daemonTaskStatus === 'unsupported';
       if (match && canEvaluateReplacement) {
         const newId = match.id ?? match.Id;
         const state = match.state ?? match.State ?? '';

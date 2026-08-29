@@ -102,7 +102,7 @@ Installer запускает Gateway и выводит одноразовый к
 | Integrations | GitLab workflows для projects, repositories, CI/CD, variables, webhooks, registry и sandbox; GitHub repositories и Actions; generic Git connectors; external SSH connectors; Cloudflare DNS/ACME automation. Credentials connectors шифруются, а доступ ограничен scopes. |
 | Relay | Long-lived local relay владеет публичным `9443/tcp` для daemon control и managed tunnel traffic. Relay Pool добавляет remote supervisor/worker pairs, явное placement и rebalancing, drain и rolling signed updates, сохраняя один логический Secure Link. |
 | AI Workspace | Опциональные intent-driven operations с готовыми Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, отслеживанием прогресса и финальной проверкой. До явного подтверждения планирование не выполняет изменений. |
-| Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@sqgateway/inference`. |
+| Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, capability-compatible cross-provider fallback до начала output, OpenAI- и Anthropic-compatible API и управляемой настройкой Codex или Claude Code с опциональным user-session auto-start через `@sqgateway/inference`. |
 | Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
 
 ## Как это работает

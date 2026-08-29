@@ -1,0 +1,133 @@
+export const GUIDE_DOCS: Record<string, string> = {
+  overview: `# Gateway Overview
+
+Gateway is a self-hosted infrastructure control plane. It combines secure access management with operations for reverse proxies, Pages, certificates, compute, databases, observability, and integrations.
+
+## Main Capabilities
+- **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.
+- **Traffic, Pages, and certificates**: nginx ingress nodes, proxy/redirect/404 routes, Pages Projects/Deployments/Tags, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
+- **Compute**: Docker nodes, containers, Compose projects, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
+- **Databases and logging**: saved PostgreSQL, Redis, and ClickHouse connections; dedicated nodes for Gateway-managed database instances; optional structured logging in managed or external ClickHouse.
+- **Operations**: daemon and Relay Pool health, notifications, housekeeping, status pages, updates, licensing, GitLab/GitHub/generic Git/external SSH/Cloudflare integrations, and a separate Gateway Inference service.
+
+## Availability Boundaries
+Single-node first-class Compose Projects provide read-only discovery, monitoring, and logs on Community and every paid plan; deployment and lifecycle management require Personal or higher. Horizontal application clusters and multiple instances of one workload on one machine remain in development. Existing Compose Projects, cross-node migration, and blue/green slots must not be described as those unreleased scaling capabilities.
+
+## How To Guide A User
+Start with the user goal, then read the focused topic before explaining a workflow or calling tools. Use installation for a new deployment, authentication for access/sign-in questions, gateway-settings for control-plane settings and MCP, and troubleshooting for failures. A feature being described here does not grant permission to view or change it; always respect the user's scopes and confirm destructive changes.
+
+## Dashboard Attention And Pins
+- The Dashboard sidebar item can show a **12px square attention badge**. Blue means the Dashboard has only informational cards, such as an unfinished setup checklist. Yellow means at least one warning card is visible; this includes red/unhealthy resource states, certificate expiry, low node capacity, MFA reminders, update/logging/inference warnings, and unhealthy pinned database or Docker resources. No badge means there are no visible information or warning cards for the current user.
+- The Dashboard is one user-scoped bootstrap snapshot. Do not describe the badge as an unread notification count or as a system-wide state: it reflects only cards visible to the signed-in user and their permissions.
+- Nodes, routes, databases, Docker containers, and Docker deployments can each be pinned independently to the **Dashboard**, the **Sidebar**, or both. A Dashboard pin adds a compact card; a Sidebar pin adds a quick-access link. Removing one placement must not remove the other.
+- When a user asks where to pin something, explain this distinction and recommend Dashboard for operational status and Sidebar for frequent navigation.
+- In the embedded Gateway Assistant, resolve the resource with \`find_resource\` first, then use \`set_resource_pin\` with an explicit \`target\` and \`pinned\` value. Docker pins also need \`nodeId\`, \`nodeSlug\`, and the resource \`name\`. This tool changes only the current browser session's saved layout preference and is intentionally unavailable through MCP.`,
+
+  installation: `# Installing And First-Time Setup
+
+## Install
+Use the release installer. It installs Gateway and starts it with native HTTPS by default. Supported installer options are --install-dir, --image, --source-dir, --http, --https, and --dry-run. The installer does not collect a domain, nginx, Cloudflare, OIDC, SMTP, or ClickHouse configuration.
+
+## Browser Setup Wizard
+After the stack becomes healthy, the installer prints the Gateway URL, System CA SHA-256 fingerprint, a one-time setup code valid for 24 hours, and a reset command. The plaintext code appears only in installer output. Until the wizard completes, normal product and auth APIs return SETUP_REQUIRED.
+
+The wizard requires:
+1. An explicit canonical public URL.
+2. One or more sign-in methods: OIDC, password, and/or email one-time code.
+3. OIDC settings when selected, and verified SMTP for an email-based method.
+4. Exactly one first administrator and one primary sign-in method for that account.
+5. Structured logging mode: disabled, Gateway-managed local ClickHouse, or external ClickHouse.
+
+## HTTPS And Reverse Proxy
+Native HTTP and HTTPS both listen on port 3000. Native HTTPS uses a Gateway System CA leaf certificate. A reverse proxy may connect over either protocol; when it verifies the HTTPS upstream, configure it to trust the Gateway System CA. Public certificates, DNS, Cloudflare, and ACME are configured after setup, not by the installer or wizard.
+
+## Safe Advice
+Never ask a user to paste a setup code, password, API token, private key, or SMTP/OIDC secret into chat. Explain where it is entered in the UI instead. For a failed install or wizard, use the troubleshooting topic before suggesting recovery steps.`,
+
+  authentication: `# Authentication And User Access
+
+## Sign-In Methods
+Gateway can enable OIDC, password, and email one-time-code sign-in independently. Email-based sign-in requires verified SMTP. Passkeys can be added by an already signed-in user and are not a first-run primary method.
+
+## First Administrator
+The browser setup wizard creates exactly one explicit first administrator in the built-in system-admin group. Gateway does not promote an arbitrary first OIDC user. The setup code is one-time and expires after 24 hours; it must not be shared or stored in chat.
+
+## OIDC
+Configure issuer URL, client ID, client secret, requested scopes, optional automatic user creation, default group, and optional verified-email enforcement in Gateway settings. OIDC users are bound to their provider subject after the first login. When verified-email enforcement is enabled, Gateway requires the provider's verified-email assertion for future auto-provisioning and matching flows.
+
+## Accounts And Permissions
+Each user belongs to one permission group and may have permitted per-user scope overrides. Groups, scopes, resource restrictions, API tokens, OAuth authorizations, and MCP access determine what a user can do. Do not imply that a successful sign-in grants administration access.
+
+## Support Rules
+Use the Login/Profile UI for password, email-code, passkey, and token flows. Do not reveal, request, or copy secrets. If authentication is unavailable, check SMTP/OIDC configuration, the canonical URL, and the relevant audit or application logs; use troubleshooting for the ordered diagnostic path.`,
+
+  cloudflare: `# Cloudflare Integration
+
+Gateway Cloudflare connectors securely store an encrypted API token, synchronize available DNS zones, and support Gateway domain management plus automated DNS-01 ACME flows.
+
+## Setup
+Create a connector in the Cloudflare integration UI or through the authenticated Gateway API, provide a token with only the required zone and DNS permissions, then test and synchronize it. Do not ask users to paste the token into chat and do not expose its value after creation.
+
+## What It Enables
+- Gateway domains can create, adopt, inspect, and—when authorized—delete Cloudflare A/AAAA records.
+- DNS-01 certificates can create and clean up TXT records automatically when one enabled connector has an unambiguous matching zone.
+- A wildcard certificate or a deployment where port 80 is unavailable usually needs DNS-01.
+
+## Constraints And Diagnostics
+If no enabled connector has a matching zone, DNS-01 cannot be automated. If several connectors match, resolve the ambiguity rather than choosing one silently. Existing DNS records with a different target require explicit approval before overwrite. Use connector test/sync, zone status, and DNS propagation checks before retrying certificate issuance. If the API token is already present in the user's current request, create_cloudflare_connector can create the connector under approval; otherwise open the concrete Cloudflare setup flow and keep the secret out of chat history.`,
+
+  'docker-registries': `# Docker Registries
+
+Gateway stores private Docker registry credentials encrypted at rest. A registry may be global or restricted to a specific Docker node; use only a registry available to the selected node when pulling, recreating, or deploying an image.
+
+The Gateway-managed internal Distribution registry is separate from user-saved registry credentials. It has no host-published port by default, keeps three successful artifacts plus live pins, and is configured under Settings > Features. Do not ask for a domain unless the user explicitly wants external Docker-client access; internal builder/runtime traffic uses scoped daemon-managed Relay bindings.
+
+Public Docker Hub images such as \`nginx:alpine\` do not require a saved registry. Pull them directly with \`registryId\` omitted. Never create a manual Docker Hub registry merely to pull a public image, and never pass an empty string as \`registryId\`.
+
+## Configuration
+Use the Docker registry UI or REST API to create, test, edit, or remove a registry. Viewing requires docker:registries:view; create, edit, and delete operations require the corresponding docker:registries scope. Integration-managed registry records, such as GitLab-provided credentials, cannot be edited as ordinary registries.
+
+## Safe Use
+Credentials are never returned after storage and must not be pasted into chat, logs, templates, or container environment variables. For Bearer token authentication, Gateway sends credentials only to a token service on the same HTTPS registry host or an explicitly configured trusted HTTPS token-service origin. Do not weaken this protection merely to make a pull succeed.
+
+## Troubleshooting
+First confirm the registry is enabled, available for the selected node, and passes its connection test. Then verify the image reference and node connectivity. A missing-credential failure may mean a GitLab integration exists but has no usable registry credentials; configure it in the integration rather than replacing it with an unrelated secret.`,
+
+  clickhouse: `# ClickHouse In Gateway
+
+Gateway supports ClickHouse as a saved external database connection, a Gateway-managed database instance on a dedicated database node, or the optional structured-logging backend.
+
+## Access And Connectivity
+External ClickHouse connections require an HTTP(S) URL or host plus database and username. Managed instances are private by default. Application bindings use the private connector and authenticated Gateway tunnel; do not present a binding as direct TCP access or disclose its injected credentials.
+
+Published managed ClickHouse uses TLS and exposes HTTPS plus a native TLS endpoint. Gateway provides the Database CA certificate/fingerprint with direct credentials and supports certificate rotation after a node IP change. Publishing is an explicit infrastructure choice, not a default.
+
+## Data Operations
+Gateway provides schema/table browsing, a SQL console, monitoring, and conditional row operations when the selected table supports them. Do not promise arbitrary inline updates or deletes: ClickHouse mutations can be unsupported for a table and must fail closed. Do not use database tools to claim that Gateway can deploy, bind, publish, or reveal managed-instance credentials unless a matching guarded operation is available.
+
+## Structured Logging
+Structured logging can be disabled, use Gateway-managed local ClickHouse, or use an external ClickHouse connection. It is configured separately from ordinary saved database connections in Gateway settings.`,
+
+  troubleshooting: `# Gateway Troubleshooting
+
+## Start With Evidence
+Identify the failing surface, read its focused internal topic, and inspect the current Gateway state before proposing a change. Do not ask for or expose secrets, raw credentials, private keys, setup codes, full daemon errors, or unredacted logs. Prefer health/status tools, audit records, and sanitized operational logs.
+
+## First Setup Or Sign-In
+- Setup blocked: confirm the one-time setup code is within its 24-hour lifetime and use the installer-provided reset command when it has expired. Normal APIs remain locked until the wizard completes.
+- Sign-in failure: distinguish OIDC, password, and email-code methods. Check OIDC issuer/client settings and verified-email policy, or verified SMTP for email-based sign-in. Do not claim OIDC is mandatory.
+- Browser URL problem: confirm the explicit canonical URL and whether the browser reaches Gateway directly or through a reverse proxy. Native HTTP/HTTPS use port 3000.
+
+## Nodes, Ingress, And Certificates
+- Offline node: inspect node health and reconnect status before retrying a mutation.
+- Route failure: verify its nginx ingress node, domain affinity, upstream reachability, published Docker port where applicable, and rendered configuration. Do not disable a route to imitate maintenance mode.
+- ACME failure: for HTTP-01 verify public port 80 and DNS; for DNS-01 verify the matching Cloudflare connector/zone and TXT propagation. Use staging for safe certificate-flow tests.
+
+## Docker, Databases, And Integrations
+- Docker pull failure: validate the node, image reference, registry availability, and registry credentials before changing a registry trust policy.
+- Database failure: distinguish a saved external connection from a private managed instance. Check health and TLS/connection settings; do not copy binding credentials or publish an endpoint as a workaround.
+- Cloudflare failure: test and synchronize the connector, then resolve missing or ambiguous zones explicitly.
+
+## Escalation
+If evidence is insufficient, state what could be verified and direct an administrator with the needed scope to the relevant UI or logs. Never invent a successful recovery, current version, or available tool.`,
+};

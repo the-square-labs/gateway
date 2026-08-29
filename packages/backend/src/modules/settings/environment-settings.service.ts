@@ -9,6 +9,7 @@ import {
   EnvironmentSettingsSchema,
   type EnvironmentSettingsUpdate,
   EnvironmentSettingsUpdateSchema,
+  REQUEST_LIMIT_MAXIMUMS,
 } from './environment-settings.schemas.js';
 
 const SETTINGS_KEY = 'environment:settings';
@@ -47,7 +48,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     requestBodyMaxBytes: 2_097_152,
     oauthBodyMaxBytes: 32_768,
     inferenceHttpBodyMaxBytes: 256 * 1024 * 1024,
-    inferenceWebSocketMaxPayloadBytes: 50 * 1024 * 1024,
+    inferenceWebSocketMaxPayloadBytes: 128 * 1024 * 1024,
     inferenceMaxConcurrentRequestsPerToken: 32,
     inferenceConcurrencyLeaseSeconds: 600,
   },
@@ -135,10 +136,33 @@ export function getEnvironmentSettingsSnapshot(): EnvironmentSettings {
 function normalizeEnvironmentSettings(value: unknown): EnvironmentSettings {
   if (!value || typeof value !== 'object') return structuredClone(DEFAULT_ENVIRONMENT_SETTINGS);
   const stored = value as Partial<EnvironmentSettings>;
+  const requestLimits = {
+    ...DEFAULT_ENVIRONMENT_SETTINGS.requestLimits,
+    ...stored.requestLimits,
+  };
   return EnvironmentSettingsSchema.parse({
     rateLimits: { ...DEFAULT_ENVIRONMENT_SETTINGS.rateLimits, ...stored.rateLimits },
     loggingIngest: { ...DEFAULT_ENVIRONMENT_SETTINGS.loggingIngest, ...stored.loggingIngest },
-    requestLimits: { ...DEFAULT_ENVIRONMENT_SETTINGS.requestLimits, ...stored.requestLimits },
+    requestLimits: {
+      requestBodyMaxBytes: Math.min(requestLimits.requestBodyMaxBytes, REQUEST_LIMIT_MAXIMUMS.requestBodyMaxBytes),
+      oauthBodyMaxBytes: Math.min(requestLimits.oauthBodyMaxBytes, REQUEST_LIMIT_MAXIMUMS.oauthBodyMaxBytes),
+      inferenceHttpBodyMaxBytes: Math.min(
+        requestLimits.inferenceHttpBodyMaxBytes,
+        REQUEST_LIMIT_MAXIMUMS.inferenceHttpBodyMaxBytes
+      ),
+      inferenceWebSocketMaxPayloadBytes: Math.min(
+        requestLimits.inferenceWebSocketMaxPayloadBytes,
+        REQUEST_LIMIT_MAXIMUMS.inferenceWebSocketMaxPayloadBytes
+      ),
+      inferenceMaxConcurrentRequestsPerToken: Math.min(
+        requestLimits.inferenceMaxConcurrentRequestsPerToken,
+        REQUEST_LIMIT_MAXIMUMS.inferenceMaxConcurrentRequestsPerToken
+      ),
+      inferenceConcurrencyLeaseSeconds: Math.min(
+        requestLimits.inferenceConcurrencyLeaseSeconds,
+        REQUEST_LIMIT_MAXIMUMS.inferenceConcurrencyLeaseSeconds
+      ),
+    },
     sessions: { ...DEFAULT_ENVIRONMENT_SETTINGS.sessions, ...stored.sessions },
     pkiDefaults: { ...DEFAULT_ENVIRONMENT_SETTINGS.pkiDefaults, ...stored.pkiDefaults },
   });

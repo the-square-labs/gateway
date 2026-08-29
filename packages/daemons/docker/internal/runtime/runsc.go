@@ -131,11 +131,12 @@ func (m *Manager) Preflight(ctx context.Context) Status {
 	_ = service
 
 	status.RemoteInstallable = os.Geteuid() == 0
-	installedVersion, runscFound := installedRunscVersion(ctx)
+	runscPath := filepath.Join(m.InstallDir, "runsc")
+	installedVersion, runscFound := installedRunscVersion(ctx, runscPath)
 	status.InstalledVersion = installedVersion
 	registered, currentConfig, configErr := runscDockerConfigStatus(
 		m.DockerConfig,
-		filepath.Join(m.InstallDir, "runsc"),
+		runscPath,
 	)
 	if configErr != nil {
 		status.State = StateFailed
@@ -428,9 +429,8 @@ func isLocalDockerHost(host string) bool {
 	return host == "" || strings.HasPrefix(host, "unix://") || strings.HasPrefix(host, "/")
 }
 
-func installedRunscVersion(ctx context.Context) (string, bool) {
-	path, err := exec.LookPath("runsc")
-	if err != nil {
+func installedRunscVersion(ctx context.Context, path string) (string, bool) {
+	if _, err := os.Stat(path); err != nil {
 		return "", false
 	}
 	output, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()

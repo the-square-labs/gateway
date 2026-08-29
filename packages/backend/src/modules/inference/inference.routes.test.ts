@@ -442,6 +442,26 @@ describe('inference management token routes', () => {
     expect(text).not.toMatch(/credits|microdollars|tokens|price/i);
   });
 
+  it('returns 30-day usage totals scoped to the current user', async () => {
+    registerSession(USER);
+    const overview = {
+      windowDays: 30,
+      requestTotals: [{ status: 'completed', requests: 4, credits: '2', apiMicrodollars: 100, tokens: 500 }],
+      ledgerTotals: [{ budgetType: 'api', credits: '2', apiMicrodollars: 100, tokens: 500 }],
+      dailyUsage: [{ date: '2026-08-28', requests: 4, credits: 2, apiMicrodollars: 100, tokens: 500 }],
+    };
+    const selfOverview = vi.fn().mockResolvedValue(overview);
+    container.registerInstance(InferenceUsageService, { selfOverview } as unknown as InferenceUsageService);
+
+    const response = await createApp().request('/api/inference/usage/self/overview', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(overview);
+    expect(selfOverview).toHaveBeenCalledWith(expect.objectContaining({ id: USER.id }));
+  });
+
   it('accepts independently disabled rolling windows in the default limit policy', async () => {
     const limitsAdmin = { ...USER, scopes: [...USER.scopes, 'inference:limits:manage'] };
     registerSession(limitsAdmin);
@@ -471,6 +491,26 @@ describe('inference management token routes', () => {
 
     expect(response.status).toBe(200);
     expect(service.setDefault).toHaveBeenCalledWith(limitsAdmin.id, payload);
+  });
+
+  it('resets all usage windows for one user', async () => {
+    const limitsAdmin = { ...USER, scopes: [...USER.scopes, 'inference:limits:manage'] };
+    registerSession(limitsAdmin);
+    const service = {
+      resetUserLimits: vi.fn().mockResolvedValue({
+        resetAt: '2026-08-28T12:00:00.000Z',
+        usage: { credits5h: 0, credits7d: 0, credits30d: 0, apiMonthlyMicrodollars: 0, recoveryAt: {} },
+      }),
+    };
+    container.registerInstance(InferenceUsageService, service as unknown as InferenceUsageService);
+
+    const response = await createApp().request(`/api/inference/limits/users/${USER.id}/reset`, {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'X-CSRF-Token': 'csrf-token' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(service.resetUserLimits).toHaveBeenCalledWith(limitsAdmin.id, USER.id);
   });
 
   it('lets limits-only administrators list users without receiving usage data', async () => {

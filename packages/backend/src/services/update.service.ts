@@ -12,7 +12,7 @@ import {
   releaseNotes,
   releaseUrl,
 } from '@/lib/release-artifacts.js';
-import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
+import { compareSemver, isNewerVersion, isReleaseCandidateVersion, parseSemver } from '@/lib/semver.js';
 import type { TrustedDaemonUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
   type TrustedGatewayUpdateArtifact,
@@ -21,6 +21,7 @@ import {
   verifyRelayImageManifest,
 } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { GeneralSettingsService, UpdateChannel } from '@/modules/settings/general-settings.service.js';
 import type { DockerService } from './docker.service.js';
 
 const logger = createChildLogger('UpdateService');
@@ -105,9 +106,9 @@ export function isRelayTooOldForGatewayUpdate(relayVersion: string, targetVersio
   const current = parseSemver(relayVersion);
   const target = parseSemver(targetVersion);
   if (!current || !target) return false;
-  if (current[0] < target[0]) return true;
-  if (current[0] > target[0]) return false;
-  return target[1] - current[1] >= 2;
+  if (current.major < target.major) return true;
+  if (current.major > target.major) return false;
+  return target.minor - current.minor >= 2;
 }
 
 export function isGatewayCompatibleWithRelayUpdate(currentVersion: string, minGatewayVersion: string): boolean {
@@ -137,14 +138,22 @@ export class UpdateService {
     private readonly db: DrizzleClient,
     private readonly dockerService: DockerService,
     private readonly env: Env,
-    private readonly relayRuntime?: RelayUpdateRuntime
+    private readonly relayRuntime?: RelayUpdateRuntime,
+    private readonly generalSettings?: GeneralSettingsService
   ) {
     this.releasesUrl = this.env.RELEASES_API_URL;
   }
 
+  private async getUpdateChannel(): Promise<UpdateChannel> {
+    return (await this.generalSettings?.getConfig())?.updateChannel ?? 'stable';
+  }
+
   private async fetchReleases(): Promise<ReleaseRecord[]> {
-    logger.debug('Checking release provider for updates', { url: this.releasesUrl });
-    const response = await fetch(this.releasesUrl, {
+    const channel = await this.getUpdateChannel();
+    const url = new URL(this.releasesUrl);
+    url.searchParams.set('channel', channel);
+    logger.debug('Checking release provider for updates', { url: url.toString(), channel });
+    const response = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
     });
@@ -154,11 +163,13 @@ export class UpdateService {
 
   private async fetchNextRelease(
     component: 'gateway' | 'relay',
-    currentVersion: string
+    currentVersion: string,
+    channel: UpdateChannel
   ): Promise<ReleaseRecord | null> {
     const url = new URL(this.releasesUrl);
     url.searchParams.set('component', component);
     url.searchParams.set('current', currentVersion);
+    url.searchParams.set('channel', channel);
     const response = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
@@ -231,6 +242,7 @@ export class UpdateService {
 
   async getCachedStatus(): Promise<UpdateStatus> {
     const currentVersion = this.getCurrentVersion();
+    const updateChannel = await this.getUpdateChannel();
 
     const allRows = await this.db
       .select()
@@ -239,11 +251,19 @@ export class UpdateService {
 
     const map = new Map(allRows.map((r) => [r.key, r.value as string]));
 
-    const latestVersion = map.get(SETTINGS_KEYS.latestVersion) ?? null;
+    const cachedLatestVersion = map.get(SETTINGS_KEYS.latestVersion) ?? null;
+    const latestVersion =
+      updateChannel === 'stable' && cachedLatestVersion && isReleaseCandidateVersion(cachedLatestVersion)
+        ? null
+        : cachedLatestVersion;
     const gatewayUpdateAvailable =
       currentVersion !== 'dev' && latestVersion != null ? isNewerVersion(latestVersion, currentVersion) : false;
     const currentRelayVersion = this.env.GATEWAY_RELAY_BUILD_VERSION ?? 'unknown';
-    const latestRelayVersion = map.get(SETTINGS_KEYS.relayLatestVersion) ?? null;
+    const cachedLatestRelayVersion = map.get(SETTINGS_KEYS.relayLatestVersion) ?? null;
+    const latestRelayVersion =
+      updateChannel === 'stable' && cachedLatestRelayVersion && isReleaseCandidateVersion(cachedLatestRelayVersion)
+        ? null
+        : cachedLatestRelayVersion;
     const relayMinGatewayVersion = map.get(SETTINGS_KEYS.relayMinGatewayVersion) ?? null;
     const relayUpdateAvailable =
       currentRelayVersion !== 'dev' &&
@@ -262,15 +282,15 @@ export class UpdateService {
       currentVersion,
       latestVersion,
       updateAvailable,
-      releaseNotes: map.get(SETTINGS_KEYS.releaseNotes) ?? null,
-      releaseUrl: map.get(SETTINGS_KEYS.releaseUrl) ?? null,
+      releaseNotes: latestVersion ? (map.get(SETTINGS_KEYS.releaseNotes) ?? null) : null,
+      releaseUrl: latestVersion ? (map.get(SETTINGS_KEYS.releaseUrl) ?? null) : null,
       lastCheckedAt: map.get(SETTINGS_KEYS.lastCheckedAt) ?? null,
       relay: {
         currentVersion: currentRelayVersion,
         latestVersion: latestRelayVersion,
         updateAvailable: relayUpdateAvailable,
-        releaseNotes: map.get(SETTINGS_KEYS.relayReleaseNotes) ?? null,
-        releaseUrl: map.get(SETTINGS_KEYS.relayReleaseUrl) ?? null,
+        releaseNotes: latestRelayVersion ? (map.get(SETTINGS_KEYS.relayReleaseNotes) ?? null) : null,
+        releaseUrl: latestRelayVersion ? (map.get(SETTINGS_KEYS.relayReleaseUrl) ?? null) : null,
         operation: durableOperation ?? this.relayUpdateOperation,
       },
     };
@@ -305,14 +325,17 @@ export class UpdateService {
 
     try {
       const currentRelayVersion = this.env.GATEWAY_RELAY_BUILD_VERSION ?? currentVersion;
+      const updateChannel = await this.getUpdateChannel();
       const [latest, latestRelay] = await Promise.all([
-        this.fetchNextRelease('gateway', currentVersion),
-        this.fetchNextRelease('relay', currentRelayVersion),
+        this.fetchNextRelease('gateway', currentVersion, updateChannel),
+        this.fetchNextRelease('relay', currentRelayVersion, updateChannel),
       ]);
       if (latest) {
         await this.upsertSetting(SETTINGS_KEYS.latestVersion, latest.tag_name);
         await this.upsertSetting(SETTINGS_KEYS.releaseNotes, releaseNotes(latest));
         await this.upsertSetting(SETTINGS_KEYS.releaseUrl, releaseUrl(latest));
+      } else {
+        await this.deleteSettings([SETTINGS_KEYS.latestVersion, SETTINGS_KEYS.releaseNotes, SETTINGS_KEYS.releaseUrl]);
       }
       if (latestRelay) {
         const relayVersion = latestRelay.tag_name.replace(/-relay$/, '');
@@ -321,6 +344,13 @@ export class UpdateService {
         await this.upsertSetting(SETTINGS_KEYS.relayReleaseNotes, releaseNotes(latestRelay));
         await this.upsertSetting(SETTINGS_KEYS.relayReleaseUrl, releaseUrl(latestRelay));
         await this.upsertSetting(SETTINGS_KEYS.relayMinGatewayVersion, relayArtifact.minGatewayVersion);
+      } else {
+        await this.deleteSettings([
+          SETTINGS_KEYS.relayLatestVersion,
+          SETTINGS_KEYS.relayReleaseNotes,
+          SETTINGS_KEYS.relayReleaseUrl,
+          SETTINGS_KEYS.relayMinGatewayVersion,
+        ]);
       }
       if (!latest && !latestRelay) logger.debug('No Gateway or relay releases found');
       return this.getCachedStatus();
@@ -1152,6 +1182,10 @@ backup="$FOUNDATION_BACKUP_DIR"
         target: settings.key,
         set: { value, updatedAt: new Date() },
       });
+  }
+
+  private async deleteSettings(keys: string[]): Promise<void> {
+    await this.db.delete(settings).where(inArray(settings.key, keys));
   }
 }
 

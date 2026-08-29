@@ -1,0 +1,19 @@
+---
+title: Database operations
+description: Monitor health, use logs and consoles, back up data, and recover failed bindings.
+section: Databases
+order: 4
+audience: [database-operator, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Database operations
+
+Monitor engine health, node availability, storage growth, latency, connection pressure, and binding state. A paused instance intentionally disables health, metrics, Explorer, and Console until unpaused.
+
+Use logs for startup, storage, authentication, and recovery errors. Use Explorer or Console only with the required read/write/admin scope, and avoid running unbounded production queries through an operator UI.
+
+Back up database data with an engine-appropriate method and test restore on a separate target. Gateway configuration backups do not replace PostgreSQL/Redis/ClickHouse data backups.
+
+For a failed binding, check in order: Relay health, database node, target Docker node, database readiness, binding desired state, connector identity, and engine principal. Prefer reconciliation or retry over deleting containers or roles manually.

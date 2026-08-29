@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
 import { InferenceProviderRegistry } from '../providers/inference-provider.registry.js';
-import { InferenceModelService } from './inference-model.service.js';
+import { __testOnly, InferenceModelService } from './inference-model.service.js';
 
 const MODEL = {
   id: 'model-1',
@@ -182,5 +182,40 @@ describe('inference model availability — live discovered sources', () => {
   it('exposes a subscription-backed live source without an API budget', async () => {
     const { availability } = availabilityService([{ modelId: 'model-1', sourceType: 'subscription' }], 0);
     await expect(availability).resolves.toEqual({ modelIds: ['model-1'], apiUsageEnabled: false });
+  });
+});
+
+describe('inference model capability characterization', () => {
+  it('intersects enabled primary capabilities and names limiting sources', () => {
+    const sourceRow = (
+      name: string,
+      upstreamModelId: string,
+      capabilities: Record<string, boolean>,
+      options: { enabled?: boolean; role?: 'primary' | 'vision_sidecar' } = {}
+    ) => ({
+      source: {
+        enabled: options.enabled ?? true,
+        upstreamModelId,
+        capabilitiesOverride: null,
+        metadata: { composition: { role: options.role ?? 'primary' } },
+      },
+      connection: { name, providerId: 'custom' },
+      discovered: { modalities: ['text'], capabilities },
+    });
+
+    expect(
+      __testOnly.detectedCapabilityState(
+        { tools: true, vision: true },
+        [
+          sourceRow('Primary A', 'model-a', { tools: true, vision: true }),
+          sourceRow('Primary B', 'model-b', { tools: true, vision: false }),
+          sourceRow('Disabled', 'model-disabled', { tools: false, vision: false }, { enabled: false }),
+          sourceRow('Sidecar', 'model-sidecar', { tools: false, vision: true }, { role: 'vision_sidecar' }),
+        ] as never
+      )
+    ).toEqual({
+      effective: { tools: true, vision: false },
+      limitations: { vision: ['Primary B · model-b'] },
+    });
   });
 });

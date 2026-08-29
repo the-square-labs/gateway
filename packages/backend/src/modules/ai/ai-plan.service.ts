@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNotNull, max } from 'drizzle-orm';
-import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
+import type { DrizzleClient } from '@/db/client.js';
 import {
   type AIPlan,
   type AIPlanChangeSummary,
@@ -17,6 +17,8 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AIPlanRuntimeSnapshot } from './ai.types.js';
+import { cleanOptionalPlanValue as cleanOptional, cleanPlanStrings as cleanStrings } from './ai-plan-input.js';
+import { requireAcceptedRevision } from './ai-plan-revision.js';
 
 const ACTIVE_PLAN_STATUSES: AIPlan['status'][] = [
   'drafting',
@@ -779,24 +781,4 @@ export class AIPlanService {
       .set({ ...update, activeTimeMs: plan.activeTimeMs + elapsed, activeSince: null, updatedAt: now })
       .where(eq(aiPlans.id, plan.id));
   }
-}
-
-async function requireAcceptedRevision(db: DrizzleExecutor, planId: string) {
-  const [revision] = await db
-    .select()
-    .from(aiPlanRevisions)
-    .where(and(eq(aiPlanRevisions.planId, planId), eq(aiPlanRevisions.status, 'accepted')))
-    .orderBy(desc(aiPlanRevisions.revision))
-    .limit(1);
-  if (!revision) throw new AppError(409, 'AI_PLAN_REVISION_NOT_ACCEPTED', 'No accepted plan revision exists');
-  return revision;
-}
-
-function cleanStrings(values: string[]): string[] {
-  return values.map((value) => value.trim()).filter(Boolean);
-}
-
-function cleanOptional(value: string | null | undefined): string | null {
-  const cleaned = value?.trim();
-  return cleaned || null;
 }

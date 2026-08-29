@@ -1,0 +1,22 @@
+---
+title: Docker overview
+description: Choose between containers, Deployments, Compose Projects, and Git-backed delivery.
+section: Docker
+order: 1
+audience: [operator, platform-engineer, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Docker overview
+
+Choose the highest-level lifecycle that matches the application:
+
+- **Container:** one directly managed runtime.
+- **Deployment:** blue/green slots, health-gated rollout, rollback, and webhook delivery.
+- **Compose Project:** multiple services with one validated project lifecycle.
+- **Git source:** an input mode for Containers, Deployments, Compose, or Pages—not a separate application entity.
+
+Gateway also manages images, volumes, networks, registries, logs, files, console access, health checks, migrations, archives, builds, and durable Tasks.
+
+Project-owned or Deployment-owned runtime children must be managed through their owner. Direct child mutation is blocked to prevent state drift.

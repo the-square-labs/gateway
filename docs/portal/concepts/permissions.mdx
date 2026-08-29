@@ -1,0 +1,42 @@
+---
+title: Permissions and scopes
+description: Design least-privilege access with global, node, folder, and resource scopes.
+section: Concepts
+order: 3
+audience: [security-admin, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Permissions and scopes
+
+Gateway uses explicit scopes. A scope has a capability base and may include a resource suffix.
+
+```text
+docker:containers:view
+docker:containers:view:<node-id>/<resource-id>
+databases:view:<database-id>
+nodes:details:<node-id>
+```
+
+## Design rules
+
+1. Grant through groups for normal access; reserve direct user additions for exceptions.
+2. Prefer resource-scoped grants over an entire node or product area.
+3. Separate viewing from mutation, secret reveal, export, mounts, and destructive actions.
+4. Treat API tokens and OAuth grants as delegated authority, not as alternate administrators.
+5. Test the resulting user journey, including navigation visibility and direct API denial.
+
+## Important separations
+
+- Container editing does not imply mount editing.
+- Database access does not imply credential reveal.
+- Inference use does not imply AI Workspace access.
+- Viewing a resource does not imply viewing its host node details.
+- Route editing does not imply certificate private-key export.
+
+## Revocation
+
+Session and WebSocket operations revalidate access. Revoking a group, token, or resource grant must stop new privileged actions and terminate protected streams where required. Historical audit records remain attributable after a user is blocked or deleted.
+
+See [Scopes, tokens, and OAuth](../identity/scopes-tokens-oauth.mdx) for implementation workflows.

@@ -10,6 +10,7 @@ Version 0.3 accepts both the previous discovery schema v1 and the current v2 doc
 
 ```sh
 npx -y @sqgateway/inference@latest
+npx -y @sqgateway/inference@latest --url https://gateway.example.com
 ```
 
 The manager shows the active Gateway connection plus Codex and Claude Code state. It can log in, set up, diagnose, repair, or remove either package-managed harness integration, refresh the Codex catalog, and log out.
@@ -19,6 +20,7 @@ The manager shows the active Gateway connection plus Codex and Claude Code state
 ```sh
 npx -y @sqgateway/inference@latest login
 npx -y @sqgateway/inference@latest login https://gateway.example.com
+npx -y @sqgateway/inference@latest login --url https://gateway.example.com
 npx -y @sqgateway/inference@latest login https://gateway.example.com --token gwi_...
 npx -y @sqgateway/inference@latest logout
 ```
@@ -45,6 +47,8 @@ Profiles, the private runtime helper, catalogs, proxy state, and mode-`0600` set
 ```sh
 npx -y @sqgateway/inference@latest setup
 npx -y @sqgateway/inference@latest setup codex
+npx -y @sqgateway/inference@latest setup codex --url https://gateway.example.com
+npx -y @sqgateway/inference@latest setup codex --url https://gateway.example.com --startup
 ```
 
 `setup` asks which supported harness to configure when the harness is omitted in an interactive terminal. Outside a terminal, the harness is required. The current release supports Codex and Claude Code.
@@ -56,6 +60,16 @@ Codex must also be signed in to an OpenAI account through its normal login flow.
 Gateway model entries reuse the full model instructions bundled with the installed Codex CLI. The companion does not replace Codex's base prompt with a Gateway-authored prompt; exact Codex model slugs use their matching bundled instructions, while other routed models use the bundled default instructions from that Codex version.
 
 The installed helper owns the loopback proxy, refreshes the catalog at startup, follows Gateway invalidation events, and falls back to conditional polling. Runtime auth, proxy, and MCP lifecycle modes are private implementation details and are not public CLI commands.
+
+On macOS and Linux, automatic user-session startup can be managed independently after Codex setup:
+
+```sh
+npx -y @sqgateway/inference@latest startup install
+npx -y @sqgateway/inference@latest startup status
+npx -y @sqgateway/inference@latest startup uninstall
+```
+
+The interactive manager exposes the same enable/disable actions. Startup uses the installed private runtime directly, so it does not depend on npm, npx, or shell PATH configuration. It starts with the user's login session; the CLI does not install a privileged system service or enable systemd lingering.
 
 Codex usage and quota displays are not overridden. View Gateway limits in the Gateway UI; Codex Desktop and CLI continue to show their native account usage. Version 0.3.6 and later remove the experimental usage wrappers from 0.3.4 and 0.3.5. Running `setup codex` cleans up package-owned legacy wrapper artifacts automatically. The offline cleanup command remains available for affected installations:
 

@@ -188,6 +188,59 @@ func TestReconcileClosesRevokedActiveSessions(t *testing.T) {
 	}
 }
 
+func TestReconcileClosesLegacyGenerationZeroSessionsAfterAssignmentActivation(t *testing.T) {
+	store, err := policy.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := New(store)
+	registration := &endpointRegistration{
+		endpointID:           "endpoint-1",
+		generation:           1,
+		assignmentGeneration: 0,
+		stop:                 make(chan struct{}),
+	}
+	tunnel := &activeTunnel{
+		routeID:              "route-1",
+		routeGeneration:      1,
+		endpointID:           "endpoint-1",
+		endpointGeneration:   1,
+		assignmentGeneration: 0,
+		stop:                 make(chan struct{}),
+	}
+	b.endpoints["endpoint-1"] = registration
+	b.active["legacy"] = tunnel
+
+	endpoint := &relayv1.EndpointPolicy{EndpointId: "endpoint-1", Generation: 1, AssignmentGeneration: 1}
+	route := &relayv1.RoutePolicy{
+		RouteId:              "route-1",
+		Generation:           1,
+		TargetEndpointId:     endpoint.EndpointId,
+		AssignmentGeneration: 1,
+	}
+	b.Reconcile(nil, &policy.Snapshot{
+		Endpoints:           map[string]*relayv1.EndpointPolicy{endpoint.EndpointId: endpoint},
+		Routes:              map[string]*relayv1.RoutePolicy{route.RouteId: route},
+		EndpointAssignments: map[string]*relayv1.EndpointPolicy{"endpoint-1:1": endpoint},
+		RouteAssignments:    map[string]*relayv1.RoutePolicy{"route-1:1": route},
+	})
+
+	select {
+	case <-registration.stop:
+	default:
+		t.Fatal("legacy endpoint registration remained active after assignment generation activation")
+	}
+	select {
+	case <-tunnel.stop:
+	default:
+		t.Fatal("legacy tunnel remained active after assignment generation activation")
+	}
+	if _, exists := b.endpoints["endpoint-1"]; exists {
+		t.Fatal("legacy endpoint registration remained indexed")
+	}
+}
+
 func TestEndpointDisconnectClosesActiveSessions(t *testing.T) {
 	store, err := policy.Open(t.TempDir())
 	if err != nil {

@@ -81,6 +81,13 @@ export interface RelayInstanceHealth {
   policySigningKeyIds?: string[];
 }
 
+export interface RelayManagedDatabaseListenerConfig {
+  networkName: string;
+  listenAddress: string;
+  listenPort: number;
+  allowedSources: string[];
+}
+
 export interface RelayArtifactDescriptor {
   version: string;
   digest: string;
@@ -186,6 +193,7 @@ export const relayRoutes = pgTable(
     maxFrameBytes: integer('max_frame_bytes')
       .notNull()
       .default(1024 * 1024),
+    managedDatabaseListener: jsonb('managed_database_listener').$type<RelayManagedDatabaseListenerConfig>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

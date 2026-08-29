@@ -211,6 +211,59 @@ services: {}
     );
   });
 
+  it.each([
+    `services:
+  api:
+    image: example/api:latest
+    volumes:
+      - \${HOST_PATH}:/sock:ro
+volumes:
+  \${HOST_PATH}: {}
+`,
+    `services:
+  api:
+    image: example/api:latest
+    volumes:
+      - type: volume
+        source: \${HOST_PATH}
+        target: /sock
+volumes:
+  \${HOST_PATH}: {}
+`,
+  ])('rejects variable interpolation in volume sources', (yaml) => {
+    const result = validateComposeYaml({
+      projectName: 'demo',
+      variables: { HOST_PATH: '/var/run/docker.sock' },
+      secretKeys: [],
+      yaml,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: expect.stringMatching(/HOST_BIND_FORBIDDEN|INVALID_VOLUME/) })
+    );
+  });
+
+  it('keeps interpolation available for the physical name of a declared volume', () => {
+    const result = validateComposeYaml({
+      projectName: 'demo',
+      variables: { VOLUME_NAME: 'demo-data' },
+      secretKeys: [],
+      yaml: `services:
+  api:
+    image: example/api:latest
+    volumes:
+      - data:/data
+volumes:
+  data:
+    name: \${VOLUME_NAME}
+`,
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it('reports unresolved required variables without persisting expanded values', () => {
     const result = validateComposeYaml({
       projectName: 'demo',

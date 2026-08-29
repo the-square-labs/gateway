@@ -35,15 +35,15 @@ Gateway and inference-core upgrades do not invalidate provider connections, runt
 2. Install the inference core and wait for it to report healthy.
 3. In **Providers**, connect subscription accounts through the displayed OAuth/device flow or add API/local credentials. OpenAI/Codex uses the remote-safe device flow at `auth.openai.com/codex/device`; Gateway never relies on the Codex CLI's `localhost:1455` loopback callback. Subscription connectors are unofficial upstream integrations and require explicit terms/risk acknowledgement.
 4. Wait for sync. Providers with multiple connected accounts/keys appear as one collapsible table group; a provider with one connection remains a normal row. Open an account row to review 5h/7d/30d subscription quota, enable or disable it, synchronize it manually, or configure a minimum remaining reserve.
-5. Gateway automatically routes across compatible accounts for the same provider/model while retaining thread affinity and failing over only before client output begins. Within a provider group, drag account rows to set the priority used by Sequential routing; accounts cannot be moved between provider groups. A subscription connection is excluded when its worst fresh quota window falls below its configured reserve.
-6. In **Models**, publish a stable public model ID for one provider and upstream model.
+5. Gateway automatically routes across compatible sources while retaining active-turn affinity and failing over only before client output begins. Within a provider group, drag account rows to set the priority used by Sequential routing; accounts cannot be moved between provider groups. A subscription connection is excluded when its worst fresh quota window falls below its configured reserve. A logical model may also include fallback sources from different providers or upstream models when every source satisfies the published modalities, capabilities, reasoning map, and technical limits.
+6. In **Models**, publish a stable public model ID with one or more compatible sources.
 7. Configure context/input/output/auto-compaction limits, modalities, and access. Subscription-backed models also have a credit multiplier; API-backed models use versioned provider/manual pricing and do not expose a subscription multiplier.
 8. Configure reasoning overrides such as `ultra=max`. Efforts without an override map to the same provider name. Drag efforts into the order that clients and the AI Workspace reasoning selector should display them.
 9. In **Settings > Inference > Limits**, set default limits and optional per-user overrides.
 
 Drag model rows to set the order returned by the management and data-plane catalogs. The companion preserves that order in the Codex manifest, and AI Workspace uses it for its model selector and default-model fallback.
 
-There is no user-visible or administrator-managed Pool entity. One logical model belongs to one provider template and one upstream model; Gateway does not mix providers behind a model.
+There is no user-visible or administrator-managed Pool entity. Provider administration remains grouped by provider, while one logical model may include compatible sources from more than one provider or upstream model. Gateway validates every enabled source against the model's published contract and keeps failover inside one request/accounting lineage; it never switches after output has begun.
 
 ## User setup
 
@@ -72,12 +72,23 @@ The interactive package asks for the Gateway URL and then offers browser OAuth w
 ```bash
 npx -y @sqgateway/inference@latest login https://gateway.example.com --token gwi_...
 npx -y @sqgateway/inference@latest setup codex
+npx -y @sqgateway/inference@latest setup codex --url https://gateway.example.com --startup
 npx -y @sqgateway/inference@latest setup claude-code
 ```
 
 Codex setup issues a dedicated runtime token, installs a private stable helper and loopback proxy, and maintains the authoritative Gateway model catalog. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog. Native Codex usage and quota displays are not overridden.
 
 Use `--home /data/inference` or `GATEWAY_INFERENCE_HOME=/data/inference` to keep profiles, credentials, catalogs, helper, and proxy state below one companion directory. The package propagates that home into its installed long-lived processes. Codex and Claude Code configuration still remains in the harness-native configuration directory.
+
+On macOS and Linux, Codex helper startup can be managed independently after setup:
+
+```bash
+npx -y @sqgateway/inference@latest startup install
+npx -y @sqgateway/inference@latest startup status
+npx -y @sqgateway/inference@latest startup uninstall
+```
+
+The startup entry runs the already installed private helper directly at user login. It does not depend on npm, `npx`, or shell `PATH`, does not install a privileged system service, and does not enable systemd lingering.
 
 Claude Code setup requires Claude Code 2.1.129 or newer. It configures Claude Code's native Anthropic gateway contract through `ANTHROPIC_BASE_URL`, model discovery, and a private `apiKeyHelper`; it does not run a loopback proxy. The integration applies only to the Claude Code CLI, not Claude Desktop or the VS Code extension.
 
@@ -110,6 +121,8 @@ Users see percentages only:
 - recovery/reset timestamps.
 
 Administrators can see raw cost, tokens, credits, upstream quota, and request metadata.
+
+Profile includes a 30-day request/token/cost overview for the signed-in user. An inference limits administrator can reset all four usage baselines for one user. Resetting does not delete ledger or request history: rolling 5-hour/7-day/30-day windows start at the reset instant until their natural windows overtake it, while the API monthly cycle remains anchored to the reset's local calendar date and time.
 
 Setting a user's monthly API budget to zero disables API-funded usage for that user. Logical models whose usable sources are API-only are then omitted from the OpenAI-compatible catalog and the AI Workspace model picker instead of being shown as unusable choices.
 
@@ -146,7 +159,7 @@ Gateway supports:
 - the Responses v2 `compaction_trigger` item;
 - Gateway `ocx1:` compaction envelopes that can be passed back as a `compaction` input item.
 
-Compaction is accounted separately and never receives dynamic burn; a requested eligible Fast tier still receives its fixed service-tier multiplier. Provider selection cannot change after output begins, preventing mixed or duplicated streams.
+Compaction is accounted separately and never receives dynamic burn; a requested eligible Fast tier still receives its fixed service-tier multiplier. A retry may select another capability-compatible provider before output begins, including for continuation requests, but provider selection cannot change after output starts, preventing mixed or duplicated streams.
 
 For Responses WebSocket clients, the socket remains usable until the client, Gateway, or the managed core closes it. A failed or incomplete turn is recorded as failed instead of being finalized as a successful zero-output request. Activity stores normalized metadata and usage only; hovering a model in the administrator activity table identifies the provider account used for that request.
 
@@ -188,7 +201,7 @@ Before enabling production scopes, verify in staging with at least one real subs
 - OAuth/API credential lifecycle and reauthentication;
 - real model/quota discovery and freshness;
 - published model access and reasoning mapping;
-- subscription request, quota pressure, and pre-output failover between eligible accounts of the same provider/model;
+- subscription request, quota pressure, and pre-output failover between compatible same-provider and cross-provider sources;
 - user percentage update and administrator raw accounting;
 - Codex discovery, streaming, tools, reasoning, continuation, and explicit auto-compaction;
 - Claude Messages streaming and `count_tokens`;

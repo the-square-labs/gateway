@@ -281,6 +281,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
           targetResourceId: addition.targetResourceId,
           environment: addition.environment,
           status: "creating" as const,
+          lastError: null,
           createdAt: "",
           updatedAt: "",
         },
@@ -787,8 +788,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
                           ? "secondary"
                           : entry.binding.status === "ready"
                             ? "success"
-                            : "secondary"
+                            : entry.binding.status === "error"
+                              ? "destructive"
+                              : "secondary"
                     }
+                    title={entry.binding.lastError ?? undefined}
                   >
                     {entry.pending === "remove"
                       ? "will unlink"

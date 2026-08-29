@@ -55,7 +55,6 @@ import {
   deriveAllowedResourceIdsByScope,
   hasSelectableScopeBase,
   parseScopesForForm,
-  requiresResourceSelection,
   scopeMatches,
 } from "@/lib/scope-utils";
 import { api } from "@/services/api";
@@ -65,43 +64,13 @@ import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DatabaseConnection, LoggingSchema, Node, PermissionGroup, ProxyHost } from "@/types";
 import { GROUP_ASSIGNABLE_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
-
-function isScopeSubset(requestedScopes: string[], allowedScopes: string[]): boolean {
-  return requestedScopes.every((scope) => scopeMatches(allowedScopes, scope));
-}
-
-function getGroupEffectiveScopes(group: PermissionGroup): string[] {
-  return [...new Set([...group.scopes, ...(group.inheritedScopes ?? [])])];
-}
-
-function formatGroupNameInput(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+/g, "");
-}
-
-function formatGroupName(value: string): string {
-  return formatGroupNameInput(value).replace(/-+$/g, "");
-}
-
-function findMissingRequiredResourceSelection(
-  baseScopes: string[],
-  resources: Record<string, string[]>,
-  allowedResourceIdsByScope: Record<string, string[]>,
-  initialResourceLimitedScopes: readonly string[]
-): string | null {
-  for (const scope of baseScopes) {
-    if (
-      requiresResourceSelection(scope, allowedResourceIdsByScope, initialResourceLimitedScopes) &&
-      (resources[scope]?.length ?? 0) === 0
-    ) {
-      return scope;
-    }
-  }
-  return null;
-}
+import {
+  findMissingRequiredResourceSelection,
+  formatGroupName,
+  formatGroupNameInput,
+  getGroupEffectiveScopes,
+  isScopeSubset,
+} from "./admin-groups-helpers";
 
 export function AdminGroups({
   embedded = false,

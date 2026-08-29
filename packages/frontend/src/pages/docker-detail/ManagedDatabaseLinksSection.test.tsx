@@ -37,6 +37,7 @@ const binding: ManagedDatabaseBinding = {
   targetResourceId: "app",
   environment: { connectionUri: "DATABASE_URL" },
   status: "ready",
+  lastError: null,
   createdAt: "2026-08-01T00:00:00.000Z",
   updatedAt: "2026-08-01T00:00:00.000Z",
 };
@@ -172,6 +173,18 @@ describe("ManagedDatabaseLinksSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith(database.id, binding.id));
+  });
+
+  it("shows a failed reconciliation as an error with the backend failure detail", async () => {
+    const lastError = "Binding reconciliation failed: connector address is unavailable";
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([
+      { ...binding, status: "error", lastError },
+    ]);
+
+    renderLinks();
+
+    expect(await screen.findByTitle(lastError)).toHaveTextContent("error");
   });
 
   it("keeps links visible but unavailable when their databases node is offline", async () => {

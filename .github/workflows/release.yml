@@ -23,9 +23,16 @@ jobs:
     name: Full verification
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      release_kind: ${{ steps.release-tag.outputs.kind }}
+      prerelease: ${{ steps.release-tag.outputs.prerelease }}
     steps:
       - name: Check out tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Classify release tag
+        id: release-tag
+        run: scripts/release-tag.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Install pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
@@ -65,7 +72,7 @@ jobs:
 
   build:
     name: Build
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -103,8 +110,8 @@ jobs:
 
   sign:
     name: Sign
-    if: ${{ !contains(github.ref_name, '-') }}
-    needs: build
+    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
+    needs: [verify, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -156,8 +163,8 @@ jobs:
 
   publish:
     name: Publish
-    if: ${{ !contains(github.ref_name, '-') }}
-    needs: sign
+    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
+    needs: [verify, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -181,14 +188,20 @@ jobs:
           password: ${{ github.token }}
 
       - name: Publish image aliases
+        env:
+          RELEASE_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
           docker pull "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}"
           docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}"
-          docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:latest"
           docker push "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}"
-          docker push "${GATEWAY_IMAGE}:latest"
+          if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
+            docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:latest"
+            docker push "${GATEWAY_IMAGE}:latest"
+          fi
 
       - name: Upload release asset to draft
+        env:
+          RELEASE_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
           git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > release-notes.md
           if ! grep -q '[^[:space:]]' release-notes.md; then
@@ -196,22 +209,26 @@ jobs:
           fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
-            gh release edit "$GITHUB_REF_NAME" \
-              --title "Gateway ${GITHUB_REF_NAME}" \
-              --notes-file release-notes.md
+            args=(--title "Gateway ${GITHUB_REF_NAME}" --notes-file release-notes.md)
+            if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+              args+=(--prerelease --latest=false)
+            else
+              args+=(--prerelease=false)
+            fi
+            gh release edit "$GITHUB_REF_NAME" "${args[@]}"
           else
-            gh release create "$GITHUB_REF_NAME" \
-              --draft \
-              --verify-tag \
-              --title "Gateway ${GITHUB_REF_NAME}" \
-              --notes-file release-notes.md
+            args=(--draft --verify-tag --title "Gateway ${GITHUB_REF_NAME}" --notes-file release-notes.md)
+            if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+              args+=(--prerelease --latest=false)
+            fi
+            gh release create "$GITHUB_REF_NAME" "${args[@]}"
           fi
           gh release upload "$GITHUB_REF_NAME" gateway-image.update.json --clobber
 
   release:
     name: Release
-    if: ${{ !contains(github.ref_name, '-') }}
-    needs: publish
+    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
+    needs: [verify, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -230,7 +247,7 @@ jobs:
 
   component-release:
     name: Component release
-    if: ${{ contains(github.ref_name, '-') }}
+    if: ${{ needs.verify.outputs.release_kind == 'component' }}
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 90

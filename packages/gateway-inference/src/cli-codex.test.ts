@@ -9,6 +9,7 @@ import type { InteractiveCliUi } from './interactive-ui.js';
 import type { Output } from './output.js';
 import type { CliPaths } from './paths.js';
 import { ProfileStore } from './profiles.js';
+import type { InferenceStartupManager } from './startup.js';
 import type { OAuthCredential, RuntimeCredential } from './types.js';
 
 const MODELS = {
@@ -182,6 +183,11 @@ describe('@sqgateway/inference CLI', () => {
       cancel: vi.fn(),
       outro: vi.fn(),
     } satisfies InteractiveCliUi;
+    const startupManager = {
+      status: vi.fn(async () => ({ supported: true, installed: false, active: false })),
+      install: vi.fn(async () => ({ supported: true, installed: true, active: true })),
+      uninstall: vi.fn(async () => ({ supported: true, installed: false, active: false })),
+    } satisfies InferenceStartupManager;
     const dependencies = {
       paths,
       profiles,
@@ -198,6 +204,7 @@ describe('@sqgateway/inference CLI', () => {
         ensure: vi.fn(async () => ({ baseUrl: inferenceProxyBaseUrl(paths, 'default') })),
         stop: vi.fn(async () => undefined),
       } satisfies InferenceProxyDaemonManager,
+      startupManager,
     };
 
     expect(await runCli(['setup'], { ...dependencies, interactive: false })).toBe(1);
@@ -209,10 +216,13 @@ describe('@sqgateway/inference CLI', () => {
     expect(interactiveUi.outro).toHaveBeenCalledWith(expect.stringContaining('Gateway models'));
     expect(interactiveUi.outro).toHaveBeenCalledWith(expect.stringContaining('not signed in to an OpenAI account'));
 
-    expect(await runCli(['setup', 'codex'], dependencies)).toBe(0);
+    expect(await runCli(['setup', 'codex', '--url', 'https://gateway.example.com', '--startup'], dependencies)).toBe(0);
+    expect(interactiveUi.gatewayOrigin).not.toHaveBeenCalled();
+    expect(startupManager.install).toHaveBeenCalledOnce();
     expect(human.at(-1)).toContain('default: gateway-model');
     expect(human.at(-1)).toContain('not signed in to an OpenAI account');
     expect(human.at(-1)).toContain('Fully quit and reopen Codex');
+    expect(human.at(-1)).toContain('Startup: installed');
     const configured = await readFile(join(codexHome, 'config.toml'), 'utf8');
     expect(configured).toContain('model_provider = "openai"');
     expect(configured).toContain(`openai_base_url = "${inferenceProxyBaseUrl(paths, 'default')}"`);
@@ -302,6 +312,10 @@ describe('@sqgateway/inference CLI', () => {
     expect(values.at(-1)).toMatchObject({ error: { code: 'UNKNOWN_COMMAND' } });
     expect(await runCli(['--profile', 'work'], dependencies)).toBe(1);
     expect(values.at(-1)).toMatchObject({ error: { code: 'INVALID_ARGUMENT' } });
+
+    expect(await runCli(['startup', 'status'], { ...dependencies, interactive: false })).toBe(0);
+    expect(await runCli(['startup', 'install'], { ...dependencies, interactive: false })).toBe(0);
+    expect(await runCli(['startup', 'uninstall'], { ...dependencies, interactive: false })).toBe(0);
 
     expect(await runCli(['--help'], dependencies)).toBe(0);
     expect(human.at(-1)).toContain('npx @sqgateway/inference');

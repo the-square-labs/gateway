@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -302,6 +303,39 @@ func TestImportedArchiveUsesImageIDForEnvOnlyRecreateAndLabelForTagUpdate(t *tes
 	}
 	if got := containerTagUpdateImageReference(insp); got != "registry.example/team/app:stable" {
 		t.Fatalf("tag update source = %q", got)
+	}
+}
+
+func TestRecreateExpectedStateSurvivesIntermediateCreatedContainer(t *testing.T) {
+	client := &Client{recreateStateDirectory: t.TempDir()}
+	if err := client.persistRecreateExpectedRunning("api", true); err != nil {
+		t.Fatalf("persist expected state: %v", err)
+	}
+
+	expectedRunning, err := client.resolveRecreateExpectedRunning("api", false, nil)
+	if err != nil {
+		t.Fatalf("resolve expected state: %v", err)
+	}
+	if !expectedRunning {
+		t.Fatal("expected persisted running state to override intermediate created state")
+	}
+}
+
+func TestRecreateExpectedStateClearsCompletedMarker(t *testing.T) {
+	client := &Client{recreateStateDirectory: t.TempDir()}
+	if err := client.persistRecreateExpectedRunning("api", true); err != nil {
+		t.Fatalf("persist expected state: %v", err)
+	}
+
+	expectedRunning, err := client.resolveRecreateExpectedRunning("api", true, nil)
+	if err != nil {
+		t.Fatalf("resolve expected state: %v", err)
+	}
+	if !expectedRunning {
+		t.Fatal("expected current running state to be preserved")
+	}
+	if _, err := client.readRecreateExpectedRunning("api"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected completed marker to be removed, got %v", err)
 	}
 }
 
@@ -763,6 +797,81 @@ func TestMergeManagedDatabaseExtraHostsReplacesGeneratedAliases(t *testing.T) {
 	expected := []string{"api.internal:10.0.0.4", "db-fedcba9876543210:172.20.0.2"}
 	if !reflect.DeepEqual(merged, expected) {
 		t.Fatalf("unexpected merged extra hosts: got %#v want %#v", merged, expected)
+	}
+}
+
+func TestManagedDatabaseHostEntryUsesDaemonListenerGateway(t *testing.T) {
+	entry, err := managedDatabaseHostEntry(
+		"gateway-db-0123456789abcdef",
+		managedDatabaseHostListenerNetwork("gateway-db-0123456789abcdef", "network-1", "172.22.0.1", map[string]string{
+			"gateway-db-connector-0123456789abcdef": "172.22.0.2/24",
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != "db-0123456789abcdef:172.22.0.1" {
+		t.Fatalf("managed database host entry = %q", entry)
+	}
+}
+
+func TestManagedDatabaseConnectorCreateUsesStableIPv4Address(t *testing.T) {
+	client := &Client{databaseTunnelDirectory: "/var/lib/docker-daemon/database-tunnel"}
+	config := ContainerCreateConfig{
+		Name:             "gateway-db-connector-0123456789abcdef",
+		NetworkMode:      "gateway-db-0123456789abcdef",
+		NetworkAliases:   []string{"db-0123456789abcdef"},
+		IPv4Address:      "172.22.0.2",
+		RuntimeProfile:   "secure",
+		InternalWorkload: "managed-database-connector",
+		Labels: map[string]string{
+			"wiolett.gateway.managed-database.connector": "true",
+		},
+		Binds: []string{"/var/lib/docker-daemon/database-tunnel:/run/gateway-db:ro"},
+	}
+
+	networking, err := client.networkingConfigForCreate(config)
+	if err != nil {
+		t.Fatalf("unexpected networking config error: %v", err)
+	}
+	endpoint := networking.EndpointsConfig[config.NetworkMode]
+	if endpoint == nil || endpoint.IPAMConfig == nil {
+		t.Fatal("expected managed connector endpoint IPAM config")
+	}
+	if got := endpoint.IPAMConfig.IPv4Address.String(); got != config.IPv4Address {
+		t.Fatalf("expected stable IPv4 address %q, got %q", config.IPv4Address, got)
+	}
+}
+
+func TestManagedConnectorIPAMKeepsStableAddressOutsideDynamicRange(t *testing.T) {
+	config, reservedAddress, err := managedConnectorIPAM("172.22.0.0/24", "172.22.0.1")
+	if err != nil {
+		t.Fatalf("unexpected managed connector IPAM error: %v", err)
+	}
+	reserved, err := netip.ParseAddr(reservedAddress)
+	if err != nil {
+		t.Fatalf("parse reserved address: %v", err)
+	}
+	if !config.Subnet.Contains(reserved) {
+		t.Fatalf("expected reserved address %s inside subnet %s", reserved, config.Subnet)
+	}
+	if config.IPRange.Contains(reserved) {
+		t.Fatalf("reserved address %s must remain outside dynamic range %s", reserved, config.IPRange)
+	}
+	if got := config.Gateway.String(); got != "172.22.0.1" {
+		t.Fatalf("expected gateway 172.22.0.1, got %s", got)
+	}
+}
+
+func TestStaticIPv4AddressIsRejectedForUserWorkload(t *testing.T) {
+	client := &Client{databaseTunnelDirectory: "/var/lib/docker-daemon/database-tunnel"}
+	_, err := client.networkingConfigForCreate(ContainerCreateConfig{
+		Name:        "application",
+		NetworkMode: "application-network",
+		IPv4Address: "172.22.0.2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved for managed database connectors") {
+		t.Fatalf("expected user workload static address rejection, got %v", err)
 	}
 }
 

@@ -420,6 +420,7 @@ export class NodeDispatchService {
             grant: assignment.grant,
             schemaVersion: assignment.schemaVersion,
             candidates: assignment.candidates,
+            managedDatabaseListener: assignment.managedDatabaseListener,
           })),
         },
       },

@@ -130,7 +130,12 @@ function createService(
       })),
     }),
   };
-  const routing = { select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }) };
+  const releaseAffinityTurn = vi.fn().mockResolvedValue(undefined);
+  const routing = {
+    select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }),
+    markAffinityActive: vi.fn().mockResolvedValue(undefined),
+    beginAffinityTurn: vi.fn().mockResolvedValue(releaseAffinityTurn),
+  };
   const bridge = options.coreError
     ? { dataPlaneTarget: vi.fn().mockRejectedValue(options.coreError) }
     : {
@@ -162,7 +167,7 @@ function createService(
           })
       );
   vi.stubGlobal('fetch', fetchStub);
-  return { service, models, routing, bridge, coreAccounting, fetchStub, selection };
+  return { service, models, routing, releaseAffinityTurn, bridge, coreAccounting, fetchStub, selection };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -203,6 +208,32 @@ describe('inference core proxy', () => {
     expect(sentBody.reasoning).toEqual({ effort: 'minimal' });
     expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(
       expect.objectContaining({ userId: USER.id, model: MODEL })
+    );
+  });
+
+  it('refreshes thread affinity activity when an HTTP turn finishes', async () => {
+    const { service, routing, releaseAffinityTurn } = createService();
+    let finishActivityRefresh!: () => void;
+    routing.markAffinityActive.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishActivityRefresh = resolve;
+      })
+    );
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5', input: 'continue', prompt_cache_key: 'thread-activity' }), {
+        'content-type': 'application/json',
+      }),
+      'responses'
+    );
+
+    await response.text();
+
+    expect(routing.markAffinityActive).toHaveBeenCalledWith('thread-activity');
+    expect(releaseAffinityTurn).not.toHaveBeenCalled();
+    finishActivityRefresh();
+    await vi.waitFor(() => expect(releaseAffinityTurn).toHaveBeenCalledOnce());
+    expect(routing.markAffinityActive.mock.invocationCallOrder[0]).toBeLessThan(
+      releaseAffinityTurn.mock.invocationCallOrder[0]!
     );
   });
 
@@ -289,6 +320,7 @@ describe('inference core proxy', () => {
       'responses'
     );
     expect(response.status).toBe(200);
+    await response.text();
     expect(fetchStub).toHaveBeenCalledTimes(2);
     const contexts = fetchStub.mock.calls.map(([, init]) => {
       const encoded = (init.headers as Record<string, string>)['x-wiolett-context'];
@@ -314,6 +346,37 @@ describe('inference core proxy', () => {
       CONNECTION_2,
       0
     );
+    await vi.waitFor(() => expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledOnce());
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+      'completed',
+      undefined
+    );
+  });
+
+  it('finalizes an HTTP transport failure exactly once with the normalized Gateway error', async () => {
+    const { service, routing, releaseAffinityTurn, coreAccounting } = createService({
+      fetchError: new Error('connect ECONNREFUSED'),
+    });
+
+    await expect(
+      service.proxy(
+        createContext(
+          JSON.stringify({ model: 'gpt-5.5', input: 'continue', prompt_cache_key: 'thread-transport-error' }),
+          { 'content-type': 'application/json' }
+        ),
+        'responses'
+      )
+    ).rejects.toMatchObject({ status: 503, code: 'inference_core_unavailable' });
+
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledOnce();
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+      'failed',
+      expect.objectContaining({ status: 503, code: 'inference_core_unavailable' })
+    );
+    expect(routing.markAffinityActive).toHaveBeenCalledOnce();
+    expect(releaseAffinityTurn).toHaveBeenCalledOnce();
   });
 
   it('keeps configured core sources routable across transient discovery omissions', async () => {

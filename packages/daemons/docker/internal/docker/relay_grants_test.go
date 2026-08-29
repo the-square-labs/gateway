@@ -2,13 +2,18 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/moby/moby/api/types/network"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 )
 
 func TestAssignmentsForRelayTargetPreservesActiveAndStagingGenerations(t *testing.T) {
@@ -105,5 +110,51 @@ func TestRelayGrantStoreRefreshesWithinPolicyRevision(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("grant mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestSyncRelayGrantsReconcilesManagedDatabaseListenersAndReturnsStatus(t *testing.T) {
+	directory := t.TempDir()
+	store, err := newRelayGrantStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := availableTCPPort(t)
+	listenerNetwork := managedDatabaseHostListenerNetwork("gateway-db-binding-1", "network-1", "127.0.0.1", nil)
+	manager := &managedDatabaseHostListenerManager{
+		listeners: map[string]*managedDatabaseHostListener{},
+		global:    make(chan struct{}, managedDatabaseHostListenerGlobalConnections),
+		inspectNetwork: func(context.Context, string) (network.Inspect, error) {
+			return listenerNetwork, nil
+		},
+		openBinding: func(net.Conn, string, uint64) {},
+	}
+	plugin := &DockerPlugin{
+		cfg:               &config.Config{},
+		relayGrants:       store,
+		relayTunnels:      map[string]*relayTunnelRouter{},
+		databaseListeners: manager,
+	}
+	plugin.cfg.StateDir = directory
+	bundle := &pb.SyncRelayGrantsCommand{
+		PolicyRevision: 1,
+		Grants: []*pb.RelayGrantAssignment{
+			managedDatabaseHostListenerAssignment("binding-1", "gateway-db-binding-1", "127.0.0.1", uint32(port), 3, []string{"container:api"}),
+		},
+	}
+	detail, err := plugin.SyncRelayGrants(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { manager.reconcile(context.Background(), &pb.SyncRelayGrantsCommand{}) })
+	var decoded struct {
+		ListenerStatuses map[string]managedDatabaseHostListenerStatus `json:"listenerStatuses"`
+	}
+	if err := json.Unmarshal([]byte(detail), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	status := decoded.ListenerStatuses["binding-1"]
+	if status.State != "ready" || status.Address != "127.0.0.1" || status.Port != uint16(port) {
+		t.Fatalf("listener status = %#v", status)
 	}
 }

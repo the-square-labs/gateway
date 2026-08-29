@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AIPlan } from '@/db/schema/index.js';
 import { AIPlanService } from './ai-plan.service.js';
+import { cleanOptionalPlanValue, cleanPlanStrings } from './ai-plan-input.js';
 
 function planRow(overrides: Partial<AIPlan> = {}): AIPlan {
   const now = new Date('2026-08-12T00:00:00.000Z');
@@ -250,6 +251,14 @@ describe('AIPlanService lifecycle guards', () => {
     });
   });
 
+  it('requires an accepted revision before final verification', async () => {
+    const service = new AIPlanService(queuedSelectDb([[planRow()], []]) as never);
+
+    await expect(service.requestFinalVerification('user-1', 'conversation-1')).rejects.toMatchObject({
+      code: 'AI_PLAN_REVISION_NOT_ACCEPTED',
+    });
+  });
+
   it('resumes a paused final-verification run back into verification', async () => {
     const paused = planRow({ status: 'paused', activeSince: null });
     const verifying = planRow({ status: 'verifying', activeSince: new Date('2026-08-12T00:03:00.000Z') });
@@ -347,5 +356,21 @@ describe('AIPlanService lifecycle guards', () => {
 
     expect(set).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
     expect(result.status).toBe('completed');
+  });
+});
+
+describe('AI plan draft normalization', () => {
+  it('trims draft lists and drops blank entries without reordering them', () => {
+    expect(cleanPlanStrings([' first ', '', '  ', 'second'])).toEqual(['first', 'second']);
+  });
+
+  it.each([
+    [undefined, null],
+    [null, null],
+    ['', null],
+    ['   ', null],
+    ['  value  ', 'value'],
+  ] as const)('normalizes optional draft value %j to %j', (value, expected) => {
+    expect(cleanOptionalPlanValue(value)).toBe(expected);
   });
 });

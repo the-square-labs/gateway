@@ -215,7 +215,7 @@ func validateServiceVolumes(node, topLevel *yaml.Node) error {
 	for _, entry := range node.Content {
 		if entry.Kind == yaml.ScalarNode {
 			source := strings.Split(entry.Value, ":")[0]
-			if source == "" || strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") || known[source] == nil {
+			if source == "" || strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") || strings.ContainsAny(source, `\\$`) || known[source] == nil {
 				return errors.New("host bind mounts and unnamed volumes are not supported")
 			}
 			continue
@@ -224,7 +224,7 @@ func validateServiceVolumes(node, topLevel *yaml.Node) error {
 			return errors.New("compose service volume is invalid")
 		}
 		values := mappingValues(entry)
-		if values["type"] == nil || values["type"].Value != "volume" || values["source"] == nil || known[values["source"].Value] == nil {
+		if values["type"] == nil || values["type"].Value != "volume" || values["source"] == nil || strings.ContainsAny(values["source"].Value, `\\$`) || known[values["source"].Value] == nil {
 			return errors.New("host bind mounts and unnamed volumes are not supported")
 		}
 		for key := range values {

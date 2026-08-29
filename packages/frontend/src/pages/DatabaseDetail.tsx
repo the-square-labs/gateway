@@ -24,6 +24,14 @@ import { DatabaseCredentialsDialog } from "./database-detail/DatabaseCredentials
 import { DatabaseHeader } from "./database-detail/DatabaseHeader";
 import { DatabaseOverviewTab } from "./database-detail/DatabaseOverviewTab";
 import { DatabaseSettingsTab } from "./database-detail/DatabaseSettingsTab";
+import {
+  appendDatabaseMetricSnapshot,
+  hasDatabaseScope,
+  isPrivateManagedDatabase,
+  readDatabaseMonitoringCache,
+  shouldRefreshDatabaseDetailForEvent,
+  updateDatabaseMonitoringCache,
+} from "./database-detail/database-detail-state";
 import { ManagedDatabaseSettingsTab } from "./database-detail/ManagedDatabaseSettingsTab";
 import {
   PostgresExtensionsTab,
@@ -33,56 +41,6 @@ import { RedisConfigDialog } from "./database-detail/RedisConfigDialog";
 import { ResizeManagedDatabaseDialog } from "./database-detail/ResizeManagedDatabaseDialog";
 import { SqlExplorer } from "./database-detail/SqlExplorer";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
-
-export function isPrivateManagedDatabase(database: DatabaseConnection) {
-  return database.managed !== undefined && database.managed.publishedPort === null;
-}
-
-export function shouldRefreshDatabaseDetailForEvent(action?: string) {
-  return (
-    action !== "data.updated" && action !== "query.executed" && action !== "extensions.updated"
-  );
-}
-
-interface DatabaseMonitoringCache {
-  history: DatabaseMetricSnapshot[];
-  healthHistory: DatabaseConnection["healthHistory"];
-  healthStatus: DatabaseConnection["healthStatus"];
-}
-
-export function databaseMonitoringCacheKey(databaseId: string) {
-  return `database:monitoring:${databaseId}`;
-}
-
-export function appendDatabaseMetricSnapshot(
-  history: DatabaseMetricSnapshot[],
-  snapshot: DatabaseMetricSnapshot
-) {
-  return [...history, snapshot].slice(-60);
-}
-
-function readDatabaseMonitoringCache(databaseId: string | undefined) {
-  return databaseId
-    ? api.getCached<DatabaseMonitoringCache>(
-        databaseMonitoringCacheKey(databaseId),
-        Number.POSITIVE_INFINITY
-      )
-    : undefined;
-}
-
-function updateDatabaseMonitoringCache(
-  databaseId: string,
-  update: Partial<DatabaseMonitoringCache>
-) {
-  const current = readDatabaseMonitoringCache(databaseId);
-  api.setCache(databaseMonitoringCacheKey(databaseId), {
-    history: [],
-    healthHistory: [],
-    healthStatus: "unknown",
-    ...current,
-    ...update,
-  } satisfies DatabaseMonitoringCache);
-}
 
 export function DatabaseDetail({
   resolvedDatabaseId,
@@ -128,33 +86,18 @@ export function DatabaseDetail({
   const loadedDatabaseId = database?.id ?? "";
   const isManagedPaused = database?.managed?.status === "paused";
 
-  const canEdit = !!(id && (hasScope("databases:edit") || hasScope(`databases:edit:${id}`)));
+  const canEdit = hasDatabaseScope(hasScope, "databases:edit", id);
   const canManageSettings = canEdit && (!database?.managed || database.managed.status !== "paused");
   const canResize = canManageSettings && database?.managed?.status === "ready";
   const canPause = canEdit && database?.managed?.status === "ready";
   const canUnpause = canEdit && database?.managed?.status === "paused";
   const canRestart = canEdit && !!database?.managed && database.managed.status !== "paused";
-  const canDelete = !!(id && (hasScope("databases:delete") || hasScope(`databases:delete:${id}`)));
-  const canRead = !!(
-    id &&
-    (hasScope("databases:query:read") || hasScope(`databases:query:read:${id}`))
-  );
-  const canWrite = !!(
-    id &&
-    (hasScope("databases:query:write") || hasScope(`databases:query:write:${id}`))
-  );
-  const canAdmin = !!(
-    id &&
-    (hasScope("databases:query:admin") || hasScope(`databases:query:admin:${id}`))
-  );
-  const canReveal = !!(
-    id &&
-    (hasScope("databases:credentials:reveal") || hasScope(`databases:credentials:reveal:${id}`))
-  );
-  const canViewMonitoring = !!(
-    id &&
-    (hasScope("databases:view") || hasScope(`databases:view:${id}`))
-  );
+  const canDelete = hasDatabaseScope(hasScope, "databases:delete", id);
+  const canRead = hasDatabaseScope(hasScope, "databases:query:read", id);
+  const canWrite = hasDatabaseScope(hasScope, "databases:query:write", id);
+  const canAdmin = hasDatabaseScope(hasScope, "databases:query:admin", id);
+  const canReveal = hasDatabaseScope(hasScope, "databases:credentials:reveal", id);
+  const canViewMonitoring = hasDatabaseScope(hasScope, "databases:view", id);
 
   const [activeTab, setActiveTab] = useUrlTab(
     ["overview", "explorer", "console", "logs", "extensions"],
@@ -211,10 +154,7 @@ export function DatabaseDetail({
   const managedNodeAvailable = database?.managed?.nodeAvailable !== false;
   const managedNodeId = database?.managed?.nodeId;
   const managedInstanceId = database?.managed?.id;
-  const canObserveManagedNode = !!(
-    managedNodeId &&
-    (hasScope("nodes:details") || hasScope(`nodes:details:${managedNodeId}`))
-  );
+  const canObserveManagedNode = hasDatabaseScope(hasScope, "nodes:details", managedNodeId);
 
   useEffect(() => {
     if (activeTab === "logs" && !managedNodeAvailable) setActiveTab("overview");

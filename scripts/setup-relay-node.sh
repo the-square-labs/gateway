@@ -68,7 +68,11 @@ decode_base64url() {
 }
 
 fetch_verified() {
-  local name="$1" daemon_type="$2" manifest="${TEMP_DIR}/${name}.update.json" payload="${TEMP_DIR}/${name}.payload" signature="${TEMP_DIR}/${name}.sig" binary="${TEMP_DIR}/${name}"
+  local name="$1" daemon_type="$2"
+  local manifest="${TEMP_DIR}/${name}.update.json"
+  local payload="${TEMP_DIR}/${name}.payload"
+  local signature="${TEMP_DIR}/${name}.sig"
+  local binary="${TEMP_DIR}/${name}"
   curl -fsSL "${PACKAGE_BASE}/${name}.update.json" -o "$manifest"
   [[ "$(jq -r '.schemaVersion' "$manifest")" == "1" && "$(jq -r '.keyId' "$manifest")" == "wiolett-update-v1" ]] || { echo "Untrusted manifest envelope for ${name}" >&2; exit 1; }
   decode_base64url "$(jq -r '.payload' "$manifest")" >"$payload"

@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, vi } from "vitest";
+import { useConfirmDialog } from "@/components/common/ConfirmDialog";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { InferenceLimitPolicy } from "@/types/inference";
 import { InferenceUsersTable } from "./InferenceAdminTables";
@@ -21,9 +23,72 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 describe("InferenceUsersTable", () => {
   afterEach(() => {
+    useConfirmDialog.getState().close();
     api.invalidateCache("req:/api/inference/usage/users");
     api.invalidateCache("req:/api/inference/limits");
     vi.restoreAllMocks();
+  });
+
+  it("shows reset dates and resets all windows from one confirmed action", async () => {
+    const recoveryAt = {
+      credits5h: "2026-08-28T17:00:00.000Z",
+      credits7d: "2026-09-04T12:00:00.000Z",
+      credits30d: "2026-09-27T12:00:00.000Z",
+      apiMonthly: "2026-09-28T12:00:00.000Z",
+    };
+    vi.spyOn(api, "listInferenceUsersUsage").mockResolvedValue([
+      {
+        id: "user-1",
+        email: "alex@example.com",
+        name: "Alex Gateway",
+        avatarUrl: null,
+        limits: {
+          enabled: true,
+          credits5hEnabled: true,
+          credits5h: 100,
+          credits7dEnabled: true,
+          credits7d: 500,
+          credits30dEnabled: true,
+          credits30d: 1000,
+          apiMonthlyMicrodollars: 10_000_000,
+          billingTimezone: "UTC",
+        },
+        usage: {
+          credits5h: 10,
+          credits7d: 20,
+          credits30d: 30,
+          apiMonthlyMicrodollars: 1_000_000,
+          recoveryAt,
+        },
+      },
+    ]);
+    vi.spyOn(api, "listInferenceLimits").mockResolvedValue([limitPolicy()]);
+    const reset = vi.spyOn(api, "resetInferenceUserLimits").mockResolvedValue({
+      resetAt: "2026-08-28T12:00:00.000Z",
+      usage: {
+        credits5h: 0,
+        credits7d: 0,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        recoveryAt,
+      },
+    });
+    const user = userEvent.setup();
+
+    const { container } = render(<InferenceUsersTable canManage />);
+    expect(container.querySelector(".lucide-gauge")).toBeInTheDocument();
+    await user.click(await screen.findByText("Alex Gateway"));
+
+    expect(screen.getByText(`Resets ${formatDateTime(recoveryAt.credits5h)}`)).toBeInTheDocument();
+    expect(screen.getByText(`Resets ${formatDateTime(recoveryAt.apiMonthly)}`)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reset limits" }));
+    expect(useConfirmDialog.getState()).toMatchObject({
+      open: true,
+      title: "Reset usage limits?",
+      confirmLabel: "Reset limits",
+    });
+    await act(async () => useConfirmDialog.getState().onConfirm?.());
+    await waitFor(() => expect(reset).toHaveBeenCalledWith("user-1"));
   });
 
   it("embeds the user table and opens the shared default-policy editor", async () => {

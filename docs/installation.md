@@ -15,7 +15,7 @@ The disk figures are free capacity after the operating system is installed. When
 
 - Linux with Docker Engine and Docker Compose v2.
 - OpenSSL and curl.
-- Access to the Gateway image registry and GitLab release API.
+- Access to the Gateway update service and image registry. The update service resolves signed artifacts from GitHub Releases.
 - Inbound `3000/tcp` for the UI/API and `9443/tcp` for managed daemon gRPC connections.
 - A trusted reverse proxy is optional. Gateway can serve port 3000 directly over HTTP or over a certificate issued by its existing System CA.
 

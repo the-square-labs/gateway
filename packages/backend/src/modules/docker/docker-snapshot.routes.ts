@@ -61,6 +61,7 @@ const VIEW_SCOPE: Record<DockerRefreshKind, string> = {
 };
 
 async function canRefreshContainerDetail(scopes: string[], nodeId: string, key: string): Promise<boolean> {
+  await container.resolve(DockerManagementService).inspectUserContainer(nodeId, key);
   if (hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, '')) return true;
   const resources = container.resolve(DockerAccessResourceService);
   const resourceId =

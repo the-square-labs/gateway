@@ -99,7 +99,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Integrations | GitLab project, repository, CI/CD, variable, webhook, registry, and sandbox workflows; GitHub repository and Actions workflows; generic Git connectors; external SSH connectors; and Cloudflare DNS/ACME automation. Connector credentials are encrypted and access is scope-gated. |
 | Relay | A long-lived local relay owns public `9443/tcp` for daemon control and managed tunnel traffic. Relay Pool can add remote supervisor/worker pairs, explicit placement and rebalancing, draining, and rolling signed updates while preserving one logical Secure Link. |
 | AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. |
-| Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@sqgateway/inference`. |
+| Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, capability-compatible cross-provider fallback before output begins, OpenAI- and Anthropic-compatible APIs, and managed Codex or Claude Code setup with optional user-session auto-start through `@sqgateway/inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
 ## How It Works

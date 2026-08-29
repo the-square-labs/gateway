@@ -10,6 +10,8 @@ export interface ComposeServiceTarget {
 export interface ComposeManagedDatabasePatch {
   bindingId: string;
   networkName: string;
+  hostAlias?: string;
+  hostAddress?: string;
   environment: Record<string, string>;
 }
 
@@ -76,6 +78,28 @@ function serviceNetworks(value: unknown): Record<string, unknown> {
   return { ...value };
 }
 
+function serviceExtraHosts(value: unknown): Record<string, string> {
+  if (value === undefined) return {};
+  if (Array.isArray(value)) {
+    const result: Record<string, string> = {};
+    for (const entry of value) {
+      if (typeof entry !== 'string') {
+        throw new AppError(409, 'COMPOSE_EXTRA_HOSTS_CONFLICT', 'Compose service extra_hosts cannot be updated safely');
+      }
+      const separator = entry.indexOf(':');
+      if (separator <= 0 || separator === entry.length - 1) {
+        throw new AppError(409, 'COMPOSE_EXTRA_HOSTS_CONFLICT', 'Compose service extra_hosts cannot be updated safely');
+      }
+      result[entry.slice(0, separator)] = entry.slice(separator + 1);
+    }
+    return result;
+  }
+  if (!isRecord(value)) {
+    throw new AppError(409, 'COMPOSE_EXTRA_HOSTS_CONFLICT', 'Compose service extra_hosts cannot be updated safely');
+  }
+  return Object.fromEntries(Object.entries(value).map(([host, address]) => [host, String(address)]));
+}
+
 function networkKey(bindingId: string) {
   return `gateway_db_${bindingId.replaceAll('-', '').slice(0, 16)}`;
 }
@@ -118,6 +142,15 @@ export function addManagedDatabaseBindingToYaml(yaml: string, serviceName: strin
   }
   service.environment = environment;
 
+  if (patch.hostAlias && patch.hostAddress) {
+    const extraHosts = serviceExtraHosts(service.extra_hosts);
+    if (extraHosts[patch.hostAlias] !== undefined && extraHosts[patch.hostAlias] !== patch.hostAddress) {
+      throw new AppError(409, 'COMPOSE_EXTRA_HOSTS_CONFLICT', `Compose service already defines ${patch.hostAlias}`);
+    }
+    extraHosts[patch.hostAlias] = patch.hostAddress;
+    service.extra_hosts = extraHosts;
+  }
+
   const logicalNetwork = networkKey(patch.bindingId);
   const networks = isRecord(root.networks) ? { ...root.networks } : {};
   const existingNetwork = networks[logicalNetwork];
@@ -158,6 +191,16 @@ export function removeManagedDatabaseBindingFromYaml(
   if (Object.keys(environment).length > 0) service.environment = environment;
   else delete service.environment;
 
+  if (patch.hostAlias && patch.hostAddress) {
+    const extraHosts = serviceExtraHosts(service.extra_hosts);
+    if (extraHosts[patch.hostAlias] !== undefined && extraHosts[patch.hostAlias] !== patch.hostAddress) {
+      throw new AppError(409, 'COMPOSE_MANAGED_BINDING_CHANGED', `Managed host ${patch.hostAlias} was changed`);
+    }
+    delete extraHosts[patch.hostAlias];
+    if (Object.keys(extraHosts).length > 0) service.extra_hosts = extraHosts;
+    else delete service.extra_hosts;
+  }
+
   const logicalNetwork = networkKey(patch.bindingId);
   const attachedNetworks = serviceNetworks(service.networks);
   delete attachedNetworks[logicalNetwork];
@@ -196,6 +239,16 @@ export function assertManagedDatabaseBindingInYaml(
         409,
         'COMPOSE_MANAGED_BINDING_REQUIRED',
         `Compose service must preserve managed environment ${name}`
+      );
+    }
+  }
+  if (patch.hostAlias && patch.hostAddress) {
+    const extraHosts = serviceExtraHosts(service.extra_hosts);
+    if (extraHosts[patch.hostAlias] !== patch.hostAddress) {
+      throw new AppError(
+        409,
+        'COMPOSE_MANAGED_BINDING_REQUIRED',
+        `Compose service must preserve managed host ${patch.hostAlias}`
       );
     }
   }

@@ -71,6 +71,7 @@ function registerCommon(candidateConnectionIds = ['conn-1']) {
     }),
     eval: evalMock,
   } as never);
+  const releaseAffinityTurn = vi.fn().mockResolvedValue(undefined);
   const proxy = {
     resolveTarget: vi.fn().mockResolvedValue({
       model: { id: 'model-1', publicId: 'gpt-5.5', reasoningEfforts: [], defaultReasoningEffort: null },
@@ -88,6 +89,8 @@ function registerCommon(candidateConnectionIds = ['conn-1']) {
       candidateConnectionIds,
     }),
     dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data' }),
+    markAffinityActive: vi.fn().mockResolvedValue(undefined),
+    beginAffinityTurn: vi.fn().mockResolvedValue(releaseAffinityTurn),
   };
   container.registerInstance(InferenceCoreProxyService, proxy as never);
   const accounting = {
@@ -96,7 +99,7 @@ function registerCommon(candidateConnectionIds = ['conn-1']) {
     finalizeCoreRequest: vi.fn().mockResolvedValue(undefined),
   };
   container.registerInstance(InferenceCoreAccountingService, accounting as never);
-  return { proxy, accounting, evalMock };
+  return { proxy, accounting, evalMock, releaseAffinityTurn };
 }
 
 function clientSocket() {
@@ -135,6 +138,40 @@ describe('core responses websocket proxy', () => {
     upstream.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } }));
     upstream.handlers.close?.();
     expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
+  });
+
+  it('refreshes thread affinity activity when a WebSocket turn finishes', async () => {
+    const { proxy, releaseAffinityTurn } = registerCommon();
+    let finishActivityRefresh!: () => void;
+    proxy.markAffinityActive.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishActivityRefresh = resolve;
+      })
+    );
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      {
+        data: JSON.stringify({
+          type: 'response.create',
+          response: { model: 'gpt-5.5', input: 'continue', prompt_cache_key: 'thread-activity' },
+        }),
+      } as never,
+      ws as never
+    );
+
+    upstreamInstances[0]!.handlers.message?.(
+      JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } })
+    );
+
+    expect(proxy.markAffinityActive).toHaveBeenCalledWith('thread-activity');
+    expect(releaseAffinityTurn).not.toHaveBeenCalled();
+    finishActivityRefresh();
+    await vi.waitFor(() => expect(releaseAffinityTurn).toHaveBeenCalledOnce());
+    expect(proxy.markAffinityActive.mock.invocationCallOrder[0]).toBeLessThan(
+      releaseAffinityTurn.mock.invocationCallOrder[0]!
+    );
   });
 
   it.each(['error', 'response.failed', 'response.incomplete'])('%s finalizes the request as failed', async (type) => {

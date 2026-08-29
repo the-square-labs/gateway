@@ -1,7 +1,8 @@
-import { SlidersHorizontal } from "lucide-react";
+import { Gauge, SlidersHorizontal } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
+import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -20,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
   InferenceLimitInput,
@@ -100,6 +102,7 @@ export function InferenceUsersTable({
   const [apiDollars, setApiDollars] = useState("0");
   const [apiUsageEnabled, setApiUsageEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const initializedRef = useRef(hasCachedData);
 
   const parsedCredits5h = parseNonNegativeNumber(creditLimitDraft.credits5h);
@@ -194,6 +197,33 @@ export function InferenceUsersTable({
       toast.error(error instanceof Error ? error.message : "Failed to update limits");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const resetLimits = async () => {
+    if (!editing) return;
+    if (
+      !(await confirm({
+        title: "Reset usage limits?",
+        description: `Reset all active inference usage windows for ${editing.email}? Current usage will become zero and each reset date will move to a new window starting now.`,
+        confirmLabel: "Reset limits",
+        variant: "default",
+      }))
+    ) {
+      return;
+    }
+    setResetting(true);
+    try {
+      const result = await api.resetInferenceUserLimits(editing.id);
+      setEditing((current) => (current ? { ...current, usage: result.usage } : current));
+      setUsers((current) =>
+        current.map((user) => (user.id === editing.id ? { ...user, usage: result.usage } : user))
+      );
+      toast.success("Usage limits reset");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to reset limit usage");
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -295,6 +325,7 @@ export function InferenceUsersTable({
       {loading && <Skeleton />}
       <PanelShell
         title="Limits"
+        icon={<Gauge className="h-4 w-4" />}
         description={
           canViewUsage
             ? "Default inherited policy, per-user overrides, and current usage"
@@ -358,6 +389,11 @@ export function InferenceUsersTable({
               onChange={(credits5h) => setCreditLimitDraft((value) => ({ ...value, credits5h }))}
               disabled={!form.credits5hEnabled || !globallyEnabled.credits5h}
               description={!globallyEnabled.credits5h ? "Disabled globally" : undefined}
+              recoveryAt={
+                form.credits5hEnabled && globallyEnabled.credits5h
+                  ? editing?.usage?.recoveryAt.credits5h
+                  : undefined
+              }
             />
             <LimitInput
               label="Weekly credit limit"
@@ -365,6 +401,11 @@ export function InferenceUsersTable({
               onChange={(credits7d) => setCreditLimitDraft((value) => ({ ...value, credits7d }))}
               disabled={!form.credits7dEnabled || !globallyEnabled.credits7d}
               description={!globallyEnabled.credits7d ? "Disabled globally" : undefined}
+              recoveryAt={
+                form.credits7dEnabled && globallyEnabled.credits7d
+                  ? editing?.usage?.recoveryAt.credits7d
+                  : undefined
+              }
             />
             <LimitInput
               label="Monthly credit limit"
@@ -372,6 +413,11 @@ export function InferenceUsersTable({
               onChange={(credits30d) => setCreditLimitDraft((value) => ({ ...value, credits30d }))}
               disabled={!form.credits30dEnabled || !globallyEnabled.credits30d}
               description={!globallyEnabled.credits30d ? "Disabled globally" : undefined}
+              recoveryAt={
+                form.credits30dEnabled && globallyEnabled.credits30d
+                  ? editing?.usage?.recoveryAt.credits30d
+                  : undefined
+              }
             />
             <LimitInput
               label="API monthly limit · USD"
@@ -382,6 +428,7 @@ export function InferenceUsersTable({
               }}
               step="0.01"
               disabled={!apiUsageEnabled}
+              recoveryAt={apiUsageEnabled ? editing?.usage?.recoveryAt.apiMonthly : undefined}
               trailingControl={
                 <Switch
                   checked={apiUsageEnabled}
@@ -415,6 +462,16 @@ export function InferenceUsersTable({
                 searchPlaceholder="Search timezones..."
               />
             </SettingsControlRow>
+            {editing ? (
+              <SettingsControlRow
+                title="Reset usage limits"
+                description="Start fresh usage windows from the current time. Limit values are unchanged."
+              >
+                <Button variant="outline" onClick={() => void resetLimits()} disabled={resetting}>
+                  {resetting ? "Resetting..." : "Reset limits"}
+                </Button>
+              </SettingsControlRow>
+            ) : null}
           </PanelShell>
           <PanelShell
             title="AI credit limits"
@@ -483,6 +540,7 @@ function LimitInput({
   disabled = false,
   description,
   trailingControl,
+  recoveryAt,
 }: {
   label: string;
   value: string;
@@ -491,10 +549,17 @@ function LimitInput({
   disabled?: boolean;
   description?: string;
   trailingControl?: ReactNode;
+  recoveryAt?: string;
 }) {
+  const resolvedDescription =
+    description ?? (recoveryAt ? `Resets ${formatDateTime(recoveryAt)}` : undefined);
   return (
-    <SettingsControlRow title={label} description={description}>
-      <div className="flex w-full items-center gap-3">
+    <SettingsControlRow
+      title={label}
+      description={resolvedDescription}
+      controlsClassName="sm:min-w-[12rem]"
+    >
+      <div className="flex w-full items-center justify-end gap-2">
         <Input
           aria-label={`${label} value`}
           type="number"
@@ -504,6 +569,7 @@ function LimitInput({
           placeholder={disabled ? "Unlimited" : undefined}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
+          className="h-8 sm:max-w-44"
         />
         {trailingControl}
       </div>

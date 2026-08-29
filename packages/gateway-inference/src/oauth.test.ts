@@ -65,13 +65,13 @@ function jsonResponse(value: unknown, status = 200) {
 }
 
 describe('OAuth PKCE login', () => {
-  it('passes the complete OAuth URL to Windows without cmd.exe parsing ampersands', () => {
+  it('opens the complete OAuth URL through the Windows default browser', () => {
     const url =
       'https://gateway.example.com/api/oauth/authorize?response_type=code&client_id=goc_cli&code_challenge=test';
 
     expect(resolveBrowserLaunchCommand('win32', url)).toEqual({
-      command: 'explorer.exe',
-      args: [url],
+      command: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+      args: ['/d', '/s', '/c', `start "" "${url}"`],
     });
   });
 

@@ -119,8 +119,29 @@ export interface ManagedDatabaseBinding {
   targetResourceId: string;
   environment: ManagedDatabaseBindingEnvironment;
   status: "creating" | "ready" | "error" | "deleting";
+  lastError: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ManagedDatabaseBindingRuntime {
+  routeId: string;
+  activeStreams: number;
+  openedTotal: string;
+  completedTotal: string;
+  failedTotal: string;
+  throttledTotal: string;
+  sourceToTargetBytes: string;
+  targetToSourceBytes: string;
+  setupLatencyP95Ms: number;
+  averageDurationMs: number;
+  lastActivityAt: string | null;
+  metricsSince: string;
+}
+
+export interface ManagedDatabaseBindingRuntimeStatus {
+  binding: ManagedDatabaseBinding;
+  runtime: ManagedDatabaseBindingRuntime | null;
 }
 
 export interface ManagedDatabaseBindingCreateInput {

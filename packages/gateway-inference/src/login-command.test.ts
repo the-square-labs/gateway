@@ -44,6 +44,19 @@ describe('Gateway inference token login', () => {
     });
     expect(() => parseArgs(['--home', '--token', 'gwi_test', 'login'])).toThrow(/requires a directory path/i);
     expect(() => parseArgs(['setup', 'codex', '--token', 'gwi_test'])).toThrow(/only with the login command/i);
+    expect(parseArgs(['setup', 'codex', '--url', 'https://gateway.example.com', '--startup'])).toEqual({
+      command: ['setup', 'codex'],
+      url: 'https://gateway.example.com',
+      startup: true,
+    });
+    expect(parseArgs(['--url=https://gateway.example.com'])).toEqual({
+      command: [],
+      url: 'https://gateway.example.com',
+    });
+    expect(() => parseArgs(['login', 'https://one.example.com', '--url', 'https://two.example.com'])).toThrow(
+      /either positionally or with --url/i
+    );
+    expect(() => parseArgs(['setup', 'claude-code', '--startup'])).toThrow(/only with setup codex/i);
   });
 
   it('binds the existing token to its Gateway user without OAuth or an email argument', async () => {

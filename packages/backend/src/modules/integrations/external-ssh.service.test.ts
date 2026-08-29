@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ExternalSshService } from './external-ssh.service.js';
+import { ExternalSshService, isLoopbackAddress } from './external-ssh.service.js';
 
 function serviceWithNodes(nodeRows: unknown[] = []) {
   const db = {
@@ -13,6 +13,16 @@ function serviceWithNodes(nodeRows: unknown[] = []) {
 }
 
 describe('ExternalSshService target safety', () => {
+  it.each([
+    '127.0.0.1',
+    '::1',
+    '0:0:0:0:0:0:0:1',
+    '::ffff:127.0.0.1',
+    '::ffff:7f00:1',
+  ])('recognizes loopback address form %s', (address) => {
+    expect(isLoopbackAddress(address)).toBe(true);
+  });
+
   it('rejects a managed node after hostname resolution', async () => {
     const { service } = serviceWithNodes([
       {

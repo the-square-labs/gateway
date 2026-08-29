@@ -139,6 +139,36 @@ func TestComposePolicyRejectsBuildAndInjectsOwnershipLabels(t *testing.T) {
 	}
 }
 
+func TestComposePolicyRejectsVariableInterpolationInVolumeSources(t *testing.T) {
+	for _, composeYAML := range []string{
+		`services:
+  web:
+    image: nginx:alpine
+    volumes:
+      - ${HOST_PATH}:/sock:ro
+volumes:
+  ${HOST_PATH}: {}
+`,
+		`services:
+  web:
+    image: nginx:alpine
+    volumes:
+      - type: volume
+        source: ${HOST_PATH}
+        target: /sock
+volumes:
+  ${HOST_PATH}: {}
+`,
+	} {
+		command := validComposeCommand("apply", "operation-volume-interpolation")
+		command.Variables = map[string]string{"HOST_PATH": "/var/run/docker.sock"}
+		command.ComposeYaml = []byte(composeYAML)
+		if _, err := validateComposeCommand(command); err == nil || !strings.Contains(err.Error(), "host bind") {
+			t.Fatalf("volume interpolation validation error = %v", err)
+		}
+	}
+}
+
 func TestComposePolicyAcceptsOrdinaryResourceLimitsAndRejectsInvalidValues(t *testing.T) {
 	command := validComposeCommand("apply", "operation-resources")
 	command.ComposeYaml = []byte(`services:

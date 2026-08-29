@@ -1,0 +1,35 @@
+---
+title: Publish a static site with Pages
+description: Upload or build an immutable site deployment and route a domain to a release tag.
+section: End-to-end journeys
+order: 4
+audience: [developer, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Publish a static site with Pages
+
+## Artifact upload path
+
+1. Enable Pages in feature settings.
+2. Create a Pages Project and select nginx placement.
+3. Upload the built static artifact through the resumable deploy API or remote MCP upload workflow.
+4. Finalize the immutable Deployment.
+5. Move the system-managed `latest` Tag or a custom Tag to the Deployment.
+6. Create a Pages Route for the public domain and selected Tag.
+7. Verify caching, runtime configuration, and rollback by moving the Tag.
+
+## Git build path
+
+On supported plans, connect a repository, discover `package.json`, select the package manager and build command, configure Build Secrets, and publish the approved artifact to the requested Tag.
+
+<!-- screenshot: id=pages-project-release; viewport=1440x900; description=Pages Project with immutable deployments, latest tag, and public route; redact=domain,repository,commit-author -->
+
+## Runtime configuration
+
+Pages can serve public runtime configuration from `/_gateway/pages/config.js` as `window.runtime.config`. It is public, capped at 64 KiB, and served with `no-store`. Never place secrets in it.
+
+## Rollback
+
+Move the Route's Tag back to a known-good immutable Deployment. Do not mutate the old artifact in place.

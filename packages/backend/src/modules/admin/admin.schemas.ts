@@ -152,6 +152,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
           }
         }, 'Must be an http(s) origin without a path')
         .optional(),
+      updateChannel: z.enum(['stable', 'preview']).optional(),
       hideExternalBranding: z.boolean().optional(),
       fileUploadMaxBytes: z.number().int().min(FILE_UPLOAD_MIN_BYTES).max(FILE_UPLOAD_MAX_BYTES).optional(),
       fileOpenMaxBytes: z.number().int().min(FILE_OPEN_MIN_BYTES).max(FILE_OPEN_MAX_BYTES).optional(),

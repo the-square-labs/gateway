@@ -19,6 +19,21 @@ describe('normalizePublicUrl', () => {
 });
 
 describe('GeneralSettingsService feature settings', () => {
+  it('defaults unknown or missing update channels to stable and persists preview', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: { updateChannel: 'nightly' } }]);
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
+    };
+    const service = new GeneralSettingsService(db as never);
+
+    await expect(service.getConfig()).resolves.toMatchObject({ updateChannel: 'stable' });
+    await expect(service.updateConfig({ updateChannel: 'preview' })).resolves.toMatchObject({
+      updateChannel: 'preview',
+    });
+  });
+
   it('ignores the removed Gateway public IP field in persisted settings', async () => {
     const limit = vi.fn().mockResolvedValue([{ value: { gatewayPublicIps: ['203.0.113.10'] } }]);
     const db = {

@@ -65,7 +65,7 @@ describe("Compose UI contract", () => {
   it("creates Compose projects from repositories with the shared repository controls", () => {
     const editor = source("pages/compose/ComposeProjectEditor.tsx");
     const repositoryFields = source("pages/docker-deploy/RepositorySourceFields.tsx");
-    const api = source("services/api-docker.ts");
+    const api = source("services/api-docker-resources.ts");
     expect(editor).toContain('from "../docker-deploy/RepositorySourceFields"');
     expect(editor).toContain('value="repository" className="h-full px-3 py-0"');
     expect(editor).toContain('import { PanelShell } from "@/components/common/PanelShell"');

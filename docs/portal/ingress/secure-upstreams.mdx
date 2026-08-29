@@ -1,0 +1,19 @@
+---
+title: Secure upstreams
+description: Connect Routes to managed workloads without ordinary public port exposure.
+section: Ingress
+order: 4
+audience: [platform-engineer, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Secure upstreams
+
+Select a managed Docker target in the Route or Additional Route editor. Gateway validates workload ownership and the selected service or port, creates the Route-owned Secure Link, and reconciles connector state through the Relay.
+
+Route-owned bindings follow the Route lifecycle. They can be inspected but cannot be deleted independently. Additional user-managed bindings are intended for advanced nginx configuration and have their own lifecycle.
+
+Verify connector health, Route health, and application behavior. If a workload is recreated, Gateway should reconnect by stable resource identity. If a Route is deleted, its owned binding must be retired.
+
+Do not work around a failed link by publishing an internal workload port until you understand the failure. Check Relay health, both node connections, target identity, scope authorization, and connector logs first.

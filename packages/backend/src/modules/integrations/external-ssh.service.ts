@@ -511,8 +511,31 @@ export class ExternalSshService {
   }
 }
 
-function isLoopbackAddress(address: string): boolean {
-  return address === '::1' || address === '0:0:0:0:0:0:0:1' || address.startsWith('127.');
+export function isLoopbackAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  if (normalized.startsWith('127.')) return true;
+  if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
+  const halves = normalized.split('::');
+  if (halves.length > 2) return false;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves[1] ? halves[1].split(':') : [];
+  const dotted = right.at(-1)?.includes('.') ? right.pop() : left.at(-1)?.includes('.') ? left.pop() : undefined;
+  if (dotted) {
+    const octets = dotted.split('.').map(Number);
+    if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+    right.push(((octets[0]! << 8) | octets[1]!).toString(16), ((octets[2]! << 8) | octets[3]!).toString(16));
+  }
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || missing < 0) return false;
+  const words = [...left, ...Array.from({ length: missing }, () => '0'), ...right].map((word) =>
+    Number.parseInt(word, 16)
+  );
+  return (
+    words.length === 8 &&
+    words.slice(0, 5).every((word) => word === 0) &&
+    words[5] === 0xffff &&
+    (words[6] ?? 0) >> 8 === 127
+  );
 }
 
 function fingerprint(key: Buffer): string {

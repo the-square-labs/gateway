@@ -22,7 +22,7 @@ export function InferenceEndpointRow() {
   return (
     <SettingsControlRow
       title="Base URL"
-      description="OpenAI-compatible inference API root."
+      description="Root URL for the OpenAI-compatible inference API used by clients."
       help="Use this address as the provider base URL in OpenAI-compatible clients. Authentication still uses a Gateway inference API token."
     >
       <CopyValueField label="Base URL" showLabel={false} value={baseUrl} className="w-full" />
@@ -70,8 +70,11 @@ export function InferenceHarnessDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const gatewayUrl = window.location.origin;
-  const codexSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup codex`;
-  const claudeCodeSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup claude-code`;
+  const interactiveSetupCopyCommand = `${CLI_COMMAND} --url ${gatewayUrl}`;
+  const codexSetupCommand = `${CLI_COMMAND} setup codex`;
+  const codexSetupCopyCommand = `${codexSetupCommand} --url ${gatewayUrl}`;
+  const claudeCodeSetupCommand = `${CLI_COMMAND} setup claude-code`;
+  const claudeCodeSetupCopyCommand = `${claudeCodeSetupCommand} --url ${gatewayUrl}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -84,7 +87,12 @@ export function InferenceHarnessDialog({
         </DialogDescription>
 
         <div className="space-y-4">
-          <CopyCodeBlock label="Interactive setup" value={CLI_COMMAND} codeClassName="min-h-0" />
+          <CopyCodeBlock
+            label="Interactive setup"
+            value={CLI_COMMAND}
+            copyValue={interactiveSetupCopyCommand}
+            codeClassName="min-h-0"
+          />
 
           <div className="space-y-2">
             <div>
@@ -96,7 +104,8 @@ export function InferenceHarnessDialog({
             </div>
             <CopyCodeBlock
               label="Direct Codex setup"
-              value={codexSetupCommands}
+              value={codexSetupCommand}
+              copyValue={codexSetupCopyCommand}
               codeClassName="min-h-0"
             />
             <div className="border border-border p-3">
@@ -119,7 +128,8 @@ export function InferenceHarnessDialog({
             </div>
             <CopyCodeBlock
               label="Direct Claude Code setup"
-              value={claudeCodeSetupCommands}
+              value={claudeCodeSetupCommand}
+              copyValue={claudeCodeSetupCopyCommand}
               codeClassName="min-h-0"
             />
             <div className="border border-border p-3">

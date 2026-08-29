@@ -82,7 +82,7 @@ export function parseLegacySettingsEnv(content: string): LegacySettingsEnv {
         oauthBodyMaxBytes: optionalInteger('OAUTH_BODY_MAX_BYTES'),
         inferenceHttpBodyMaxBytes: legacyInferenceBodyBytes,
         inferenceWebSocketMaxPayloadBytes:
-          legacyInferenceBodyBytes === undefined ? undefined : Math.min(legacyInferenceBodyBytes, 50 * 1024 * 1024),
+          legacyInferenceBodyBytes === undefined ? undefined : Math.min(legacyInferenceBodyBytes, 512 * 1024 * 1024),
         inferenceMaxConcurrentRequestsPerToken: optionalInteger('INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN'),
         inferenceConcurrencyLeaseSeconds: optionalInteger('INFERENCE_CONCURRENCY_LEASE_SECONDS'),
       }),

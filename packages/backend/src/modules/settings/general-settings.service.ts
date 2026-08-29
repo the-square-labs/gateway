@@ -46,6 +46,7 @@ export const SHUTDOWN_TOTAL_MAX_SECONDS = 50;
 
 export interface GeneralSettings {
   publicUrl: string | null;
+  updateChannel: UpdateChannel;
   hideExternalBranding: boolean;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
@@ -57,6 +58,8 @@ export interface GeneralSettings {
   relayGrantTtlHours: number;
   features: GeneralFeatureSettings;
 }
+
+export type UpdateChannel = 'stable' | 'preview';
 
 export interface GeneralRelaySettings {
   dataLanes: number;
@@ -85,6 +88,7 @@ export interface GeneralFeatureSettings {
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   publicUrl: null,
+  updateChannel: 'stable',
   hideExternalBranding: false,
   fileUploadMaxBytes: FILE_UPLOAD_DEFAULT_BYTES,
   fileOpenMaxBytes: FILE_OPEN_DEFAULT_BYTES,
@@ -452,6 +456,7 @@ export class GeneralSettingsService {
 
     return {
       publicUrl: normalizePublicUrl(record.publicUrl as string | null | undefined),
+      updateChannel: record.updateChannel === 'preview' ? 'preview' : 'stable',
       hideExternalBranding:
         typeof record.hideExternalBranding === 'boolean'
           ? record.hideExternalBranding

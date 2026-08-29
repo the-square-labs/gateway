@@ -1,0 +1,26 @@
+---
+title: Security model
+description: Understand Gateway trust boundaries and fail-closed behavior.
+section: Operations and security
+order: 4
+audience: [security-admin, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Security model
+
+Gateway assumes managed hosts and administrators are consequential trust boundaries. It reduces reusable credentials and direct shell dependence through outbound daemon enrollment, PKI identities, resource scopes, audited operations, and bounded daemon roles.
+
+Key principles:
+
+- one-time enrollment rather than reusable node tokens;
+- mTLS and pinned Gateway identity for managed transport;
+- explicit resource scopes and separate reveal/export/mount permissions;
+- encrypted secrets at rest and masked output by default;
+- Gateway-owned internal containers excluded from user lifecycle APIs;
+- separate application identities for managed database bindings;
+- fail-closed behavior when ownership, entitlement, node state, or provider compatibility cannot be proven;
+- immutable audit attribution after account lifecycle changes.
+
+Gateway is not a host hardening product, firewall manager, general VPN, or replacement for engine-native backups. Secure the underlying operating systems and networks independently.

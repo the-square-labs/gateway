@@ -3,6 +3,7 @@ import {
   CircleDollarSign,
   Clock3,
   Gauge,
+  Plus,
   Server,
   Sigma,
   TriangleAlert,
@@ -15,7 +16,10 @@ import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
-import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
+import {
+  useInferenceSelfUsage,
+  useInferenceSelfUsageOverview,
+} from "@/hooks/use-inference-self-usage";
 import { DASHBOARD_INFERENCE_USAGE_THRESHOLD } from "@/lib/inference-self-usage";
 import { cn, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -23,6 +27,7 @@ import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import type {
   InferenceSelfUsage,
   InferenceSystemUsage,
+  InferenceUsageOverview,
   InferenceUsageWindow,
 } from "@/types/inference";
 import {
@@ -79,14 +84,16 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
         title="Inference usage"
         description="Usage limits for the AI models available to you. Limits recover automatically."
         actions={
-          <Button variant="ghost" onClick={() => setInstructionsOpen(true)}>
+          <Button onClick={() => setInstructionsOpen(true)}>
+            <Plus className="h-4 w-4" />
             Set up a harness
           </Button>
         }
       >
         <div
           className={cn(
-            "grid grid-cols-1 gap-px bg-border sm:grid-cols-2",
+            "grid grid-cols-1 gap-px bg-border",
+            cardCount > 1 && "sm:grid-cols-2",
             cardCount === 4 && "xl:grid-cols-4",
             cardCount === 3 && "xl:grid-cols-3",
             cardCount === 2 && "xl:grid-cols-2"
@@ -96,7 +103,9 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
             <UsageStatCard key={label} label={label} value={value} icon={icon} />
           ))}
         </div>
-        <InferenceEndpointRow />
+        <div className="border-t border-border">
+          <InferenceEndpointRow />
+        </div>
       </PanelShell>
       <InferenceHarnessDialog open={instructionsOpen} onOpenChange={setInstructionsOpen} />
     </>
@@ -131,32 +140,73 @@ function UsageStatCard({
   );
 }
 
-export function InferenceUsage() {
-  const { usage, loading, error } = useInferenceSelfUsage();
+function InferenceUsageOverviewSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-busy="true">
+      {Array.from({ length: 4 }, (_, index) => (
+        <Skeleton key={index} className="h-44 w-full" />
+      ))}
+    </div>
+  );
+}
+
+export function InferenceUsage({
+  previewUsage,
+  previewOverview,
+}: {
+  previewUsage?: InferenceSelfUsage;
+  previewOverview?: InferenceUsageOverview;
+} = {}) {
+  const liveUsage = useInferenceSelfUsage(previewUsage === undefined);
+  const liveOverview = useInferenceSelfUsageOverview(previewOverview === undefined);
+  const usage = previewUsage ?? liveUsage.usage;
+  const overview = previewOverview ?? liveOverview.usage;
+  const loading = previewUsage === undefined && liveUsage.loading;
+  const overviewLoading = previewOverview === undefined && liveOverview.loading;
+  const error = previewUsage === undefined ? liveUsage.error : null;
 
   if (loading) {
     return (
-      <PanelShell
-        icon={<Gauge className="h-4 w-4" />}
-        title="Inference usage"
-        description="Usage limits for the AI models available to you. Limits recover automatically."
-      >
-        <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2" aria-busy="true">
-          {Array.from({ length: 2 }, (_, index) => (
-            <div key={index} className="space-y-3 bg-card p-4">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-7 w-16" />
-              <Skeleton className="h-2 w-full" />
-              <Skeleton className="h-3 w-40" />
-            </div>
-          ))}
-        </div>
-      </PanelShell>
+      <div className="space-y-4">
+        <InferenceUsageOverviewSkeleton />
+        <PanelShell
+          icon={<Gauge className="h-4 w-4" />}
+          title="Inference usage"
+          description="Usage limits for the AI models available to you. Limits recover automatically."
+        >
+          <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2" aria-busy="true">
+            {Array.from({ length: 2 }, (_, index) => (
+              <div key={index} className="space-y-3 bg-card p-4">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-7 w-16" />
+                <Skeleton className="h-2 w-full" />
+                <Skeleton className="h-3 w-40" />
+              </div>
+            ))}
+          </div>
+        </PanelShell>
+      </div>
     );
   }
   if (error || !usage?.enabled) return null;
 
-  return <InferenceUsagePanel usage={usage} />;
+  const hasConfiguredLimit =
+    usage.api.configured ||
+    usage.subscription["5h"].configured ||
+    usage.subscription["7d"].configured ||
+    usage.subscription["30d"].configured;
+  if (!overview && !overviewLoading && !hasConfiguredLimit) return null;
+
+  return (
+    <div className="space-y-4">
+      {overview ? (
+        <InferenceUsageOverviewCards usage={overview} />
+      ) : overviewLoading ? (
+        <InferenceUsageOverviewSkeleton />
+      ) : null}
+      {hasConfiguredLimit ? <InferenceUsagePanel usage={usage} /> : null}
+    </div>
+  );
 }
 
 export function DashboardInferenceUsage({
@@ -357,18 +407,6 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
     void load();
   }, [load, refreshToken]);
 
-  const totals = useMemo(() => {
-    const requests = usage?.requestTotals.reduce((sum, row) => sum + Number(row.requests), 0) ?? 0;
-    return {
-      requests,
-      tokens: usage?.ledgerTotals.reduce((sum, row) => sum + Number(row.tokens), 0) ?? 0,
-      credits: usage?.ledgerTotals.reduce((sum, row) => sum + Number(row.credits), 0) ?? 0,
-      apiMicrodollars:
-        usage?.ledgerTotals.reduce((sum, row) => sum + Number(row.apiMicrodollars), 0) ?? 0,
-    };
-  }, [usage]);
-  const history = usage?.dailyUsage ?? [];
-
   if (error && !usage) {
     return (
       <PanelShell
@@ -387,42 +425,60 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
 
   if (loading && !usage) return <Skeleton />;
 
+  return <InferenceUsageOverviewCards usage={usage!} />;
+}
+
+export function InferenceUsageOverviewCards({ usage }: { usage: InferenceUsageOverview }) {
+  const totals = useMemo(() => {
+    const requests = usage.requestTotals.reduce((sum, row) => sum + Number(row.requests), 0);
+    return {
+      requests,
+      tokens: usage.ledgerTotals.reduce((sum, row) => sum + Number(row.tokens), 0),
+      credits: usage.ledgerTotals.reduce((sum, row) => sum + Number(row.credits), 0),
+      apiMicrodollars: usage.ledgerTotals.reduce(
+        (sum, row) => sum + Number(row.apiMicrodollars),
+        0
+      ),
+    };
+  }, [usage]);
+  const subtitle = `Last ${usage.windowDays} days`;
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard
-        label="API cost"
+        label="Inference API usage"
         value={`$${(totals.apiMicrodollars / 1_000_000).toFixed(2)}`}
         icon={CircleDollarSign}
-        history={history.map((row) => row.apiMicrodollars / 1_000_000)}
+        history={usage.dailyUsage.map((row) => row.apiMicrodollars / 1_000_000)}
         color="#22c55e"
-        subtitle="Last 30 days"
+        subtitle={subtitle}
         appearance="dashboard"
       />
       <StatCard
-        label="Tokens"
+        label="Inference tokens"
         value={totals.tokens.toLocaleString()}
         icon={Sigma}
-        history={history.map((row) => row.tokens)}
+        history={usage.dailyUsage.map((row) => row.tokens)}
         color="#3b82f6"
-        subtitle="Last 30 days"
+        subtitle={subtitle}
         appearance="dashboard"
       />
       <StatCard
-        label="Credits"
+        label="Inference credits"
         value={Math.round(totals.credits).toLocaleString()}
         icon={Gauge}
-        history={history.map((row) => row.credits)}
+        history={usage.dailyUsage.map((row) => row.credits)}
         color="#8b5cf6"
-        subtitle="Last 30 days"
+        subtitle={subtitle}
         appearance="dashboard"
       />
       <StatCard
-        label="Requests"
+        label="Inference requests"
         value={totals.requests.toLocaleString()}
         icon={Server}
-        history={history.map((row) => row.requests)}
+        history={usage.dailyUsage.map((row) => row.requests)}
         color="#f59e0b"
-        subtitle="Last 30 days"
+        subtitle={subtitle}
         appearance="dashboard"
       />
     </div>

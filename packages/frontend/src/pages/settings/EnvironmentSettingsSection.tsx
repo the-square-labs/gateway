@@ -635,7 +635,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
           divisor={MIB}
           unit="MiB"
           min={1}
-          max={256}
+          max={32}
           disabled={disabled}
           onChange={(value) => setValue("requestLimits", "requestBodyMaxBytes", value)}
         />
@@ -647,7 +647,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
           divisor={KIB}
           unit="KiB"
           min={8}
-          max={4096}
+          max={1024}
           disabled={disabled}
           onChange={(value) => setValue("requestLimits", "oauthBodyMaxBytes", value)}
         />
@@ -659,7 +659,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
           divisor={MIB}
           unit="MiB"
           min={1}
-          max={256}
+          max={2048}
           disabled={disabled}
           onChange={(value) => setValue("requestLimits", "inferenceHttpBodyMaxBytes", value)}
         />
@@ -671,7 +671,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
           divisor={MIB}
           unit="MiB"
           min={1}
-          max={50}
+          max={512}
           disabled={disabled}
           onChange={(value) =>
             setValue("requestLimits", "inferenceWebSocketMaxPayloadBytes", value)
@@ -683,6 +683,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
           help="Concurrency means requests running at the same time. This protects capacity even when the token is still below its request-per-window rate limit."
           value={draft.requestLimits.inferenceMaxConcurrentRequestsPerToken}
           unit="requests"
+          max={128}
           disabled={disabled}
           onChange={(value) =>
             setValue("requestLimits", "inferenceMaxConcurrentRequestsPerToken", value)
@@ -695,7 +696,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
           value={draft.requestLimits.inferenceConcurrencyLeaseSeconds}
           unit="seconds"
           min={30}
-          max={3600}
+          max={2400}
           disabled={disabled}
           onChange={(value) => setValue("requestLimits", "inferenceConcurrencyLeaseSeconds", value)}
         />

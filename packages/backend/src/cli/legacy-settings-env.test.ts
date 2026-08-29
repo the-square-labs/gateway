@@ -46,4 +46,11 @@ describe('parseLegacySettingsEnv', () => {
     expect(env.CLICKHOUSE_DATABASE).toBe('gateway_logs');
     expect(appUrl).toBeUndefined();
   });
+
+  it('does not preserve the retired 50 MiB WebSocket ceiling during legacy import', () => {
+    const { environment } = parseLegacySettingsEnv(`INFERENCE_BODY_MAX_BYTES=${600 * 1024 * 1024}`);
+
+    expect(environment.requestLimits?.inferenceHttpBodyMaxBytes).toBe(600 * 1024 * 1024);
+    expect(environment.requestLimits?.inferenceWebSocketMaxPayloadBytes).toBe(512 * 1024 * 1024);
+  });
 });

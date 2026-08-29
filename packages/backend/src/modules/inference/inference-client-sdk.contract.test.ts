@@ -169,7 +169,11 @@ function buildApp() {
     select: vi.fn().mockReturnValue(selectChain([{ source: SOURCE, connection: CONNECTION }])),
     query: { inferencePricingSnapshots: { findFirst: vi.fn().mockResolvedValue(null) } },
   };
-  const routing = { select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }) };
+  const routing = {
+    select: vi.fn().mockResolvedValue({ connectionId: 'conn-1', providerId: 'openai-apikey' }),
+    markAffinityActive: vi.fn().mockResolvedValue(undefined),
+    beginAffinityTurn: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue(undefined)),
+  };
   const bridge = {
     dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data' }),
   };

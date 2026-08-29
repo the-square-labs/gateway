@@ -441,7 +441,8 @@ function selectDefaultModel(catalog: Awaited<ReturnType<typeof readCatalog>>): s
 
 export async function runCommand(command: string, args: string[], env = process.env): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const launch = resolveCommandLaunch(process.platform, command, args, env);
+    const child = spawn(launch.command, launch.args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -461,6 +462,25 @@ export async function runCommand(command: string, args: string[], env = process.
     child.once('error', (error) => finish({ code: 127, stdout, stderr: error.message }));
     child.once('close', (code) => finish({ code: code ?? 1, stdout, stderr }));
   });
+}
+
+export function resolveCommandLaunch(
+  platform: NodeJS.Platform,
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env
+): { command: string; args: string[] } {
+  if (platform !== 'win32') return { command, args };
+  const commandLine = [command, ...args].map(quoteWindowsCmdArgument).join(' ');
+  return {
+    command: env.ComSpec || env.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', commandLine],
+  };
+}
+
+function quoteWindowsCmdArgument(value: string): string {
+  if (/^[A-Za-z0-9_./:\\=-]+$/.test(value)) return value;
+  return `"${value.replaceAll('%', '%%').replaceAll('"', '""')}"`;
 }
 
 function compareVersions(left: string, right: string): number {

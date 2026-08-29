@@ -1,0 +1,1 @@
+ALTER TABLE "managed_database_bindings" ADD COLUMN "connector_address" varchar(45);

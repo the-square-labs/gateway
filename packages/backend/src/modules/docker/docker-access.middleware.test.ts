@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { resolveDockerContainerScopeResourceId } from './docker-access.middleware.js';
 
 describe('Docker container emergency scope identity', () => {
@@ -25,6 +26,19 @@ describe('Docker container emergency scope identity', () => {
         resolvePersisted,
       })
     ).rejects.toThrow('container absent');
+    expect(resolvePersisted).not.toHaveBeenCalled();
+  });
+
+  it('never falls back to persisted identity for a Gateway-owned internal container', async () => {
+    const inspect = vi.fn().mockRejectedValue(new AppError(404, 'GATEWAY_INTERNAL_CONTAINER', 'Container not found'));
+    const resolvePersisted = vi.fn().mockResolvedValue('resource-1');
+
+    await expect(
+      resolveDockerContainerScopeResourceId(inspect, {
+        active: () => true,
+        resolvePersisted,
+      })
+    ).rejects.toMatchObject({ code: 'GATEWAY_INTERNAL_CONTAINER' });
     expect(resolvePersisted).not.toHaveBeenCalled();
   });
 });

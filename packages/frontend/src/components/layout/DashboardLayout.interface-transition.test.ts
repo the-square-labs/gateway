@@ -4,7 +4,7 @@ import {
   resolveAIWorkspaceEntry,
   resolveInterfaceTransition,
   shouldOpenAIConversationInConsole,
-} from "./DashboardLayout";
+} from "./dashboard-layout-helpers";
 
 describe("resolveInterfaceTransition", () => {
   it("opens Operations Console with the current conversation in the AI side panel", () => {

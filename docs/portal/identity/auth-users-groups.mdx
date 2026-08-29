@@ -1,0 +1,21 @@
+---
+title: Authentication, users, and groups
+description: Configure sign-in methods, MFA, user lifecycle, and group-based access.
+section: Identity and access
+order: 1
+audience: [security-admin, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Authentication, users, and groups
+
+Gateway supports independent OIDC, local-password, and email one-time-code authentication. Passkeys are enrolled after account creation. MFA policy can require enrollment before a user receives a normal session.
+
+Use groups as the normal permission boundary. Keep a small, auditable administrator group and separate operators, developers, observers, and automation. Blocking or deleting a user revokes access while preserving historical attribution. Restoring a deleted user leaves the account blocked until explicitly enabled.
+
+Impersonation is an administrative support flow and must remain distinguishable in session purpose and audit records. Stop impersonation to restore the original administrator session; do not issue normal API tokens from an impersonated session.
+
+Gateway does not provide SCIM. Document the organization's manual or external provisioning process accordingly.
+
+<!-- screenshot: id=groups-scope-editor; viewport=1440x900; description=Permission group editor with global and resource-scoped grants; redact=group-names,user-emails,resource-names -->

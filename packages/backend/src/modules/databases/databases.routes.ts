@@ -14,6 +14,7 @@ import {
 import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
+import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -51,6 +52,7 @@ import {
   getDatabaseConnectionBySlugRoute,
   getDatabaseConnectionRoute,
   getDatabaseHealthHistoryRoute,
+  getManagedDatabaseBindingRuntimeRoute,
   getManagedDatabaseRoute,
   getRedisKeyRoute,
   insertPostgresRowRoute,
@@ -221,6 +223,9 @@ export async function assertManagedDatabaseBindingTargetAccess(c: any, target: M
       const inspected = await container
         .resolve(DockerManagementService)
         .inspectContainer(target.targetNodeId, target.targetResourceId);
+      if (isGatewayInternalContainer(inspected)) {
+        throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+      }
       const resourceId = String(inspected?.scopeResourceId ?? '');
       if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
       for (const scope of targetScopes) {
@@ -231,6 +236,32 @@ export async function assertManagedDatabaseBindingTargetAccess(c: any, target: M
   for (const scope of ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete']) {
     assertDockerResourceScope(scopes, scope, target.targetNodeId, '');
   }
+}
+
+export async function assertManagedDatabaseBindingTargetViewAccess(c: any, target: ManagedDatabaseBindingTarget) {
+  const scopes = c.get('effectiveScopes') || [];
+  if (target.targetType === 'compose_service') {
+    const composeTarget = decodeComposeServiceTarget(target.targetResourceId);
+    assertDockerResourceScope(scopes, 'docker:compose:view', target.targetNodeId, composeTarget.projectId);
+    return;
+  }
+
+  const scope = 'docker:containers:view';
+  if (hasScope(scopes, scope) || hasScope(scopes, `${scope}:${target.targetNodeId}`)) return;
+  if (target.targetType === 'deployment') {
+    assertDockerResourceScope(scopes, scope, target.targetNodeId, target.targetResourceId);
+    return;
+  }
+
+  const inspected = await container
+    .resolve(DockerManagementService)
+    .inspectContainer(target.targetNodeId, target.targetResourceId);
+  if (isGatewayInternalContainer(inspected)) {
+    throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  }
+  const resourceId = String(inspected?.scopeResourceId ?? '');
+  if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  assertDockerResourceScope(scopes, scope, target.targetNodeId, resourceId);
 }
 
 databaseRoutes.use('*', authMiddleware);
@@ -385,6 +416,17 @@ databaseRoutes.openapi(
     const input = DeleteManagedDatabaseBindingSchema.parse(body);
     const data = await bindings.delete(managedDatabaseId, bindingId, user.id, input);
     return c.json({ data });
+  }
+);
+
+databaseRoutes.openapi(
+  { ...getManagedDatabaseBindingRuntimeRoute, middleware: requireManagedDatabaseScopes('databases:view') },
+  async (c) => {
+    const bindings = container.resolve(ManagedDatabaseBindingService);
+    const managedDatabaseId = c.req.param('id')!;
+    const bindingId = c.req.param('bindingId')!;
+    await assertManagedDatabaseBindingTargetViewAccess(c, await bindings.getTarget(managedDatabaseId, bindingId));
+    return c.json({ data: await bindings.getRuntime(managedDatabaseId, bindingId) });
   }
 );
 

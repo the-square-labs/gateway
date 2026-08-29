@@ -1,0 +1,268 @@
+export const OPERATIONS_DOCS: Record<string, string> = {
+  folders: `# Foldered Resources
+
+Gateway uses shared folder views for several resource lists. Use folder tools instead of guessing REST paths.
+
+## Tools
+- list_resource_folders({ resourceType, dockerResourceType? }) lists folders and visible assignments.
+- manage_resource_folder({ resourceType, operation, ... }) mutates folder trees and item placement.
+
+## Resource Types
+- nodes
+- databases
+- domains
+- logging_environments
+- logging_schemas
+- admin_users
+- permission_groups
+- routes
+- docker with dockerResourceType: container, compose, image, network, or volume
+
+## Operations
+- create: { name, parentId? }
+- update: { folderId, name?, parentId? }
+- delete: { folderId }
+- reorder_folders: { items: [{ id, sortOrder }] }
+- move_resources: { folderId, resourceIds }
+- reorder_resources: { items: [{ id, sortOrder }] }
+- move_folder is supported only where the underlying resource service supports moving folders.
+
+## Scope Rules
+- nodes: list with nodes:details or nodes:folders:manage; mutate with nodes:folders:manage.
+- databases: list with databases:view or databases:folders:manage; mutate with databases:folders:manage.
+- domains: list with domains:view; mutate with domains:folders:manage.
+- logging_environments: list with logs:environments:view, logs:environments:folders:manage, or logs:manage; mutate with logs:environments:folders:manage or logs:manage.
+- logging_schemas: list with logs:schemas:view, logs:schemas:folders:manage, or logs:manage; mutate with logs:schemas:folders:manage or logs:manage.
+- admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.
+- permission_groups: list with admin:groups or admin:groups:folders:manage; mutate with admin:groups:folders:manage.
+- routes: list with proxy:view or proxy:folders:manage; mutate folders with proxy:folders:manage; moving routes also checks proxy:edit for each route.
+- docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:compose:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; Compose, image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
+
+  'node-files': `# Node File Management
+
+Use manage_node_file for node filesystem operations. This works through the node daemon and follows the same validation as the node Files UI.
+
+## Operations
+- list: { nodeId, operation: "list", path? }
+- read: { nodeId, operation: "read", path, encoding?: "auto"|"utf8"|"base64", limitBytes? }
+- write: { nodeId, operation: "write", path, content? or contentBase64? }
+- create: { nodeId, operation: "create", path, content? or contentBase64? }
+- mkdir: { nodeId, operation: "mkdir", path }
+- delete: { nodeId, operation: "delete", path }
+- move: { nodeId, operation: "move", fromPath, toPath }
+- upload_init: { nodeId, operation: "upload_init", path, totalBytes }
+- upload_chunk: { nodeId, operation: "upload_chunk", uploadId, offset, contentBase64 }
+- upload_complete: { nodeId, operation: "upload_complete", uploadId, path, totalBytes }
+- upload_abort: { nodeId, operation: "upload_abort", uploadId }
+
+Read output is capped and returns { encoding, content, sizeBytes, returnedBytes, truncated }. Use base64 for binary files.`,
+
+  sandbox: `# Sandbox Runner
+
+Sandbox tools run bounded commands in Docker containers owned by the current user. They are AI-only and intentionally not exposed through MCP.
+
+## Execution Tools
+- execute_script: run a short script in a fresh container, return output, then remove the container.
+- run_process: start a longer process with a TTL.
+- read_process_output: read stdout/stderr from a running process.
+- write_process_stdin: send stdin to a running process.
+- kill_process: stop a running sandbox process.
+- list_sandbox_jobs: list current user's running sandbox jobs.
+
+## Network and Artifacts
+Sandbox containers have no direct network access. Use Gateway-mediated helpers:
+- fetch: read network content through Gateway, capped at 10 MB.
+- download_artifact: download a URL through Gateway and place it in a running sandbox under /workspace, capped at 200 MB.
+- list_artifact_files: list files/directories already present in a running sandbox workspace without starting another process.
+- read_artifact: read a file from the sandbox in chunks, capped per read.
+- send_artifact: save a sandbox file as a Gateway-managed downloadable artifact for the user.
+
+Artifact path rules:
+- The sandbox process working directory is /workspace.
+- Files that must be read_artifact or send_artifact must be written under /workspace.
+- Artifact tool path arguments are relative to /workspace. Example: write /workspace/report.txt, then send_artifact with path "report.txt".
+- If a sandbox-backed tool returns a processId and path, use list_artifact_files and read_artifact with that same processId/path to inspect files; do not launch another run_process just to run ls/find/os.walk/cat.
+- Do not write deliverable files under /tmp, and do not pass absolute paths such as "/workspace/report.txt" or relative paths like "tmp/report.txt" for files created in /tmp.
+- run_process returns as soon as the process starts. If a file is created by a running process, wait briefly and verify it with read_process_output or read_artifact before send_artifact.
+
+When send_artifact succeeds, do not print the download URL in a markdown table or manual link. The chat UI automatically attaches the file card from the tool result; respond with a short confirmation such as "Attached the file."
+
+Resource tiers are low, medium, and high. TTL is capped by tier. The agent may request ttlSeconds but cannot exceed the tier cap.`,
+
+  conversations: `# Work Sessions and AI Workspace
+
+AI conversations are stored on the backend. Tool discovery is conversation-scoped, so discovered toolsets remain available when returning to a saved conversation.
+
+## Provider State
+- The selected provider model and reasoning effort are pinned to the conversation when its first run starts.
+- A model cannot be changed while the assistant is responding.
+- Changing the model later requires a user confirmation because it can increase cost and reduce continuity or provider cache efficiency.
+- Persisted model changes appear as timeline events. Consecutive changes collapse to the final transition, and a chain that returns to the original model is hidden.
+- In Gateway Inference mode, model choices are filtered by the user's model access and effective API/subscription budget. A zero API budget hides API-only models.
+
+## Context
+- get_current_context returns the current UI route and focused resource when the user says "this page" or "current resource".
+- compact summarizes older conversation history when context grows.
+- Recent conversations are loaded from the backend, not local storage.
+- manage_ai_conversation can list, read, and delete the current user's saved conversations:
+  - { operation: "list" }
+  - { operation: "get", conversationId }
+  - { operation: "delete", conversationId }
+  - { operation: "delete_by_title", title }
+- manage_ai_conversation never creates, rewrites, or repairs conversation history. Use the chat UI/runtime for saving active messages.
+- end_conversation closes the current chat with a localized reason. Use it only when the conversation should stop, especially after the third unrelated/off-topic request in the same conversation.
+- If context is exhausted, the UI can block the composer and offer to clear the oldest saved context. Do not keep retrying the same oversized request.
+
+## Attachments And Artifacts
+- The composer accepts up to three supported images when the selected model advertises image input.
+- Uploaded attachments become Gateway-managed artifacts tied to the conversation.
+- Tool-generated files are attached through send_artifact and should not be duplicated as manual download links.
+
+## AI Workspace
+AI Workspace is Gateway's intent-driven desktop interface. The Work Session becomes the main screen, the sidebar shows a separate Dashboard link, Sidebar-pinned resources, and recent/pinned Work Sessions. Dashboard pins are not duplicated there: use the Sidebar placement for frequent navigation. Settings, Administration, and top-level pages keep a back button to return to the Work Session.
+
+Do not assume the current page from chat text. Use get_current_context when the user refers to their visible page.`,
+
+  'status-page': `# Status Pages
+
+Gateway can publish status-page data from monitored services and incidents. Use manage_status_page for settings, services, incidents, updates, proxy-template choices, and preview.
+
+## Resources and Operations
+- settings: { resource: "settings", operation: "get"|"update", payload? }
+- proxy_templates: { resource: "proxy_templates", operation: "list" }
+- services: { resource: "services", operation: "list"|"create"|"update"|"delete", serviceId?, payload? }
+- incidents: { resource: "incidents", operation: "list"|"create"|"update"|"delete"|"resolve"|"promote", incidentId?, status?, limit?, payload? }
+- incident_updates: { resource: "incident_updates", operation: "create_update", incidentId, payload }
+- preview: { resource: "preview", operation: "preview" }
+
+Scopes: status-page:view for reads/preview, status-page:manage for settings/services, and status-page:incidents:create, status-page:incidents:update, status-page:incidents:resolve, or status-page:incidents:delete for incident mutations.`,
+
+  api: `# Gateway REST API
+
+Gateway provides REST access for external scripts, CI/CD pipelines, CLI tools, and integrations without a browser session.
+Programmatic REST clients can use either Gateway API tokens (\`gw_\`) or OAuth Authorization Code + PKCE access tokens (\`gwo_\`). AI Workspace access, AI configuration, MCP user access, auth administration, raw nginx config, gateway settings, node raw config, node filesystem access, \`proxy:raw:bypass\`, and \`proxy:advanced:bypass\` cannot be delegated to API/OAuth tokens. MCP clients use OAuth access tokens for the MCP resource with ordinary delegated API scopes; the owning user account must have \`mcp:use\`. Node config and node file-management Workspace tools are intentionally browser-session-only and are not exposed through MCP.
+
+## Current-User OAuth Authorizations
+The assistant can manage existing OAuth authorizations for the current browser user with manage_oauth_authorization:
+- { operation: "list" }
+- { operation: "update_scopes", clientId, resource, scopes }
+- { operation: "revoke", clientId, resource }
+
+Pending OAuth consent remains browser-only. Do not try to approve a new OAuth client through tools.
+
+## Current-User Gateway API Tokens
+The assistant can manage the current browser user's Gateway API tokens with manage_api_token:
+- { operation: "list" }
+- { operation: "create", name, scopes }
+- { operation: "update", tokenId, name?, scopes? }
+- { operation: "revoke", tokenId }
+
+Token scopes must be a subset of the current user's scopes. Token secrets are returned only by create and cannot be read later. manage_api_token is browser-session-only and is not exposed through MCP.
+
+## Creating an API Token
+1. Go to **Profile** → **Authorizations** → **API Tokens**
+2. Click **Create Token** → enter a name and select the scopes (permissions) the token should have
+3. Token scopes must be a subset of your own group's scopes — you cannot grant permissions you don't have
+4. The token is shown **once** after creation (prefixed with \`gw_\`) — copy and store it securely
+5. Tokens cannot be retrieved after creation — if lost, revoke and create a new one
+
+## Authentication
+Programmatic API requests authenticate via the \`Authorization\` header:
+
+\`\`\`bash
+curl -H "Authorization: Bearer gw_your_token_here" https://gateway.example.com/api/cas
+\`\`\`
+
+Token format: \`gw_\` followed by 64 hex characters.
+OAuth access tokens use the \`gwo_\` prefix and the same Bearer header. Browser-only endpoints still require the HttpOnly session cookie and CSRF token where applicable.
+
+## Base URL
+All endpoints are under \`/api/\`. Example: \`https://gateway.example.com/api/cas\`
+
+## Key Endpoints
+
+### PKI & Certificates
+- \`GET /api/cas\` — list certificate authorities
+- \`GET /api/cas/:id\` — get CA details
+- \`POST /api/cas\` — create root CA
+- \`POST /api/cas/:id/intermediate\` — create intermediate CA
+- \`GET /api/certificates\` — list certificates
+- \`POST /api/certificates/issue\` — issue a certificate
+- \`POST /api/certificates/:id/revoke\` — revoke a certificate
+- \`GET /api/certificates/:id/export\` — download cert + key
+- \`GET /api/templates\` — list certificate templates
+
+### SSL Certificates
+- \`GET /api/ssl-certificates\` — list SSL certificates
+- \`POST /api/ssl-certificates/acme\` — request ACME (Let's Encrypt) certificate
+- \`POST /api/ssl-certificates/upload\` — upload custom certificate
+- \`POST /api/ssl-certificates/internal\` — link PKI cert as SSL
+
+### Ingress Routes
+The UI calls these resources Routes; stable API paths keep the \`proxy-hosts\` name.
+- \`GET /api/proxy-hosts\` — list routes
+- \`POST /api/proxy-hosts\` — create route
+- \`PUT /api/proxy-hosts/:id\` — update route
+- \`DELETE /api/proxy-hosts/:id\` — delete route
+- \`GET /api/nginx-templates\` — list nginx config templates
+Programmatic clients can use validated \`advancedConfig\`, but cannot set or read raw nginx config fields.
+
+### Domains
+- \`GET /api/domains\` — list domains
+- \`POST /api/domains\` — register domain
+- \`POST /api/domains/:id/check-dns\` — trigger DNS re-check
+
+### Nodes
+- \`GET /api/nodes\` — list daemon nodes
+- \`POST /api/nodes\` — create node (returns enrollment token and gatewayCertSha256)
+- \`DELETE /api/nodes/:id\` — delete node
+
+### Docker
+- \`GET /api/docker/nodes/:nodeId/containers\` — list containers
+- \`GET /api/docker/nodes/:nodeId/source-resources/admission\` — check internal-registry and Build Worker admission
+- \`POST /api/docker/nodes/:nodeId/source-resources\` — create a container/deployment source reservation and queue its first immutable build
+- \`POST /api/docker/nodes/:nodeId/compose-projects/from-source\` — create a Compose Project source reservation and queue one immutable child build per build-enabled service
+- \`GET /api/docker/builds\` — list visible Git-source builds
+- \`GET /api/docker/builds/:buildId\` — inspect one build and its artifact/policy result
+- \`GET /api/docker/builds/:buildId/logs\` — read persisted build logs
+- \`POST /api/docker/builds/:buildId/cancel\` — request build cancellation
+- \`POST /api/docker/builds/:buildId/retry\` — queue a new attempt
+- \`POST /api/docker/nodes/:nodeId/containers/:id/start\` — start container
+- \`POST /api/docker/nodes/:nodeId/containers/:id/stop\` — stop container
+- \`POST /api/docker/nodes/:nodeId/containers/:id/restart\` — restart container
+- \`POST /api/docker/nodes/:nodeId/containers/:id/recreate\` — recreate with new config (supports \`image\` field for tag change)
+- \`POST /api/docker/nodes/:nodeId/images/pull-sync\` — pull image synchronously (validates image exists)
+
+### Docker Webhooks
+- \`GET /api/docker/nodes/:nodeId/containers/:name/webhook\` — get webhook config
+- \`PUT /api/docker/nodes/:nodeId/containers/:name/webhook\` — enable/update webhook
+- \`DELETE /api/docker/nodes/:nodeId/containers/:name/webhook\` — disable webhook
+- \`POST /api/webhooks/docker/:token\` — trigger webhook update (no auth header needed, token is in URL)
+
+### Access Lists
+- \`GET /api/access-lists\` — list access lists
+- \`POST /api/access-lists\` — create access list
+
+### Browser-only administration
+- \`/auth/*\`, \`/api/oauth/consent/*\`, \`/api/oauth/authorizations/*\`, \`/api/admin/users\`, \`/api/admin/groups\`, \`/api/tokens\`, \`/api/ai/*\`, raw nginx config endpoints, and system update mutations require a browser session.
+- \`GET /api/audit\` — query audit log
+
+## Response Format
+- Success: JSON body with the resource data
+- Errors: \`{ "code": "ERROR_CODE", "message": "Human-readable description" }\`
+- List endpoints return: \`{ "data": [...], "total": N, "page": 1, "totalPages": N }\`
+
+## Rate Limits & Pagination
+- Default page size: 20 items. Use \`?page=N&limit=N\` for pagination (max 100).
+- Search: \`?search=term\` on list endpoints for text filtering.
+- Filter by type: \`?type=nginx\` on nodes, \`?status=running\` on containers.
+
+## Scopes
+Token permissions are controlled by scopes. Each endpoint requires specific scopes. A token with only \`pki:cert:view\` can list certificates but cannot issue or revoke them. See the permissions topic for the full scope list.
+
+## Token Management
+- Tokens are tied to the user who created them
+- Revoking a token invalidates it immediately
+- Token last-used timestamp is tracked for auditing
+- Tokens inherit the user's resource restrictions (if the user's group restricts a scope to specific resources, the token is similarly restricted)`,
+};

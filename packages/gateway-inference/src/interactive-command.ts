@@ -16,6 +16,7 @@ import type { Output } from './output.js';
 import type { CliPaths } from './paths.js';
 import type { ProfileStore } from './profiles.js';
 import { authenticatedSetupClient } from './session.js';
+import { type InferenceStartupManager, inferenceStartupManager, type StartupStatus } from './startup.js';
 import type { InferenceSetupClient } from './tokens.js';
 import type { InferenceDiscovery, SetupIdentity } from './types.js';
 
@@ -32,12 +33,15 @@ export interface InteractiveCommandInput {
   env?: NodeJS.ProcessEnv;
   home?: string;
   proxyDaemon?: InferenceProxyDaemonManager;
+  startupManager?: InferenceStartupManager;
+  gateway?: string;
 }
 
 interface InteractiveState {
   identity?: SetupIdentity;
   codexConfigured: boolean;
   claudeCodeConfigured: boolean;
+  startup: StartupStatus;
   models: string[];
 }
 
@@ -47,6 +51,8 @@ type InferenceAction =
   | 'sync'
   | 'doctor'
   | 'remove'
+  | 'enable-startup'
+  | 'disable-startup'
   | 'doctor-claude-code'
   | 'remove-claude-code'
   | 'logout';
@@ -100,6 +106,14 @@ export async function runInteractiveInferenceCommand(
       await diagnose(input, codexIntegration);
       continue;
     }
+    if (action === 'enable-startup') {
+      state.startup = await installStartup(input);
+      continue;
+    }
+    if (action === 'disable-startup') {
+      state.startup = await uninstallStartup(input);
+      continue;
+    }
     if (action === 'doctor-claude-code') {
       await diagnoseClaudeCode(input, claudeCodeIntegration);
       continue;
@@ -138,10 +152,17 @@ async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<I
   const claudeCode = await inspectClaudeCodeConfiguration({
     paths: resolveClaudeCodePaths(input.paths, input.profileName, input.env, input.home),
   });
+  const startup = await (input.startupManager ?? inferenceStartupManager).status({
+    paths: input.paths,
+    profileName: input.profileName,
+    env: input.env,
+    home: input.home,
+  });
   return {
     identity,
     codexConfigured: config.configured,
     claudeCodeConfigured: claudeCode.configured,
+    startup,
     models,
   };
 }
@@ -152,6 +173,11 @@ async function showState(input: InteractiveCommandInput, state: InteractiveState
   if (state.identity) showAccount(input.ui, state.identity);
   input.ui.info(state.codexConfigured ? `Codex: configured · ${state.models.length} models` : 'Codex: not configured');
   input.ui.info(state.claudeCodeConfigured ? 'Claude Code: configured' : 'Claude Code: not configured');
+  if (state.startup.supported) {
+    input.ui.info(
+      `Startup: ${state.startup.installed ? (state.startup.active ? 'enabled' : 'installed') : 'disabled'}`
+    );
+  }
 }
 
 function inferenceActions(state: InteractiveState): InteractiveOption[] {
@@ -188,6 +214,21 @@ function inferenceActions(state: InteractiveState): InteractiveOption[] {
         hint: 'Delete only package-managed configuration and credentials',
       }
     );
+    if (state.startup.supported) {
+      options.push(
+        state.startup.installed
+          ? {
+              value: 'disable-startup',
+              label: 'Disable automatic startup',
+              hint: 'Stop launching the local inference proxy with your user session',
+            }
+          : {
+              value: 'enable-startup',
+              label: 'Enable automatic startup',
+              hint: 'Launch the local inference proxy with your user session',
+            }
+      );
+    }
   }
   if (state.claudeCodeConfigured) {
     options.push(
@@ -224,7 +265,7 @@ function logoutBlockedReason(state: InteractiveState): string | null {
 
 async function authenticate(input: InteractiveCommandInput): Promise<SetupIdentity | null> {
   const existing = await input.profiles.get(input.profileName);
-  const gateway = existing?.origin ?? (await input.ui.gatewayOrigin());
+  const gateway = input.gateway ?? existing?.origin ?? (await input.ui.gatewayOrigin());
   if (!gateway) {
     input.ui.cancel('Login cancelled.');
     return null;
@@ -356,6 +397,16 @@ async function removeHarness(input: InteractiveCommandInput, integration: CodexI
       }
       return false;
     }
+    const startupManager = input.startupManager ?? inferenceStartupManager;
+    const startupInput = {
+      paths: input.paths,
+      profileName: input.profileName,
+      env: input.env,
+      home: input.home,
+    };
+    if ((await startupManager.status(startupInput)).installed) {
+      await startupManager.uninstall(startupInput);
+    }
     spinner.stop(result.tokenRevoked ? 'Codex integration and runtime token removed' : 'Codex integration removed');
     if (result.conflicts.length > 0) {
       input.ui.info(`Preserved edited configuration blocks: ${result.conflicts.join(', ')}`);
@@ -415,6 +466,7 @@ async function setupHarness(
   const existing = await input.profiles.get(input.profileName);
   return runInteractiveInferenceSetup({
     profileName: input.profileName,
+    gateway: input.gateway,
     existingOrigin: existing?.origin,
     ui: input.ui,
     showIntro: false,
@@ -474,6 +526,40 @@ async function setupHarness(
       };
     },
   });
+}
+
+async function installStartup(input: InteractiveCommandInput): Promise<StartupStatus> {
+  const spinner = input.ui.spinner('Enabling automatic startup...');
+  try {
+    const status = await (input.startupManager ?? inferenceStartupManager).install({
+      paths: input.paths,
+      profileName: input.profileName,
+      env: input.env,
+      home: input.home,
+    });
+    spinner.stop('Automatic startup enabled');
+    return status;
+  } catch (error) {
+    spinner.error('Could not enable automatic startup');
+    throw error;
+  }
+}
+
+async function uninstallStartup(input: InteractiveCommandInput): Promise<StartupStatus> {
+  const spinner = input.ui.spinner('Disabling automatic startup...');
+  try {
+    const status = await (input.startupManager ?? inferenceStartupManager).uninstall({
+      paths: input.paths,
+      profileName: input.profileName,
+      env: input.env,
+      home: input.home,
+    });
+    spinner.stop('Automatic startup disabled');
+    return status;
+  } catch (error) {
+    spinner.error('Could not disable automatic startup');
+    throw error;
+  }
 }
 
 async function logout(input: InteractiveCommandInput): Promise<number> {

@@ -26,7 +26,7 @@ Start local infrastructure:
 pnpm dev:infra
 ```
 
-This starts Postgres, Redis, and ClickHouse from [docker-compose.dev.yml](../docker-compose.dev.yml).
+This starts Postgres, Redis, ClickHouse, and the development internal registry from [docker-compose.dev.yml](../docker-compose.dev.yml). PostgreSQL is published on host port `55432` to avoid collisions with another local server.
 
 Run migrations:
 
@@ -49,9 +49,9 @@ Use [.env.example](../.env.example) as the local development reference.
 Important local defaults:
 
 ```env
-DATABASE_URL=postgres://dev:dev@localhost:5432/gateway
+DATABASE_URL=postgres://dev:dev@localhost:55432/gateway
 REDIS_URL=redis://localhost:6379
-SETUP_BOOTSTRAP=true
+SETUP_BOOTSTRAP=false
 WEB_TLS_BOOTSTRAP_MODE=http
 ```
 
@@ -62,18 +62,21 @@ Configure the canonical URL, authentication, and structured logging through the 
 | Command | Description |
 |---------|-------------|
 | `pnpm dev:all` | Start backend, frontend, and status page in parallel. |
-| `pnpm dev:infra` | Start local Postgres, Redis, and ClickHouse. |
+| `pnpm dev:infra` | Build the connector images and start local Postgres, Redis, ClickHouse, and the internal registry. |
 | `pnpm dev:infra:down` | Stop local infrastructure. |
-| `pnpm build` | Build backend, frontend, status page, and logging SDK. |
+| `pnpm build` | Build backend, frontend, status page, logging SDK, inference companion, and update service. |
 | `pnpm build:all` | Build app packages and daemon binaries. |
 | `pnpm build:daemon` | Build all Go daemon binaries. |
-| `pnpm test` | Run backend, frontend, logging SDK, and daemon tests. |
+| `pnpm test` | Run backend, frontend, logging SDK, inference companion, update service, daemon, and relay tests. |
 | `pnpm test:backend` | Run backend tests. |
 | `pnpm test:logging-sdk` | Run logging SDK tests. |
+| `pnpm test:gateway-inference` | Run inference companion tests. |
 | `pnpm test:daemon` | Run Go daemon tests. |
-| `pnpm lint` | Run frontend/backend/logging SDK lint and Go vet. |
+| `pnpm test:relay` | Run local Relay tests. |
+| `pnpm test:release-upgrade` | Rehearse an upgrade from the immutable release baseline with disposable infrastructure. |
+| `pnpm lint` | Run frontend/backend/package lint and Go vet for daemons and Relay. |
 | `pnpm lint:daemon` | Run Go vet for daemons. |
-| `pnpm typecheck` | Type-check TypeScript packages. |
+| `pnpm typecheck` | Type-check backend, logging SDK, inference companion, and update service. |
 | `pnpm proto` | Regenerate protobuf stubs. |
 | `pnpm db:generate` | Generate a Drizzle ORM migration. |
 | `pnpm db:migrate` | Run database migrations. |
@@ -90,6 +93,7 @@ gateway/
 |   +-- status-page/      # Public status page frontend
 |   +-- logging-sdk/      # TypeScript structured logging client
 |   +-- gateway-inference/ # Interactive Codex/Claude Code inference companion
+|   +-- update-service/    # Cloudflare Worker for GitHub release discovery and signed assets
 |   +-- relay/            # Local long-lived Gateway relay worker
 |   +-- daemons/
 |       +-- nginx/        # nginx management daemon

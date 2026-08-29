@@ -1,0 +1,17 @@
+---
+title: Pages Git deployments
+description: Build static sites from source and publish approved immutable artifacts.
+section: Pages
+order: 2
+audience: [developer, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Pages Git deployments
+
+Connect a supported Git integration, choose repository and branch, discover `package.json`, select package manager and build command, and configure source-scoped Build Secrets. The build runs on an isolated Build Worker.
+
+Review logs and the immutable output before moving a Tag. A failed or cancelled build must not change the active public release. Retry creates a new operation rather than mutating history.
+
+For rollback, move the Route's Tag to a previous known-good Deployment. Keep runtime configuration backward compatible when two releases may be selected during an incident.

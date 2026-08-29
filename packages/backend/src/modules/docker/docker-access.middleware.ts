@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
 import {
@@ -9,6 +10,7 @@ import {
   dockerScopedNodeIds,
   hasDockerResourceScope,
 } from './docker-access-resource.service.js';
+import { inspectUserContainer } from './docker-internal-containers.js';
 
 function deny(baseScope: string): never {
   throw new HTTPException(403, { message: `Missing required scope: ${baseScope}` });
@@ -43,6 +45,7 @@ export async function resolveDockerContainerScopeResourceId(
     const data = await inspect();
     return String(data?.scopeResourceId ?? '');
   } catch (error) {
+    if (error instanceof AppError && error.code === 'GATEWAY_INTERNAL_CONTAINER') throw error;
     if (!transitionFallback?.active()) throw error;
     return (await transitionFallback.resolvePersisted()) ?? '';
   }
@@ -51,21 +54,20 @@ export async function resolveDockerContainerScopeResourceId(
 export function requireDockerContainerScope(
   baseScope: string,
   identifierParam = 'containerId',
-  options: { allowTransitionIdentityFallback?: boolean } = {}
+  options: { allowTransitionIdentityFallback?: boolean; allowBroadWithoutResolve?: boolean } = {}
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const scopes = c.get('effectiveScopes') ?? [];
     const nodeId = c.req.param('nodeId');
     const identifier = c.req.param(identifierParam);
     if (!nodeId || !identifier) deny(baseScope);
-    if (hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
+    if (options.allowBroadWithoutResolve && hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
       await next();
       return;
     }
-
     const service = container.resolve(DockerManagementService);
     const resourceId = await resolveDockerContainerScopeResourceId(
-      () => service.inspectContainer(nodeId, identifier),
+      () => inspectUserContainer(service, nodeId, identifier),
       options.allowTransitionIdentityFallback
         ? {
             active: () => Boolean(service.getContainerTransition(nodeId, identifier)),
@@ -74,6 +76,10 @@ export function requireDockerContainerScope(
           }
         : undefined
     );
+    if (hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
+      await next();
+      return;
+    }
     if (!resourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope);
     await next();
   };

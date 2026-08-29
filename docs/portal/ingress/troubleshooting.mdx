@@ -1,0 +1,23 @@
+---
+title: Ingress troubleshooting
+description: Diagnose DNS, TLS, config, health, and upstream failures in the correct order.
+section: Ingress
+order: 5
+audience: [operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Ingress troubleshooting
+
+Use this order to avoid changing the wrong layer:
+
+1. **DNS:** resolve the hostname from an external client and confirm it points to the assigned ingress node.
+2. **Network:** confirm public 80/443 reachability and host firewall rules.
+3. **TLS:** inspect certificate hostname, chain, expiry, and distribution status.
+4. **nginx config:** verify the latest revision applied and configuration validation succeeded.
+5. **Route health:** inspect expected status/body and maintenance state.
+6. **Upstream:** test the application from the nginx node or inspect Secure Link health.
+7. **Logs:** correlate nginx access/error logs with workload logs and request IDs.
+
+Common mistakes include cross-node Domain/Route placement, stale external DNS after migration, HTTP-01 on a node without public port 80, a WebSocket application without WebSocket forwarding, and selecting a workload port that is not actually published or linked.

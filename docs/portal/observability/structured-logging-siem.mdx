@@ -1,0 +1,17 @@
+---
+title: Structured logging and SIEM
+description: Centralize operational logs and export audit events without leaking secrets.
+section: Observe and notify
+order: 3
+audience: [sre, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Structured logging and SIEM
+
+Structured logging centralizes supported Gateway and daemon events with searchable fields and retention policy. Size storage for ingestion and retention, monitor ClickHouse health, and plan engine upgrades before old images become unsupported.
+
+SIEM destinations deliver audit-focused events through a durable outbox. Disabling SIEM pauses new delivery without deleting destination configuration or historical terminal records. Test signatures, retries, idempotency, and receiver capacity.
+
+Logs and SIEM payloads must not contain passwords, tokens, private keys, database connection URIs, prompts, model output, or raw binding credentials. Use request IDs and stable resource identifiers for correlation.

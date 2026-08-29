@@ -13,6 +13,9 @@ source_url="https://github.com/${repository}"
 release_notes_file=release-notes.md
 release_already_published=0
 
+source scripts/release-tag.sh
+classify_release_tag "$tag"
+
 write_release_notes() {
   local fallback=$1
   git for-each-ref "refs/tags/${tag}" --format='%(contents)' > "$release_notes_file"
@@ -23,18 +26,24 @@ write_release_notes() {
 
 prepare_release() {
   local title=$1 fallback=$2 is_draft
+  local release_args=(--title "$title" --notes-file "$release_notes_file")
   release_already_published=0
   write_release_notes "$fallback"
+  if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+    release_args+=(--prerelease --latest=false)
+  else
+    release_args+=(--prerelease=false)
+  fi
   if gh release view "$tag" >/dev/null 2>&1; then
     is_draft=$(gh release view "$tag" --json isDraft --jq .isDraft)
     if [[ "$is_draft" != "true" ]]; then
       release_already_published=1
       return
     fi
-    gh release edit "$tag" --title "$title" --notes-file "$release_notes_file"
+    gh release edit "$tag" "${release_args[@]}"
     return
   fi
-  gh release create "$tag" --draft --verify-tag --title "$title" --notes-file "$release_notes_file"
+  gh release create "$tag" --draft --verify-tag "${release_args[@]}"
 }
 
 verify_release_assets() {
@@ -112,9 +121,11 @@ publish_gateway() {
       --out ../../gateway-image.update.json
   )
   docker tag "${gateway_image}:${tag}" "${gateway_image}:${tag#v}"
-  docker tag "${gateway_image}:${tag}" "${gateway_image}:latest"
   docker push "${gateway_image}:${tag#v}"
-  docker push "${gateway_image}:latest"
+  if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
+    docker tag "${gateway_image}:${tag}" "${gateway_image}:latest"
+    docker push "${gateway_image}:latest"
+  fi
   complete_release "${assets[@]}"
 }
 
@@ -319,35 +330,29 @@ publish_relay() {
 
   build_daemon_assets relay relay-supervisor relay "main"
   docker tag "${relay_image}:${tag}" "${relay_image}:${relay_version}"
-  docker tag "${relay_image}:${tag}" "${relay_image}:latest"
   docker push "${relay_image}:${relay_version}"
-  docker push "${relay_image}:latest"
+  if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
+    docker tag "${relay_image}:${tag}" "${relay_image}:latest"
+    docker push "${relay_image}:latest"
+  fi
   complete_release "${assets[@]}"
 }
 
-case "$tag" in
-  v[0-9]*.[0-9]*.[0-9]*)
-    if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      publish_gateway
-    elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-relay$ ]]; then
-      publish_relay
-    elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nginx$ ]]; then
-      publish_daemon nginx nginx-daemon nginx "Nginx Daemon" github.com/wiolett-industries/gateway/nginx-daemon/internal/daemon
-    elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-docker$ ]]; then
-      publish_daemon docker docker-daemon docker "Docker Daemon" main
-    elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-monitoring$ ]]; then
-      publish_daemon monitoring monitoring-daemon monitoring "Monitoring Daemon" main
-    elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-database-connector$ ]]; then
-      publish_connector database-connector packages/daemons/database-connector/Dockerfile packages/daemons/database-connector
-    elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-secure-link-connector$ ]]; then
-      publish_connector secure-link-connector packages/daemons/secure-link-connector/Dockerfile packages/daemons
-    else
-      printf 'Tag %s is not a supported Gateway release tag\n' "$tag" >&2
-      exit 1
-    fi
-    ;;
-  *)
-    printf 'Tag %s is not a supported Gateway release tag\n' "$tag" >&2
-    exit 1
-    ;;
-esac
+if [[ "$RELEASE_KIND" == "gateway" ]]; then
+  publish_gateway
+elif [[ "$RELEASE_COMPONENT" == "relay" ]]; then
+  publish_relay
+elif [[ "$RELEASE_COMPONENT" == "nginx" ]]; then
+  publish_daemon nginx nginx-daemon nginx "Nginx Daemon" github.com/wiolett-industries/gateway/nginx-daemon/internal/daemon
+elif [[ "$RELEASE_COMPONENT" == "docker" ]]; then
+  publish_daemon docker docker-daemon docker "Docker Daemon" main
+elif [[ "$RELEASE_COMPONENT" == "monitoring" ]]; then
+  publish_daemon monitoring monitoring-daemon monitoring "Monitoring Daemon" main
+elif [[ "$RELEASE_COMPONENT" == "database-connector" ]]; then
+  publish_connector database-connector packages/daemons/database-connector/Dockerfile packages/daemons/database-connector
+elif [[ "$RELEASE_COMPONENT" == "secure-link-connector" ]]; then
+  publish_connector secure-link-connector packages/daemons/secure-link-connector/Dockerfile packages/daemons
+else
+  printf 'Tag %s is not a supported Gateway release tag\n' "$tag" >&2
+  exit 1
+fi

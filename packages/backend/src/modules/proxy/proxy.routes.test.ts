@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
     getRenderedConfig: vi.fn(),
     validateAdvancedConfig: vi.fn(),
     deleteProxyHost: vi.fn(),
+    create: vi.fn(),
+    present: vi.fn(),
   },
   licensePolicy: {
     requireFeature: vi.fn(),
@@ -106,6 +108,8 @@ describe('proxy routes programmatic raw config handling', () => {
     mocks.proxyService.toggleMaintenance.mockResolvedValue({ ...rawHost, maintenanceEnabled: true });
     mocks.proxyService.getRenderedConfig.mockResolvedValue('server {}');
     mocks.proxyService.validateAdvancedConfig.mockResolvedValue({ valid: true });
+    mocks.proxyService.create.mockResolvedValue({ id: 'route-1' });
+    mocks.proxyService.present.mockResolvedValue({ id: 'route-1' });
   });
 
   it('strips raw config fields from programmatic list and detail responses', async () => {
@@ -126,6 +130,26 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(detailBody.data).not.toHaveProperty('rawConfig');
     expect(detailBody.data).not.toHaveProperty('rawConfigEnabled');
     expectNoRawFields(detailBody);
+  });
+
+  it('requires advanced scope when creating an Additional Route with advanced config', async () => {
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:edit:host-1'];
+
+    const response = await createApp().request('/host-1/additional-routes', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '/api',
+        targetKind: 'manual',
+        forwardHost: 'upstream',
+        forwardPort: 8080,
+        advancedConfig: 'proxy_set_header X-Test yes;',
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.proxyService.create).not.toHaveBeenCalled();
   });
 
   it('redacts raw config from browser detail response without raw read scope', async () => {

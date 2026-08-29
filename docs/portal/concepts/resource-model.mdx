@@ -1,0 +1,36 @@
+---
+title: Resource model and ownership
+description: Learn how Gateway identifies, groups, and protects infrastructure resources.
+section: Concepts
+order: 2
+audience: [operator, developer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Resource model and ownership
+
+Gateway resources have stable identities that are distinct from mutable runtime names or container IDs.
+
+## Stable identities
+
+Permissions, bindings, source settings, health configuration, and migration state attach to a Gateway resource identity. Recreating a managed workload preserves the intended identity; deleting it explicitly removes associated grants so a later same-name resource does not inherit access accidentally.
+
+## Ownership boundaries
+
+- A Compose Project owns its service containers, named volumes, and non-external networks.
+- A blue/green Deployment owns both runtime slots and its rollout state.
+- A managed database owns its database container and engine owner identity.
+- A database binding owns a separate least-privilege application identity.
+- A Route or Additional Route can own its Secure Link binding.
+- Gateway-owned internal containers are outside user lifecycle APIs.
+
+These boundaries prevent a lower-level API from bypassing the higher-level lifecycle that created the resource.
+
+## Folders and navigation
+
+Folders organize resources and can participate in scoped access. They do not change runtime networking or ownership. Search and command-palette results should resolve to the canonical resource page rather than to implementation children.
+
+## External resources
+
+Externally created Compose Projects can be discovered from canonical Docker labels. They remain read-only until adopted with complete YAML. External databases remain operator-managed; Gateway stores and tests their connection without claiming lifecycle ownership.

@@ -120,8 +120,17 @@ export async function createLoopbackReceiver(): Promise<LoopbackReceiver> {
 
 export function resolveBrowserLaunchCommand(platform: NodeJS.Platform, url: string): BrowserLaunchCommand {
   if (platform === 'darwin') return { command: 'open', args: [url] };
-  if (platform === 'win32') return { command: 'explorer.exe', args: [url] };
+  if (platform === 'win32') {
+    return {
+      command: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+      args: ['/d', '/s', '/c', `start "" ${quoteWindowsCmdArgument(url)}`],
+    };
+  }
   return { command: 'xdg-open', args: [url] };
+}
+
+function quoteWindowsCmdArgument(value: string): string {
+  return `"${value.replaceAll('%', '%%').replaceAll('"', '""')}"`;
 }
 
 export async function openBrowser(url: string): Promise<void> {

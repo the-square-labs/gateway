@@ -3,12 +3,24 @@ package runtime
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestInstalledRunscVersionUsesConfiguredInstallPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runsc")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'runsc version release-test.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	version, found := installedRunscVersion(context.Background(), path)
+	if !found || version != "release-test.0" {
+		t.Fatalf("installed runsc = %q, found=%v", version, found)
+	}
+}
 
 func TestProgressReaderReportsDownloadPercent(t *testing.T) {
 	var percentages []uint32

@@ -28,6 +28,8 @@ describe('setup-relay-node.sh', () => {
     expect(source).toContain('.update-pending');
     expect(source).toContain('mv -f "$previous" "$binary"');
     expect(source).toContain('ExecStart=/usr/local/lib/gateway-relay/run-supervisor');
+    expect(source).toContain(`local name="$1" daemon_type="$2"\n  local manifest="\${TEMP_DIR}/\${name}.update.json"`);
+    expect(source).not.toContain(`local name="$1" daemon_type="$2" manifest="\${TEMP_DIR}/\${name}.update.json"`);
   });
 });
 
@@ -143,7 +145,7 @@ describe('install.sh managed browser bootstrap', () => {
 
   it('publishes both connector images with Relay releases instead of Gateway releases', () => {
     const source = readFileSync(githubReleaseScript, 'utf8');
-    const relayPublishing = source.slice(source.indexOf('publish_relay()'), source.indexOf('\ncase "$tag"'));
+    const relayPublishing = source.slice(source.indexOf('publish_relay()'), source.indexOf('\nif [[ "$RELEASE_KIND"'));
     const gatewayPublishing = source.slice(source.indexOf('publish_gateway()'), source.indexOf('\npublish_daemon()'));
 
     expect(relayPublishing).toContain('database-connector');
@@ -154,9 +156,10 @@ describe('install.sh managed browser bootstrap', () => {
     expect(relayPublishing).toContain('config/relay/min-gateway-version');
     expect(gatewayPublishing).not.toContain('--secure-link-connector-image');
     expect(gatewayPublishing).not.toContain('--database-connector-image');
-    expect(source).toContain('^v[0-9]+\\.[0-9]+\\.[0-9]+-relay$');
-    expect(source).toContain('^v[0-9]+\\.[0-9]+\\.[0-9]+-database-connector$');
-    expect(source).toContain('^v[0-9]+\\.[0-9]+\\.[0-9]+-secure-link-connector$');
+    expect(source).toContain('source scripts/release-tag.sh');
+    expect(source).toContain('[[ "$RELEASE_COMPONENT" == "relay" ]]');
+    expect(source).toContain('[[ "$RELEASE_COMPONENT" == "database-connector" ]]');
+    expect(source).toContain('[[ "$RELEASE_COMPONENT" == "secure-link-connector" ]]');
     expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+$/);
   });
 

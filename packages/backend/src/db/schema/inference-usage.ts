@@ -25,6 +25,7 @@ export type InferenceAttemptStatus = 'pending' | 'running' | 'completed' | 'fail
 export type InferenceBudgetType = 'subscription' | 'api';
 export type InferenceLedgerEntryType = 'settlement' | 'adjustment';
 export type InferenceQuotaStatus = 'fresh' | 'stale' | 'unavailable';
+export type InferenceLimitDimension = 'credits5h' | 'credits7d' | 'credits30d' | 'apiMonthlyMicrodollars';
 
 const usageColumns = {
   uncachedInputTokens: bigint('uncached_input_tokens', { mode: 'number' }).notNull().default(0),
@@ -173,6 +174,23 @@ export const inferenceUsageLedger = pgTable(
   ]
 );
 
+export const inferenceLimitUsageResets = pgTable(
+  'inference_limit_usage_resets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    dimension: varchar('dimension', { length: 32 }).$type<InferenceLimitDimension>().notNull(),
+    resetAt: timestamp('reset_at', { withTimezone: true }).notNull().defaultNow(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (table) => [
+    uniqueIndex('inference_limit_usage_reset_user_dimension_unique').on(table.userId, table.dimension),
+    index('inference_limit_usage_reset_user_idx').on(table.userId),
+  ]
+);
+
 export const inferenceQuotaSnapshots = pgTable(
   'inference_quota_snapshots',
   {
@@ -203,4 +221,5 @@ export const inferenceQuotaSnapshots = pgTable(
 export type InferenceRequest = typeof inferenceRequests.$inferSelect;
 export type InferenceRequestAttempt = typeof inferenceRequestAttempts.$inferSelect;
 export type InferenceUsageLedgerEntry = typeof inferenceUsageLedger.$inferSelect;
+export type InferenceLimitUsageReset = typeof inferenceLimitUsageResets.$inferSelect;
 export type InferenceQuotaSnapshot = typeof inferenceQuotaSnapshots.$inferSelect;

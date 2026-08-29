@@ -18,6 +18,14 @@ const managedRow = {
   engineConfig: { ownerUsername: 'owner', databaseName: 'app' },
   encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'key', encryptedDek: 'dek' }),
   encryptedDirectCredentials: JSON.stringify({ encryptedKey: 'direct-key', encryptedDek: 'direct-dek' }),
+  encryptedPendingOwnerCredentials: null,
+  encryptedQueryCredentials: null,
+  bindingIdentityVersion: 2,
+  applicationPrincipalName: 'app_owner',
+  ownerSeparationState: 'active',
+  ownerSeparationOperationId: null,
+  directPrincipalVersion: 2,
+  clickhouseQueryPrincipalVersion: null,
   storageSizeBytes: 1024 * 1024 * 1024,
   runtimeConfig: { nanoCPUs: 1_000_000_000, memoryLimitBytes: 1024 * 1024 * 1024, memorySwapBytes: 1024 * 1024 * 1024 },
   publishedPort: null,
@@ -33,7 +41,19 @@ function reconciliationService(row: Record<string, unknown>, result: { success: 
   const returning = vi.fn().mockResolvedValue([{ ...row, status: 'ready', pendingOperation: null, lastError: null }]);
   const set = vi.fn(() => ({ where: vi.fn(() => ({ returning })) }));
   const db: Record<string, any> = {
-    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([row]) })) })),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => {
+          const rows = Promise.resolve([row]) as Promise<Record<string, unknown>[]> & {
+            limit: ReturnType<typeof vi.fn>;
+            for: ReturnType<typeof vi.fn>;
+          };
+          rows.limit = vi.fn().mockResolvedValue([row]);
+          rows.for = vi.fn().mockResolvedValue([row]);
+          return rows;
+        }),
+      })),
+    })),
     update: vi.fn(() => ({ set })),
     delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
   };
@@ -334,8 +354,15 @@ describe('managed database catalog and input guardrails', () => {
   });
 
   it('warms the PostgreSQL extension catalog when a database becomes ready', async () => {
-    const ready = {
+    const operation = { id: 'operation-ready', action: 'create' as const };
+    const pending = {
       ...managedRow,
+      databaseConnectionId: '55555555-5555-4555-8555-555555555555',
+      status: 'creating' as const,
+      pendingOperation: operation,
+    };
+    const ready = {
+      ...pending,
       databaseConnectionId: '55555555-5555-4555-8555-555555555555',
       status: 'ready' as const,
       pendingOperation: null,
@@ -352,13 +379,10 @@ describe('managed database catalog and input guardrails', () => {
       {} as never,
       undefined,
       { warmManagedPostgresExtensionCatalog } as never
-    );
+    ) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(pending);
 
-    await (
-      service as unknown as {
-        markReady: (row: typeof ready, userId: string | null, port: number | null) => Promise<unknown>;
-      }
-    ).markReady(ready, 'user-1', null);
+    await service.markReady(pending, operation, 'user-1', null);
 
     expect(warmManagedPostgresExtensionCatalog).toHaveBeenCalledWith(ready.databaseConnectionId);
   });
@@ -392,7 +416,7 @@ describe('managed database catalog and input guardrails', () => {
     expect(set).toHaveBeenCalledWith(expect.objectContaining({ publishedPort: 32772, pendingOperation: null }));
   });
 
-  it('does not leave a completed recreate in reconciliation when direct-user provisioning fails', async () => {
+  it('keeps a completed recreate retryable when direct-user provisioning fails', async () => {
     const row = {
       ...managedRow,
       type: 'clickhouse' as const,
@@ -405,7 +429,14 @@ describe('managed database catalog and input guardrails', () => {
     const set = vi.fn((values: Record<string, unknown>) => ({
       where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...row, ...values }]) })),
     }));
-    const db = { update: vi.fn(() => ({ set })) };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([row]) })),
+        })),
+      })),
+      update: vi.fn(() => ({ set })),
+    };
     const dispatch = {
       sendDockerDatabaseCommand: vi.fn(async (_nodeId, action) =>
         action === 'update'
@@ -454,16 +485,12 @@ describe('managed database catalog and input guardrails', () => {
       null
     );
 
-    expect(set).toHaveBeenCalledWith(
+    expect(set).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        status: 'error',
-        pendingOperation: null,
-        lastError: expect.stringContaining('secure query principals'),
+        lastError: 'Managed database operation outcome is being reconciled',
       })
     );
-    expect(set).not.toHaveBeenCalledWith(
-      expect.objectContaining({ lastError: 'Managed database operation outcome is being reconciled' })
-    );
+    expect(set).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'error', pendingOperation: null }));
   });
 
   it('converges a delayed delete after daemon reports the record missing', async () => {
@@ -505,19 +532,25 @@ describe('managed database catalog and input guardrails', () => {
 
   it('dispatches a publication change as a managed container recreation update', async () => {
     const row = { ...managedRow, status: 'ready', pendingOperation: null, publishedPort: 5432 };
-    const where = vi
-      .fn()
-      .mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([row]) })
-      .mockReturnValueOnce({
-        limit: vi.fn().mockResolvedValue([{ id: row.nodeId, type: 'databases', status: 'online' }]),
-      });
     const updating = {
       ...row,
       publishedPort: null,
       pendingOperation: { id: 'operation_999', action: 'update' as const },
       status: 'updating',
     };
-    const returning = vi.fn().mockResolvedValue([updating]);
+    const where = vi
+      .fn()
+      .mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([row]) })
+      .mockReturnValueOnce({
+        limit: vi.fn().mockResolvedValue([{ id: row.nodeId, type: 'databases', status: 'online' }]),
+      })
+      .mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([row]) })
+      .mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([updating]) })
+      .mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([updating]) });
+    const returning = vi
+      .fn()
+      .mockResolvedValueOnce([updating])
+      .mockResolvedValueOnce([{ ...updating, status: 'ready', pendingOperation: null }]);
     const db = {
       select: vi.fn(() => ({
         from: vi.fn(() => ({ where })),
@@ -555,14 +588,21 @@ describe('managed database catalog and input guardrails', () => {
 
   it('pauses a ready managed database through its dedicated daemon lifecycle action', async () => {
     const row = { ...managedRow, status: 'ready', pendingOperation: null };
+    let current = row as typeof row & { pendingOperation: { id: string; action: 'pause' } | null };
     const query = vi
       .fn()
       .mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([row]) })
       .mockReturnValueOnce({
         limit: vi.fn().mockResolvedValue([{ id: row.nodeId, type: 'databases', status: 'online' }]),
-      });
+      })
+      .mockImplementation(() => ({ limit: vi.fn().mockImplementation(async () => [current]) }));
     const set = vi.fn((values: Record<string, unknown>) => ({
-      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...row, ...values }]) })),
+      where: vi.fn(() => ({
+        returning: vi.fn(async () => {
+          current = { ...current, ...values } as typeof current;
+          return [current];
+        }),
+      })),
     }));
     const db = {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where: query })) })),
@@ -690,9 +730,9 @@ describe('managed database catalog and input guardrails', () => {
     expect(credentials.password).not.toBe('direct-password');
     expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledWith(
       row.nodeId,
-      'binding_create',
+      'binding_principal_apply_v2',
       row.id,
-      expect.stringContaining('"username":"gw_postgres_direct_123"')
+      expect.stringContaining('"principalName":"gw_postgres_direct_123"')
     );
     expect(encryptString).toHaveBeenCalledWith(expect.stringContaining('"username":"gw_postgres_direct_123"'));
   });
@@ -723,7 +763,12 @@ describe('managed database catalog and input guardrails', () => {
     const service = new ManagedDatabaseService(
       db as never,
       { log: vi.fn() } as never,
-      { decryptString: vi.fn(), encryptString: vi.fn() } as never,
+      {
+        decryptString: vi
+          .fn()
+          .mockReturnValue(JSON.stringify({ username: 'owner', password: 'secret-password-123', databaseName: 'app' })),
+        encryptString: vi.fn(),
+      } as never,
       dispatch as never
     );
 
@@ -853,11 +898,15 @@ describe('managed database catalog and input guardrails', () => {
 
     await service.reconcileClickHouseQueryPrincipals();
 
-    expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledTimes(4);
+    expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledTimes(8);
     expect(dispatch.sendDockerDatabaseCommand.mock.calls.map((call) => call[1])).toEqual([
+      'owner_separation_finalize_v1',
+      'binding_principal_apply_v2',
+      'binding_principal_probe_v2',
       'clickhouse_principal_apply_v1',
-      'clickhouse_principal_apply_v1',
-      'clickhouse_principal_apply_v1',
+      'owner_separation_finalize_v1',
+      'binding_principal_apply_v2',
+      'binding_principal_probe_v2',
       'clickhouse_principal_apply_v1',
     ]);
     const commands = dispatch.sendDockerDatabaseCommand.mock.calls.map(
@@ -866,9 +915,16 @@ describe('managed database catalog and input guardrails', () => {
     expect(commands).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          principalType: 'writer',
-          username: 'gw_clickhouse_direct_123',
+          operationId: published.id,
+          currentOwnerUsername: 'clickhouse_owner',
+          currentOwnerPassword: 'owner-password',
+          pendingOwnerUsername: 'clickhouse_owner',
+          pendingOwnerPassword: 'owner-password',
+        }),
+        expect.objectContaining({
+          principalName: 'gw_clickhouse_direct_123',
           password: 'direct-password',
+          applicationPrincipalName: 'app_owner',
           ownerUsername: 'clickhouse_owner',
         }),
         expect.objectContaining({
@@ -880,6 +936,90 @@ describe('managed database catalog and input guardrails', () => {
       ])
     );
     expect(JSON.stringify(commands)).not.toContain('reconcileOnly');
+  });
+
+  it('leaves database identity migration to the binding coordinator while legacy bindings exist', async () => {
+    const row = {
+      ...managedRow,
+      status: 'ready' as const,
+      pendingOperation: null,
+      bindingIdentityVersion: 0,
+    };
+    const service = new ManagedDatabaseService(
+      {
+        select: vi.fn(() => ({ from: vi.fn().mockResolvedValue([row]) })),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never
+    ) as any;
+    vi.spyOn(service, 'legacyBindingDatabaseIds').mockResolvedValue(new Set([row.id]));
+    const ensure = vi.spyOn(service, 'ensureBindingIdentity');
+
+    await service.reconcileBindingIdentities(row.nodeId);
+
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it('prepares and pins the database runtime before applying identity v2', async () => {
+    const row = {
+      ...managedRow,
+      type: 'redis' as const,
+      version: '8.10.0',
+      imageRef: MANAGED_DATABASE_CATALOG.redis['8.10.0'],
+      engineConfig: { publishTcp: true },
+      publishedPort: 32768,
+      bindingIdentityVersion: 0,
+    };
+    const sendDockerDatabaseCommand = vi.fn().mockResolvedValue({ success: true });
+    const service = new ManagedDatabaseService(
+      {} as never,
+      {} as never,
+      {} as never,
+      { sendDockerDatabaseCommand } as never
+    ) as any;
+
+    await service.prepareBindingIdentityRuntime(row, {
+      username: 'default',
+      password: 'owner-password-123456',
+      databaseName: 'redis',
+    });
+
+    expect(sendDockerDatabaseCommand).toHaveBeenCalledWith(row.nodeId, 'update', row.id, expect.any(String));
+    const payload = JSON.parse(sendDockerDatabaseCommand.mock.calls[0]![3]) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      type: 'redis',
+      operationId: `binding-identity-${row.id}`,
+      preserveLifecycleOperationId: true,
+      publishTcp: true,
+      publishedPort: 32768,
+      redisConfig: expect.any(Object),
+    });
+  });
+
+  it('keeps the active lifecycle operation id while preparing identity on an older daemon', async () => {
+    const operationId = '77777777-7777-4777-8777-777777777777';
+    const row = {
+      ...managedRow,
+      pendingOperation: { id: operationId, action: 'create' as const, requestedAt: new Date().toISOString() },
+      bindingIdentityVersion: 0,
+    };
+    const sendDockerDatabaseCommand = vi.fn().mockResolvedValue({ success: true });
+    const service = new ManagedDatabaseService(
+      {} as never,
+      {} as never,
+      {} as never,
+      { sendDockerDatabaseCommand } as never
+    ) as any;
+
+    await service.prepareBindingIdentityRuntime(row, {
+      username: 'owner',
+      password: 'owner-password-123456',
+      databaseName: 'app',
+    });
+
+    const payload = JSON.parse(sendDockerDatabaseCommand.mock.calls[0]![3]) as Record<string, unknown>;
+    expect(payload).toMatchObject({ operationId, preserveLifecycleOperationId: true });
   });
 
   it('restores owner credentials for an existing published database connection', async () => {
@@ -912,5 +1052,381 @@ describe('managed database catalog and input guardrails', () => {
     const update = calls[0]![0];
     const encrypted = JSON.parse(update.encryptedConfig) as { payload: string };
     expect(JSON.parse(encrypted.payload)).toMatchObject({ username: 'default', password: 'owner-password' });
+  });
+
+  it('retries PostgreSQL owner preparation from persisted pending credentials after an interrupted attempt', async () => {
+    let current = {
+      ...managedRow,
+      status: 'ready' as const,
+      pendingOperation: null,
+      databaseConnectionId: null,
+      bindingIdentityVersion: 0,
+      directPrincipalVersion: 0,
+      ownerSeparationState: 'preparing' as const,
+      ownerSeparationOperationId: '77777777-7777-4777-8777-777777777777',
+      applicationPrincipalName: 'gw_app_orders',
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+      encryptedPendingOwnerCredentials: JSON.stringify({ encryptedKey: 'pending-key', encryptedDek: 'pending-dek' }),
+      encryptedDirectCredentials: null,
+    };
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => ({
+          where: vi.fn(() => ({
+            returning: vi.fn(async () => {
+              current = { ...current, ...values } as typeof current;
+              return [current];
+            }),
+          })),
+        })),
+      })),
+    };
+    const dispatch = { sendDockerDatabaseCommand: vi.fn().mockResolvedValue({ success: true }) };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi.fn((encrypted: { encryptedKey: string }) =>
+          JSON.stringify(
+            encrypted.encryptedKey === 'pending-key'
+              ? { username: 'gw_admin_orders', password: 'pending-password-123456', databaseName: 'app' }
+              : { username: 'owner', password: 'owner-password-123456', databaseName: 'app' }
+          )
+        ),
+        encryptString: vi.fn(),
+      } as never,
+      dispatch as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockImplementation(async () => current);
+    vi.spyOn(service, 'assertBindingPrincipalV2Capability').mockResolvedValue({});
+    vi.spyOn(service, 'syncCanonicalConnectionCredentials').mockResolvedValue(undefined);
+
+    const result = await service.ensureBindingIdentity(current.id, null);
+
+    expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledWith(
+      current.nodeId,
+      'owner_separation_prepare_v1',
+      current.id,
+      expect.stringContaining('"pendingOwnerUsername":"gw_admin_orders"')
+    );
+    expect(result).toMatchObject({
+      bindingIdentityVersion: 2,
+      directPrincipalVersion: 2,
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'pending-key', encryptedDek: 'pending-dek' }),
+      encryptedPendingOwnerCredentials: null,
+      ownerSeparationState: 'preparing',
+    });
+  });
+
+  it('does not finalize owner separation while any binding still uses the legacy principal model', async () => {
+    const row = {
+      ...managedRow,
+      status: 'ready' as const,
+      pendingOperation: null,
+      ownerSeparationState: 'preparing' as const,
+    };
+    const dispatch = { sendDockerDatabaseCommand: vi.fn() };
+    const service = new ManagedDatabaseService(
+      {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ id: 'binding-1', principalModelVersion: 0 }]) })),
+        })),
+      } as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn(), encryptString: vi.fn() } as never,
+      dispatch as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(row);
+
+    await expect(service.finalizeBindingIdentity(row.id, null)).resolves.toBe(row);
+    expect(dispatch.sendDockerDatabaseCommand).not.toHaveBeenCalled();
+  });
+
+  it('does not finalize owner separation while an unrelated lifecycle operation is pending', async () => {
+    const row = {
+      ...managedRow,
+      status: 'updating' as const,
+      pendingOperation: { id: 'update-operation', action: 'update' as const },
+      ownerSeparationState: 'preparing' as const,
+    };
+    const db = { select: vi.fn() };
+    const dispatch = { sendDockerDatabaseCommand: vi.fn() };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn(), encryptString: vi.fn() } as never,
+      dispatch as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(row);
+
+    await expect(service.finalizeBindingIdentity(row.id, null)).resolves.toBe(row);
+    expect(db.select).not.toHaveBeenCalled();
+    expect(dispatch.sendDockerDatabaseCommand).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a newer lifecycle operation from a stale ready completion', async () => {
+    const operationA = { id: 'operation-a', action: 'update' as const };
+    const operationB = { id: 'operation-b', action: 'restart' as const };
+    const stale = { ...managedRow, status: 'updating' as const, pendingOperation: operationA };
+    const current = { ...managedRow, status: 'updating' as const, pendingOperation: operationB };
+    const returning = vi.fn().mockResolvedValue([]);
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(() => ({ returning })) })),
+      })),
+    };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi
+          .fn()
+          .mockReturnValue(JSON.stringify({ username: 'owner', password: 'secret-password-123', databaseName: 'app' })),
+        encryptString: vi.fn(),
+      } as never,
+      {} as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(current);
+    const warm = vi.spyOn(service, 'warmPostgresExtensionCatalog').mockResolvedValue(undefined);
+    const emit = vi.spyOn(service, 'emit');
+
+    await expect(service.markReady(stale, operationA, null, null)).resolves.toMatchObject({ status: 'updating' });
+
+    expect(db.update).not.toHaveBeenCalled();
+    expect(current.pendingOperation).toBe(operationB);
+    expect(warm).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('keeps the pending operation durable when canonical synchronization fails', async () => {
+    const operation = { id: 'operation-a', action: 'update' as const };
+    const pending = { ...managedRow, status: 'updating' as const, pendingOperation: operation };
+    const db = { update: vi.fn() };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi
+          .fn()
+          .mockReturnValue(JSON.stringify({ username: 'owner', password: 'secret-password-123', databaseName: 'app' })),
+        encryptString: vi.fn(),
+      } as never,
+      {} as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(pending);
+    vi.spyOn(service, 'syncCanonicalConnectionCredentials').mockRejectedValue(new Error('connection sync failed'));
+
+    await expect(service.markReady(pending, operation, 'user-1', null, 'ready', null, true)).rejects.toThrow(
+      'connection sync failed'
+    );
+
+    expect(db.update).not.toHaveBeenCalled();
+    expect(pending.pendingOperation).toBe(operation);
+  });
+
+  it('lets a successful completion win when another completion of the same operation fails', async () => {
+    const operation = { id: 'operation-a', action: 'update' as const };
+    const pending = { ...managedRow, status: 'updating' as const, pendingOperation: operation };
+    let current = pending as typeof pending | (typeof pending & { status: 'ready'; pendingOperation: null });
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => ({
+          where: vi.fn(() => ({
+            returning: vi.fn(async () => {
+              if (current.pendingOperation?.id !== operation.id) return [];
+              current = { ...current, ...values } as typeof current;
+              return [current];
+            }),
+          })),
+        })),
+      })),
+    };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi
+          .fn()
+          .mockReturnValue(JSON.stringify({ username: 'owner', password: 'secret-password-123', databaseName: 'app' })),
+        encryptString: vi.fn(),
+      } as never,
+      {} as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockImplementation(async () => current);
+    vi.spyOn(service, 'syncCanonicalConnectionCredentials')
+      .mockRejectedValueOnce(new Error('transient sync failure'))
+      .mockResolvedValue(undefined);
+
+    const failedCompletion = service
+      .markReady(pending, operation, 'user-1', null, 'ready', null, true)
+      .catch(() => service.markOutcomeUnknown(pending));
+    const successfulCompletion = service.markReady(pending, operation, 'user-1', null, 'ready', null, true);
+
+    await Promise.all([failedCompletion, successfulCompletion]);
+
+    expect(current).toMatchObject({ status: 'ready', pendingOperation: null, lastError: null });
+    expect(service.syncCanonicalConnectionCredentials).toHaveBeenCalledTimes(2);
+    expect(service.bindingIdentityOperations.size).toBe(0);
+  });
+
+  it('coalesces concurrent dispatches of the same durable update operation', async () => {
+    const operation = { id: 'operation-a', action: 'update' as const };
+    const pending = { ...managedRow, status: 'updating' as const, pendingOperation: operation };
+    const service = new ManagedDatabaseService({} as never, {} as never, {} as never, {} as never) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(pending);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const unlocked = vi.spyOn(service, 'dispatchUpdateUnlocked').mockImplementation(async () => {
+      await gate;
+      return { status: 'ready' };
+    });
+    const credentials = { username: 'owner', password: 'secret-password-123', databaseName: 'app' };
+
+    const first = service.dispatchUpdate(pending, credentials, false, false, null);
+    const second = service.dispatchUpdate(pending, credentials, false, false, null);
+
+    await vi.waitFor(() => expect(unlocked).toHaveBeenCalledOnce());
+    expect(service.databaseOperationDispatches.size).toBe(1);
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual([{ status: 'ready' }, { status: 'ready' }]);
+
+    expect(unlocked).toHaveBeenCalledOnce();
+    expect(service.databaseOperationDispatches.size).toBe(0);
+  });
+
+  it('does not dispatch a delayed operation after a newer operation became current', async () => {
+    const operationA = { id: 'operation-a', action: 'update' as const };
+    const operationB = { id: 'operation-b', action: 'update' as const };
+    const stale = { ...managedRow, status: 'updating' as const, pendingOperation: operationA };
+    const current = { ...managedRow, status: 'updating' as const, pendingOperation: operationB };
+    const service = new ManagedDatabaseService({} as never, {} as never, {} as never, {} as never) as any;
+    vi.spyOn(service, 'getRow').mockResolvedValue(current);
+    const unlocked = vi.spyOn(service, 'dispatchUpdateUnlocked');
+
+    await expect(
+      service.dispatchUpdate(
+        stale,
+        { username: 'owner', password: 'secret-password-123', databaseName: 'app' },
+        false,
+        false,
+        null
+      )
+    ).resolves.toMatchObject({ status: 'updating' });
+
+    expect(unlocked).not.toHaveBeenCalled();
+    expect(service.databaseOperationDispatches.size).toBe(0);
+  });
+
+  it('serializes owner identity operations for the same managed database', async () => {
+    const service = new ManagedDatabaseService({} as never, { log: vi.fn() } as never, {} as never, {} as never) as any;
+    let active = 0;
+    let maxActive = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const unlocked = vi.spyOn(service, 'ensureBindingIdentityUnlocked').mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (unlocked.mock.calls.length === 1) await firstGate;
+      active -= 1;
+      return managedRow;
+    });
+
+    const first = service.ensureBindingIdentity(managedRow.id, null);
+    const second = service.ensureBindingIdentity(managedRow.id, null);
+    await vi.waitFor(() => expect(unlocked).toHaveBeenCalledTimes(1));
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(unlocked).toHaveBeenCalledTimes(2);
+    expect(maxActive).toBe(1);
+    expect(service.bindingIdentityOperations.size).toBe(0);
+  });
+
+  it('serializes binding lifecycle work with owner identity operations for the same database', async () => {
+    const service = new ManagedDatabaseService({} as never, { log: vi.fn() } as never, {} as never, {} as never) as any;
+    let releaseBinding!: () => void;
+    const bindingGate = new Promise<void>((resolve) => {
+      releaseBinding = resolve;
+    });
+    const bindingStarted = vi.fn();
+    const identityStarted = vi.fn();
+    vi.spyOn(service, 'ensureBindingIdentityUnlocked').mockImplementation(async () => {
+      identityStarted();
+      return managedRow;
+    });
+
+    const binding = service.runBindingLifecycleOperation(managedRow.id, async () => {
+      bindingStarted();
+      await bindingGate;
+    });
+    const identity = service.ensureBindingIdentity(managedRow.id, null);
+
+    await vi.waitFor(() => expect(bindingStarted).toHaveBeenCalledOnce());
+    expect(identityStarted).not.toHaveBeenCalled();
+    releaseBinding();
+    await Promise.all([binding, identity]);
+
+    expect(identityStarted).toHaveBeenCalledOnce();
+    expect(service.bindingIdentityOperations.size).toBe(0);
+  });
+
+  it('serializes retry provisioning with binding lifecycle work for the same database', async () => {
+    const failed = {
+      ...managedRow,
+      status: 'error' as const,
+      pendingOperation: null,
+      lastError: 'Managed database create failed: daemon unavailable',
+    };
+    const claimed = {
+      ...failed,
+      status: 'creating' as const,
+      pendingOperation: { id: 'retry-operation', action: 'create' as const },
+      lastError: null,
+    };
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([claimed]) })),
+        })),
+      })),
+    };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn().mockResolvedValue(undefined) } as never,
+      {
+        decryptString: vi
+          .fn()
+          .mockReturnValue(JSON.stringify({ username: 'owner', password: 'secret-password-123', databaseName: 'app' })),
+      } as never,
+      {} as never
+    ) as any;
+    const getRow = vi.spyOn(service, 'getRow').mockResolvedValue(failed);
+    vi.spyOn(service, 'assertDatabaseNode').mockResolvedValue({});
+    vi.spyOn(service, 'ensureManagedDatabaseCertificate').mockResolvedValue(failed);
+    vi.spyOn(service, 'dispatchCreate').mockResolvedValue({ id: failed.id });
+    let releaseBinding!: () => void;
+    const bindingGate = new Promise<void>((resolve) => {
+      releaseBinding = resolve;
+    });
+    const bindingStarted = vi.fn();
+
+    const binding = service.runBindingLifecycleOperation(failed.id, async () => {
+      bindingStarted();
+      await bindingGate;
+    });
+    const retry = service.retryProvisioning(failed.id, 'user-1');
+
+    await vi.waitFor(() => expect(bindingStarted).toHaveBeenCalledOnce());
+    expect(getRow).not.toHaveBeenCalled();
+    releaseBinding();
+    await Promise.all([binding, retry]);
+
+    expect(getRow).toHaveBeenCalledOnce();
+    expect(service.dispatchCreate).toHaveBeenCalledOnce();
+    expect(service.bindingIdentityOperations.size).toBe(0);
   });
 });

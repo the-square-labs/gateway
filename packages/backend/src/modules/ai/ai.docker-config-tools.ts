@@ -11,6 +11,7 @@ import {
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deployment-labels.js';
+import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
 import { FILE_UPLOAD_MAX_BYTES } from '@/modules/settings/general-settings.service.js';
 import type { User } from '@/types.js';
 
@@ -51,10 +52,10 @@ export async function manageDockerContainerConfigTool(
     if (!containerId && !containerName) throw new Error('Exactly one containerId or containerName target is required');
     let refreshedStaleId = false;
     try {
-      inspectedContainer = await context.dockerService.inspectContainer(nodeId, containerId || containerName);
+      inspectedContainer = await inspectUserContainer(context.dockerService, nodeId, containerId || containerName);
     } catch (error) {
       if (!containerId || !containerName) throw error;
-      inspectedContainer = await context.dockerService.inspectContainer(nodeId, containerName);
+      inspectedContainer = await inspectUserContainer(context.dockerService, nodeId, containerName);
       refreshedStaleId = true;
     }
     const resolvedId = String(inspectedContainer?.Id ?? inspectedContainer?.id ?? '');

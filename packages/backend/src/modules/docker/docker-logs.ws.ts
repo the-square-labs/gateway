@@ -11,6 +11,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
 import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
+import { inspectUserContainer } from './docker-internal-containers.js';
 
 const logger = createChildLogger('DockerLogStream');
 
@@ -228,7 +229,7 @@ async function authenticateAndStartStream(
     ws.close(1008, 'Authentication failed');
     return;
   }
-  const inspect = await docker.inspectContainer(nodeId, containerId).catch(() => null);
+  const inspect = await inspectUserContainer(docker, nodeId, containerId).catch(() => null);
   const scopeResourceId = String(inspect?.scopeResourceId ?? '');
   const user =
     scopeResourceId && hasDockerResourceScope(initialAuth.scopes, 'docker:containers:view', nodeId, scopeResourceId)

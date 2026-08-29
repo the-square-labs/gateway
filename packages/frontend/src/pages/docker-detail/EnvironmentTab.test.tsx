@@ -44,6 +44,7 @@ const binding: ManagedDatabaseBinding = {
   targetResourceId: "app",
   environment: { connectionUri: "DATABASE_URL" },
   status: "ready",
+  lastError: null,
   createdAt: "2026-08-01T00:00:00.000Z",
   updatedAt: "2026-08-01T00:00:00.000Z",
 };

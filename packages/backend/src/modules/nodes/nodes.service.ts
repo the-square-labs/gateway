@@ -49,6 +49,12 @@ import {
   getReportedPublicNodeAddresses,
   isPubliclyRoutableIp,
 } from './node-service-address.js';
+import {
+  createNodeFileOperationContext,
+  isNonEmptyAddressSubset,
+  orderedAddressesEqual,
+  stripNodeHealthHistory,
+} from './node-service-helpers.js';
 import type {
   CreateNodeInput,
   NodeListQuery,
@@ -57,20 +63,6 @@ import type {
 } from './nodes.schemas.js';
 
 const logger = createChildLogger('NodesService');
-
-function isNonEmptyAddressSubset(addresses: string[], allowedAddresses: string[]): boolean {
-  const allowed = new Set(allowedAddresses);
-  return addresses.length > 0 && addresses.every((address) => allowed.has(address));
-}
-
-function orderedAddressesEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((address, index) => address === right[index]);
-}
-
-function stripNodeHealthHistory<T extends { healthHistory?: unknown }>(node: T): Omit<T, 'healthHistory'> {
-  const { healthHistory: _healthHistory, ...rest } = node;
-  return rest;
-}
 
 export class NodesService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -113,23 +105,7 @@ export class NodesService {
   }
 
   private nodeFileOperationContext() {
-    return {
-      nodeDispatch: this.nodeDispatch,
-      auditService: this.auditService,
-      eventBus: this.eventBus,
-      parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
-    };
-  }
-
-  private parseResult(result: { success: boolean; error?: string; detail?: string }) {
-    if (!result.success) {
-      throw new AppError(502, 'DISPATCH_ERROR', result.error || 'Command failed on daemon');
-    }
-    try {
-      return result.detail ? JSON.parse(result.detail) : null;
-    } catch {
-      return result.detail;
-    }
+    return createNodeFileOperationContext(this.nodeDispatch, this.auditService, this.eventBus);
   }
 
   private async validateConnectedNode(id: string) {

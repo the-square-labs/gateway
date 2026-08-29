@@ -1,0 +1,49 @@
+---
+title: Architecture
+description: Understand the control plane, Relay, managed daemons, and data ownership boundaries.
+section: Concepts
+order: 1
+audience: [operator, platform-engineer, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Architecture
+
+Gateway separates centralized intent and identity from host-local execution.
+
+```text
+Users and automation
+        |
+  HTTPS / WebSocket
+        |
+Gateway application ---- PostgreSQL / Redis
+        |
+ internal authenticated gRPC
+        |
+Gateway Relay :9443
+        |
+ outbound managed-daemon sessions
+        |
+nginx / Docker / database / builder / monitoring hosts
+```
+
+## Control plane
+
+The Gateway application owns users, groups, scopes, resource definitions, desired state, audit records, encrypted integration credentials, long-running operation state, and recovery decisions. PostgreSQL is the durable source of truth. Redis is used for bounded coordination, caching, queues, and short-lived reservations where applicable.
+
+## Relay
+
+The Relay is the sole public owner of `9443/tcp`. Managed daemons connect outbound through authenticated transport. The application keeps its gRPC listener internal. If the Relay is unavailable, new managed-node operations and new private tunnel admissions fail closed; existing data-plane sessions may continue only where their protocol and authorization model allow it.
+
+## Managed daemons
+
+Each daemon has a bounded role. A Docker daemon cannot become a database daemon by changing a client request, and user lifecycle APIs must not mutate Gateway-owned internal containers. Daemons report capabilities and inventory; the control plane authorizes an operation before dispatch.
+
+## Data plane
+
+Public traffic is served by nginx nodes. Private application-to-database and nginx-to-workload paths use Secure Links and connector identities. Gateway Inference uses a separately supervised inference core reachable only through the Gateway proxy.
+
+## Failure model
+
+Read views may use sanitized last-known snapshots while a node is offline. Mutations remain unavailable. Desired state is durable so Gateway can reconcile after application, Relay, daemon, or node restarts.

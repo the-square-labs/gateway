@@ -39,7 +39,7 @@ const settings: EnvironmentSettings = {
     requestBodyMaxBytes: 2 * 1024 * 1024,
     oauthBodyMaxBytes: 32 * 1024,
     inferenceHttpBodyMaxBytes: 256 * 1024 * 1024,
-    inferenceWebSocketMaxPayloadBytes: 50 * 1024 * 1024,
+    inferenceWebSocketMaxPayloadBytes: 128 * 1024 * 1024,
     inferenceMaxConcurrentRequestsPerToken: 32,
     inferenceConcurrencyLeaseSeconds: 600,
   },
@@ -90,6 +90,31 @@ describe("EnvironmentSettingsSection", () => {
         requestLimits: expect.objectContaining({ inferenceHttpBodyMaxBytes: 96 * 1024 * 1024 }),
       })
     );
+  });
+
+  it("renders the configured request-limit defaults and maxima", async () => {
+    vi.spyOn(api, "getEnvironmentSettings").mockResolvedValue({
+      data: structuredClone(settings),
+      defaults: structuredClone(settings),
+    });
+
+    render(<EnvironmentSettingsSection canEdit />);
+
+    const expectations = [
+      ["Default API body (MiB)", 2, "32"],
+      ["OAuth and auth body (KiB)", 32, "1024"],
+      ["Inference HTTP body (MiB)", 256, "2048"],
+      ["Inference WebSocket payload (MiB)", 128, "512"],
+      ["Concurrent inference requests (requests)", 32, "128"],
+      ["Concurrency lease (seconds)", 600, "2400"],
+    ] as const;
+
+    for (const [name, value, max] of expectations) {
+      const input = await screen.findByRole("spinbutton", { name });
+      expect(input).toHaveValue(value);
+      expect(input).toHaveAttribute("max", max);
+      expect(input).not.toHaveAttribute("aria-invalid");
+    }
   });
 
   it("renders rate limiting as two independent top-level panels", async () => {

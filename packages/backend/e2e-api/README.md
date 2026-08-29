@@ -5,7 +5,7 @@ This suite verifies a running Gateway deployment through real HTTP API calls wit
 Run from the repository root:
 
 ```sh
-DATABASE_URL=postgres://dev:dev@localhost:5432/gateway \
+DATABASE_URL=postgres://dev:dev@localhost:55432/gateway \
 GATEWAY_E2E_API_URL=http://localhost:3000 \
 pnpm --filter backend e2e:api
 ```

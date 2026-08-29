@@ -178,6 +178,31 @@ describe('shouldSkipFallbackAudit', () => {
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/docker/snapshots/refresh')).toBe(true);
   });
 
+  it.each([
+    '/auth/me/mfa/totp/setup',
+    '/auth/me/passkeys/options',
+    '/auth/me/mfa/recovery-codes/passkey/options',
+    '/auth/mfa/enrollment/totp/setup',
+    '/auth/mfa/enrollment/passkey/options',
+    '/auth/passkeys/options',
+    '/auth/mfa/passkey/options',
+  ])('skips ephemeral authentication initialization at %s', (path) => {
+    expect(__testOnly.shouldSkipFallbackAudit('POST', path)).toBe(true);
+  });
+
+  it.each([
+    '/auth/me/mfa/totp/confirm',
+    '/auth/me/mfa/totp/reset',
+    '/auth/me/passkeys',
+    '/auth/me/mfa/recovery-codes/passkey/verify',
+    '/auth/mfa/enrollment/totp/confirm',
+    '/auth/mfa/enrollment/passkey/confirm',
+    '/auth/passkeys/verify',
+    '/auth/mfa/passkey/verify',
+  ])('keeps completed authentication actions auditable at %s', (path) => {
+    expect(__testOnly.shouldSkipFallbackAudit('POST', path)).toBe(false);
+  });
+
   it('skips successful checks, previews, validations, and refresh-only requests', () => {
     const paths = [
       '/api/system/check-update',

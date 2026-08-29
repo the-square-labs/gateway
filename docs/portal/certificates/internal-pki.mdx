@@ -1,0 +1,17 @@
+---
+title: Internal PKI
+description: Operate user-facing certificate authorities and certificate issuance separately from system transport PKI.
+section: Certificates and PKI
+order: 2
+audience: [security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Internal PKI
+
+Enterprise Internal PKI can create root and intermediate authorities, issue server/client/code-signing/email certificates, apply templates, publish CRLs, and export supported formats under explicit scopes.
+
+Private keys are encrypted with `PKI_MASTER_KEY`. Preserve this key independently from the database backup. Limit export permissions and audit every authority, certificate, revocation, and private-key operation.
+
+User-facing Internal PKI is separate from Gateway's hidden system PKI used for managed transport. Entitlement loss disables the user-facing feature without deleting authorities, certificates, templates, or audit history; system transport must continue to function.

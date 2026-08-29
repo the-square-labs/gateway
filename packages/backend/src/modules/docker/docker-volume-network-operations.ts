@@ -20,6 +20,7 @@ export interface DockerVolumeNetworkOperationContext {
   auditService: AuditService;
   eventBus?: EventBusService;
   parseResult(result: DockerDispatchResult): any;
+  assertContainerMutationAllowed?(nodeId: string, containerId: string): Promise<void>;
 }
 
 interface DockerVolumeFileUploadSession {
@@ -719,6 +720,7 @@ export async function connectContainerToNetwork(
   if (isGatewayManagedDockerNetwork(networkName)) {
     throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be connected manually');
   }
+  await context.assertContainerMutationAllowed?.(nodeId, containerId);
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'connect', { networkId, containerId });
   context.parseResult(result);
   await context.auditService.log({
@@ -744,6 +746,7 @@ export async function disconnectContainerFromNetwork(
   if (isBuiltInDockerNetwork(networkName)) {
     throw new AppError(400, 'BUILTIN_NETWORK', 'Containers cannot be disconnected from built-in Docker networks');
   }
+  await context.assertContainerMutationAllowed?.(nodeId, containerId);
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'disconnect', { networkId, containerId });
   context.parseResult(result);
   await context.auditService.log({

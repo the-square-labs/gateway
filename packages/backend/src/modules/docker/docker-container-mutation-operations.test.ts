@@ -9,7 +9,7 @@ import {
 } from './docker-container-mutation-operations.js';
 
 describe('killContainer emergency path', () => {
-  it('bypasses lifecycle and managed-container locks and kills by stable name', async () => {
+  it('reuses an already-authorized transition identity and kills by stable name', async () => {
     const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
     const ctx = {
       validateDockerNode: vi.fn().mockResolvedValue(undefined),
@@ -42,6 +42,34 @@ describe('killContainer emergency path', () => {
       signal: 'SIGKILL',
       configJson: JSON.stringify({ containerName: 'app', emergency: true }),
     });
+  });
+
+  it('rejects a direct kill when the target is a Gateway-owned container', async () => {
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const internalError = Object.assign(new Error('Gateway internal container'), {
+      code: 'GATEWAY_INTERNAL_CONTAINER',
+    });
+    const ctx = {
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockRejectedValue(internalError),
+      resolveContainerName: vi.fn().mockResolvedValue('gateway-db-connector'),
+      setTransition: vi.fn(),
+      emitTransition: vi.fn(),
+      createTask: vi.fn(),
+      nodeDispatch: { sendDockerContainerCommand },
+      parseResult: vi.fn(),
+      failTask: vi.fn(),
+      watchTransition: vi.fn(),
+      auditService: { log: vi.fn() },
+    };
+
+    await expect(killContainer(ctx as never, 'node-1', 'connector-1', 'SIGKILL', 'user-1')).rejects.toMatchObject({
+      code: 'GATEWAY_INTERNAL_CONTAINER',
+    });
+
+    expect(ctx.assertNotManagedDeploymentInternal).toHaveBeenCalledWith('node-1', 'connector-1');
+    expect(ctx.resolveContainerName).not.toHaveBeenCalled();
+    expect(sendDockerContainerCommand).not.toHaveBeenCalled();
   });
 });
 

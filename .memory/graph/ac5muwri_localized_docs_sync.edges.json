@@ -3,53 +3,13 @@
   "edges": [
     {
       "from_id": "ac5muwri",
-      "to_id": "j6oni2tm",
-      "relation": "related_to",
-      "weight": 0.3576,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736905,
-      "updated_at": 1787862736905
-    },
-    {
-      "from_id": "ac5muwri",
       "to_id": "duvbj7h2",
-      "relation": "related_to",
-      "weight": 0.3558,
-      "reason": "The memories are similar enough to be useful related context.",
+      "relation": "same_workflow",
+      "weight": 0.8,
+      "reason": "AI tool changes require coordinated documentation updates in ai.docs.ts and verification of MCP-facing contracts.",
       "source": "auto",
-      "created_at": 1787862736905,
-      "updated_at": 1787862736905
-    },
-    {
-      "from_id": "ac5muwri",
-      "to_id": "vrch49nc",
-      "relation": "related_to",
-      "weight": 0.3434,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736905,
-      "updated_at": 1787862736905
-    },
-    {
-      "from_id": "ac5muwri",
-      "to_id": "h8y5ou2d",
-      "relation": "related_to",
-      "weight": 0.3392,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736905,
-      "updated_at": 1787862736905
-    },
-    {
-      "from_id": "ac5muwri",
-      "to_id": "8irxtjyz",
-      "relation": "related_to",
-      "weight": 0.3331,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736905,
-      "updated_at": 1787862736905
+      "created_at": 1787955605625,
+      "updated_at": 1787955605625
     }
   ]
 }

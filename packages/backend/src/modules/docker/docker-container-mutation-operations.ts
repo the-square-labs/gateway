@@ -461,6 +461,10 @@ export async function killContainer(
   trustedStableName?: string
 ) {
   await ctx.validateDockerNode(nodeId);
+  // A trusted stable name is supplied only for an already-authorized lifecycle
+  // transition whose runtime may be temporarily absent. Direct kill requests
+  // must still prove that the target is not a Gateway-owned container.
+  if (!trustedStableName) await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = trustedStableName ?? (await ctx.resolveContainerName(nodeId, containerId));
   ctx.setTransition(nodeId, name, 'killing');
   ctx.emitTransition(nodeId, name, containerId, 'killing');
@@ -943,7 +947,7 @@ export async function recreateWithConfig(
       const result = await ctx.nodeDispatch.sendDockerContainerCommand(
         nodeId,
         'recreate',
-        { containerId, configJson: JSON.stringify(config) },
+        { containerId, configJson: JSON.stringify({ ...config, expectedState }) },
         Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
       );
       const data = ctx.parseResult(result);
@@ -1143,7 +1147,7 @@ export async function updateContainerEnv(
     const result = await ctx.nodeDispatch.sendDockerContainerCommand(
       nodeId,
       'update',
-      { containerId, configJson: JSON.stringify({ env: mergedEnv, removeEnv }) },
+      { containerId, configJson: JSON.stringify({ env: mergedEnv, removeEnv, expectedState }) },
       Math.max(60000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60))
     );
     data = ctx.parseResult(result);

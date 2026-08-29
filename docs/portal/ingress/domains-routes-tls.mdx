@@ -1,0 +1,29 @@
+---
+title: Domains, Routes, and TLS
+description: Configure the canonical ingress resource chain.
+section: Ingress
+order: 2
+audience: [operator, platform-engineer]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Domains, Routes, and TLS
+
+## Domains
+
+Register each hostname once and assign it to an eligible nginx node with a detected public service address. A Route and its Domain must remain on the same node. Cloudflare-managed Domains can reconcile A/AAAA records; external DNS remains the operator's responsibility.
+
+## Certificates
+
+Issue Let's Encrypt certificates through HTTP-01 or DNS-01, or upload existing material. HTTP-01 requires the assigned node to be publicly reachable on port 80. Gateway distributes private key material only to nodes with enabled TLS Routes that use it.
+
+## Routes
+
+Choose the Domain, behavior, upstream, TLS certificate, and health policy. Enable WebSockets, rewrites, headers, buffering, or timeout changes only when required by the application.
+
+## Migration
+
+Use the explicit ingress migration workflow to move a Domain and its Routes. Cloudflare DNS can be changed during cutover; external DNS requires an operator-confirmed update. Verify the target before removing the source placement.
+
+<!-- screenshot: id=domain-route-certificate-chain; viewport=1440x900; description=Domain detail showing assigned node, linked Route, and certificate; redact=domain,node-name,addresses -->

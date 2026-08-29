@@ -18,6 +18,7 @@ import {
   inferenceLimitUsersRoute,
   inferenceModelSuggestionsRoute,
   inferenceOAuthStatusRoute,
+  inferenceSelfUsageOverviewRoute,
   inferenceSelfUsageRoute,
   inferenceSystemUsageRoute,
   inferenceUsersUsageRoute,
@@ -28,6 +29,7 @@ import {
   listInferenceTokensRoute,
   reorderInferenceModelsRoute,
   replaceInferenceModelConfigurationRoute,
+  resetInferenceUserLimitRoute,
   revokeInferenceTokenRoute,
   setInferenceDefaultLimitsRoute,
   setInferenceUserLimitsRoute,
@@ -191,8 +193,13 @@ inferenceManagementRoutes.openapi(inferenceModelSuggestionsRoute, async (c) => {
 });
 
 inferenceManagementRoutes.use('/usage/self', requireScope('feat:ai:use'));
+inferenceManagementRoutes.use('/usage/self/*', requireScope('feat:ai:use'));
 inferenceManagementRoutes.openapi(inferenceSelfUsageRoute, async (c) => {
   return c.json(await container.resolve(InferenceUsageService).self(c.get('user')!));
+});
+
+inferenceManagementRoutes.openapi(inferenceSelfUsageOverviewRoute, async (c) => {
+  return c.json(await container.resolve(InferenceUsageService).selfOverview(c.get('user')!));
 });
 
 inferenceManagementRoutes.use('/usage/system', requireScope('inference:usage:view'));
@@ -246,4 +253,8 @@ inferenceManagementRoutes.openapi(setInferenceUserLimitsRoute, async (c) => {
 inferenceManagementRoutes.openapi(deleteInferenceUserLimitsRoute, async (c) => {
   await container.resolve(InferenceUsageService).removeUser(c.get('user')!.id, c.req.param('id')!);
   return c.body(null, 204);
+});
+
+inferenceManagementRoutes.openapi(resetInferenceUserLimitRoute, async (c) => {
+  return c.json(await container.resolve(InferenceUsageService).resetUserLimits(c.get('user')!.id, c.req.param('id')!));
 });

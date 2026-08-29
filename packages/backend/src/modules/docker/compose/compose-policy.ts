@@ -8,37 +8,19 @@ import type {
   DockerComposeNormalizedVolume,
 } from '@/db/schema/index.js';
 import { COMPOSE_YAML_MAX_BYTES, type ComposeYamlInput } from './compose.schemas.js';
+import type {
+  ComposeGitBuildPreparation,
+  ComposeGitBuildSpec,
+  ComposeValidationDiagnostic,
+  ComposeValidationResult,
+} from './compose-policy.types.js';
 
-export interface ComposeValidationDiagnostic {
-  severity: 'error' | 'warning';
-  code: string;
-  message: string;
-  path?: string;
-}
-
-export interface ComposeValidationResult {
-  valid: boolean;
-  projectName: string | null;
-  normalizedModel: DockerComposeNormalizedModel | null;
-  configDigest: string | null;
-  requiredVariables: string[];
-  diagnostics: ComposeValidationDiagnostic[];
-}
-
-export interface ComposeGitBuildSpec {
-  serviceName: string;
-  dockerfilePath: string;
-  contextPath: string;
-  buildArgs: Record<string, string>;
-}
-
-export interface ComposeGitBuildPreparation {
-  valid: boolean;
-  runtimeYaml: string | null;
-  services: ComposeGitBuildSpec[];
-  validation: ComposeValidationResult;
-  diagnostics: ComposeValidationDiagnostic[];
-}
+export type {
+  ComposeGitBuildPreparation,
+  ComposeGitBuildSpec,
+  ComposeValidationDiagnostic,
+  ComposeValidationResult,
+} from './compose-policy.types.js';
 
 const TOP_LEVEL_KEYS = new Set(['name', 'version', 'services', 'volumes', 'networks']);
 const SERVICE_KEYS = new Set([
@@ -425,7 +407,13 @@ function normalizePorts(value: unknown, path: string, diagnostics: ComposeValida
 }
 
 function isHostPath(value: string) {
-  return value.startsWith('/') || value.startsWith('.') || value.startsWith('~') || value.includes('\\');
+  return (
+    value.startsWith('/') ||
+    value.startsWith('.') ||
+    value.startsWith('~') ||
+    value.includes('\\') ||
+    value.includes('$')
+  );
 }
 
 function normalizeServiceVolumes(

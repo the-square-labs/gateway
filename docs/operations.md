@@ -16,6 +16,8 @@ From the UI:
 
 Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, runs the target image's foundation migrator, updates `GATEWAY_IMAGE_REF`, and recreates its own container. Relay has an independent immutable `GATEWAY_RELAY_IMAGE_REF`; Compose leaves it running when the digest is unchanged and replaces it when the signed `relayImageRef` changes. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
 
+The installation-wide **Update channel** is configured under **Settings > General > General settings**. `stable` is the default and accepts production releases only. `preview` also allows GitHub prereleases tagged as `vX.Y.Z-rc.N` for Gateway and with the required component suffix for Relay and managed node daemons, for example `vX.Y.Z-rc.N-relay` or `vX.Y.Z-rc.N-docker`. Switching back to `stable` immediately hides cached release-candidate offers. Component-aware resolution prefers a newer patch on the current minor, otherwise the baseline release of the next minor. Daemon checks stage one target per daemon type from that type's oldest compatible installed cohort. Inference Core keeps its independent stable signed release channel and is not changed by this setting.
+
 App-only updates leave established managed-database binding streams on the relay running. Updating the relay itself is an explicit data-plane maintenance event and may interrupt those streams. The one-time migration from a pre-relay deployment also has an expected interruption while public `9443/tcp` ownership moves from `app` to `relay`.
 
 Relay Pool updates are durable and one-at-a-time. With at least two ready physical fault domains, Gateway drains a remote instance, updates and verifies its signed worker and supervisor artifacts, returns it to service, and then continues. The local Compose relay is updated last. Drain waits up to 30 minutes and pauses instead of killing long-lived streams; the operator may wait again or use the explicitly confirmed **Force disconnect** action. A failed worker health/version check restores the previous binary, and a supervisor update is committed only after it reconnects at the expected version. Connector image references are promoted only after the whole pool succeeds.
@@ -341,6 +343,8 @@ Gateway supports operational notification workflows:
 - Certificate, domain, health, and runtime alerts.
 
 Use status pages for externally visible service health and incidents. Use notifications for internal operational alerts.
+
+Notification message and webhook templates use one canonical nested context. Common families are `notification.*`, `alert.*`, `resource.*`, `metric.*`, `node.*`, `health.*`, `certificate.*`, `state.*`, `event.*`, `operation.*`, `failure.*`, `details.*`, `fired.*`, `resolution.*`, and `gateway.*`. For example, use `{{notification.title}}`, `{{alert.severity.emoji}}`, `{{metric.value}}`, and `{{fired.duration}}`. Historical flat names such as `alert_name`, `value`, `threshold`, `fired_at`, and `fired_duration` are not aliases and render empty. The `coalesce` helper can select the first non-empty nested value.
 
 ### SIEM Audit Export
 

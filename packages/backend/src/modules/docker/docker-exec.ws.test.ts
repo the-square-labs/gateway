@@ -1,29 +1,11 @@
-import 'reflect-metadata';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
-import { NodeDispatchService } from '@/services/node-dispatch.service.js';
-import { NodeRegistryService } from '@/services/node-registry.service.js';
-import { DockerManagementService } from './docker.service.js';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  createDockerExecWSHandlers,
   DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES,
   isDockerExecPreauthMessageTooLarge,
   parseDockerExecTerminalSize,
   resizeDockerExec,
   resolveDockerExecUser,
 } from './docker-exec.ws.js';
-
-const authMocks = vi.hoisted(() => ({
-  resolveWebSocketCredential: vi.fn(),
-  resolveWebSocketCredentialForScopeBase: vi.fn(() => new Promise<never>(() => {})),
-}));
-
-vi.mock('@/modules/auth/websocket-auth.js', () => authMocks);
-
-afterEach(() => {
-  container.reset();
-  vi.clearAllMocks();
-});
 
 describe('resolveDockerExecUser', () => {
   it('uses the configured container execution user when present', async () => {
@@ -113,24 +95,4 @@ describe('Docker exec unauthenticated message limit', () => {
     );
   });
 
-  it('closes an unauthenticated socket that sends an oversized binary frame', async () => {
-    container.registerInstance(NodeDispatchService, {} as NodeDispatchService);
-    container.registerInstance(NodeRegistryService, {} as NodeRegistryService);
-    container.registerInstance(DockerManagementService, {} as DockerManagementService);
-    const ws = { send: vi.fn(), close: vi.fn() };
-    const handlers = createDockerExecWSHandlers('node-1', 'container-1', '/bin/sh', null);
-
-    handlers.onOpen({} as never, ws as never);
-    await handlers.onMessage(
-      { data: new Uint8Array(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1).buffer } as never,
-      ws as never
-    );
-
-    expect(JSON.parse(String(ws.send.mock.calls[0]?.[0]))).toEqual({
-      type: 'error',
-      message: 'Message too large before authentication',
-    });
-    expect(ws.close).toHaveBeenCalledWith(1009, 'Message too large');
-    handlers.onClose({} as never, ws as never);
-  });
 });

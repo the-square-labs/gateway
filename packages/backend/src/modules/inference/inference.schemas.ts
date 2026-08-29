@@ -189,6 +189,36 @@ export const InferenceSelfUsageResponseSchema = z.object({
   }),
 });
 
+export const InferenceUsageOverviewResponseSchema = z.object({
+  windowDays: z.number().int().positive(),
+  requestTotals: z.array(
+    z.object({
+      status: z.string(),
+      requests: z.number().int().nonnegative(),
+      credits: z.string(),
+      apiMicrodollars: z.number().int().nonnegative(),
+      tokens: z.number().int().nonnegative(),
+    })
+  ),
+  ledgerTotals: z.array(
+    z.object({
+      budgetType: z.string(),
+      credits: z.string(),
+      apiMicrodollars: z.number().int().nonnegative(),
+      tokens: z.number().int().nonnegative(),
+    })
+  ),
+  dailyUsage: z.array(
+    z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      requests: z.number().int().nonnegative(),
+      credits: z.number().nonnegative(),
+      apiMicrodollars: z.number().int().nonnegative(),
+      tokens: z.number().int().nonnegative(),
+    })
+  ),
+});
+
 export const InferenceDataPlaneUsageResponseSchema = InferenceSelfUsageResponseSchema.extend({
   tokens: z.object({
     lifetime: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),

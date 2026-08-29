@@ -23,11 +23,14 @@ import { createOutput, type Output } from './output.js';
 import { type CliPaths, resolveCliPaths } from './paths.js';
 import { ProfileStore } from './profiles.js';
 import { authenticatedSetupClient } from './session.js';
+import { type InferenceStartupManager, inferenceStartupManager } from './startup.js';
 
 interface ParsedArgs {
   command: string[];
   home?: string;
   token?: string;
+  url?: string;
+  startup?: boolean;
 }
 
 interface CliDependencies {
@@ -44,22 +47,26 @@ interface CliDependencies {
   home?: string;
   interactiveUi?: InteractiveCliUi;
   proxyDaemon?: InferenceProxyDaemonManager;
+  startupManager?: InferenceStartupManager;
 }
 
 const CONNECTION_NAME = 'default';
 
-const HELP = `Usage: npx @sqgateway/inference [--home <path>] [command]
+const HELP = `Usage: npx @sqgateway/inference [--home <path>] [--url <gateway>] [command]
 
 Commands:
   login [GATEWAY]                  Authorize through OAuth or an existing gwi_ token
   logout                           Remove Gateway setup authorization
   setup [codex|claude-code]        Configure an inference harness
+  startup install|uninstall|status Manage inference proxy startup
 
 Running without a command opens the interactive manager.
 
 Options:
   --home <path>                    Store all companion data under this directory
+  --url <gateway>                  Use this Gateway URL without prompting
   --token <gwi_token>              Authenticate with an existing inference token
+  --startup                        Install startup after setup codex
   -h, --help                       Show help
   -v, --version                    Show version`;
 
@@ -67,6 +74,8 @@ export function parseArgs(args: string[]): ParsedArgs {
   const command: string[] = [];
   let home: string | undefined;
   let token: string | undefined;
+  let url: string | undefined;
+  let startup = false;
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index]!;
     if (value === '--help' || value === '-h') return { command: ['help'] };
@@ -89,16 +98,41 @@ export function parseArgs(args: string[]): ParsedArgs {
       token = candidate.trim();
       continue;
     }
+    if (value === '--url' || value.startsWith('--url=')) {
+      if (url !== undefined) throw new CliError('INVALID_ARGUMENT', 'Option --url may be provided only once.');
+      const candidate = value === '--url' ? args[++index] : value.slice('--url='.length);
+      if (!candidate?.trim() || candidate.startsWith('-')) {
+        throw new CliError('INVALID_ARGUMENT', 'Option --url requires a Gateway URL.');
+      }
+      url = candidate.trim();
+      continue;
+    }
+    if (value === '--startup') {
+      if (startup) throw new CliError('INVALID_ARGUMENT', 'Option --startup may be provided only once.');
+      startup = true;
+      continue;
+    }
     if (value.startsWith('-')) throw new CliError('INVALID_ARGUMENT', `Unknown option: ${value}`);
     command.push(value);
   }
   if (token && command[0] !== 'login') {
     throw new CliError('INVALID_ARGUMENT', 'Option --token is supported only with the login command.');
   }
+  if (url && command[0] && command[0] !== 'login' && command[0] !== 'setup') {
+    throw new CliError('INVALID_ARGUMENT', 'Option --url is supported with login, setup, or interactive mode.');
+  }
+  if (url && command[0] === 'login' && command[1]) {
+    throw new CliError('INVALID_ARGUMENT', 'Provide the Gateway URL either positionally or with --url, not both.');
+  }
+  if (startup && (command[0] !== 'setup' || command[1] !== 'codex')) {
+    throw new CliError('INVALID_ARGUMENT', 'Option --startup is supported only with setup codex.');
+  }
   return {
     command,
     ...(home ? { home } : {}),
     ...(token ? { token } : {}),
+    ...(url ? { url } : {}),
+    ...(startup ? { startup: true } : {}),
   };
 }
 
@@ -131,10 +165,16 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
             )) === true
         : undefined,
     });
-  const input = interactiveCommandInput(paths, profiles, credentials, {
-    ...dependencies,
-    interactiveUi,
-  });
+  const input = interactiveCommandInput(
+    paths,
+    profiles,
+    credentials,
+    {
+      ...dependencies,
+      interactiveUi,
+    },
+    parsed.url
+  );
   const privateRuntime = parsed.command[0]?.startsWith('__') ?? false;
 
   try {
@@ -185,7 +225,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     }
     if (parsed.command[0] === 'login') {
       if (parsed.command.length > 2) throw new CliError('INVALID_ARGUMENT', 'Usage: login [GATEWAY]');
-      let gateway: string | undefined = parsed.command[1];
+      let gateway: string | undefined = parsed.url ?? parsed.command[1];
       if (!gateway && interactive) {
         input.ui.intro('Good Gateway Inference · Login');
         gateway = (await input.ui.gatewayOrigin()) ?? undefined;
@@ -236,6 +276,30 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       await logoutCommand(CONNECTION_NAME, profiles, credentials, output, dependencies.fetch);
       return 0;
     }
+    if (parsed.command[0] === 'startup') {
+      if (parsed.command.length !== 2 || !['install', 'uninstall', 'status'].includes(parsed.command[1]!)) {
+        throw new CliError('INVALID_ARGUMENT', 'Usage: startup install|uninstall|status');
+      }
+      const manager = dependencies.startupManager ?? inferenceStartupManager;
+      const startupInput = {
+        paths,
+        profileName: CONNECTION_NAME,
+        env: dependencies.env,
+        home: dependencies.home,
+      };
+      const status =
+        parsed.command[1] === 'install'
+          ? await manager.install(startupInput)
+          : parsed.command[1] === 'uninstall'
+            ? await manager.uninstall(startupInput)
+            : await manager.status(startupInput);
+      output.write({ ok: status.supported, ...status }, () =>
+        !status.supported
+          ? 'Automatic startup is supported on macOS and Linux.'
+          : `Startup ${status.installed ? (status.active ? 'is installed and running' : 'is installed') : 'is not installed'}.`
+      );
+      return status.supported ? 0 : 2;
+    }
     if (parsed.command[0] === 'uninstall' && parsed.command[1] === 'codex-usage') {
       if (parsed.command.length > 3) {
         throw new CliError('INVALID_ARGUMENT', 'Usage: uninstall codex-usage [desktop|cli|all]');
@@ -270,8 +334,27 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         throw new CliError('UNSUPPORTED_HARNESS', `Harness ${harness} is not supported by this CLI version.`);
       }
       return harness === 'codex'
-        ? await setupCodexCommand(input, paths, profiles, credentials, output, interactive, dependencies)
-        : await setupClaudeCodeCommand(input, paths, profiles, credentials, output, interactive, dependencies);
+        ? await setupCodexCommand(
+            input,
+            paths,
+            profiles,
+            credentials,
+            output,
+            interactive,
+            dependencies,
+            parsed.url,
+            parsed.startup
+          )
+        : await setupClaudeCodeCommand(
+            input,
+            paths,
+            profiles,
+            credentials,
+            output,
+            interactive,
+            dependencies,
+            parsed.url
+          );
     }
     throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${parsed.command.join(' ')}`);
   } catch (error) {
@@ -297,9 +380,10 @@ async function setupClaudeCodeCommand(
   credentials: CredentialStore,
   output: Output,
   interactive: boolean,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  gateway?: string
 ): Promise<number> {
-  const context = await setupContext(input, profiles, credentials, output, interactive, dependencies);
+  const context = await setupContext(input, profiles, credentials, output, interactive, dependencies, gateway);
   const result = await createClaudeCodeIntegration(paths, credentials, dependencies).setup({
     profileName: CONNECTION_NAME,
     profile: context.profile,
@@ -324,7 +408,9 @@ async function setupCodexCommand(
   credentials: CredentialStore,
   output: Output,
   interactive: boolean,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  gateway?: string,
+  installStartup = false
 ): Promise<number> {
   await removeLegacyCodexUsageComponents(paths, {
     platform: process.platform,
@@ -332,13 +418,21 @@ async function setupCodexCommand(
     env: dependencies.env,
     home: dependencies.home,
   });
-  const context = await setupContext(input, profiles, credentials, output, interactive, dependencies);
+  const context = await setupContext(input, profiles, credentials, output, interactive, dependencies, gateway);
   const result = await createIntegration(paths, credentials, dependencies).setup({
     profileName: CONNECTION_NAME,
     profile: context.profile,
     discovery: context.discovery,
     client: context.client,
   });
+  if (installStartup) {
+    await (dependencies.startupManager ?? inferenceStartupManager).install({
+      paths,
+      profileName: CONNECTION_NAME,
+      env: dependencies.env,
+      home: dependencies.home,
+    });
+  }
   output.write({ ok: true, ...result }, () =>
     [
       `Configured Codex ${result.codexVersion}.`,
@@ -346,6 +440,7 @@ async function setupCodexCommand(
       ...(result.warning ? [`Warning: ${result.warning}`] : []),
       'Fully quit and reopen Codex to load the current model catalog.',
       `Config: ${result.configFile}`,
+      ...(installStartup ? ['Startup: installed.'] : []),
     ].join('\n')
   );
   return 0;
@@ -357,21 +452,34 @@ async function setupContext(
   credentials: CredentialStore,
   output: Output,
   interactive: boolean,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  gateway?: string
 ) {
   let profile = await profiles.get(CONNECTION_NAME);
   let context: Awaited<ReturnType<typeof authenticatedSetupClient>>;
+  if (gateway && profile?.origin !== gateway) {
+    await loginCommand(
+      { gateway, command: ['login'] },
+      CONNECTION_NAME,
+      profiles,
+      credentials,
+      output,
+      dependencies.fetch,
+      dependencies.openBrowser
+    );
+    profile = await profiles.getRequired(CONNECTION_NAME);
+  }
   try {
     context = await authenticatedSetupClient(CONNECTION_NAME, profiles, credentials, dependencies.fetch);
   } catch (error) {
     if (!isAuthorizationRequired(error)) throw error;
-    let gateway = profile?.origin;
-    if (!gateway && interactive) gateway = (await input.ui.gatewayOrigin()) ?? undefined;
-    if (!gateway) {
+    let selectedGateway = gateway ?? profile?.origin;
+    if (!selectedGateway && interactive) selectedGateway = (await input.ui.gatewayOrigin()) ?? undefined;
+    if (!selectedGateway) {
       throw new CliError('GATEWAY_REQUIRED', 'Log in first or run this command in a TTY to enter the Gateway URL.');
     }
     await loginCommand(
-      { gateway, command: ['login'] },
+      { gateway: selectedGateway, command: ['login'] },
       CONNECTION_NAME,
       profiles,
       credentials,
@@ -412,7 +520,8 @@ function interactiveCommandInput(
   paths: CliPaths,
   profiles: ProfileStore,
   credentials: CredentialStore,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  gateway?: string
 ): InteractiveCommandInput {
   return {
     profileName: CONNECTION_NAME,
@@ -427,6 +536,8 @@ function interactiveCommandInput(
     env: dependencies.env,
     home: dependencies.home,
     proxyDaemon: dependencies.proxyDaemon,
+    startupManager: dependencies.startupManager,
+    gateway,
   };
 }
 

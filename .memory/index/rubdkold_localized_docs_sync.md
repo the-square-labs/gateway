@@ -6,12 +6,17 @@
     "ai-docs",
     "database-nodes",
     "documentation",
-    "localization"
+    "localization",
+    "mcp-docs",
+    "verification"
   ],
   "layer": "lite",
   "ref": "ac5muwri",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1785878943106,
-  "updated_at": 1785878943106
+  "updated_at": 1787955601466
 }
 ---
-[→ ac5muwri] Keep localized README, product docs, and embedded AI docs synchronized with feature changes
+[→ ac5muwri] Keep localized Markdown, operational guides, and embedded MCP documentation synchronized and verify live publication separately.

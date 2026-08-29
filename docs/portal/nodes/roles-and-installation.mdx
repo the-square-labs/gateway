@@ -1,0 +1,22 @@
+---
+title: Node roles and installation
+description: Select the correct daemon profile and validate its prerequisites.
+section: Nodes and Relay
+order: 2
+audience: [operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Node roles and installation
+
+Use the generated installer command from the Node creation flow. It contains bounded enrollment material and the pinned Gateway identity.
+
+- **nginx:** requires nginx, public ingress ports where applicable, configuration validation, and log access.
+- **Docker:** requires a supported Docker Engine and permissions for the configured runtime operations.
+- **database:** requires dedicated storage and the kernel/storage facilities documented by the installer.
+- **builder:** requires dedicated BuildKit/containerd capacity and should not have a Docker Engine socket.
+- **monitoring:** provides supported monitoring collection.
+- **Relay supervisor/worker:** extends Relay capacity and resilience with explicit placement.
+
+After installation, validate capability reporting rather than assuming host packages imply support. GPU, Secure Runtime, builder, storage, and migration features depend on reported healthy capabilities.

@@ -42,21 +42,17 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import type { DockerImage, DockerRegistry, Node, NodeAppearanceColor } from "@/types";
+import { filterDockerImages } from "./docker-images-filter";
+import {
+  type DockerImageUsageContainer,
+  normalizeDockerImageUsageContainers,
+} from "./docker-images-usage";
 
 interface DockerImageListItem extends DockerImage {
   _nodeId: string;
   _nodeSlug: string;
   _nodeName?: string;
   _nodeColor?: NodeAppearanceColor | null;
-}
-
-interface DockerImageUsageContainer {
-  id: string;
-  name: string;
-  state: string;
-  image: string;
-  nodeId: string;
-  nodeSlug: string;
 }
 
 export function DockerImages({
@@ -109,19 +105,9 @@ export function DockerImages({
       setUsageLoading(true);
       try {
         const containers = await api.listDockerContainers(nid);
-        const list = (Array.isArray(containers) ? containers : [])
-          .map((c: any) => ({
-            id: c.id ?? c.Id ?? "",
-            name: c.name ?? c.Name ?? "",
-            state: c.state ?? c.State ?? "",
-            image: c.image ?? c.Image ?? "",
-            nodeId: nid,
-            nodeSlug,
-          }))
-          .filter(
-            (c: any) => c.image === imageTag || c.image.split(":")[0] === imageTag.split(":")[0]
-          );
-        setUsageContainers(list);
+        setUsageContainers(
+          normalizeDockerImageUsageContainers(containers, imageTag, nid, nodeSlug)
+        );
       } catch {
         setUsageContainers([]);
       } finally {
@@ -203,33 +189,10 @@ export function DockerImages({
     void fetchImages(fixedNodeId, search);
   });
 
-  const filteredImages = useMemo(() => {
-    // Hide dangling images (<none>:<none>) — same as Docker Desktop
-    let result = images.filter((img) => {
-      const tags = (img as any).repoTags ?? (img as any).RepoTags ?? [];
-      return tags.length > 0 && !tags.every((t: string) => t === "<none>:<none>");
-    });
-    if (filterUsage === "used") {
-      result = result.filter(
-        (img) => ((img as any).containers ?? (img as any).Containers ?? -1) > 0
-      );
-    } else if (filterUsage === "unused") {
-      result = result.filter(
-        (img) => ((img as any).containers ?? (img as any).Containers ?? -1) === 0
-      );
-    }
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter((img) => {
-        const tags = (img as any).repoTags ?? (img as any).RepoTags ?? [];
-        const id = (img as any).id ?? (img as any).Id ?? "";
-        return (
-          id.toLowerCase().includes(q) || tags.some((t: string) => t.toLowerCase().includes(q))
-        );
-      });
-    }
-    return result;
-  }, [images, search, filterUsage]);
+  const filteredImages = useMemo(
+    () => filterDockerImages(images, search, filterUsage),
+    [images, search, filterUsage]
+  );
   const truncatedListMeta = images.find((img) => img._listTruncated);
   const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
   const usageColumns = useMemo<SimpleTableColumn<DockerImageUsageContainer>[]>(

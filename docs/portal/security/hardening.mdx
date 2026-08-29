@@ -1,0 +1,27 @@
+---
+title: Hardening checklist
+description: Reduce control-plane, node, credential, and supply-chain risk.
+section: Operations and security
+order: 5
+audience: [security-admin, operator]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Hardening checklist
+
+- Keep Gateway and daemon hosts patched and dedicated to their roles where practical.
+- Restrict PostgreSQL and Redis to the private application network.
+- Expose only HTTPS and Relay ports required by the deployment.
+- Require MFA for administrators and minimize administrator membership.
+- Store master keys and backups outside the Gateway host.
+- Use resource-scoped service credentials and short rotation intervals.
+- Prefer immutable image digests and dedicated Build Workers.
+- Deny host bind mounts and privileged/device access unless an explicit supported workflow requires them.
+- Keep managed databases private and use binding identities.
+- Test certificate renewal and preserve the system PKI used for internal transport.
+- Send audit events to an independently controlled SIEM where required.
+- Review source integrations, registry credentials, OAuth clients, tokens, and active sessions regularly.
+- Remove temporary maintenance, debug exposure, and manual host changes after incidents.
+
+Do not publish screenshots, support bundles, or logs until secrets, internal addresses, customer names, and repository URLs have been redacted.

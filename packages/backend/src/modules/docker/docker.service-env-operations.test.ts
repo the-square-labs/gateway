@@ -225,4 +225,53 @@ describe('DockerManagementService env operations', () => {
       SECRET: 'decrypted',
     });
   });
+
+  it('passes the pre-recreate running state to daemon env updates', async () => {
+    const inspect = {
+      Id: 'container-1',
+      Name: '/api',
+      Config: {
+        Image: 'team/api:latest',
+        Env: ['PATH=/bin'],
+        Labels: {},
+      },
+      State: { Status: 'running' },
+    };
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn(async (_nodeId: string, action: string, payload?: Record<string, unknown>) => {
+        if (action === 'inspect') {
+          return { success: true, detail: JSON.stringify(inspect) };
+        }
+        if (action === 'update') {
+          return { success: true, detail: JSON.stringify({ ok: true }), payload };
+        }
+        return { success: false, error: `unexpected action ${action}` };
+      }),
+    };
+    const service = createService(dispatch);
+    vi.spyOn(
+      service as unknown as {
+        watchRecreateByName: (
+          nodeId: string,
+          containerName: string,
+          oldContainerId: string,
+          taskId: string | undefined,
+          progress: string,
+          expectedState: string,
+          timeoutMs?: number
+        ) => void;
+      },
+      'watchRecreateByName'
+    ).mockImplementation(() => undefined);
+    service.setEnvironmentService({
+      getDecryptedMap: vi.fn().mockResolvedValue({}),
+      replace: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    await service.updateContainerEnv('node-1', 'container-1', { APP_PORT: '4000' }, undefined, 'user-1');
+
+    const updateCall = dispatch.sendDockerContainerCommand.mock.calls.find((call) => call[1] === 'update');
+    const config = JSON.parse((updateCall?.[2] as { configJson: string }).configJson);
+    expect(config.expectedState).toBe('running');
+  });
 });

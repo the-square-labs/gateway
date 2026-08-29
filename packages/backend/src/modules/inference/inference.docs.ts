@@ -16,6 +16,7 @@ import {
   InferenceProviderIdParamSchema,
   InferenceSelfUsageResponseSchema,
   InferenceTokenResponseSchema,
+  InferenceUsageOverviewResponseSchema,
   ReorderInferenceModelsSchema,
   StartInferenceOAuthSchema,
   UpdateInferenceProviderConnectionSchema,
@@ -217,12 +218,20 @@ export const inferenceSelfUsageRoute = appRoute({
   responses: okJson(InferenceSelfUsageResponseSchema),
 });
 
+export const inferenceSelfUsageOverviewRoute = appRoute({
+  method: 'get',
+  path: '/usage/self/overview',
+  tags: ['Inference Usage'],
+  summary: 'Get 30-day inference usage totals for the current user',
+  responses: okJson(InferenceUsageOverviewResponseSchema),
+});
+
 export const inferenceSystemUsageRoute = appRoute({
   method: 'get',
   path: '/usage/system',
   tags: ['Inference Usage'],
   summary: 'Get raw system usage and upstream quota for administrators',
-  responses: okJson(z.record(z.unknown())),
+  responses: okJson(InferenceUsageOverviewResponseSchema),
 });
 
 export const inferenceUsersUsageRoute = appRoute({
@@ -310,4 +319,13 @@ export const deleteInferenceUserLimitsRoute = appRoute({
   summary: 'Remove a per-user inference limit override',
   request: { params: IdParamSchema },
   responses: { 204: { description: 'No content' } },
+});
+
+export const resetInferenceUserLimitRoute = appRoute({
+  method: 'post',
+  path: '/limits/users/{id}/reset',
+  tags: ['Inference Limits'],
+  summary: 'Reset all inference usage limits for a user',
+  request: { params: IdParamSchema },
+  responses: okJson(z.record(z.unknown())),
 });

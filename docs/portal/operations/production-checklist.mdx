@@ -1,0 +1,47 @@
+---
+title: Production readiness checklist
+description: Validate a Gateway installation before it carries business workloads.
+section: Operations and security
+order: 1
+audience: [operator, sre, security-admin]
+status: ready
+lastReviewed: 2026-08-29
+---
+
+# Production readiness checklist
+
+## Control plane
+
+- Canonical HTTPS URL, cookies, WebSockets, and OAuth redirects work.
+- PostgreSQL, Redis, Relay identity, encryption keys, and uploaded artifacts are persistent and backed up.
+- Relay owns public `9443/tcp` and recovers after restart.
+- License state and required entitlements are healthy.
+
+## Identity
+
+- Two independent administrator recovery paths exist.
+- MFA and group scopes are tested with real non-admin users.
+- API/OAuth/MCP credentials are least-privilege and inventoried.
+
+## Managed nodes
+
+- Every role reports expected capabilities and update channel.
+- Offline behavior, daemon restart, node restart, and reconnect are tested.
+- Firewalls allow only documented traffic.
+
+## Workloads and data
+
+- Deploy, health check, rollback, logs, backup, and restore are proven.
+- Managed database bindings survive Gateway, Relay, daemon, node, and workload recreation tests.
+- No owner credentials are present in workload configuration.
+
+## Customer traffic
+
+- DNS, TLS renewal, ingress migration, maintenance mode, and upstream failure are tested.
+- Notifications and status-page communication reach their intended recipients.
+
+## Operations
+
+- Update and rollback runbooks have owners.
+- Disk, certificate, database, queue, Relay, and node alerts are active.
+- An incident drill has been completed without relying on undocumented shell changes.

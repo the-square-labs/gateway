@@ -3,6 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { createTokenRoute, listTokensRoute, renameTokenRoute, revokeTokenRoute } from './tokens.docs.js';
@@ -11,8 +12,22 @@ import { TokensService } from './tokens.service.js';
 
 export const tokensRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
+export function assertTokenManagementSession(impersonation: unknown): void {
+  if (impersonation) {
+    throw new AppError(
+      403,
+      'IMPERSONATION_TOKEN_MANAGEMENT_FORBIDDEN',
+      'API tokens cannot be managed while impersonating'
+    );
+  }
+}
+
 tokensRoutes.use('*', authMiddleware);
 tokensRoutes.use('*', sessionOnly);
+tokensRoutes.use('*', async (c, next) => {
+  assertTokenManagementSession(c.get('impersonation'));
+  await next();
+});
 
 tokensRoutes.openapi(listTokensRoute, async (c) => {
   const tokensService = container.resolve(TokensService);

@@ -1,0 +1,1 @@
+ALTER TABLE "relay_routes" ADD COLUMN "managed_database_listener" jsonb;
