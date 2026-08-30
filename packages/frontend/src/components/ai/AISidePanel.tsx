@@ -35,6 +35,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
 import { selectedModelSupportsImages } from "@/lib/ai-model-capabilities";
+import { isQuestionAwaitingAnswer } from "@/lib/ai-question-state";
 import {
   confirmBypassEverythingMode,
   updateAIApprovalModeOptimistically,
@@ -602,9 +603,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       if (msg.role === "assistant" && msg.toolCalls) {
         const allQuestions = msg.toolCalls.filter((tc) => tc.name === "ask_question");
         if (allQuestions.length === 0) continue;
-        const nextUnanswered = allQuestions.find(
-          (tc) => tc.status === "awaiting_approval" || tc.status === "running"
-        );
+        const nextUnanswered = allQuestions.find(isQuestionAwaitingAnswer);
         if (nextUnanswered) {
           const answeredCount = allQuestions.filter(
             (tc) => tc.status === "completed" || tc.status === "failed" || tc.status === "rejected"

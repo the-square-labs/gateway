@@ -2,6 +2,24 @@ import type { AIWorkspaceAvailability } from "@/components/ai/AIWorkspaceAvailab
 
 const SIDEBAR_WIDTH_KEY = "gateway-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 260;
+const COMMAND_PALETTE_SHIFT_GAP_MS = 400;
+
+export interface CommandPaletteShiftState {
+  count: number;
+  lastPressAt: number;
+}
+
+export function registerCommandPaletteShiftPress(
+  state: CommandPaletteShiftState,
+  now: number
+): { state: CommandPaletteShiftState; open: boolean } {
+  const count =
+    state.count > 0 && now - state.lastPressAt <= COMMAND_PALETTE_SHIFT_GAP_MS
+      ? state.count + 1
+      : 1;
+  if (count >= 3) return { state: { count: 0, lastPressAt: 0 }, open: true };
+  return { state: { count, lastPressAt: now }, open: false };
+}
 
 export function resolveInterfaceTransition(
   nextInterface: "ai_workspace" | "operations_console",

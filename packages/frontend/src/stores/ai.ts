@@ -35,9 +35,11 @@ import {
 } from "./ai.store-runtime";
 import {
   type AIState,
+  ANSWERED_QUESTION_TOMBSTONE_TTL_MS,
   aiContextEstimateState,
   aiConversationLoadState,
   aiWebSocketState,
+  answeredQuestionTombstones,
   appendLocalAssistantError,
   appendPendingSteerMessage,
   appliedConversationRevisions,
@@ -724,6 +726,11 @@ export const useAIStore = create<AIState>()((set, get) => ({
       .flatMap((message) => message.toolCalls ?? [])
       .find((toolCall) => toolCall.id === toolCallId);
     const clientCommandId = generateId();
+    answeredQuestionTombstones.set(toolCallId, {
+      conversationId: state.activeConversationId,
+      runId: state.activeRunId,
+      expiresAt: Date.now() + ANSWERED_QUESTION_TOMBSTONE_TTL_MS,
+    });
 
     set((state) => ({
       messages: updateToolCallById(state.messages, toolCallId, (tc) => ({
@@ -751,6 +758,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       });
     } catch (error) {
       pendingToolCommands.delete(clientCommandId);
+      answeredQuestionTombstones.delete(toolCallId);
       set((state) => ({
         messages: updateToolCallById(state.messages, toolCallId, (tc) => ({
           ...tc,
@@ -1466,6 +1474,7 @@ export function resetAIStateForAuthChange() {
   completedAssistantCommentVersions.clear();
   terminalAssistantRuns.clear();
   appliedConversationRevisions.clear();
+  answeredQuestionTombstones.clear();
   pendingToolCommands.clear();
   pendingInputCommands.clear();
   observedPlanStatuses.clear();

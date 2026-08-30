@@ -186,6 +186,36 @@ describe("AIMessage tool call groups", () => {
     expect(screen.getByText("Show health summary")).toBeInTheDocument();
   });
 
+  it("does not replay the entry animation for a persisted user message after reconciliation", () => {
+    const optimistic = render(
+      <AIMessage
+        message={{
+          id: "user-1",
+          role: "user",
+          content: "Show health summary",
+          localOnly: true,
+        }}
+      />
+    );
+    optimistic.unmount();
+
+    const persisted = render(
+      <AIMessage
+        message={{
+          id: "user-1",
+          role: "user",
+          content: "Show health summary",
+          localOnly: false,
+        }}
+      />
+    );
+
+    expect(persisted.container.firstElementChild).not.toHaveStyle({ opacity: "0" });
+    expect(persisted.container.firstElementChild).not.toHaveStyle({
+      transform: "translateY(4px)",
+    });
+  });
+
   it("marks a steer while it waits for the next model boundary", () => {
     const { container } = render(
       <AIMessage

@@ -296,7 +296,7 @@ export function AIMessage({
     return (
       <motion.div
         className="group relative flex justify-end"
-        initial={prefersReducedMotion ? false : { opacity: 0, y: 4 }}
+        initial={prefersReducedMotion || message.localOnly !== true ? false : { opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: prefersReducedMotion ? 0 : 0.15, ease: "easeOut" }}
       >

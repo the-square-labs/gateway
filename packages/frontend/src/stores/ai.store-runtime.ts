@@ -14,9 +14,11 @@ import type {
 } from "@/types/ai";
 import {
   type AIState,
+  ANSWERED_QUESTION_TOMBSTONE_TTL_MS,
   ASSISTANT_DELTA_BATCH_MS,
   ASSISTANT_DELTA_BATCH_WORDS,
   acceptConversationRevision,
+  answeredQuestionTombstones,
   appendLocalAssistantError,
   appendPendingSteerMessages,
   assistantDeltaBuffers,
@@ -165,6 +167,9 @@ export function handleWSMessage(
           : undefined;
         if (pending) {
           if (msg.clientCommandId) pendingToolCommands.delete(msg.clientCommandId);
+          if (pending.decision === "question") {
+            answeredQuestionTombstones.delete(pending.toolCallId);
+          }
           set((state) => ({
             isStreaming: false,
             isCompactingContext: false,
@@ -357,6 +362,11 @@ export function handleWSMessage(
     case "question.answered":
       if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       if (get().activeConversationId !== msg.conversationId) return;
+      answeredQuestionTombstones.set(msg.question.toolCallId, {
+        conversationId: msg.conversationId,
+        runId: msg.runId,
+        expiresAt: Date.now() + ANSWERED_QUESTION_TOMBSTONE_TTL_MS,
+      });
       set((state) => ({
         activeRunId: msg.runId,
         isStreaming: true,
@@ -440,18 +450,34 @@ export function projectConversationSnapshot(
     .filter((toolCall) => toolCall.toolName !== "send_comment")
     .map(runtimeToolCallToUI);
   const runtimeToolCallsById = new Map(runtimeToolCalls.map((toolCall) => [toolCall.id, toolCall]));
-  const pendingQuestions =
+  const pendingQuestions = (
     snapshot.runtime.pendingQuestions.length > 0
       ? snapshot.runtime.pendingQuestions
       : snapshot.runtime.pendingQuestion
         ? [snapshot.runtime.pendingQuestion]
-        : [];
+        : []
+  ).filter((question) => {
+    const tombstone = answeredQuestionTombstones.get(question.toolCallId);
+    if (tombstone && tombstone.expiresAt <= Date.now()) {
+      answeredQuestionTombstones.delete(question.toolCallId);
+      return true;
+    }
+    return !(
+      tombstone &&
+      tombstone.conversationId === snapshot.conversation.id &&
+      tombstone.runId === question.runId
+    );
+  });
   const pendingQuestionToolCalls = pendingQuestions.map((question) =>
     pendingQuestionToToolCall(question, runtimeToolCallsById.get(question.toolCallId))
   );
   const pendingInputs = snapshot.runtime.pendingInputs ?? [];
   const snapshotMessages = reconcileOptimisticMessages(
-    normalizeSnapshotMessages(snapshot),
+    suppressAnsweredQuestionTombstones(
+      normalizeSnapshotMessages(snapshot),
+      currentMessages,
+      snapshot.conversation.id
+    ),
     currentMessages,
     snapshot.runtime.activeRun?.id ?? null,
     snapshot.runtime.activeRun?.clientCommandId ?? null
@@ -505,6 +531,44 @@ export function projectConversationSnapshot(
       Boolean(pendingCredentialChallenge) || isActiveRunStatus(snapshot.runtime.activeRun?.status),
     isStartingConversation: false,
   };
+}
+
+export function suppressAnsweredQuestionTombstones(
+  messages: AIMessage[],
+  currentMessages: AIMessage[],
+  conversationId: string
+): AIMessage[] {
+  const currentToolCalls = new Map(
+    currentMessages.flatMap((message) =>
+      (message.toolCalls ?? []).map((toolCall) => [toolCall.id, toolCall] as const)
+    )
+  );
+  return messages.map((message) => {
+    if (!message.toolCalls?.length) return message;
+    let changed = false;
+    const toolCalls = message.toolCalls.map((toolCall) => {
+      const tombstone = answeredQuestionTombstones.get(toolCall.id);
+      if (tombstone && tombstone.expiresAt <= Date.now()) {
+        answeredQuestionTombstones.delete(toolCall.id);
+        return toolCall;
+      }
+      if (
+        toolCall.name !== "ask_question" ||
+        !tombstone ||
+        tombstone.conversationId !== conversationId
+      ) {
+        return toolCall;
+      }
+      changed = true;
+      const current = currentToolCalls.get(toolCall.id);
+      return {
+        ...toolCall,
+        status: "completed" as const,
+        result: current?.result ?? toolCall.result,
+      };
+    });
+    return changed ? { ...message, toolCalls } : message;
+  });
 }
 
 export function reconcileOptimisticMessages(

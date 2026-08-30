@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
 import { aiConversationRoute } from "@/lib/ai-conversation-route";
 import { selectedModelSupportsImages } from "@/lib/ai-model-capabilities";
+import { isQuestionAwaitingAnswer } from "@/lib/ai-question-state";
 import {
   confirmBypassEverythingMode,
   updateAIApprovalModeOptimistically,
@@ -559,9 +560,7 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
       const msg = messages[i];
       if (msg.role === "assistant" && msg.toolCalls) {
         const allQuestions = msg.toolCalls.filter((tc) => tc.name === "ask_question");
-        const nextUnanswered = allQuestions.find(
-          (tc) => tc.status === "awaiting_approval" || tc.status === "running"
-        );
+        const nextUnanswered = allQuestions.find(isQuestionAwaitingAnswer);
         if (nextUnanswered) {
           const answeredCount = allQuestions.filter(
             (tc) => tc.status === "completed" || tc.status === "failed" || tc.status === "rejected"

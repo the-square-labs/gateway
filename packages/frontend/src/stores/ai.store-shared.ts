@@ -313,6 +313,11 @@ export const pendingToolCommands = new Map<
     approvalDecision?: "approved" | "rejected";
   }
 >();
+export const answeredQuestionTombstones = new Map<
+  string,
+  { conversationId: string; runId: string; expiresAt: number }
+>();
+export const ANSWERED_QUESTION_TOMBSTONE_TTL_MS = 30_000;
 export const pendingInputCommands = new Map<
   string,
   {

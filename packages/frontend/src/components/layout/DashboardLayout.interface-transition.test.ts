@@ -1,10 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
+  registerCommandPaletteShiftPress,
   resolveAccessibleInterface,
   resolveAIWorkspaceEntry,
   resolveInterfaceTransition,
   shouldOpenAIConversationInConsole,
 } from "./dashboard-layout-helpers";
+
+describe("command palette Shift shortcut", () => {
+  it("opens only after three consecutive Shift presses", () => {
+    const first = registerCommandPaletteShiftPress({ count: 0, lastPressAt: 0 }, 1_000);
+    const second = registerCommandPaletteShiftPress(first.state, 1_200);
+    const third = registerCommandPaletteShiftPress(second.state, 1_400);
+
+    expect(first.open).toBe(false);
+    expect(second.open).toBe(false);
+    expect(third.open).toBe(true);
+    expect(third.state).toEqual({ count: 0, lastPressAt: 0 });
+  });
+
+  it("resets the sequence after a pause", () => {
+    const first = registerCommandPaletteShiftPress({ count: 0, lastPressAt: 0 }, 1_000);
+    const afterPause = registerCommandPaletteShiftPress(first.state, 1_500);
+    const next = registerCommandPaletteShiftPress(afterPause.state, 1_700);
+
+    expect(afterPause.state.count).toBe(1);
+    expect(next.open).toBe(false);
+  });
+});
 
 describe("resolveInterfaceTransition", () => {
   it("opens Operations Console with the current conversation in the AI side panel", () => {

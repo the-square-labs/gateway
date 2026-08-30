@@ -1,3 +1,4 @@
+import { isQuestionAwaitingAnswer } from "@/lib/ai-question-state";
 import type {
   AIMessageAttachment,
   AIMessage as AIMessageType,
@@ -124,18 +125,7 @@ export function AIMessageList({
 function runActivityLabel(messages: AIMessageType[], isStreaming: boolean): string | null {
   if (!isStreaming) return null;
   const toolCalls = messages.flatMap((message) => message.toolCalls ?? []);
-  if (
-    toolCalls.some(
-      (toolCall) =>
-        toolCall.name === "ask_question" &&
-        (toolCall.status === "awaiting_approval" || toolCall.status === "running") &&
-        !(
-          toolCall.result &&
-          typeof toolCall.result === "object" &&
-          typeof (toolCall.result as { answer?: unknown }).answer === "string"
-        )
-    )
-  ) {
+  if (toolCalls.some(isQuestionAwaitingAnswer)) {
     return "Waiting for response";
   }
   if (

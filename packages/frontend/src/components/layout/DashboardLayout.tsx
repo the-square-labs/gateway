@@ -20,10 +20,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useRouteScrollRestoration } from "@/hooks/use-route-scroll-restoration";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
-import { keyboardNavigationRoutes } from "@/lib/app-navigation";
 import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { applyForcedGatewayUpdateStatus } from "@/lib/dev-force-updates";
-import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isCompactPanelsViewport } from "@/lib/responsive-panels";
 import { ConfigureAIWorkspaceWizard } from "@/pages/dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { api } from "@/services/api";
@@ -32,7 +30,6 @@ import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
-import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
@@ -45,6 +42,7 @@ import {
   ApplicationShellSkeleton,
   persistSidebarWidth,
   readSidebarWidth,
+  registerCommandPaletteShiftPress,
   resolveAccessibleInterface,
   resolveAIWorkspaceEntry,
   resolveInterfaceTransition,
@@ -73,10 +71,6 @@ export function DashboardLayout() {
     setPreferredInterface,
   } = useUIStore();
   const aiEnabled = useAIStore((state) => state.isEnabled);
-  const dashboardInferenceUsage = useDashboardBootstrapStore(
-    (state) => state.snapshot?.inferenceUsage ?? null
-  );
-  const dashboardHasLowInferenceUsage = hasLowInferenceUsage(dashboardInferenceUsage);
 
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
@@ -496,18 +490,15 @@ export function DashboardLayout() {
 
   // Keyboard shortcuts
   useEffect(() => {
-    // Double-Shift detection
-    let lastShiftUp = 0;
+    let shiftState = { count: 0, lastPressAt: 0 };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === "Shift" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const now = Date.now();
-        if (now - lastShiftUp < 280) {
-          lastShiftUp = 0;
-          setCommandPaletteOpen(true);
-        } else {
-          lastShiftUp = now;
-        }
+        const next = registerCommandPaletteShiftPress(shiftState, Date.now());
+        shiftState = next.state;
+        if (next.open) setCommandPaletteOpen(true);
+        return;
       }
+      shiftState = { count: 0, lastPressAt: 0 };
     };
     window.addEventListener("keyup", handleKeyUp);
 
@@ -560,39 +551,13 @@ export function DashboardLayout() {
             break;
         }
       }
-      // Cmd+number navigation
-      if (mod && !e.altKey && !e.shiftKey) {
-        const features = useSystemConfigStore.getState().config.features;
-        const auth = useAuthStore.getState();
-        const routes = keyboardNavigationRoutes({
-          scopes: auth.user?.scopes ?? [],
-          pkiEnabled: features.pkiEnabled,
-          siemEnabled: features.siemEnabled,
-          loggingEnabled: features.loggingEnabled,
-          inferenceEnabled: features.inferenceEnabled,
-          hasLowInferenceUsage: dashboardHasLowInferenceUsage,
-          pagesEnabled: useUIBootstrapStore.getState().snapshot?.navigation.pagesEnabled ?? false,
-          hasDockerNodes:
-            useDockerStore.getState().dockerNodes.length > 0 ||
-            [
-              "docker:containers:view",
-              "docker:images:view",
-              "docker:volumes:view",
-              "docker:networks:view",
-            ].some((scope) => useAuthStore.getState().hasScopedAccess(scope)),
-        });
-        if (e.key in routes) {
-          e.preventDefault();
-          navigate(routes[e.key]);
-        }
-      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [commandPaletteOpen, dashboardHasLowInferenceUsage, setCommandPaletteOpen, navigate]);
+  }, [commandPaletteOpen, setCommandPaletteOpen, navigate]);
 
   const interfaceOnboarding = (
     <>
