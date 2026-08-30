@@ -4,6 +4,11 @@ import { getReplacementContainerFailureMessage } from './docker-recreate-watch.j
 import type { DockerTaskService } from './docker-task.service.js';
 
 const LEGACY_TASK_STATUS_UNSUPPORTED_ERROR = 'unknown container action: task_status';
+const NODE_DISCONNECTED_RE = /node .* (?:is not connected|disconnected)/i;
+
+function isNodeDisconnectedError(error: unknown): boolean {
+  return NODE_DISCONNECTED_RE.test(error instanceof Error ? error.message : String(error));
+}
 
 export type ContainerAction =
   | 'created'
@@ -68,7 +73,12 @@ export function watchDockerTransition(
         clearInterval(poll);
         await context.failTask(taskId, 'Timed out', nodeId, name);
       }
-    } catch {
+    } catch (error) {
+      if (isNodeDisconnectedError(error)) {
+        clearInterval(poll);
+        await context.failTask(taskId, 'Docker node disconnected during container operation', nodeId, name);
+        return;
+      }
       // Container might not exist during recreate — keep polling
       if (Date.now() - start > timeoutMs) {
         clearInterval(poll);
@@ -171,7 +181,12 @@ export function watchDockerRecreateByName(
         clearInterval(poll);
         await context.failTask(taskId, 'Timed out', nodeId, containerName);
       }
-    } catch {
+    } catch (error) {
+      if (isNodeDisconnectedError(error)) {
+        clearInterval(poll);
+        await context.failTask(taskId, 'Docker node disconnected during container operation', nodeId, containerName);
+        return;
+      }
       if (Date.now() - start > timeoutMs) {
         clearInterval(poll);
         await context.failTask(taskId, 'Timed out', nodeId, containerName);

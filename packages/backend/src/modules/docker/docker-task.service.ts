@@ -16,8 +16,33 @@ export class DockerTaskService {
   constructor(private db: DrizzleClient) {}
 
   private eventBus?: EventBusService;
+  private containerTaskTerminalHandler?: (task: {
+    nodeId: string;
+    containerId: string | null;
+    containerName: string | null;
+  }) => void | Promise<void>;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+  }
+  setContainerTaskTerminalHandler(
+    handler: (task: {
+      nodeId: string;
+      containerId: string | null;
+      containerName: string | null;
+    }) => void | Promise<void>
+  ) {
+    this.containerTaskTerminalHandler = handler;
+  }
+  private async handleContainerTaskTerminal(task: {
+    nodeId: string;
+    containerId?: string | null;
+    containerName?: string | null;
+  }) {
+    await this.containerTaskTerminalHandler?.({
+      nodeId: task.nodeId,
+      containerId: task.containerId ?? null,
+      containerName: task.containerName ?? null,
+    });
   }
   private emit(task: { id: string; nodeId: string; status: string; progress?: string | null; error?: string | null }) {
     this.eventBus?.publish('docker.task.changed', {
@@ -94,7 +119,10 @@ export class DockerTaskService {
       .where(and(inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES]), lt(dockerTasks.createdAt, cutoff)))
       .returning();
 
-    for (const row of rows) this.emit(row);
+    for (const row of rows) {
+      this.emit(row);
+      await this.handleContainerTaskTerminal(row);
+    }
     if (rows.length > 0) {
       logger.warn(`Marked ${rows.length} stale docker task(s) as failed`);
     }
@@ -112,7 +140,10 @@ export class DockerTaskService {
       .where(inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES]))
       .returning();
 
-    for (const row of rows) this.emit(row);
+    for (const row of rows) {
+      this.emit(row);
+      await this.handleContainerTaskTerminal(row);
+    }
     if (rows.length > 0) {
       logger.warn(`Marked ${rows.length} active docker task(s) as failed after backend startup`);
     }
@@ -138,6 +169,9 @@ export class DockerTaskService {
 
     if (!row) throw new AppError(404, 'NOT_FOUND', 'Docker task not found');
     this.emit(row);
+    if (COMPLETED_TASK_STATUSES.includes(row.status as (typeof COMPLETED_TASK_STATUSES)[number])) {
+      await this.handleContainerTaskTerminal(row);
+    }
     return row;
   }
 

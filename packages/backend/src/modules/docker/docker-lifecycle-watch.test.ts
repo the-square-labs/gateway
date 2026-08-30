@@ -246,4 +246,29 @@ describe('watchDockerRecreateByName finalization', () => {
     expect(taskService.update).not.toHaveBeenCalled();
     expect(context.emitContainer).not.toHaveBeenCalled();
   });
+
+  it('fails immediately when the Docker node disconnects during a recreate', async () => {
+    vi.useFakeTimers();
+    const { context } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand.mockRejectedValue(new Error('Node node-1 is not connected'));
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container env updated',
+      'running',
+      60000
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(context.failTask).toHaveBeenCalledWith(
+      'task-1',
+      'Docker node disconnected during container operation',
+      'node-1',
+      'api'
+    );
+  });
 });

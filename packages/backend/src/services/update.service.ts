@@ -1080,25 +1080,13 @@ exit 1`,
 
   private async getDurableRelayOperation(): Promise<RelayUpdateOperation | null> {
     if (!this.relayPoolRuntime) return null;
-    const [run] = await this.db
+    const [latestRun] = await this.db
       .select()
       .from(relayPoolUpdateRuns)
-      .where(
-        and(
-          eq(relayPoolUpdateRuns.poolId, 'system'),
-          inArray(relayPoolUpdateRuns.state, [
-            'preflight',
-            'draining',
-            'updating',
-            'verifying',
-            'paused',
-            'rolling_back',
-            'failed',
-          ])
-        )
-      )
+      .where(eq(relayPoolUpdateRuns.poolId, 'system'))
       .orderBy(desc(relayPoolUpdateRuns.startedAt))
       .limit(1);
+    const run = latestRun?.state === 'complete' ? undefined : latestRun;
     if (!run) return null;
     return {
       status: run.state === 'failed' || run.state === 'paused' ? 'failed' : 'updating',

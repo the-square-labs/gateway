@@ -141,25 +141,13 @@ export class RelayPoolService {
     const stagingByEndpoint = new Map(
       generations.filter(({ state }) => state === 'staging').map((generation) => [generation.endpointId, generation])
     );
-    const [updateRun] = await this.db
+    const [latestUpdateRun] = await this.db
       .select()
       .from(relayPoolUpdateRuns)
-      .where(
-        and(
-          eq(relayPoolUpdateRuns.poolId, 'system'),
-          inArray(relayPoolUpdateRuns.state, [
-            'preflight',
-            'draining',
-            'updating',
-            'verifying',
-            'paused',
-            'rolling_back',
-            'failed',
-          ])
-        )
-      )
+      .where(eq(relayPoolUpdateRuns.poolId, 'system'))
       .orderBy(desc(relayPoolUpdateRuns.startedAt))
       .limit(1);
+    const updateRun = latestUpdateRun?.state === 'complete' ? undefined : latestUpdateRun;
     const updateSteps = updateRun
       ? await this.db
           .select()

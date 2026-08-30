@@ -77,6 +77,8 @@ describe('DockerTaskService', () => {
     const existingTask = {
       id: 'task-1',
       nodeId: '11111111-1111-4111-8111-111111111111',
+      containerId: 'container-1',
+      containerName: 'api',
       status: 'running',
     };
     const cancelledTask = {
@@ -94,8 +96,10 @@ describe('DockerTaskService', () => {
     const set = vi.fn().mockReturnValue({ where: updateWhere });
     const update = vi.fn().mockReturnValue({ set });
     const publish = vi.fn();
+    const terminal = vi.fn();
     const service = new DockerTaskService({ select, update } as never);
     service.setEventBus({ publish } as never);
+    service.setContainerTaskTerminalHandler(terminal);
 
     await expect(service.forceCancel('task-1')).resolves.toEqual(cancelledTask);
 
@@ -115,6 +119,11 @@ describe('DockerTaskService', () => {
         error: cancelledTask.error,
       })
     );
+    expect(terminal).toHaveBeenCalledWith({
+      nodeId: existingTask.nodeId,
+      containerId: existingTask.containerId,
+      containerName: existingTask.containerName,
+    });
   });
 
   it('rejects force-cancel for completed tasks', async () => {
