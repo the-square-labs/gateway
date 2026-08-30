@@ -25,7 +25,9 @@ describe("NodeEnrollmentDialog", () => {
     await user.click(screen.getByRole("combobox", { name: "Node Type" }));
     await user.click(screen.getByRole("option", { name: /Relay/ }));
 
-    expect(await screen.findByPlaceholderText("relay.example.com")).toBeInTheDocument();
+    const relayAddress = await screen.findByPlaceholderText("relay.example.com");
+    expect(relayAddress).toBeInTheDocument();
+    expect(relayAddress.parentElement?.style.height).toBe("");
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
