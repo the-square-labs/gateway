@@ -2,6 +2,101 @@ import { describe, expect, it, vi } from 'vitest';
 import { HousekeepingService } from './housekeeping.service.js';
 
 describe('HousekeepingService system certificate cleanup', () => {
+  it('cleans only obsolete unused Gateway connector images on online Docker nodes', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ id: 'node-1' }]) })),
+      })),
+    };
+    const dockerService = {
+      inspectSelf: vi.fn().mockResolvedValue({
+        Config: { Image: 'the-square-labs/gateway:v2.10.0-rc.8', Labels: {} },
+      }),
+    };
+    const service = new HousekeepingService(
+      db as any,
+      dockerService as any,
+      {} as any,
+      {
+        SECURE_LINK_CONNECTOR_IMAGE: 'the-square-labs/gateway/secure-link-connector@sha256:current',
+      } as any
+    );
+    vi.spyOn(service as any, 'dockerRequest').mockResolvedValue({ statusCode: 200, body: '[]' });
+    const dockerManagement = {
+      listAllImages: vi.fn().mockResolvedValue([
+        {
+          Id: 'current',
+          RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:current'],
+          Created: 3,
+          Containers: 0,
+          Size: 10,
+        },
+        {
+          Id: 'rollback',
+          RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:rollback'],
+          Created: 2,
+          Containers: 0,
+          Size: 20,
+        },
+        {
+          Id: 'obsolete',
+          RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:obsolete'],
+          Created: 1,
+          Containers: 0,
+          Size: 30,
+        },
+        { Id: 'user', RepoTags: ['acme/api:old'], Created: 0, Containers: 0, Size: 40 },
+      ]),
+      removeGatewayInternalImage: vi.fn().mockResolvedValue(undefined),
+    };
+    service.setDockerManagementService(dockerManagement as any);
+
+    await expect((service as any).pruneDockerImages()).resolves.toEqual({
+      itemsCleaned: 1,
+      spaceFreedBytes: 30,
+    });
+    expect(dockerManagement.removeGatewayInternalImage).toHaveBeenCalledWith('node-1', 'obsolete');
+  });
+
+  it('still cleans managed-node connector images when local Docker inspection is unavailable', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ id: 'node-1' }]) })),
+      })),
+    };
+    const service = new HousekeepingService(
+      db as any,
+      { inspectSelf: vi.fn().mockRejectedValue(new Error('socket unavailable')) } as any,
+      {} as any,
+      { SECURE_LINK_CONNECTOR_IMAGE: 'connector@sha256:current' } as any
+    );
+    const dockerManagement = {
+      listAllImages: vi.fn().mockResolvedValue([
+        {
+          Id: 'rollback',
+          RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:rollback'],
+          Created: 2,
+          Containers: 0,
+          Size: 20,
+        },
+        {
+          Id: 'obsolete',
+          RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:obsolete'],
+          Created: 1,
+          Containers: 0,
+          Size: 30,
+        },
+      ]),
+      removeGatewayInternalImage: vi.fn().mockResolvedValue(undefined),
+    };
+    service.setDockerManagementService(dockerManagement as any);
+
+    await expect((service as any).pruneDockerImages()).resolves.toEqual({
+      itemsCleaned: 1,
+      spaceFreedBytes: 30,
+    });
+  });
+
   it('enables every available housekeeping category by default', async () => {
     const where = vi.fn().mockResolvedValue([{ key: 'logging:clickhouse', value: { mode: 'local' } }]);
     const service = new HousekeepingService(

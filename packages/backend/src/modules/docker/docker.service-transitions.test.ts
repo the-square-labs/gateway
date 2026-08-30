@@ -70,4 +70,54 @@ describe('DockerManagementService container transitions', () => {
 
     expect(detail.State).toMatchObject({ Status: 'running', Running: true });
   });
+
+  it('includes non-secret direct database link state in the initial container snapshot', async () => {
+    const rows = [
+      {
+        databaseId: 'database-1',
+        databaseName: 'Orders',
+        databaseType: 'postgres',
+        bindingId: 'binding-1',
+        managedDatabaseId: 'database-1',
+        targetNodeId: 'node-1',
+        targetResourceId: 'api',
+        status: 'error',
+        lastError: 'relay unavailable',
+      },
+    ];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
+        })),
+      })),
+    };
+    const service = new DockerManagementService(
+      db as never,
+      { log: vi.fn() } as never,
+      {} as never,
+      { getNode: vi.fn(() => ({ lastHealthReport: { gpuDevices: [] } })) } as never
+    );
+    const detail: Record<string, any> = { Id: 'container-1', Name: '/api' };
+
+    await service.decoratePublicContainerDetailSnapshot('node-1', detail);
+
+    expect(detail.databaseLinks).toEqual([
+      {
+        database: { id: 'database-1', name: 'Orders', type: 'postgres' },
+        binding: {
+          id: 'binding-1',
+          managedDatabaseId: 'database-1',
+          targetNodeId: 'node-1',
+          targetType: 'container',
+          targetResourceId: 'api',
+          status: 'error',
+          lastError: 'relay unavailable',
+        },
+      },
+    ]);
+    expect(detail.secureLinkDown).toBe(true);
+    expect(JSON.stringify(detail.databaseLinks)).not.toContain('environment');
+    expect(JSON.stringify(detail.databaseLinks)).not.toContain('credentials');
+  });
 });

@@ -76,6 +76,22 @@ describe('redisPersistedSizeBytes', () => {
 });
 
 describe('database monitoring poll scheduling', () => {
+  it('runs the first background sweep after the startup delay without a registered client', async () => {
+    vi.useFakeTimers();
+    const databaseService = {
+      listAllRows: vi.fn().mockResolvedValue([{ id: 'database-1' }]),
+      get: vi.fn().mockResolvedValue({ managed: { status: 'paused' } }),
+    };
+    const service = new DatabaseMonitoringService(databaseService as never, null);
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(databaseService.listAllRows).toHaveBeenCalledOnce();
+    expect(databaseService.get).toHaveBeenCalledWith('database-1');
+    service.destroy();
+    vi.useRealTimers();
+  });
+
   it('stops cleanly when a connection is deleted during an in-flight poll', async () => {
     const databaseService = {
       get: vi.fn().mockRejectedValue(new Error('Connection not found')),

@@ -643,22 +643,39 @@ export function isBuiltInDockerNetwork(name: string) {
   return ['bridge', 'host', 'none'].includes(name);
 }
 
-export async function resolveNetworkName(
+interface ResolvedDockerNetwork {
+  id: string;
+  name: string;
+}
+
+export async function resolveNetworkIdentity(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,
   networkId: string
-) {
+): Promise<ResolvedDockerNetwork> {
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'list');
   const networks = context.parseResult(result);
-  if (!Array.isArray(networks)) return networkId;
+  if (!Array.isArray(networks)) {
+    throw new AppError(502, 'DOCKER_NETWORK_INVENTORY_UNAVAILABLE', 'Docker network inventory is unavailable');
+  }
 
-  const match = networks.find((network: any) => {
+  const identities = networks.map((network: any) => {
     const id = String(network.id ?? network.Id ?? '');
     const name = String(network.name ?? network.Name ?? '');
-    return id === networkId || name === networkId;
+    return { id, name };
   });
+  const exactMatches = identities.filter(({ id, name }) => id === networkId || name === networkId);
+  if (exactMatches.length === 1) return exactMatches[0]!;
+  if (exactMatches.length > 1) {
+    throw new AppError(409, 'DOCKER_NETWORK_AMBIGUOUS', 'Docker network identifier is ambiguous');
+  }
+  const prefixMatches = identities.filter(({ id }) => id.startsWith(networkId));
+  if (prefixMatches.length === 1) return prefixMatches[0]!;
+  if (prefixMatches.length > 1) {
+    throw new AppError(409, 'DOCKER_NETWORK_AMBIGUOUS', 'Docker network identifier is ambiguous');
+  }
 
-  return String(match?.name ?? match?.Name ?? networkId);
+  throw new AppError(404, 'DOCKER_NETWORK_NOT_FOUND', 'Docker network was not found');
 }
 
 export async function createNetwork(
@@ -690,23 +707,23 @@ export async function removeNetwork(
   networkId: string,
   userId: string
 ) {
-  const networkName = await resolveNetworkName(context, nodeId, networkId);
-  if (isGatewayManagedDockerNetwork(networkName)) {
+  const network = await resolveNetworkIdentity(context, nodeId, networkId);
+  if (isGatewayManagedDockerNetwork(network.name)) {
     throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be removed');
   }
-  if (isBuiltInDockerNetwork(networkName)) {
+  if (isBuiltInDockerNetwork(network.name)) {
     throw new AppError(400, 'BUILTIN_NETWORK', 'Built-in Docker networks cannot be removed');
   }
-  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'remove', { networkId });
+  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'remove', { networkId: network.id });
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.network.remove',
     userId,
     resourceType: 'docker-network',
-    resourceId: networkId,
-    details: { nodeId },
+    resourceId: network.id,
+    details: { nodeId, networkName: network.name },
   });
-  context.eventBus?.publish('docker.network.changed', { nodeId, name: networkId, action: 'removed' });
+  context.eventBus?.publish('docker.network.changed', { nodeId, name: network.name, action: 'removed' });
 }
 
 export async function connectContainerToNetwork(
@@ -716,19 +733,22 @@ export async function connectContainerToNetwork(
   containerId: string,
   userId: string
 ) {
-  const networkName = await resolveNetworkName(context, nodeId, networkId);
-  if (isGatewayManagedDockerNetwork(networkName)) {
+  const network = await resolveNetworkIdentity(context, nodeId, networkId);
+  if (isGatewayManagedDockerNetwork(network.name)) {
     throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be connected manually');
   }
   await context.assertContainerMutationAllowed?.(nodeId, containerId);
-  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'connect', { networkId, containerId });
+  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'connect', {
+    networkId: network.id,
+    containerId,
+  });
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.network.connect',
     userId,
     resourceType: 'docker-network',
-    resourceId: networkId,
-    details: { nodeId, containerId },
+    resourceId: network.id,
+    details: { nodeId, containerId, networkName: network.name },
   });
 }
 
@@ -739,21 +759,24 @@ export async function disconnectContainerFromNetwork(
   containerId: string,
   userId: string
 ) {
-  const networkName = await resolveNetworkName(context, nodeId, networkId);
-  if (isGatewayManagedDockerNetwork(networkName)) {
+  const network = await resolveNetworkIdentity(context, nodeId, networkId);
+  if (isGatewayManagedDockerNetwork(network.name)) {
     throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be disconnected manually');
   }
-  if (isBuiltInDockerNetwork(networkName)) {
+  if (isBuiltInDockerNetwork(network.name)) {
     throw new AppError(400, 'BUILTIN_NETWORK', 'Containers cannot be disconnected from built-in Docker networks');
   }
   await context.assertContainerMutationAllowed?.(nodeId, containerId);
-  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'disconnect', { networkId, containerId });
+  const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'disconnect', {
+    networkId: network.id,
+    containerId,
+  });
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.network.disconnect',
     userId,
     resourceType: 'docker-network',
-    resourceId: networkId,
-    details: { nodeId, containerId },
+    resourceId: network.id,
+    details: { nodeId, containerId, networkName: network.name },
   });
 }

@@ -61,6 +61,7 @@ export function compactVolumeListItem(volume: Record<string, any>) {
     managementState: volume.managementState,
     storageKind: volume.storageKind,
     capacityBytes: volume.capacityBytes,
+    usedBytes: volume.usedBytes ?? null,
     adoptable: Boolean(volume.adoptable),
     adoptionReason: volume.adoptionReason,
     availability: volume.availability,
@@ -148,15 +149,19 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
           Array.isArray(containerSnapshot.data) ? containerSnapshot.data : []
         );
       if (!Array.isArray(data)) return c.json({ data });
+      const metrics = await snapshots.getDetails<{ usedBytes?: number | null }>(nodeId, 'volume-metrics');
       const search = c.req.query('search')?.trim().toLowerCase();
       const compacted = data
         .filter((item) => !isComposeOwnedVolume(item))
         .filter((item) => matchesVolumeSearch(item, search))
-        .map((item) => ({
-          ...compactVolumeListItem(item),
-          nodeId,
-          availability: snapshots.availability(nodeId, snapshot),
-        }));
+        .map((item) => {
+          const name = String(item.name ?? item.Name ?? '');
+          return {
+            ...compactVolumeListItem({ ...item, usedBytes: metrics[name]?.data?.usedBytes ?? null }),
+            nodeId,
+            availability: snapshots.availability(nodeId, snapshot),
+          };
+        });
       const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
       return c.json({
         data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,

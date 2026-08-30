@@ -103,6 +103,19 @@ function assertUserContainerSnapshot(data: Record<string, any> | null | undefine
   assertUserContainerAccessible(data);
 }
 
+function filterContainerDatabaseLinksForScopes(data: any, scopes: string[]) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.databaseLinks)) return data;
+  const databaseLinks = data.databaseLinks.filter((link: any) => {
+    const databaseId = String(link?.database?.id ?? '');
+    return hasScopeForResource(scopes, 'databases:view', databaseId);
+  });
+  return {
+    ...data,
+    databaseLinks,
+    secureLinkDown: Boolean(data.secureLinkDown),
+  };
+}
+
 function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string) {
   return {
     canViewNetworks: hasScopeForResource([...actorScopes], 'docker:networks:view', nodeId),
@@ -139,6 +152,7 @@ export function compactContainerListItem(container: Record<string, any>) {
     healthCheckId: container.healthCheckId,
     healthCheckEnabled: container.healthCheckEnabled,
     healthStatus: container.healthStatus,
+    secureLinkDown: Boolean(container.secureLinkDown),
     lastHealthCheckAt: container.lastHealthCheckAt,
     folderId: container.folderId,
     folderIsSystem: container.folderIsSystem,
@@ -298,7 +312,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         c.req.param('containerName')!
       );
       assertUserContainerSnapshot(resolved);
-      const data = await service.decorateContainerDetailSnapshot(nodeId, resolved);
+      const data = filterContainerDatabaseLinksForScopes(
+        await service.decoratePublicContainerDetailSnapshot(nodeId, resolved),
+        c.get('effectiveScopes') ?? []
+      );
       return c.json({
         data: {
           ...(data && typeof data === 'object' ? data : { value: data }),
@@ -328,7 +345,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       }
       const detail = await snapshots.getContainerDetailSnapshot(nodeId, containerId);
       assertUserContainerSnapshot(detail.data);
-      const data = await service.decorateContainerDetailSnapshot(nodeId, detail.data);
+      const data = filterContainerDatabaseLinksForScopes(
+        await service.decoratePublicContainerDetailSnapshot(nodeId, detail.data),
+        c.get('effectiveScopes') ?? []
+      );
       return c.json({
         data: {
           ...(data && typeof data === 'object' ? data : { value: data }),

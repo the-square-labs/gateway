@@ -113,7 +113,7 @@ export async function buildAISystemPromptDetailed(
 
   push(
     'Base instructions',
-    `You are the AI assistant for Gateway — a self-hosted infrastructure control plane for nginx ingress, certificates, Docker, databases, and operations.
+    `You are the AI assistant for Gateway — an infrastructure control plane for nginx ingress, certificates, Docker, databases, and operations.
 
 User: ${user.name || user.email} (${user.groupName}). Date: ${new Date().toISOString().split('T')[0]}.
 Scopes: ${formatScopesForPrompt(user.scopes)}.

@@ -126,7 +126,7 @@ function renderAuthEmail(content: EmailContent): string {
             ${action}
             <p style="margin:28px 0 0;border-left:2px solid #7161a8;background:#1d1d21;color:#b6b4be;padding:12px 14px;font-family:Arial,sans-serif;font-size:13px;line-height:1.5">${escapeHtml(content.securityNote)}</p>
           </td></tr>
-          <tr><td style="border-top:1px solid #303034;padding:23px 42px 28px;color:#85858c;font-family:Arial,sans-serif;font-size:12px;line-height:1.55">Gateway — Self-hosted infrastructure control plane.<br><a href="https://thesquarelabs.com" style="color:#f4f4f5;font-weight:400;opacity:0.65;text-decoration:underline">Powered by Square Labs</a></td></tr>
+          <tr><td style="border-top:1px solid #303034;padding:23px 42px 28px;color:#85858c;font-family:Arial,sans-serif;font-size:12px;line-height:1.55">Gateway — Infrastructure control plane.<br><a href="https://thesquarelabs.com" style="color:#f4f4f5;font-weight:400;opacity:0.65;text-decoration:underline">Powered by Square Labs</a></td></tr>
         </table>
       </td></tr>
     </table>

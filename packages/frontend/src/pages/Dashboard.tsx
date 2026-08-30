@@ -13,7 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useRealtime } from "@/hooks/use-realtime";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -510,18 +509,9 @@ export function Dashboard() {
     emailOtp: boolean;
   } | null>(null);
   const [relayRetryPending, setRelayRetryPending] = useState(false);
-  const refreshDashboardNodes = useCallback(async () => {
-    try {
-      const response = await api.listNodes({ limit: 100 });
-      setNodesList(response.data);
-      setNodesLoading(false);
-    } catch {
-      // Keep the last complete dashboard snapshot when the lightweight refresh fails.
-    }
-  }, []);
-  useRealtime(user && hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
-    void refreshDashboardNodes();
-  });
+  // Keep the page and sidebar on the same bootstrap generation. The session-wide
+  // realtime bridge invalidates this snapshot on node changes, so a recovered node
+  // cannot turn the page green before the sidebar attention state is refreshed.
   const canViewNodeDetails = useCallback(
     (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
     [hasScope]

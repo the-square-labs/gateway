@@ -796,9 +796,11 @@ export function DockerContainers({
       label: "Health",
       width: "7rem",
       renderCell: (container) => {
-        const status = container.healthCheckEnabled
-          ? (container.healthStatus ?? "unknown")
-          : "disabled";
+        const status = container.secureLinkDown
+          ? "offline"
+          : container.healthCheckEnabled
+            ? (container.healthStatus ?? "unknown")
+            : "disabled";
         return <Badge variant={STATUS_BADGE[status] ?? "secondary"}>{status}</Badge>;
       },
     },

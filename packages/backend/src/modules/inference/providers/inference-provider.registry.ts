@@ -242,7 +242,7 @@ const DEFINITIONS: readonly InferenceProviderDefinition[] = [
     allowBaseUrlOverride: true,
     models: ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/qwen/qwq-32b'],
   }),
-  chatProvider('litellm', 'LiteLLM (self-hosted)', 'http://localhost:4000/v1', {
+  chatProvider('litellm', 'LiteLLM (local deployment)', 'http://localhost:4000/v1', {
     allowBaseUrlOverride: true,
     authTypes: ['api_key', 'local'],
     keyOptional: true,

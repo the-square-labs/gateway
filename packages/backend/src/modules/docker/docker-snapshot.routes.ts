@@ -18,6 +18,7 @@ import {
 } from './docker-access-resource.service.js';
 import { compactContainerListItem, matchesContainerSearch } from './docker-container.routes.js';
 import { compactImageListItem, matchesImageSearch } from './docker-image.routes.js';
+import { filterGatewayInternalImages } from './docker-internal-images.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
 import { compactNetworkListItem, matchesNetworkSearch } from './docker-network.routes.js';
 import {
@@ -75,7 +76,9 @@ function normalizeRows(kind: DockerSnapshotKind, data: Record<string, any>[], se
     case 'containers':
       return data.filter((item) => matchesContainerSearch(item, search)).map(compactContainerListItem);
     case 'images':
-      return data.filter((item) => matchesImageSearch(item, search)).map(compactImageListItem);
+      return filterGatewayInternalImages(data)
+        .filter((item) => matchesImageSearch(item, search))
+        .map(compactImageListItem);
     case 'volumes':
       return data.filter((item) => matchesVolumeSearch(item, search)).map(compactVolumeListItem);
     case 'networks':
@@ -108,7 +111,7 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
                   : true
           )
         : snapshot.data;
-      const source =
+      let source =
         kind === 'containers'
           ? await docker.decoratePublicContainerSnapshot(node.id, standaloneSnapshot)
           : kind === 'volumes'
@@ -118,6 +121,13 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
                 (await snapshots.getList<Record<string, any>[]>(node.id, 'containers')).data
               )
             : standaloneSnapshot;
+      if (kind === 'volumes' && Array.isArray(source)) {
+        const metrics = await snapshots.getDetails<{ usedBytes?: number | null }>(node.id, 'volume-metrics');
+        source = source.map((volume) => {
+          const name = String(volume.name ?? volume.Name ?? '');
+          return { ...volume, usedBytes: metrics[name]?.data?.usedBytes ?? null };
+        });
+      }
       const availability = snapshots.availability(node.id, snapshot);
       const normalized = normalizeRows(kind, Array.isArray(source) ? source : [], search);
       const scoped: Array<Record<string, unknown>> =

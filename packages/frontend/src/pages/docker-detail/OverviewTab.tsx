@@ -16,6 +16,7 @@ export function OverviewTab({
   data,
   sourceIdentity,
   databaseLinks,
+  onSecureLinkHealthChange,
 }: {
   nodeId: string;
   containerId: string;
@@ -25,6 +26,7 @@ export function OverviewTab({
     deployedCommitSha: string | null;
   } | null;
   databaseLinks: ContainerDatabaseLink[];
+  onSecureLinkHealthChange?: (down: boolean) => void;
 }) {
   const transition = data._transition as string | undefined;
   const state = transition ?? data.State?.Status ?? (data.State?.Running ? "running" : "stopped");
@@ -194,10 +196,12 @@ export function OverviewTab({
         {/* Ports */}
         <PanelShell
           title="Port Mappings"
+          className="flex flex-col"
+          bodyClassName="flex flex-1 flex-col [&>*]:flex-1"
           actions={ports.length > 0 ? <Badge variant="secondary">{ports.length}</Badge> : null}
         >
           {ports.length > 0 ? (
-            <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border max-h-[calc(2.75rem*3+1px)] overflow-auto">
+            <div className="max-h-80 divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border overflow-auto">
               {ports.map((p, i) => (
                 <DetailRow
                   key={i}
@@ -214,6 +218,8 @@ export function OverviewTab({
         {/* Networks */}
         <PanelShell
           title="Networks"
+          className="flex flex-col"
+          bodyClassName="flex flex-1 flex-col [&>*]:flex-1"
           actions={
             networkEntries.length > 0 ? (
               <Badge variant="secondary">{networkEntries.length}</Badge>
@@ -221,7 +227,7 @@ export function OverviewTab({
           }
         >
           {networkEntries.length > 0 ? (
-            <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border max-h-[calc(2.75rem*3+1px)] overflow-auto">
+            <div className="max-h-80 divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border overflow-auto">
               {networkEntries.map(([name, cfg]) => (
                 <DetailRow
                   key={name}
@@ -255,7 +261,9 @@ export function OverviewTab({
         </PanelShell>
       )}
 
-      {databaseLinks.length > 0 && <LinkRuntimeTab links={databaseLinks} />}
+      {databaseLinks.length > 0 && (
+        <LinkRuntimeTab links={databaseLinks} onHealthChange={onSecureLinkHealthChange} />
+      )}
 
       {/* Recent Tasks */}
       {recentTasks.length > 0 && (

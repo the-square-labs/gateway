@@ -1,7 +1,7 @@
 {
   "name": "Good Gateway",
   "short_name": "Gateway",
-  "description": "Self-hosted infrastructure control plane",
+  "description": "Infrastructure control plane",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

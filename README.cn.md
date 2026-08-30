@@ -233,7 +233,7 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 
 ## 产品计划与许可
 
-Gateway 提供四个产品计划。付费计划适用于一个 self-hosted 实例，不按 managed node、用户或 custom permission group 额外收费。
+Gateway 提供四个产品计划。付费计划适用于一个 Gateway 实例，不按 managed node、用户或 custom permission group 额外收费。
 
 Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商业目的。由 Square Labs 签发的 Personal、Business 或 Enterprise 密钥，会依据 [Commercial Key License](COMMERCIAL-LICENSE.md) 自动向许可证记录中的被许可方授予一台官方未修改 Gateway 实例的有限商业使用权，并在密钥到期后继续有效 30 个自然日。两种许可证均不允许修改或再分发。
 

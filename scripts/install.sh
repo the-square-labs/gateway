@@ -143,7 +143,7 @@ show_header() {
   rule="${rule// /─}"
   echo -e "${BRAND_MINT}╭${rule}╮${NC}"
   printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-*.*s${NC} ${BRAND_MINT}│${NC}\n" "$content_width" "$content_width" "Gateway Installer"
-  printf "${BRAND_MINT}│${NC} ${GRAY}%-*.*s${NC} ${BRAND_MINT}│${NC}\n" "$content_width" "$content_width" "Self-hosted infrastructure control plane"
+  printf "${BRAND_MINT}│${NC} ${GRAY}%-*.*s${NC} ${BRAND_MINT}│${NC}\n" "$content_width" "$content_width" "Infrastructure control plane"
   echo -e "${BRAND_MINT}╰${rule}╯${NC}"
   echo ""
 }

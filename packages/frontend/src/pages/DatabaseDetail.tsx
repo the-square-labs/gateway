@@ -40,6 +40,7 @@ import {
 import { RedisConfigDialog } from "./database-detail/RedisConfigDialog";
 import { ResizeManagedDatabaseDialog } from "./database-detail/ResizeManagedDatabaseDialog";
 import { SqlExplorer } from "./database-detail/SqlExplorer";
+import { databaseDeleteConfirmation } from "./database-detail/shared";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 
 export function DatabaseDetail({
@@ -346,9 +347,10 @@ export function DatabaseDetail({
 
   const remove = async () => {
     if (!id || !database) return;
+    const deletion = databaseDeleteConfirmation(database);
     const ok = await confirm({
-      title: "Delete Database",
-      description: `Delete saved connection "${database.name}"?`,
+      title: deletion.title,
+      description: deletion.description,
       confirmLabel: "Delete",
       variant: "destructive",
     });
@@ -356,7 +358,7 @@ export function DatabaseDetail({
     try {
       await api.deleteDatabase(id);
       usePinnedDatabasesStore.getState().removePin(id);
-      toast.success("Database deleted");
+      toast.success(deletion.successMessage);
       navigate("/databases");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete database");

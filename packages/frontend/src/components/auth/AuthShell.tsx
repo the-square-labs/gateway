@@ -26,7 +26,7 @@ export function AuthShell({
             <img src="/android-chrome-192x192.png" alt="Gateway" className="h-10 w-10" />
             <h1 className="text-3xl font-bold tracking-tight text-foreground">Gateway</h1>
           </div>
-          <p className="text-sm text-muted-foreground">Self-hosted infrastructure control plane</p>
+          <p className="text-sm text-muted-foreground">Infrastructure control plane</p>
         </div>
         {children}
         <div className="flex flex-col items-center gap-2 pt-3 text-xs text-muted-foreground">

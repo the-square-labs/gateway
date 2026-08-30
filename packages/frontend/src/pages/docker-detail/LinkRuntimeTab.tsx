@@ -8,24 +8,29 @@ import {
   Timer,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
-import type {
-  ManagedDatabase,
-  ManagedDatabaseBinding,
-  ManagedDatabaseBindingRuntime,
-} from "@/types";
+import type { ManagedDatabaseBinding, ManagedDatabaseBindingRuntime } from "@/types";
 
 const MAX_HISTORY = 60;
 const POLL_INTERVAL_MS = 2000;
 
 export interface ContainerDatabaseLink {
-  database: ManagedDatabase;
-  binding: ManagedDatabaseBinding;
+  database: Pick<import("@/types").ManagedDatabase, "id" | "name" | "type">;
+  binding: Pick<
+    ManagedDatabaseBinding,
+    | "id"
+    | "managedDatabaseId"
+    | "targetNodeId"
+    | "targetType"
+    | "targetResourceId"
+    | "status"
+    | "lastError"
+  >;
 }
 
 interface RuntimeSample {
@@ -36,32 +41,8 @@ interface RuntimeSample {
 interface LinkRuntimeState {
   runtime: ManagedDatabaseBindingRuntime | null;
   history: RuntimeSample[];
-  error: string | null;
+  telemetryUnavailable: boolean;
   loading: boolean;
-}
-
-export async function loadContainerDatabaseLinks(
-  nodeId: string,
-  containerName: string
-): Promise<ContainerDatabaseLink[]> {
-  const databases = await api.listManagedDatabases();
-  const bindingLists = await Promise.all(
-    databases.map(async (database) => ({
-      database,
-      bindings: await api.listManagedDatabaseBindings(database.id),
-    }))
-  );
-
-  return bindingLists.flatMap(({ database, bindings }) =>
-    bindings
-      .filter(
-        (binding) =>
-          binding.targetNodeId === nodeId &&
-          binding.targetType === "container" &&
-          binding.targetResourceId === containerName
-      )
-      .map((binding) => ({ database, binding }))
-  );
 }
 
 function counter(value: unknown): number {
@@ -198,27 +179,54 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
   );
 }
 
-export function LinkRuntimeTab({ links }: { links: ContainerDatabaseLink[] }) {
+export function LinkRuntimeTab({
+  links,
+  onHealthChange,
+}: {
+  links: ContainerDatabaseLink[];
+  onHealthChange?: (down: boolean) => void;
+}) {
   const [states, setStates] = useState<Record<string, LinkRuntimeState>>({});
   const generationRef = useRef(0);
+  const orderedLinks = useMemo(
+    () =>
+      [...links].sort(
+        (left, right) =>
+          left.database.name.localeCompare(right.database.name) ||
+          left.binding.id.localeCompare(right.binding.id)
+      ),
+    [links]
+  );
+  const linksRef = useRef(orderedLinks);
+  linksRef.current = orderedLinks;
+  const linkIds = orderedLinks.map(({ binding }) => binding.id).join("|");
 
   useEffect(() => {
     const generation = ++generationRef.current;
+    const activeLinkIds = new Set(linkIds.split("|").filter(Boolean));
     let inFlight = false;
-    setStates(
+    setStates((current) =>
       Object.fromEntries(
-        links.map(({ binding }) => [
-          binding.id,
-          { runtime: null, history: [], error: null, loading: true } satisfies LinkRuntimeState,
-        ])
+        linksRef.current
+          .filter(({ binding }) => activeLinkIds.has(binding.id))
+          .map(({ binding }) => [
+            binding.id,
+            current[binding.id] ?? {
+              runtime: null,
+              history: [],
+              telemetryUnavailable: false,
+              loading: true,
+            },
+          ])
       )
     );
     const load = async () => {
       if (inFlight) return;
       inFlight = true;
       try {
+        const currentLinks = linksRef.current.filter(({ binding }) => binding.status !== "error");
         const results = await Promise.allSettled(
-          links.map(async ({ database, binding }) => ({
+          currentLinks.map(async ({ database, binding }) => ({
             bindingId: binding.id,
             status: await api.getManagedDatabaseBindingRuntime(database.id, binding.id),
           }))
@@ -229,7 +237,7 @@ export function LinkRuntimeTab({ links }: { links: ContainerDatabaseLink[] }) {
           if (generation !== generationRef.current) return current;
           const next: Record<string, LinkRuntimeState> = {};
           for (const [index, result] of results.entries()) {
-            const bindingId = links[index]!.binding.id;
+            const bindingId = currentLinks[index]!.binding.id;
             const previous = current[bindingId];
             if (result.status === "fulfilled") {
               const runtime = result.value.status.runtime;
@@ -238,17 +246,14 @@ export function LinkRuntimeTab({ links }: { links: ContainerDatabaseLink[] }) {
                 history: runtime
                   ? [...(previous?.history ?? []), { at: sampledAt, runtime }].slice(-MAX_HISTORY)
                   : (previous?.history ?? []),
-                error: runtime ? null : "Route telemetry is not available yet.",
+                telemetryUnavailable: false,
                 loading: false,
               };
             } else {
               next[bindingId] = {
                 runtime: previous?.runtime ?? null,
                 history: previous?.history ?? [],
-                error:
-                  result.reason instanceof Error
-                    ? result.reason.message
-                    : "Failed to load database link runtime",
+                telemetryUnavailable: true,
                 loading: false,
               };
             }
@@ -265,12 +270,18 @@ export function LinkRuntimeTab({ links }: { links: ContainerDatabaseLink[] }) {
       generationRef.current += 1;
       window.clearInterval(timer);
     };
-  }, [links]);
+  }, [linkIds]);
+
+  const hasDownLink = orderedLinks.some(({ binding }) => binding.status === "error");
+  useEffect(() => {
+    onHealthChange?.(hasDownLink);
+  }, [hasDownLink, onHealthChange]);
 
   return (
-    <div className="space-y-6 pb-6">
-      {links.map(({ database, binding }) => {
+    <div className="space-y-6">
+      {orderedLinks.map(({ database, binding }) => {
         const state = states[binding.id];
+        if (binding.status === "error") return null;
         return (
           <section key={binding.id} className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -298,13 +309,17 @@ export function LinkRuntimeTab({ links }: { links: ContainerDatabaseLink[] }) {
             ) : state.runtime ? (
               <>
                 {runtimeCards(state.runtime, state.history)}
-                {state.error && <p className="text-xs text-destructive">{state.error}</p>}
+                {state.telemetryUnavailable && (
+                  <p className="text-xs text-muted-foreground">
+                    Runtime telemetry is temporarily unavailable. Showing the last confirmed sample.
+                  </p>
+                )}
               </>
-            ) : (
-              <div className="border border-destructive/50 bg-card p-4 text-sm text-destructive">
-                {binding.lastError || state.error || "Route telemetry is not available yet."}
-              </div>
-            )}
+            ) : state.telemetryUnavailable ? (
+              <p className="text-sm text-muted-foreground">
+                Runtime telemetry is temporarily unavailable.
+              </p>
+            ) : null}
           </section>
         );
       })}

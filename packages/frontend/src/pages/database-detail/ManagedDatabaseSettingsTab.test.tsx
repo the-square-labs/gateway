@@ -40,6 +40,9 @@ describe("ManagedDatabaseSettingsTab", () => {
     expect(screen.getByLabelText("CPU cores")).toBeInTheDocument();
     expect(screen.getByLabelText("Memory, MB")).toBeInTheDocument();
     expect(screen.getByLabelText("Swap, MB")).toBeInTheDocument();
+    expect(screen.getByLabelText("Interactive query budget").closest(".border")).toHaveClass(
+      "border"
+    );
     expect(screen.getByText("Publish TCP port")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeInTheDocument();
 

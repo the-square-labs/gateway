@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Gateway is an AI-first but not AI-dependent self-hosted infrastructure control plane. Operators can work through AI Workspace or use the complete Operations Console, REST API, OAuth, and MCP surfaces without AI. The product is built around a central web app and host daemons that connect outbound to the app, so operators can manage common infrastructure workflows without direct shell access to every server.
+Gateway is an AI-first but not AI-dependent infrastructure control plane. Operators can work through AI Workspace or use the complete Operations Console, REST API, OAuth, and MCP surfaces without AI. The product is built around a central web app and host daemons that connect outbound to the app, so operators can manage common infrastructure workflows without direct shell access to every server.
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
 

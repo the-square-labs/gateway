@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Gateway is offered in four product plans: Community, Personal, Business, and Enterprise. Plans apply to one self-hosted Gateway installation. Paid plans do not add per-node, per-user, or per-permission-group charges.
+Gateway is offered in four product plans: Community, Personal, Business, and Enterprise. Plans apply to one Gateway installation. Paid plans do not add per-node, per-user, or per-permission-group charges.
 
 The plan limits and feature availability below define the product access granted by each plan.
 

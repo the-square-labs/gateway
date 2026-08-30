@@ -78,10 +78,7 @@ import {
   type InspectData,
   STATUS_BADGE,
 } from "./docker-detail/helpers";
-import {
-  type ContainerDatabaseLink,
-  loadContainerDatabaseLinks,
-} from "./docker-detail/LinkRuntimeTab";
+import type { ContainerDatabaseLink } from "./docker-detail/LinkRuntimeTab";
 import { LogsTab } from "./docker-detail/LogsTab";
 import {
   buildContainerMutationSnapshot,
@@ -210,8 +207,8 @@ export function DockerContainerDetail({
     DockerSourceBinding,
     "repositoryFullPath" | "deployedCommitSha"
   > | null>(null);
-  const [databaseLinks, setDatabaseLinks] = useState<ContainerDatabaseLink[]>([]);
-  const databaseLinksRequestRef = useRef(0);
+  const [runtimeSecureLinkDown, setRuntimeSecureLinkDown] = useState(false);
+  const runtimeSecureLinkContainerRef = useRef(containerId);
 
   const [activeTab, setActiveTab] = useUrlTab(
     ["overview", "source", "logs", "console", "files", "stats", "environment", "settings"],
@@ -538,40 +535,18 @@ export function DockerContainerDetail({
   // Realtime: refetch on any container.changed event for this container's name.
   // Also handle the recreate ID migration for every open tab.
   const containerName = ((container?.Name ?? "") as string).replace(/^\//, "");
-
-  const refreshDatabaseLinks = useCallback(async () => {
-    const requestId = ++databaseLinksRequestRef.current;
-    if (!canViewContainer || !nodeId || !containerName) {
-      if (requestId !== databaseLinksRequestRef.current) return;
-      setDatabaseLinks([]);
-      return;
-    }
-
-    try {
-      const links = await loadContainerDatabaseLinks(nodeId, containerName);
-      if (requestId !== databaseLinksRequestRef.current) return;
-      setDatabaseLinks(links);
-      toast.dismiss("container-database-links");
-    } catch {
-      if (requestId !== databaseLinksRequestRef.current) return;
-      toast.error("Failed to load managed database links", {
-        id: "container-database-links",
-      });
-    }
-  }, [canViewContainer, containerName, nodeId]);
-
+  const databaseLinks = (
+    ((container as any)?.databaseLinks ?? []) as ContainerDatabaseLink[]
+  ).filter((link) => link?.binding?.targetType === "container");
   useEffect(() => {
-    databaseLinksRequestRef.current += 1;
-    setDatabaseLinks([]);
-    void refreshDatabaseLinks();
-    return () => {
-      databaseLinksRequestRef.current += 1;
-    };
-  }, [refreshDatabaseLinks]);
-
-  useRealtime("database.changed", () => {
-    void refreshDatabaseLinks();
-  });
+    if (runtimeSecureLinkContainerRef.current === containerId) return;
+    runtimeSecureLinkContainerRef.current = containerId;
+    setRuntimeSecureLinkDown(false);
+  }, [containerId]);
+  useEffect(() => {
+    if (databaseLinks.length === 0) setRuntimeSecureLinkDown(false);
+  }, [databaseLinks.length]);
+  useRealtime("database.changed", () => void refreshContainer());
 
   const fetchHealthCheck = useCallback(async () => {
     if (!nodeId || !containerName) return;
@@ -798,6 +773,7 @@ export function DockerContainerDetail({
   const lifecycleActions = containerLifecycleActions(state);
   const image = container ? resolveContainerImageReference(container) : "";
   const unavailable = container?.availability === "unavailable";
+  const secureLinkDown = Boolean((container as any)?.secureLinkDown) || runtimeSecureLinkDown;
   const labels = (container?.Config?.Labels ?? container?.Labels ?? {}) as Record<string, string>;
   const composeManaged = Boolean(labels["com.docker.compose.project"]);
   const composeProjectName = labels["com.docker.compose.project"];
@@ -1060,6 +1036,16 @@ export function DockerContainerDetail({
                 >
                   {unavailable ? "Unavailable" : state}
                 </Badge>
+                {secureLinkDown && (
+                  <>
+                    <Badge variant="destructive" size="inline" className="shrink-0">
+                      Unhealthy
+                    </Badge>
+                    <Badge variant="destructive" size="inline" className="shrink-0">
+                      Secure Link Down
+                    </Badge>
+                  </>
+                )}
               </div>
               {sourceIdentity ? (
                 <p className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
@@ -1126,7 +1112,7 @@ export function DockerContainerDetail({
         {healthCheck?.enabled && (
           <HealthBars
             history={healthCheck.healthHistory}
-            currentStatus={healthCheck.healthStatus}
+            currentStatus={secureLinkDown ? "offline" : healthCheck.healthStatus}
           />
         )}
 
@@ -1180,6 +1166,7 @@ export function DockerContainerDetail({
               data={container}
               sourceIdentity={sourceIdentity}
               databaseLinks={databaseLinks}
+              onSecureLinkHealthChange={setRuntimeSecureLinkDown}
             />
           </TabsContent>
           <TabsContent value="source" className="pb-6">

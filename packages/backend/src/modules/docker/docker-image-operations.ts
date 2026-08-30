@@ -1,6 +1,11 @@
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import {
+  filterGatewayInternalImages,
+  isDanglingDockerImage,
+  isGatewayInternalImage,
+} from './docker-internal-images.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
 
@@ -22,9 +27,14 @@ export interface DockerImageOperationContext {
   longDockerOperationTimeoutMs: number;
 }
 
-export async function listImages(context: DockerImageOperationContext, nodeId: string) {
+export async function listAllImages(context: DockerImageOperationContext, nodeId: string) {
   const result = await context.nodeDispatch.sendDockerImageCommand(nodeId, 'list');
   return context.parseResult(result);
+}
+
+export async function listImages(context: DockerImageOperationContext, nodeId: string) {
+  const images = await listAllImages(context, nodeId);
+  return Array.isArray(images) ? filterGatewayInternalImages(images) : images;
 }
 
 export async function pullImage(
@@ -110,8 +120,28 @@ export async function removeImage(
 }
 
 export async function pruneImages(context: DockerImageOperationContext, nodeId: string, userId: string) {
-  const result = await context.nodeDispatch.sendDockerImageCommand(nodeId, 'prune');
-  const data = context.parseResult(result);
+  const images = await listAllImages(context, nodeId);
+  const deleted: string[] = [];
+  let spaceReclaimed = 0;
+  if (Array.isArray(images)) {
+    for (const image of images) {
+      if (isGatewayInternalImage(image) || !isDanglingDockerImage(image)) continue;
+      const imageId = String(image.id ?? image.Id ?? '');
+      if (!imageId) continue;
+      try {
+        const result = await context.nodeDispatch.sendDockerImageCommand(nodeId, 'remove', {
+          imageRef: imageId,
+          force: false,
+        });
+        context.parseResult(result);
+        deleted.push(imageId);
+        spaceReclaimed += Number(image.size ?? image.Size ?? 0);
+      } catch {
+        // Docker rejects in-use or parent images; keep pruning the remaining safe candidates.
+      }
+    }
+  }
+  const data = { ImagesDeleted: deleted, SpaceReclaimed: spaceReclaimed };
   await context.auditService.log({
     action: 'docker.image.prune',
     userId,

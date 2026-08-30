@@ -1002,7 +1002,7 @@ export function AIConfigSection() {
                   <SelectItem value="brave">Brave Search — privacy-first</SelectItem>
                   <SelectItem value="serper">Serper — Google results</SelectItem>
                   <SelectItem value="exa">Exa — semantic search</SelectItem>
-                  <SelectItem value="searxng">SearXNG — self-hosted</SelectItem>
+                  <SelectItem value="searxng">SearXNG — local deployment</SelectItem>
                 </SelectContent>
               </Select>
             </SettingsControlRow>

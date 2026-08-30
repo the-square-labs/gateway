@@ -392,7 +392,7 @@ describe('DockerManagementService volume and network operations', () => {
     expect(dispatch.sendDockerNetworkCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
   });
 
-  it('hides and protects Gateway-managed database networks', async () => {
+  it('hides and protects every Gateway-managed network', async () => {
     const dispatch = {
       sendDockerNetworkCommand: vi.fn(async (_nodeId: string, action: string) => {
         if (action === 'list') {
@@ -400,7 +400,8 @@ describe('DockerManagementService volume and network operations', () => {
             success: true,
             detail: JSON.stringify([
               { Id: 'custom-1', Name: 'frontend' },
-              { Id: 'managed-1', Name: 'gateway-db-79c029a3cedc4af1' },
+              { Id: 'managed-1234567890ab', Name: 'gateway-db-79c029a3cedc4af1' },
+              { Id: 'secure-links-1234567890ab', Name: 'gateway-secure-links' },
             ]),
           };
         }
@@ -411,8 +412,12 @@ describe('DockerManagementService volume and network operations', () => {
 
     await expect(service.listNetworks('node-1')).resolves.toEqual([{ Id: 'custom-1', Name: 'frontend' }]);
     await expect(
-      service.disconnectContainerFromNetwork('node-1', 'managed-1', 'container-1', 'user-1')
+      service.disconnectContainerFromNetwork('node-1', 'managed-1234', 'container-1', 'user-1')
     ).rejects.toMatchObject({ statusCode: 409, code: 'MANAGED_NETWORK' });
+    await expect(service.removeNetwork('node-1', 'secure-links-1234', 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MANAGED_NETWORK',
+    });
     expect(dispatch.sendDockerNetworkCommand).not.toHaveBeenCalledWith('node-1', 'disconnect', expect.anything());
   });
 
@@ -420,25 +425,28 @@ describe('DockerManagementService volume and network operations', () => {
     const dispatch = {
       sendDockerNetworkCommand: vi.fn(async (_nodeId: string, action: string) => {
         if (action === 'list') {
-          return { success: true, detail: JSON.stringify([{ Id: 'custom-1', Name: 'frontend' }]) };
+          return {
+            success: true,
+            detail: JSON.stringify([{ Id: 'custom-1234567890ab', Name: 'frontend' }]),
+          };
         }
         return { success: true };
       }),
     };
     const { service, audit } = createService(dispatch);
 
-    await service.disconnectContainerFromNetwork('node-1', 'custom-1', 'container-1', 'user-1');
+    await service.disconnectContainerFromNetwork('node-1', 'custom-1234', 'container-1', 'user-1');
 
     expect(dispatch.sendDockerNetworkCommand).toHaveBeenCalledWith('node-1', 'disconnect', {
-      networkId: 'custom-1',
+      networkId: 'custom-1234567890ab',
       containerId: 'container-1',
     });
     expect(audit.log).toHaveBeenCalledWith({
       action: 'docker.network.disconnect',
       userId: 'user-1',
       resourceType: 'docker-network',
-      resourceId: 'custom-1',
-      details: { nodeId: 'node-1', containerId: 'container-1' },
+      resourceId: 'custom-1234567890ab',
+      details: { nodeId: 'node-1', containerId: 'container-1', networkName: 'frontend' },
     });
   });
 });

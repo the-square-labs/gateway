@@ -8,6 +8,7 @@ import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
+import { registerImageRoutes } from './docker-image.routes.js';
 import { registerNetworkRoutes } from './docker-network.routes.js';
 import { registerDockerSnapshotRoutes } from './docker-snapshot.routes.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
@@ -35,6 +36,7 @@ class MemoryCache {
   getClient() {
     return {
       hget: vi.fn(async (key: string, field: string) => this.hashes.get(key)?.get(field) ?? null),
+      hgetall: vi.fn(async (key: string) => Object.fromEntries(this.hashes.get(key) ?? [])),
       hset: vi.fn(async (key: string, field: string, value: string) => {
         const hash = this.hashes.get(key) ?? new Map<string, string>();
         hash.set(field, value);
@@ -81,6 +83,11 @@ async function setup() {
     decoratePublicContainerSnapshot: vi.fn(async (_nodeId, data) => data),
     decoratePublicVolumeSnapshot: vi.fn(async (_nodeId, data) => data),
     decorateContainerDetailSnapshot: vi.fn(async (_nodeId, data) => data),
+    decoratePublicContainerDetailSnapshot: vi.fn(async (_nodeId, data) => ({
+      ...data,
+      databaseLinks: [],
+      secureLinkDown: false,
+    })),
     listContainers: vi.fn(),
     listGpuAttachmentUsers: vi.fn(),
   };
@@ -113,10 +120,11 @@ afterEach(() => {
 });
 
 describe('Docker snapshot routes', () => {
-  it('hides Gateway-managed database networks from aggregate snapshots', async () => {
+  it('hides every Gateway-managed network from aggregate snapshots', async () => {
     const { snapshots } = await setup();
     await snapshots.replaceList(NODE_1, 'networks', [
       { Id: 'managed', Name: 'gateway-db-79c029a3cedc4af1', Driver: 'bridge' },
+      { Id: 'secure-links', Name: 'gateway-secure-links', Driver: 'bridge' },
       { Id: 'application', Name: 'application', Driver: 'bridge' },
     ]);
     const app = appWithScopes([`docker:networks:view:${NODE_1}`]);
@@ -127,6 +135,46 @@ describe('Docker snapshot routes', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as any;
     expect(body.data.map((network: any) => network.name)).toEqual(['application']);
+  });
+
+  it('hides Gateway-owned images from direct and aggregate snapshots', async () => {
+    const { snapshots } = await setup();
+    await snapshots.replaceList(NODE_1, 'images', [
+      { Id: 'user', RepoTags: ['acme/api:latest'] },
+      {
+        Id: 'secure-link',
+        RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:abc'],
+      },
+      { Id: 'compose', RepoDigests: ['docker.io/docker/compose-bin@sha256:def'] },
+    ]);
+    const app = appWithScopes([`docker:images:view:${NODE_1}`]);
+    registerImageRoutes(app);
+    registerDockerSnapshotRoutes(app);
+
+    const direct = await app.request(`/nodes/${NODE_1}/images`);
+    const aggregate = await app.request('/images');
+
+    await expect(direct.json()).resolves.toMatchObject({ data: [{ id: 'user' }], total: 1 });
+    await expect(aggregate.json()).resolves.toMatchObject({ data: [{ id: 'user' }], total: 1 });
+  });
+
+  it('adds cached volume size to direct and aggregate lists without daemon dispatch', async () => {
+    const { snapshots, dispatch } = await setup();
+    await snapshots.replaceList(NODE_1, 'volumes', [{ Name: 'data', Driver: 'local', Scope: 'local' }]);
+    await snapshots.replaceDetail(NODE_1, 'volume-metrics', 'data', {
+      usedBytes: 42,
+      collectedAt: '2026-08-30T10:00:00.000Z',
+    });
+    const app = appWithScopes([`docker:volumes:view:${NODE_1}`]);
+    registerVolumeRoutes(app);
+    registerDockerSnapshotRoutes(app);
+
+    const direct = await app.request(`/nodes/${NODE_1}/volumes`);
+    const aggregate = await app.request('/volumes');
+
+    await expect(direct.json()).resolves.toMatchObject({ data: [{ name: 'data', usedBytes: 42 }] });
+    await expect(aggregate.json()).resolves.toMatchObject({ data: [{ name: 'data', usedBytes: 42 }] });
+    expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalled();
   });
 
   it('hides Compose-owned children from aggregate standalone lists while retaining shared resources', async () => {
@@ -278,6 +326,40 @@ describe('Docker snapshot routes', () => {
     expect(response.status).toBe(200);
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(1, NODE_1, 'containers');
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(2, NODE_1, 'container-detail', 'c1');
+  });
+
+  it('filters database link identities by scope while preserving the container outage state', async () => {
+    const { snapshots, docker } = await setup();
+    const visibleDatabaseId = '33333333-3333-4333-8333-333333333333';
+    const hiddenDatabaseId = '44444444-4444-4444-8444-444444444444';
+    await snapshots.replaceDetail(NODE_1, 'container-detail', 'c1', { Id: 'c1', Name: '/one' });
+    docker.decoratePublicContainerDetailSnapshot.mockResolvedValue({
+      Id: 'c1',
+      Name: '/one',
+      secureLinkDown: true,
+      databaseLinks: [
+        {
+          database: { id: hiddenDatabaseId, name: 'Hidden', type: 'postgres' },
+          binding: { id: 'binding-hidden', status: 'error' },
+        },
+        {
+          database: { id: visibleDatabaseId, name: 'Visible', type: 'redis' },
+          binding: { id: 'binding-visible', status: 'ready' },
+        },
+      ],
+    });
+    const app = appWithScopes([`docker:containers:view:${NODE_1}`, `databases:view:${visibleDatabaseId}`]);
+    registerContainerRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/containers/c1`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        secureLinkDown: true,
+        databaseLinks: [{ database: { id: visibleDatabaseId, name: 'Visible' } }],
+      },
+    });
   });
 
   it('serves volume metrics from the snapshot cache without live daemon dispatch', async () => {

@@ -64,6 +64,7 @@ export class DatabaseMonitoringService extends EventEmitter {
   // Serialize monitoring collections per node so a concurrent full metric scrape
   // cannot head-of-line block another database's lightweight health probe.
   private readonly managedNodePollTails = new Map<string, Promise<void>>();
+  private backgroundStartTimeout: ReturnType<typeof setTimeout> | null = null;
   private backgroundInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -103,28 +104,32 @@ export class DatabaseMonitoringService extends EventEmitter {
   }
 
   destroy(): void {
+    if (this.backgroundStartTimeout) clearTimeout(this.backgroundStartTimeout);
     if (this.backgroundInterval) clearInterval(this.backgroundInterval);
     for (const interval of this.pollIntervals.values()) clearInterval(interval);
     this.pollIntervals.clear();
   }
 
   private startBackgroundPolling() {
-    setTimeout(() => {
-      this.backgroundInterval = setInterval(() => {
-        this.databaseService
-          .listAllRows()
-          .then((rows) => {
-            for (const row of rows) {
-              if (this.pollIntervals.has(row.id)) continue;
-              void this.pollOnce(row.id);
-            }
-          })
-          .catch((error) => {
-            logger.warn('Background database polling failed', {
-              error: error instanceof Error ? error.message : String(error),
-            });
+    const sweep = () => {
+      this.databaseService
+        .listAllRows()
+        .then((rows) => {
+          for (const row of rows) {
+            if (this.pollIntervals.has(row.id)) continue;
+            void this.pollOnce(row.id);
+          }
+        })
+        .catch((error) => {
+          logger.warn('Background database polling failed', {
+            error: error instanceof Error ? error.message : String(error),
           });
-      }, BACKGROUND_POLL_INTERVAL_MS);
+        });
+    };
+    this.backgroundStartTimeout = setTimeout(() => {
+      this.backgroundStartTimeout = null;
+      sweep();
+      this.backgroundInterval = setInterval(sweep, BACKGROUND_POLL_INTERVAL_MS);
     }, 5000);
   }
 

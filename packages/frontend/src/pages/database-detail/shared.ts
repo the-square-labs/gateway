@@ -54,6 +54,21 @@ export const SQL_EXPLORER_PAGE_SIZE = 100;
 export const VIRTUAL_ROW_HEIGHT = 37;
 export const VIRTUAL_RESULT_ROW_HEIGHT = 49;
 
+export function databaseDeleteConfirmation(database: Pick<DatabaseConnection, "name" | "managed">) {
+  if (database.managed) {
+    return {
+      title: "Delete Managed Database",
+      description: `Permanently delete managed database "${database.name}"? Its container, network, mounted storage, and disk image will be removed together with the saved connection. All database data will be lost.`,
+      successMessage: "Managed database deleted",
+    };
+  }
+  return {
+    title: "Delete Database Connection",
+    description: `Delete saved connection "${database.name}"? The external database and its data will not be changed.`,
+    successMessage: "Database connection deleted",
+  };
+}
+
 export function formatMetricValue(key: string, value: number | null): string {
   if (value == null) return "-";
   if (key.includes("bytes")) return formatBytes(value);

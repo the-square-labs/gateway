@@ -1,7 +1,7 @@
 export const GUIDE_DOCS: Record<string, string> = {
   overview: `# Gateway Overview
 
-Gateway is a self-hosted infrastructure control plane. It combines secure access management with operations for reverse proxies, Pages, certificates, compute, databases, observability, and integrations.
+Gateway is an infrastructure control plane. It combines secure access management with operations for reverse proxies, Pages, certificates, compute, databases, observability, and integrations.
 
 ## Main Capabilities
 - **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.

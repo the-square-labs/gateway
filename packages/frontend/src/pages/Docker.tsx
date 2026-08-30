@@ -9,6 +9,7 @@ import {
   ListTodo,
   Network,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -58,6 +59,7 @@ export function Docker() {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess, user } = useAuthStore();
   const setSelectedNode = useDockerStore((s) => s.setSelectedNode);
+  const selectedNodeId = useDockerStore((s) => s.selectedNodeId);
   const setDockerNodes = useDockerStore((s) => s.setDockerNodes);
   const fetchContainers = useDockerStore((s) => s.fetchContainers);
   const fetchImages = useDockerStore((s) => s.fetchImages);
@@ -73,6 +75,12 @@ export function Docker() {
     (node) =>
       hasScope("docker:containers:create") || hasScope(`docker:containers:create:${node.id}`)
   );
+  const imageActionNodeId =
+    selectedNodeId ?? (dockerNodes.length === 1 ? dockerNodes[0]?.id : null);
+  const canPruneImages = Boolean(
+    imageActionNodeId &&
+      (hasScope("docker:images:delete") || hasScope(`docker:images:delete:${imageActionNodeId}`))
+  );
 
   const deployContainerRef = useRef<(() => void) | null>(null);
   const createFolderRef = useRef<(() => void) | null>(null);
@@ -82,6 +90,7 @@ export function Docker() {
   const createComposeFolderRef = useRef<(() => void) | null>(null);
   const createComposeRef = useRef<(() => void) | null>(null);
   const pullImageRef = useRef<(() => void) | null>(null);
+  const pruneImagesRef = useRef<(() => void) | null>(null);
   const createVolumeRef = useRef<(() => void) | null>(null);
   const createNetworkRef = useRef<(() => void) | null>(null);
   const refreshContainersRef = useRef<(() => void) | null>(null);
@@ -259,6 +268,12 @@ export function Docker() {
                 New Folder
               </Button>
             )}
+            {canPruneImages && (
+              <Button variant="outline" onClick={() => pruneImagesRef.current?.()}>
+                <Trash2 className="h-4 w-4 mr-1" />
+                Prune Dangling
+              </Button>
+            )}
             {hasScopedAccess("docker:images:pull") && (
               <Button onClick={() => pullImageRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
@@ -362,6 +377,15 @@ export function Docker() {
             label: "Pull Image",
             icon: <Plus className="h-4 w-4" />,
             onClick: () => pullImageRef.current?.(),
+          },
+        ]
+      : []),
+    ...(activeTab === "images" && canPruneImages
+      ? [
+          {
+            label: "Prune Dangling",
+            icon: <Trash2 className="h-4 w-4" />,
+            onClick: () => pruneImagesRef.current?.(),
           },
         ]
       : []),
@@ -489,6 +513,9 @@ export function Docker() {
               }}
               onRefreshRef={(fn) => {
                 refreshImagesRef.current = fn;
+              }}
+              onPruneRef={(fn) => {
+                pruneImagesRef.current = fn;
               }}
             />
           </TabsContent>

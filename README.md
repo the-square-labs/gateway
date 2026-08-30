@@ -2,7 +2,7 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 
 # Gateway
 
-AI-first but not AI-dependent self-hosted infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
+AI-first but not AI-dependent infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
 ## Why Gateway
 
@@ -139,7 +139,7 @@ Nodes do not need inbound management ports. Public traffic ports, such as `80` a
 
 ## Security Model
 
-Gateway is designed to be secure by default for a self-hosted infrastructure control plane:
+Gateway is designed to be secure by default as an infrastructure control plane:
 
 - User login supports OIDC, password, email codes, and passkeys. Local authentication requires verified SMTP delivery, and group MFA policy is enforced after the primary credential.
 - Managed nodes connect outbound to Gateway over gRPC with mTLS. First enrollment requires a one-time token plus the generated Gateway gRPC certificate fingerprint, and the daemon verifies the Gateway TLS leaf before sending the token. After enrollment, daemon commands require a client certificate issued by Gateway's internal node CA.
@@ -238,7 +238,7 @@ No. AI Workspace is optional. The Operations Console, REST API, OAuth, and MCP r
 
 ## Plans And Licensing
 
-Gateway has four product plans. Paid plans apply to one self-hosted installation and do not add per-node, per-user, or per-permission-group charges.
+Gateway has four product plans. Paid plans apply to one Gateway installation and do not add per-node, per-user, or per-permission-group charges.
 
 Community is for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Personal, Business, or Enterprise key issued by Square Labs automatically grants the named licensee limited commercial-use rights for one official, unmodified installation under the [Commercial Key License](COMMERCIAL-LICENSE.md), including 30 calendar days after the key expires. Neither license permits modification or redistribution.
 

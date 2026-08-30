@@ -1,3 +1,3 @@
 export function isGatewayManagedDockerNetwork(name: string) {
-  return name.startsWith('gateway-db-');
+  return name === 'gateway-secure-links' || name.startsWith('gateway-db-');
 }

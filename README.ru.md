@@ -2,7 +2,7 @@
 
 # Gateway
 
-AI-first, но не AI-dependent self-hosted платформа управления инфраструктурой для nginx ingress, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
+AI-first, но не AI-dependent платформа управления инфраструктурой для nginx ingress, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
 
 > [!NOTE]
 > Основная разработка ведется на [GitHub](https://github.com/the-square-labs/gateway). Issues и запросы функций можно оставлять в [GitHub issue tracker](https://github.com/the-square-labs/gateway/issues).
@@ -134,7 +134,7 @@ Relay — отдельный long-lived container и единственный п
 
 ## Security Model
 
-Gateway по умолчанию ориентирован на безопасную работу как self-hosted infrastructure control plane:
+Gateway по умолчанию ориентирован на безопасную работу как infrastructure control plane:
 
 - Вход поддерживает OIDC, пароль, email-коды и passkeys. Local authentication требует проверенной SMTP-доставки, а group MFA policy применяется после primary credential.
 - Managed nodes подключаются к Gateway исходяще по gRPC с mTLS. Первая регистрация требует одноразовый token и сгенерированный fingerprint gRPC-сертификата Gateway, а daemon проверяет TLS leaf Gateway перед отправкой token. После enrollment daemon-команды требуют client certificate, выпущенный внутренней node CA Gateway.
@@ -233,7 +233,7 @@ Managed services продолжают работать. Existing nginx configs �
 
 ## Планы и лицензирование
 
-У Gateway четыре продуктовых плана. Платные планы применяются к одной self-hosted установке без отдельной оплаты за managed nodes, пользователей или custom permission groups.
+У Gateway четыре продуктовых плана. Платные планы применяются к одной установке Gateway без отдельной оплаты за managed nodes, пользователей или custom permission groups.
 
 Community предназначен только для некоммерческого использования по [PolyForm Strict License 1.0.0](LICENSE.md). Ключ Personal, Business или Enterprise, выданный Square Labs, автоматически даёт указанному в лицензии владельцу ограниченное право коммерческого использования одной официальной немодифицированной установки по [Commercial Key License](COMMERCIAL-LICENSE.md), включая 30 календарных дней после истечения ключа. Ни одна из лицензий не разрешает модификацию или распространение.
 

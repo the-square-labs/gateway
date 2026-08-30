@@ -33,7 +33,11 @@ import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SessionService } from '@/services/session.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
-import { getDashboardAttentionSeverity } from './dashboard-attention.js';
+import {
+  getDashboardAttentionSeverity,
+  hasDashboardPinnedDatabaseWarning,
+  hasDashboardPinnedDockerWarning,
+} from './dashboard-attention.js';
 import { DashboardReadModelService, dashboardStatsFromSourceSnapshots } from './dashboard-read-model.service.js';
 import { getNginxLogHistory, logRelay, type RelayedLogEntry } from './log-relay.service.js';
 import {
@@ -689,11 +693,10 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const nodeHealthWarning = nodeResponse.data.some((node: any) =>
     ['offline', 'error', 'degraded'].includes(node.status)
   );
-  const pinnedDatabaseWarning = pinnedDatabaseResponse.data.some((database: any) =>
-    ['offline', 'degraded'].includes(database.healthStatus)
-  );
-  const pinnedDockerWarning = pinnedDockerResources.some((resource) =>
-    ['failed', 'unhealthy', 'exited', 'dead', 'stopped', 'degraded'].includes(String(resource.state).toLowerCase())
+  const pinnedDatabaseWarning = hasDashboardPinnedDatabaseWarning(pinnedDatabaseResponse.data, dashboardPinDatabaseIds);
+  const pinnedDockerWarning = hasDashboardPinnedDockerWarning(
+    pinnedDockerResources,
+    request.pins.dashboard.dockerResources
   );
   const relay = container.isRegistered(RelaySupervisorService)
     ? container.resolve(RelaySupervisorService).getSnapshot(hasScope(scopes, 'admin:system'))

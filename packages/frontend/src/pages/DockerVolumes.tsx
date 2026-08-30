@@ -34,6 +34,7 @@ import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerVolumeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
+import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -322,6 +323,17 @@ export function DockerVolumes({
             </Badge>
           );
         },
+      },
+      {
+        id: "size",
+        label: "Size",
+        width: "7rem",
+        align: "right" as const,
+        renderCell: (v) => (
+          <span className="text-sm text-muted-foreground">
+            {typeof v.usedBytes === "number" ? formatBytes(v.usedBytes) : "—"}
+          </span>
+        ),
       },
       {
         id: "created",

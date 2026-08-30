@@ -1,4 +1,14 @@
-import { Code2, KeyRound, Plus, Save, ScrollText, Settings, Trash2 } from "lucide-react";
+import {
+  Braces,
+  Code2,
+  Gauge,
+  KeyRound,
+  Plus,
+  Save,
+  ScrollText,
+  Settings,
+  Trash2,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -11,6 +21,7 @@ import {
   type ResponsiveHeaderAction,
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -460,18 +471,17 @@ function LoggingEnvironmentSettings({
 
   return (
     <div className="space-y-6 pb-6">
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <SettingsPanel
           title="Schema"
           description="Reusable validation attached to this environment"
+          icon={<Braces className="h-4 w-4" />}
         >
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Attached schema</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Reusable labels, fields, and schema mode
-              </p>
-            </div>
+          <SettingsControlRow
+            title="Attached schema"
+            description="Reusable labels, fields, and schema mode"
+            help="Select a reusable validation schema. No schema accepts events without schema validation and uses Loose mode."
+          >
             <Select
               disabled={!canEdit}
               value={draft.schemaId ?? "none"}
@@ -479,7 +489,7 @@ function LoggingEnvironmentSettings({
                 onDraftChange({ ...draft, schemaId: schemaId === "none" ? null : schemaId })
               }
             >
-              <SelectTrigger className="w-[240px]">
+              <SelectTrigger aria-label="Attached schema" className="w-[240px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -491,37 +501,40 @@ function LoggingEnvironmentSettings({
                 ))}
               </SelectContent>
             </Select>
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Mode</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Effective unknown-field behavior for this environment
-              </p>
-            </div>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Mode"
+            description="Effective unknown-field behavior for this environment"
+            help="Inherited from the attached schema. Without a schema, the environment uses Loose mode."
+          >
             <Badge variant="secondary" className="uppercase">
               {effectiveSchemaMode}
             </Badge>
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Enabled</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Disabled environments reject ingest tokens and hide new writes
-              </p>
-            </div>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Enabled"
+            description="Disabled environments reject ingest tokens and hide new writes"
+            help="Disabling the environment rejects new ingest requests while keeping already stored events available until retention removes them."
+          >
             <Switch
               disabled={!canEdit}
               checked={draft.enabled ?? environment.enabled}
               onChange={(enabled: boolean) => onDraftChange({ ...draft, enabled })}
+              ariaLabel="Enabled"
             />
-          </div>
+          </SettingsControlRow>
         </SettingsPanel>
 
-        <SettingsPanel title="Ingest" description="Environment-specific retention and throttles">
+        <SettingsPanel
+          title="Ingest"
+          description="Environment-specific retention and throttles"
+          icon={<Gauge className="h-4 w-4" />}
+        >
           <SettingsNumberRow
             label="Retention days"
             description="Stored per event and enforced by ClickHouse TTL"
+            help="Events older than this number of days are removed by ClickHouse TTL. Lowering the value can make older data expire sooner."
+            placeholder="30"
             value={draft.retentionDays ?? environment.retentionDays}
             min={1}
             max={365}
@@ -536,6 +549,8 @@ function LoggingEnvironmentSettings({
           <SettingsNumberRow
             label="Request limit"
             description="Per-window request limit for this environment"
+            help="Optional environment-wide request cap for each logging rate-limit window. Leave empty to use the configured per-token request default."
+            placeholder="Use token default"
             value={draft.rateLimitRequestsPerWindow ?? ""}
             min={1}
             disabled={!canEdit}
@@ -546,6 +561,8 @@ function LoggingEnvironmentSettings({
           <SettingsNumberRow
             label="Event limit"
             description="Per-window event limit for this environment"
+            help="Optional environment-wide event cap for each logging rate-limit window. Leave empty to use the configured per-token event default."
+            placeholder="Use token default"
             value={draft.rateLimitEventsPerWindow ?? ""}
             min={1}
             disabled={!canEdit}
@@ -562,16 +579,19 @@ function LoggingEnvironmentSettings({
 function SettingsPanel({
   title,
   description,
+  icon,
   children,
 }: {
   title: string;
   description: string;
+  icon?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <PanelShell
       title={title}
       description={description}
+      icon={icon}
       bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
     >
       {children}
@@ -611,6 +631,8 @@ function SettingsTextRow({
 function SettingsNumberRow({
   label,
   description,
+  help,
+  placeholder,
   value,
   min,
   max,
@@ -619,6 +641,8 @@ function SettingsNumberRow({
 }: {
   label: string;
   description: string;
+  help?: string;
+  placeholder?: string;
   value: number | "";
   min?: number;
   max?: number;
@@ -626,20 +650,18 @@ function SettingsNumberRow({
   onChange: (value: number | null) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
+    <SettingsControlRow title={label} description={description} help={help}>
       <Input
-        className="w-[180px]"
+        aria-label={label}
+        className="w-full sm:w-[180px]"
         type="number"
         min={min}
         max={max}
+        placeholder={placeholder}
         disabled={disabled}
         value={value}
         onChange={(event) => onChange(event.target.value ? Number(event.target.value) : null)}
       />
-    </div>
+    </SettingsControlRow>
   );
 }

@@ -12,6 +12,10 @@ import { createChildLogger } from '@/lib/logger.js';
 import type { AISandboxArtifactService } from '@/modules/ai/ai.sandbox-artifact.service.js';
 import type { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
+import {
+  type GatewayInternalImageCandidate,
+  selectObsoleteGatewayConnectorImages,
+} from '@/modules/docker/docker-internal-images.js';
 import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
@@ -616,49 +620,37 @@ export class HousekeepingService {
   }
 
   private async pruneDockerImages(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> {
+    let cleaned = 0;
+    let freedBytes = 0;
     try {
-      // Get current running image
       const selfInfo = await this.dockerService.inspectSelf();
       const currentImage = selfInfo.Config.Image;
       const imageBase = currentImage.includes(':')
         ? currentImage.substring(0, currentImage.lastIndexOf(':'))
         : currentImage;
-
-      // List all images
       const listRes = await this.dockerRequest('GET', `/images/json`);
-      if (listRes.statusCode !== 200) return { itemsCleaned: 0 };
-
-      const images = JSON.parse(listRes.body) as Array<{
-        Id: string;
-        RepoTags: string[] | null;
-        Size: number;
-      }>;
-
-      let cleaned = 0;
-      let freedBytes = 0;
-
-      for (const img of images) {
-        const tags = img.RepoTags || [];
-        // Only consider gateway images
-        const isGatewayImage = tags.some((t) => t.startsWith(`${imageBase}:`));
-        if (!isGatewayImage) continue;
-
-        // Don't remove the currently running image
-        const isCurrentImage = tags.some((t) => t === currentImage);
-        if (isCurrentImage) continue;
-
-        try {
-          const delRes = await this.dockerRequest('DELETE', `/images/${encodeURIComponent(img.Id)}`);
-          if (delRes.statusCode === 200) {
-            cleaned++;
-            freedBytes += img.Size;
+      if (listRes.statusCode === 200) {
+        const images = JSON.parse(listRes.body) as Array<{
+          Id: string;
+          RepoTags: string[] | null;
+          Size: number;
+        }>;
+        for (const img of images) {
+          const tags = img.RepoTags || [];
+          if (!tags.some((tag) => tag.startsWith(`${imageBase}:`))) continue;
+          if (tags.some((tag) => tag === currentImage)) continue;
+          try {
+            const delRes = await this.dockerRequest('DELETE', `/images/${encodeURIComponent(img.Id)}`);
+            if (delRes.statusCode === 200) {
+              cleaned += 1;
+              freedBytes += img.Size;
+            }
+          } catch {
+            // Keep cleaning other images.
           }
-        } catch {
-          // ignore individual failures
         }
       }
 
-      // Also clean up stopped sidecar containers
       const labels = selfInfo.Config.Labels;
       const composeProject = labels['com.docker.compose.project'];
       if (composeProject) {
@@ -675,19 +667,31 @@ export class HousekeepingService {
           for (const c of containers) {
             try {
               await this.dockerService.removeContainer(c.Id);
-              cleaned++;
+              cleaned += 1;
             } catch {
-              // ignore
+              // Keep cleaning other sidecars.
             }
           }
         }
       }
-
-      return { itemsCleaned: cleaned, spaceFreedBytes: freedBytes };
     } catch (error) {
-      logger.warn('Docker pruning failed', { error });
-      return { itemsCleaned: 0 };
+      logger.warn('Gateway host Docker pruning failed', { error });
     }
+
+    for (const candidate of await this.getObsoleteConnectorImages()) {
+      try {
+        await this.dockerManagementService?.removeGatewayInternalImage(candidate.nodeId, candidate.id);
+        cleaned += 1;
+        freedBytes += candidate.size;
+      } catch (error) {
+        logger.warn('Failed to remove obsolete Gateway connector image', {
+          nodeId: candidate.nodeId,
+          imageId: candidate.id,
+          error,
+        });
+      }
+    }
+    return { itemsCleaned: cleaned, spaceFreedBytes: freedBytes };
   }
 
   // ── Stats Helpers ───────────────────────────────────────────────
@@ -789,6 +793,8 @@ export class HousekeepingService {
   }
 
   private async getDockerImageStats(): Promise<HousekeepingStats['dockerImages']> {
+    let oldCount = 0;
+    let reclaimable = 0;
     try {
       const selfInfo = await this.dockerService.inspectSelf();
       const currentImage = selfInfo.Config.Image;
@@ -797,31 +803,52 @@ export class HousekeepingService {
         : currentImage;
 
       const res = await this.dockerRequest('GET', '/images/json');
-      if (res.statusCode !== 200) return { oldImageCount: 0, reclaimableBytes: 0 };
-
-      const images = JSON.parse(res.body) as Array<{
-        Id: string;
-        RepoTags: string[] | null;
-        Size: number;
-      }>;
-
-      let oldCount = 0;
-      let reclaimable = 0;
-
-      for (const img of images) {
-        const tags = img.RepoTags || [];
-        const isGateway = tags.some((t) => t.startsWith(`${imageBase}:`));
-        if (!isGateway) continue;
-        const isCurrent = tags.some((t) => t === currentImage);
-        if (isCurrent) continue;
-        oldCount++;
-        reclaimable += img.Size;
+      if (res.statusCode === 200) {
+        const images = JSON.parse(res.body) as Array<{
+          Id: string;
+          RepoTags: string[] | null;
+          Size: number;
+        }>;
+        for (const img of images) {
+          const tags = img.RepoTags || [];
+          if (!tags.some((tag) => tag.startsWith(`${imageBase}:`))) continue;
+          if (tags.some((tag) => tag === currentImage)) continue;
+          oldCount += 1;
+          reclaimable += img.Size;
+        }
       }
-
-      return { oldImageCount: oldCount, reclaimableBytes: reclaimable };
     } catch {
-      return { oldImageCount: 0, reclaimableBytes: 0 };
+      // Managed-node connector stats remain available without local Docker.
     }
+    const connectorImages = await this.getObsoleteConnectorImages();
+    return {
+      oldImageCount: oldCount + connectorImages.length,
+      reclaimableBytes: reclaimable + connectorImages.reduce((sum, image) => sum + image.size, 0),
+    };
+  }
+
+  private async getObsoleteConnectorImages(): Promise<Array<GatewayInternalImageCandidate & { nodeId: string }>> {
+    if (!this.dockerManagementService) return [];
+    const dockerNodes = await this.db
+      .select({ id: nodes.id })
+      .from(nodes)
+      .where(and(eq(nodes.type, 'docker'), eq(nodes.status, 'online')));
+    const candidates: Array<GatewayInternalImageCandidate & { nodeId: string }> = [];
+    for (const node of dockerNodes) {
+      try {
+        const images = await this.dockerManagementService.listAllImages(node.id);
+        if (!Array.isArray(images)) continue;
+        candidates.push(
+          ...selectObsoleteGatewayConnectorImages(images, this._env.SECURE_LINK_CONNECTOR_IMAGE).map((image) => ({
+            ...image,
+            nodeId: node.id,
+          }))
+        );
+      } catch (error) {
+        logger.warn('Failed to inspect Gateway connector images', { nodeId: node.id, error });
+      }
+    }
+    return candidates;
   }
 
   private async findOrphanedVolumes(

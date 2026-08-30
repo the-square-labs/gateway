@@ -278,21 +278,23 @@ export function ManagedDatabaseSettingsTab({
         </div>
 
         {database.type !== "redis" && (
-          <SettingsControlRow
-            title="Interactive query budget"
-            description="Total SQL Console execution budget shared dynamically between statements (30–600 seconds)"
-          >
-            <Input
-              aria-label="Interactive query budget"
-              type="number"
-              min={30}
-              max={600}
-              value={interactiveQueryBudgetSeconds}
-              onChange={(event) => setInteractiveQueryBudgetSeconds(event.target.value)}
-              disabled={saving || confirmingRecreate || managed.status === "paused"}
-              className="w-32"
-            />
-          </SettingsControlRow>
+          <PanelShell>
+            <SettingsControlRow
+              title="Interactive query budget"
+              description="Total SQL Console execution budget shared dynamically between statements (30–600 seconds)"
+            >
+              <Input
+                aria-label="Interactive query budget"
+                type="number"
+                min={30}
+                max={600}
+                value={interactiveQueryBudgetSeconds}
+                onChange={(event) => setInteractiveQueryBudgetSeconds(event.target.value)}
+                disabled={saving || confirmingRecreate || managed.status === "paused"}
+                className="w-32"
+              />
+            </SettingsControlRow>
+          </PanelShell>
         )}
 
         <PanelShell

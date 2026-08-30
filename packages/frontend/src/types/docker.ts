@@ -85,6 +85,7 @@ export interface DockerContainer {
   healthCheckId?: string | null;
   healthCheckEnabled?: boolean;
   healthStatus?: "online" | "offline" | "degraded" | "unknown" | "disabled";
+  secureLinkDown?: boolean;
   lastHealthCheckAt?: string | null;
   healthHistory?: Array<{ ts: string; status: string; responseMs?: number; slow?: boolean }>;
   folderId?: string | null;
@@ -437,6 +438,7 @@ export interface DockerVolume {
   managementState?: "managed" | "legacy";
   storageKind?: "regular" | "disk-image";
   capacityBytes?: number | null;
+  usedBytes?: number | null;
   adoptable?: boolean;
   adoptionReason?: string;
   createdAt?: string;

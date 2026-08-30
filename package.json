@@ -2,7 +2,7 @@
   "name": "gateway",
   "version": "1.0.0",
   "private": true,
-  "description": "Self-hosted infrastructure control plane",
+  "description": "Infrastructure control plane",
   "scripts": {
     "dev": "nx run backend:dev",
     "dev:frontend": "nx run frontend:dev",

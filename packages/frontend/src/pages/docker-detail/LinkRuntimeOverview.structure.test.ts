@@ -16,7 +16,7 @@ describe("Docker container Link Runtime placement", () => {
     expect(containerDetailSource).not.toContain('<TabsTrigger value="link-runtime">');
     expect(containerDetailSource).not.toContain('<TabsContent value="link-runtime"');
 
-    const runtimeIndex = overviewSource.indexOf("<LinkRuntimeTab links={databaseLinks} />");
+    const runtimeIndex = overviewSource.indexOf("<LinkRuntimeTab");
     const activityIndex = overviewSource.indexOf('title="Recent Activity"');
 
     expect(runtimeIndex).toBeGreaterThan(-1);

@@ -60,12 +60,14 @@ export function DockerImages({
   onPullRef,
   onCreateFolderRef,
   onRefreshRef,
+  onPruneRef,
   fixedNodeId,
 }: {
   embedded?: boolean;
   onPullRef?: (fn: () => void) => void;
   onCreateFolderRef?: (fn: () => void) => void;
   onRefreshRef?: (fn: () => void) => void;
+  onPruneRef?: (fn: () => void) => void;
   fixedNodeId?: string;
 } = {}) {
   const navigate = useNavigate();
@@ -77,6 +79,8 @@ export function DockerImages({
   const storeDockerNodes = useDockerStore((s) => s.dockerNodes);
   const dockerNodesLoaded = useDockerStore((s) => s.dockerNodesLoaded);
   const visibleNodeId = fixedNodeId ?? selectedNodeId;
+  const pruneNodeId =
+    visibleNodeId ?? (storeDockerNodes.length === 1 ? storeDockerNodes[0]?.id : null);
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
@@ -246,21 +250,21 @@ export function DockerImages({
 
   const handlePrune = useCallback(async () => {
     const ok = await confirm({
-      title: "Prune Unused Images",
-      description: "Remove all dangling (unused) images from this node?",
+      title: "Prune Dangling Images",
+      description: "Remove dangling images from this node? Tagged unused images are preserved.",
       confirmLabel: "Prune",
     });
     if (!ok) return;
     setPruning(true);
     try {
-      if (!selectedNodeId) {
+      if (!pruneNodeId) {
         toast.error("Select a node to prune images");
         return;
       }
-      const result = await api.pruneImages(selectedNodeId);
-      const freed = (result as Record<string, unknown>).spaceReclaimed;
+      const result = await api.pruneImages(pruneNodeId);
+      const freed = result.spaceReclaimed ?? result.SpaceReclaimed;
       toast.success(
-        freed ? `Pruned images, freed ${formatBytes(Number(freed))}` : "Pruned unused images"
+        freed ? `Pruned images, freed ${formatBytes(Number(freed))}` : "Pruned dangling images"
       );
       fetchImages(undefined, search);
     } catch (err) {
@@ -268,7 +272,10 @@ export function DockerImages({
     } finally {
       setPruning(false);
     }
-  }, [fetchImages, selectedNodeId, search]);
+  }, [fetchImages, pruneNodeId, search]);
+  useEffect(() => {
+    onPruneRef?.(() => void handlePrune());
+  }, [handlePrune, onPruneRef]);
 
   const openImageDetails = useCallback(
     (image: DockerImageListItem) => {
@@ -470,7 +477,7 @@ export function DockerImages({
                     hasScope(`docker:images:delete:${selectedNodeId}`)
                       ? [
                           {
-                            label: pruning ? "Pruning..." : "Prune Unused",
+                            label: pruning ? "Pruning..." : "Prune Dangling",
                             icon: <Trash2 className="h-4 w-4" />,
                             onClick: handlePrune,
                             disabled: pruning,
@@ -506,7 +513,7 @@ export function DockerImages({
                   hasScope(`docker:images:delete:${selectedNodeId}`)) && (
                   <Button variant="outline" onClick={handlePrune} disabled={pruning}>
                     <Trash2 className="h-4 w-4 mr-1" />
-                    {pruning ? "Pruning..." : "Prune Unused"}
+                    {pruning ? "Pruning..." : "Prune Dangling"}
                   </Button>
                 )}
                 {(hasScope("docker:images:pull") ||

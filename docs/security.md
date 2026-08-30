@@ -6,7 +6,7 @@ Gateway is a privileged infrastructure control plane, so its security model is b
 
 ## Secure-By-Default Principles
 
-Gateway defaults to security controls that reduce the most common self-hosted control-plane risks:
+Gateway defaults to security controls that reduce the most common privately operated control-plane risks:
 
 - First-run access is protected by a one-time, 24-hour setup code. Gateway stores only its identifier, expiry, and SHA-256 hash.
 - OIDC, password, and email one-time-code sign-in are explicit administrator choices. Password hashes use the local credential store; SMTP and OIDC secrets are envelope-encrypted with `PKI_MASTER_KEY`.

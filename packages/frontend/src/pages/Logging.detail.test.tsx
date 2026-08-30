@@ -118,6 +118,53 @@ describe("Logging detail views", () => {
     });
   });
 
+  it("uses standard settings spacing, placeholders, help, and accessible labels", () => {
+    const { container } = renderWithRouter(
+      <LoggingEnvironmentDetail
+        environment={makeEnvironment({
+          rateLimitRequestsPerWindow: null,
+          rateLimitEventsPerWindow: null,
+        })}
+        schemas={[makeSchema()]}
+        loggingEnabled={true}
+        loading={false}
+        activeTab="settings"
+        canEdit={true}
+        canDelete={false}
+        canCreateToken={false}
+        canDeleteToken={false}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+      { path: "/logging/environments/:id/:tab", route: "/logging/environments/env-1/settings" }
+    );
+
+    expect(container.querySelector(".lg\\:grid-cols-2")).toHaveClass("gap-4");
+    expect(container.querySelector(".lucide-braces")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-gauge")).toBeInTheDocument();
+    expect(screen.getByLabelText("Attached schema")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enabled" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Retention days")).toHaveAttribute("placeholder", "30");
+    expect(screen.getByLabelText("Request limit")).toHaveAttribute(
+      "placeholder",
+      "Use token default"
+    );
+    expect(screen.getByLabelText("Event limit")).toHaveAttribute(
+      "placeholder",
+      "Use token default"
+    );
+    for (const label of [
+      "Attached schema",
+      "Mode",
+      "Enabled",
+      "Retention days",
+      "Request limit",
+      "Event limit",
+    ]) {
+      expect(screen.getByRole("button", { name: `About ${label}` })).toBeInTheDocument();
+    }
+  });
+
   it("shows animated SDK and API connection instructions from the environment header", async () => {
     const user = userEvent.setup();
 

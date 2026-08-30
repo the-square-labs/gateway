@@ -1,6 +1,12 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerDeployments, dockerManagedVolumes, nodes } from '@/db/schema/index.js';
+import {
+  dockerDeployments,
+  dockerManagedVolumes,
+  managedDatabaseBindings,
+  managedDatabaseInstances,
+  nodes,
+} from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
@@ -43,6 +49,7 @@ import { deriveDockerGpuAttachment, hasDockerGpuV1Capability } from './docker-gp
 import type { DockerHealthCheckService } from './docker-health-check.service.js';
 import type { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import {
+  listAllImages as listAllDockerImages,
   listImages as listDockerImages,
   pruneImages as pruneDockerImages,
   pullImage as pullDockerImage,
@@ -54,6 +61,7 @@ import {
   inspectUserContainer as inspectUserSelectedContainer,
   isGatewayInternalContainer,
 } from './docker-internal-containers.js';
+import { dockerImageId, findGatewayInternalImage, resolveDockerImageByIdentifier } from './docker-internal-images.js';
 import {
   type ContainerAction,
   type DockerLifecycleWatchContext,
@@ -667,6 +675,51 @@ export class DockerManagementService {
 
   // ─── Container operations ──────────────────────────────────────────
 
+  private async getDirectContainerDatabaseLinks(nodeId: string, containerNames: string[]) {
+    if (containerNames.length === 0 || typeof (this.db as { select?: unknown }).select !== 'function') {
+      return new Map<string, Array<Record<string, unknown>>>();
+    }
+    const rows = await this.db
+      .select({
+        databaseId: managedDatabaseInstances.id,
+        databaseName: managedDatabaseInstances.name,
+        databaseType: managedDatabaseInstances.type,
+        bindingId: managedDatabaseBindings.id,
+        managedDatabaseId: managedDatabaseBindings.managedDatabaseId,
+        targetNodeId: managedDatabaseBindings.targetNodeId,
+        targetResourceId: managedDatabaseBindings.targetResourceId,
+        status: managedDatabaseBindings.status,
+        lastError: managedDatabaseBindings.lastError,
+      })
+      .from(managedDatabaseBindings)
+      .innerJoin(managedDatabaseInstances, eq(managedDatabaseInstances.id, managedDatabaseBindings.managedDatabaseId))
+      .where(
+        and(
+          eq(managedDatabaseBindings.targetNodeId, nodeId),
+          eq(managedDatabaseBindings.targetType, 'container'),
+          inArray(managedDatabaseBindings.targetResourceId, containerNames)
+        )
+      );
+    const byContainer = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of rows) {
+      const links = byContainer.get(row.targetResourceId) ?? [];
+      links.push({
+        database: { id: row.databaseId, name: row.databaseName, type: row.databaseType },
+        binding: {
+          id: row.bindingId,
+          managedDatabaseId: row.managedDatabaseId,
+          targetNodeId: row.targetNodeId,
+          targetType: 'container',
+          targetResourceId: row.targetResourceId,
+          status: row.status,
+          lastError: row.lastError,
+        },
+      });
+      byContainer.set(row.targetResourceId, links);
+    }
+    return byContainer;
+  }
+
   async listContainers(nodeId: string) {
     await this.validateDockerNode(nodeId);
     const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
@@ -789,6 +842,10 @@ export class DockerManagementService {
               visibleContainers.map((c: any) => ((c.name ?? c.Name ?? '') as string).replace(/^\//, '')).filter(Boolean)
             )
           : new Map();
+      const containerNames = visibleContainers
+        .map((container: any) => String(container.name ?? container.Name ?? '').replace(/^\/+/, ''))
+        .filter(Boolean);
+      const databaseLinks = await this.getDirectContainerDatabaseLinks(nodeId, containerNames);
       for (const c of visibleContainers) {
         const cName = ((c.name ?? c.Name ?? '') as string).replace(/^\//, '');
         if (!cName) continue;
@@ -812,6 +869,7 @@ export class DockerManagementService {
           c.healthStatus = health.healthStatus;
           c.lastHealthCheckAt = health.lastHealthCheckAt;
         }
+        c.secureLinkDown = (databaseLinks.get(cName) ?? []).some((link: any) => link.binding?.status === 'error');
       }
       if (this.deploymentService) {
         const deploymentRows = await this.deploymentService.syntheticRows(nodeId);
@@ -856,6 +914,17 @@ export class DockerManagementService {
   async decoratePublicContainerSnapshot(nodeId: string, containers: any) {
     const publicContainers = Array.isArray(containers) ? filterGatewayInternalContainers(containers) : containers;
     return this.decorateContainerSnapshot(nodeId, publicContainers);
+  }
+
+  /** User-facing inspect decoration with non-secret direct database-link metadata. */
+  async decoratePublicContainerDetailSnapshot(nodeId: string, data: any) {
+    const decorated = await this.decorateContainerDetailSnapshot(nodeId, data);
+    if (!decorated) return decorated;
+    const cName = String(decorated.Name ?? decorated.name ?? '').replace(/^\/+/, '');
+    const databaseLinks = cName ? await this.getDirectContainerDatabaseLinks(nodeId, [cName]) : new Map();
+    decorated.databaseLinks = databaseLinks.get(cName) ?? [];
+    decorated.secureLinkDown = decorated.databaseLinks.some((link: any) => link.binding?.status === 'error');
+    return decorated;
   }
 
   async inspectContainer(nodeId: string, containerId: string) {
@@ -1155,6 +1224,12 @@ export class DockerManagementService {
     return listDockerImages(this.imageOperationContext(), nodeId);
   }
 
+  /** Raw image inventory for reconciliation and housekeeping only. */
+  async listAllImages(nodeId: string) {
+    await this.validateDockerNode(nodeId);
+    return listAllDockerImages(this.imageOperationContext(), nodeId);
+  }
+
   async pullImage(nodeId: string, imageRef: string, registryAuth?: string, userId?: string, registryId?: string) {
     await this.validateDockerNode(nodeId);
     return pullDockerImage(this.imageOperationContext(), nodeId, imageRef, registryAuth, userId, registryId);
@@ -1173,7 +1248,34 @@ export class DockerManagementService {
 
   async removeImage(nodeId: string, imageId: string, force: boolean, userId: string) {
     await this.validateDockerNode(nodeId);
-    await removeDockerImage(this.imageOperationContext(), nodeId, imageId, force, userId);
+    const images = await listAllDockerImages(this.imageOperationContext(), nodeId);
+    const imageList = Array.isArray(images) ? images : [];
+    const image = resolveDockerImageByIdentifier(imageList, imageId);
+    if (!image) {
+      throw new AppError(404, 'DOCKER_IMAGE_NOT_FOUND', 'Docker image was not found');
+    }
+    if (findGatewayInternalImage(imageList, imageId)) {
+      throw new AppError(409, 'GATEWAY_INTERNAL_IMAGE', 'Gateway-owned images cannot be removed manually');
+    }
+    const canonicalImageId = dockerImageId(image);
+    if (!canonicalImageId) {
+      throw new AppError(404, 'DOCKER_IMAGE_NOT_FOUND', 'Docker image was not found');
+    }
+    await removeDockerImage(this.imageOperationContext(), nodeId, canonicalImageId, force, userId);
+  }
+
+  async removeGatewayInternalImage(nodeId: string, imageId: string) {
+    await this.validateDockerNode(nodeId);
+    const images = await listAllDockerImages(this.imageOperationContext(), nodeId);
+    const image = findGatewayInternalImage(Array.isArray(images) ? images : [], imageId);
+    if (!image) {
+      throw new AppError(404, 'GATEWAY_INTERNAL_IMAGE_NOT_FOUND', 'Gateway-owned image was not found');
+    }
+    const canonicalImageId = dockerImageId(image);
+    if (!canonicalImageId) {
+      throw new AppError(404, 'GATEWAY_INTERNAL_IMAGE_NOT_FOUND', 'Gateway-owned image was not found');
+    }
+    await removeDockerImage(this.imageOperationContext(), nodeId, canonicalImageId, false, 'system');
   }
 
   async pruneImages(nodeId: string, userId: string) {

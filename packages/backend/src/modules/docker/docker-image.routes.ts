@@ -12,6 +12,7 @@ import {
 } from './docker.docs.js';
 import { ImagePullSchema } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
+import { filterGatewayInternalImages } from './docker-internal-images.js';
 import { DockerRegistryService } from './docker-registry.service.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 
@@ -74,7 +75,7 @@ export function registerImageRoutes(router: OpenAPIHono<AppEnv>) {
       const data = snapshot.data;
       if (!Array.isArray(data)) return c.json({ data });
       const search = c.req.query('search')?.trim().toLowerCase();
-      const compacted = data
+      const compacted = filterGatewayInternalImages(data)
         .filter((item) => matchesImageSearch(item, search))
         .map((item) => ({
           ...compactImageListItem(item),

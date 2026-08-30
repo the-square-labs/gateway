@@ -26,6 +26,23 @@ function createService(dispatch: { sendDockerImageCommand: ReturnType<typeof vi.
 }
 
 describe('DockerManagementService image operations', () => {
+  it('keeps raw internal inventory available while filtering public image lists', async () => {
+    const images = [
+      { Id: 'user', RepoTags: ['acme/api:latest'] },
+      {
+        Id: 'internal',
+        RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:abc'],
+      },
+    ];
+    const dispatch = {
+      sendDockerImageCommand: vi.fn().mockResolvedValue({ success: true, detail: JSON.stringify(images) }),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.listImages('node-1')).resolves.toEqual([images[0]]);
+    await expect(service.listAllImages('node-1')).resolves.toEqual(images);
+  });
+
   it('pulls images in the background, updates task state, remembers registry, and emits changes', async () => {
     const dispatch = {
       sendDockerImageCommand: vi.fn().mockResolvedValue({ success: true, detail: '"pulled"' }),
@@ -113,7 +130,11 @@ describe('DockerManagementService image operations', () => {
 
   it('removes images with audit and image change events', async () => {
     const dispatch = {
-      sendDockerImageCommand: vi.fn().mockResolvedValue({ success: true }),
+      sendDockerImageCommand: vi.fn(async (_nodeId: string, action: string) =>
+        action === 'list'
+          ? { success: true, detail: JSON.stringify([{ Id: 'sha256:image', RepoTags: ['acme/api:latest'] }]) }
+          : { success: true }
+      ),
     };
     const { service, audit } = createService(dispatch);
     const eventBus = { publish: vi.fn() };
@@ -139,12 +160,96 @@ describe('DockerManagementService image operations', () => {
     });
   });
 
+  it('rejects user deletion of Gateway-owned images', async () => {
+    const dispatch = {
+      sendDockerImageCommand: vi.fn(async (_nodeId: string, action: string) =>
+        action === 'list'
+          ? {
+              success: true,
+              detail: JSON.stringify([
+                {
+                  Id: 'sha256:internal',
+                  RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:abc'],
+                },
+              ]),
+            }
+          : { success: true }
+      ),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.removeImage('node-1', 'sha256:internal', true, 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'GATEWAY_INTERNAL_IMAGE',
+    });
+    expect(dispatch.sendDockerImageCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
+  });
+
+  it('rejects Gateway-owned images addressed by an unprefixed short image ID', async () => {
+    const dispatch = {
+      sendDockerImageCommand: vi.fn(async (_nodeId: string, action: string) =>
+        action === 'list'
+          ? {
+              success: true,
+              detail: JSON.stringify([
+                {
+                  Id: 'sha256:abcdef1234567890',
+                  RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:abc'],
+                },
+              ]),
+            }
+          : { success: true }
+      ),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.removeImage('node-1', 'abcdef123456', true, 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'GATEWAY_INTERNAL_IMAGE',
+    });
+    expect(dispatch.sendDockerImageCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
+  });
+
+  it('dispatches the canonical full image ID for a unique short user image ID', async () => {
+    const dispatch = {
+      sendDockerImageCommand: vi.fn(async (_nodeId: string, action: string) =>
+        action === 'list'
+          ? {
+              success: true,
+              detail: JSON.stringify([{ Id: 'sha256:1234567890abcdef', RepoTags: ['acme/api:latest'] }]),
+            }
+          : { success: true }
+      ),
+    };
+    const { service } = createService(dispatch);
+
+    await service.removeImage('node-1', '1234567890ab', false, 'user-1');
+
+    expect(dispatch.sendDockerImageCommand).toHaveBeenCalledWith('node-1', 'remove', {
+      imageRef: 'sha256:1234567890abcdef',
+      force: false,
+    });
+  });
+
   it('returns prune results and emits a wildcard image change event', async () => {
     const dispatch = {
-      sendDockerImageCommand: vi.fn().mockResolvedValue({
-        success: true,
-        detail: JSON.stringify({ ImagesDeleted: ['old'], SpaceReclaimed: 100 }),
-      }),
+      sendDockerImageCommand: vi.fn(async (_nodeId: string, action: string) =>
+        action === 'list'
+          ? {
+              success: true,
+              detail: JSON.stringify([
+                { Id: 'old', RepoTags: null, Size: 100 },
+                {
+                  Id: 'internal',
+                  RepoTags: null,
+                  RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:abc'],
+                  Size: 200,
+                },
+                { Id: 'tagged', RepoTags: ['acme/api:old'], Size: 300 },
+              ]),
+            }
+          : { success: true }
+      ),
     };
     const { service, audit } = createService(dispatch);
     const eventBus = { publish: vi.fn() };
@@ -155,7 +260,18 @@ describe('DockerManagementService image operations', () => {
       SpaceReclaimed: 100,
     });
 
-    expect(dispatch.sendDockerImageCommand).toHaveBeenCalledWith('node-1', 'prune');
+    expect(dispatch.sendDockerImageCommand).toHaveBeenCalledWith('node-1', 'remove', {
+      imageRef: 'old',
+      force: false,
+    });
+    expect(dispatch.sendDockerImageCommand).not.toHaveBeenCalledWith('node-1', 'remove', {
+      imageRef: 'internal',
+      force: false,
+    });
+    expect(dispatch.sendDockerImageCommand).not.toHaveBeenCalledWith('node-1', 'remove', {
+      imageRef: 'tagged',
+      force: false,
+    });
     expect(audit.log).toHaveBeenCalledWith({
       action: 'docker.image.prune',
       userId: 'user-1',

@@ -242,9 +242,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
             <img src="/android-chrome-192x192.png" alt="Gateway" className="h-10 w-10" />
             <div>
               <p className="text-sm font-semibold">Gateway</p>
-              <p className="text-xs text-muted-foreground">
-                Self-hosted infrastructure control plane
-              </p>
+              <p className="text-xs text-muted-foreground">Infrastructure control plane</p>
             </div>
           </div>
         </div>
