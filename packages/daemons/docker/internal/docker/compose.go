@@ -25,6 +25,7 @@ const (
 	composeOperationCacheLimit        = 256
 	composeSidecarInitializationLimit = 5 * time.Second
 	composeSidecarPullLimit           = 5 * time.Minute
+	composeErrorDetailLimit           = 4 * 1024
 )
 
 var (
@@ -340,6 +341,12 @@ func composeOperationKey(projectID, operationID string) string {
 	return projectID + "\x00" + operationID
 }
 
+type composeSidecarCommandError struct {
+	detail string
+}
+
+func (e *composeSidecarCommandError) Error() string { return e.detail }
+
 func redactComposeExecutionError(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return errors.New("docker compose operation canceled")
@@ -347,7 +354,46 @@ func redactComposeExecutionError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errors.New("docker compose operation timed out")
 	}
+	var commandError *composeSidecarCommandError
+	if errors.As(err, &commandError) {
+		detail := safeComposeErrorDetail(commandError.detail)
+		if detail != "" {
+			return errors.New(detail)
+		}
+	}
 	return errors.New("docker compose operation failed")
+}
+
+func safeComposeErrorDetail(detail string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(detail), " "))
+	switch {
+	case strings.Contains(normalized, "port is already allocated"),
+		strings.Contains(normalized, "address already in use"),
+		strings.Contains(normalized, "bind for"):
+		return "Docker Compose could not publish a host port because it is already in use. Change the published port and create a new revision."
+	case strings.Contains(normalized, "authentication required"),
+		strings.Contains(normalized, "unauthorized"),
+		strings.Contains(normalized, "pull access denied"),
+		strings.Contains(normalized, "requested access to the resource is denied"):
+		return "Docker Compose could not authenticate to an image registry. Verify the registry credentials and image access."
+	case strings.Contains(normalized, "manifest unknown"),
+		strings.Contains(normalized, "no matching manifest"),
+		strings.Contains(normalized, "not found") && strings.Contains(normalized, "manifest"):
+		return "Docker Compose could not find a configured image tag for this node architecture. Verify the image name and tag."
+	case strings.Contains(normalized, "no such image"),
+		strings.Contains(normalized, "image is missing locally"):
+		return "A required image is not available on the Docker node. Run Pull & Apply or verify registry access."
+	case strings.Contains(normalized, "declared as external") && strings.Contains(normalized, "network"):
+		return "A required external Docker network was not found on the node. Create it or update the Compose configuration."
+	case strings.Contains(normalized, "declared as external") && strings.Contains(normalized, "volume"):
+		return "A required external Docker volume was not found on the node. Create it or update the Compose configuration."
+	case strings.Contains(normalized, "invalid reference format"):
+		return "A configured container image reference is invalid. Update the image name and create a new revision."
+	case strings.Contains(normalized, "container name") && strings.Contains(normalized, "already in use"):
+		return "A Compose container name is already in use on the Docker node. Rename or remove the conflicting container."
+	default:
+		return "docker compose operation failed"
+	}
 }
 
 // dockerComposeSidecar runs a pre-provisioned digest-pinned image through the

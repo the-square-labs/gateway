@@ -1420,7 +1420,7 @@ export class DockerComposeService {
       })
       .map(nameFor)
       .sort();
-    const expectsRunning = project.status !== 'stopped' && project.status !== 'missing';
+    const expectsRunning = project.desiredState === 'running';
     const drifted =
       project.managementState === 'managed' &&
       !!activeRevision &&

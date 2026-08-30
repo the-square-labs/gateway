@@ -264,6 +264,25 @@ func TestComposeExecutionErrorsAreRedacted(t *testing.T) {
 	}
 }
 
+func TestComposeCommandErrorReturnsOnlyAllowlistedDiagnostic(t *testing.T) {
+	err := redactComposeExecutionError(&composeSidecarCommandError{
+		detail: "Bind for 0.0.0.0:8080 failed: port is already allocated; token=super-secret",
+	})
+	if got := err.Error(); got != "Docker Compose could not publish a host port because it is already in use. Change the published port and create a new revision." {
+		t.Fatalf("unexpected detailed compose error: %q", got)
+	}
+	if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), "8080") {
+		t.Fatalf("allowlisted compose error leaked raw detail: %q", err.Error())
+	}
+
+	generic := redactComposeExecutionError(&composeSidecarCommandError{
+		detail: "multiline\nsecret value from user-authored yaml",
+	})
+	if got := generic.Error(); got != "docker compose operation failed" {
+		t.Fatalf("unexpected generic compose error: %q", got)
+	}
+}
+
 func TestComposeCapabilityRequiresInitializedExecutorAndGeneralProfile(t *testing.T) {
 	plugin := &DockerPlugin{cfg: &config.Config{}}
 	if containsCapability(plugin.BuildRegisterMessage("node-1").Capabilities, composeCapability) {

@@ -303,7 +303,8 @@ export function ComposeProjectEditor({
         revisionId = revision.id;
       }
       if (!targetProjectId || !revisionId) throw new Error("Compose revision was not created");
-      await api.startDockerComposeOperation(nodeId, targetProjectId, "apply", {
+      const operationAction = projectId ? "apply" : "pull_apply";
+      await api.startDockerComposeOperation(nodeId, targetProjectId, operationAction, {
         revisionId,
         idempotencyKey: createClientUuid(),
       });

@@ -475,10 +475,10 @@ export function DockerComposeProjectDetail() {
   }, [activityLoading, activityLoadingMore, activityNextCursor, activityOpen, loadActivity]);
 
   useEffect(() => {
-    if (project?.status === "stopped" && activeTab === "monitoring") {
+    if (project?.desiredState === "stopped" && activeTab === "monitoring") {
       setActiveTab("overview");
     }
-  }, [activeTab, project?.status, setActiveTab]);
+  }, [activeTab, project?.desiredState, setActiveTab]);
 
   const canManage =
     !!project &&
@@ -1095,7 +1095,7 @@ export function DockerComposeProjectDetail() {
             <TabsTrigger
               value="monitoring"
               className="gap-1.5"
-              disabled={project.status === "stopped"}
+              disabled={project.desiredState === "stopped"}
             >
               <Activity className="h-3.5 w-3.5" /> Monitoring
             </TabsTrigger>
@@ -1297,7 +1297,7 @@ export function DockerComposeProjectDetail() {
               description="Gateway-stored Compose YAML for the active revision. Editing creates a new immutable revision."
               actions={
                 project.managementState === "managed" && canManage ? (
-                  <Button size="sm" onClick={() => setRevisionOpen(true)}>
+                  <Button onClick={() => setRevisionOpen(true)}>
                     <FilePenLine className="mr-1 h-4 w-4" /> New revision
                   </Button>
                 ) : null
@@ -1488,7 +1488,18 @@ export function DockerComposeProjectDetail() {
                 }
               />
               <DetailRow label="Progress" value={selectedOperation.progress || "—"} />
-              <DetailRow label="Error" value={selectedOperation.error || "—"} />
+              <DetailRow
+                label="Error"
+                value={
+                  selectedOperation.error ? (
+                    <span className="whitespace-pre-wrap break-words text-left text-sm text-red-600 dark:text-red-400">
+                      {selectedOperation.error}
+                    </span>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
             </div>
           )}
         </DialogContent>

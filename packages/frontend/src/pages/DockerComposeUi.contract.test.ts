@@ -122,12 +122,23 @@ describe("Compose UI contract", () => {
 
   it("disables stopped monitoring and omits services without a running container", () => {
     const detail = source("pages/DockerComposeProjectDetail.tsx");
-    expect(detail).toContain('project?.status === "stopped" && activeTab === "monitoring"');
+    expect(detail).toContain('project?.desiredState === "stopped" && activeTab === "monitoring"');
     expect(detail).toContain('setActiveTab("overview")');
-    expect(detail).toContain('disabled={project.status === "stopped"}');
+    expect(detail).toContain('disabled={project.desiredState === "stopped"}');
     expect(detail).toContain('service.state === "running" && Boolean(service.containerIds[0])');
     expect(detail).toContain("<ComposeProcessesTable services={monitoredServices}");
     expect(detail).not.toContain("No runtime container is available for this service.");
+  });
+
+  it("uses shared empty state, default button sizing, and pulls the first project image", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    const editor = source("pages/compose/ComposeProjectEditor.tsx");
+    const table = source("components/ui/data-table.tsx");
+    expect(table).toContain('import { EmptyState } from "@/components/common/EmptyState"');
+    expect(table).toContain("<EmptyState message={emptyMessage} embedded={embedded} />");
+    expect(detail).toContain("<Button onClick={() => setRevisionOpen(true)}>");
+    expect(detail).not.toContain('<Button size="sm" onClick={() => setRevisionOpen(true)}>');
+    expect(editor).toContain('const operationAction = projectId ? "apply" : "pull_apply"');
   });
 
   it("retains Activity details through the close animation and matches failed badge text", () => {

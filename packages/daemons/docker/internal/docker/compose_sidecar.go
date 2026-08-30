@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -71,6 +72,16 @@ func (c *Client) runComposeSidecar(ctx context.Context, image, socketPath string
 			return fmt.Errorf("wait for compose sidecar: %s", result.Error.Message)
 		}
 		if result.StatusCode != 0 {
+			stdout, stderr, logErr := readContainerLogs(ctx, c, containerID, composeErrorDetailLimit)
+			if logErr == nil {
+				detail := strings.TrimSpace(stderr)
+				if detail == "" {
+					detail = strings.TrimSpace(string(stdout))
+				}
+				if detail != "" {
+					return &composeSidecarCommandError{detail: detail}
+				}
+			}
 			return errors.New("compose sidecar exited unsuccessfully")
 		}
 		return nil

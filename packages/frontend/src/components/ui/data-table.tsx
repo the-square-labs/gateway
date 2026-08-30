@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef } from "react";
+import { EmptyState } from "@/components/common/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { cn } from "@/lib/utils";
@@ -125,16 +126,7 @@ export function DataTable<T>({
   if (initialLoading && data.length === 0) return <Skeleton />;
 
   if (data.length === 0) {
-    return (
-      <div
-        className={cn(
-          "flex items-center justify-center bg-card py-16",
-          !embedded && "rounded-lg border border-border"
-        )}
-      >
-        {emptyContent ?? <p className="text-sm text-muted-foreground">{emptyMessage}</p>}
-      </div>
-    );
+    return emptyContent ?? <EmptyState message={emptyMessage} embedded={embedded} />;
   }
 
   const virtualItems = virtualizer.getVirtualItems();

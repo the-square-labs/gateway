@@ -173,6 +173,18 @@ describe('DockerComposeService', () => {
     expect(sanitized.length).toBeLessThanOrEqual(4000);
   });
 
+  it('does not mark a stopped managed project as drifted after a failed first apply', () => {
+    const compose = service();
+    const runtime = (compose as any).projectRuntime(
+      { containers: [], volumes: [], networks: [] },
+      'demo',
+      { ...PROJECT, managementState: 'managed', desiredState: 'stopped', status: 'failed' },
+      { configDigest: 'digest' }
+    );
+
+    expect(runtime.drifted).toBe(false);
+  });
+
   it.each([
     'start',
     'stop',
