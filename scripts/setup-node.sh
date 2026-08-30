@@ -667,6 +667,10 @@ if ! prompt_yes_no "Proceed with installation?" "Y"; then
 fi
 guide_blank
 
+nginx_version() {
+    nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9.]*\).*#\1#p' | head -n 1
+}
+
 dry_run_preview() {
     if command_exists nginx; then
         ok "nginx already installed ($(nginx_version))"
@@ -721,10 +725,6 @@ REPO
             warn "Cannot add nginx.org repo for ${OS_ID}. Falling back to system package."
             ;;
     esac
-}
-
-nginx_version() {
-    nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9.]*\).*#\1#p' | head -n 1
 }
 
 nginx_version_at_least() {

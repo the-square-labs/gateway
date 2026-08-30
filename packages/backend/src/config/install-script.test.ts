@@ -29,6 +29,7 @@ describe('nginx node installer baseline', () => {
     expect(source).toContain('LimitNOFILE=$' + '{NGINX_SERVICE_NOFILE_MIN}');
     expect(source).toContain('rc_ulimit="$' + '{rc_ulimit:-} -n %s"');
     expect(source).toContain('Effective nginx server_tokens must be off');
+    expect(source.indexOf('nginx_version() {')).toBeLessThan(source.indexOf('dry_run_preview() {'));
     const configTest = source.indexOf('if nginx -t >> "$LOG_FILE" 2>&1; then');
     const tokenCheck = source.indexOf('verify_nginx_server_tokens', configTest);
     const serviceAction = source.indexOf('systemctl restart nginx', tokenCheck);
