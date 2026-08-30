@@ -1,5 +1,13 @@
 [English](README.md) | [Русский](README.ru.md) | 中文
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/gateway-lockup-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/brand/gateway-lockup-light.png">
+    <img src="docs/assets/brand/gateway-lockup-light.png" width="720" alt="Good Gateway">
+  </picture>
+</p>
+
 # Gateway
 
 AI-first 但不依赖 AI 的自托管基础设施控制平面，用于 nginx ingress、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
@@ -69,20 +77,28 @@ curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts
 
 <table>
 <tr>
-<td align="center"><strong>Dashboard</strong></td>
-<td align="center"><strong>Nginx Monitoring</strong></td>
+<td align="center"><strong>基础设施总览</strong></td>
+<td align="center"><strong>AI Workspace 规划</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/dashboard.png" width="450" alt="Dashboard"></td>
-<td><img src="docs/screenshots/nginx-monitoring.png" width="450" alt="Nginx Monitoring"></td>
+<td><img src="docs/screenshots/product-tour/dashboard.png" width="100%" alt="Gateway dashboard，展示 routes、databases、nodes、health 和资源使用情况"></td>
+<td><img src="docs/screenshots/product-tour/ai-workspace.png" width="100%" alt="AI Workspace 展示经过审阅的基础设施部署计划"></td>
 </tr>
 <tr>
-<td align="center"><strong>Ingress Route Config</strong></td>
-<td align="center"><strong>Settings</strong></td>
+<td align="center"><strong>Workload 与 Secure Link runtime</strong></td>
+<td align="center"><strong>Managed database 可观测性</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Ingress Route Config"></td>
-<td><img src="docs/screenshots/settings.png" width="450" alt="Settings"></td>
+<td><img src="docs/screenshots/product-tour/container-secure-link.png" width="100%" alt="Docker workload overview 与 Secure Link runtime metrics"></td>
+<td><img src="docs/screenshots/product-tour/managed-database.png" width="100%" alt="Managed PostgreSQL database health 与 performance overview"></td>
+</tr>
+<tr>
+<td align="center"><strong>Ingress route 与 health</strong></td>
+<td align="center"><strong>分布式 node inventory</strong></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/product-tour/ingress-route.png" width="100%" alt="由 Docker Secure Link 支持的健康 ingress route"></td>
+<td><img src="docs/screenshots/product-tour/nodes.png" width="100%" alt="Gateway node inventory，包含 ingress、Docker、database、monitoring、build 和 relay roles"></td>
 </tr>
 </table>
 

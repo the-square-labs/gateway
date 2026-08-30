@@ -1,5 +1,13 @@
 [English](README.md) | Русский | [中文](README.cn.md)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/gateway-lockup-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/brand/gateway-lockup-light.png">
+    <img src="docs/assets/brand/gateway-lockup-light.png" width="720" alt="Good Gateway">
+  </picture>
+</p>
+
 # Gateway
 
 AI-first, но не AI-dependent платформа управления инфраструктурой для nginx ingress, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
@@ -69,20 +77,28 @@ Installer запускает Gateway и выводит одноразовый к
 
 <table>
 <tr>
-<td align="center"><strong>Dashboard</strong></td>
-<td align="center"><strong>Nginx Monitoring</strong></td>
+<td align="center"><strong>Обзор инфраструктуры</strong></td>
+<td align="center"><strong>Планирование в AI Workspace</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/dashboard.png" width="450" alt="Dashboard"></td>
-<td><img src="docs/screenshots/nginx-monitoring.png" width="450" alt="Nginx Monitoring"></td>
+<td><img src="docs/screenshots/product-tour/dashboard.png" width="100%" alt="Dashboard Gateway с маршрутами, базами данных, нодами, health status и использованием ресурсов"></td>
+<td><img src="docs/screenshots/product-tour/ai-workspace.png" width="100%" alt="AI Workspace с проверенным планом развертывания инфраструктуры"></td>
 </tr>
 <tr>
-<td align="center"><strong>Ingress Route Config</strong></td>
-<td align="center"><strong>Settings</strong></td>
+<td align="center"><strong>Workload и Secure Link runtime</strong></td>
+<td align="center"><strong>Наблюдаемость managed database</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Ingress Route Config"></td>
-<td><img src="docs/screenshots/settings.png" width="450" alt="Settings"></td>
+<td><img src="docs/screenshots/product-tour/container-secure-link.png" width="100%" alt="Обзор Docker workload с метриками Secure Link runtime"></td>
+<td><img src="docs/screenshots/product-tour/managed-database.png" width="100%" alt="Health и performance overview managed PostgreSQL database"></td>
+</tr>
+<tr>
+<td align="center"><strong>Ingress route и health</strong></td>
+<td align="center"><strong>Распределённые ноды</strong></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/product-tour/ingress-route.png" width="100%" alt="Работающий ingress route с Docker Secure Link"></td>
+<td><img src="docs/screenshots/product-tour/nodes.png" width="100%" alt="Список нод Gateway с ingress, Docker, database, monitoring, build и relay ролями"></td>
 </tr>
 </table>
 
