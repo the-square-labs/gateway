@@ -34,7 +34,6 @@ type OAuthScopeItem = {
 type ConsentResult = {
   kind: "approved" | "denied";
   redirectUrl: string;
-  delivered: boolean;
 };
 
 const OAUTH_ONLY_SCOPES: Record<string, Omit<OAuthScopeItem, "value">> = {
@@ -58,6 +57,18 @@ function scopeItem(scope: string): OAuthScopeItem {
     desc: match?.desc ?? scope,
     group: match?.group ?? "Scope",
   };
+}
+
+function isLoopbackCallbackUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function OAuthConsent() {
@@ -175,16 +186,8 @@ export function OAuthConsent() {
     });
   };
 
-  const openLoopbackCallbackWindow = () =>
-    window.open(
-      "about:blank",
-      "gateway-oauth-callback",
-      "popup,width=520,height=320,left=120,top=120"
-    );
-
   const approve = async () => {
     if (!requestId || finalSelectedScopes.length === 0 || hasMissingResourceSelection) return;
-    const callbackWindow = preview?.redirect.isExternal ? null : openLoopbackCallbackWindow();
     setIsSubmitting(true);
     try {
       const result = await api.approveOAuthConsent(requestId, finalSelectedScopes);
@@ -192,15 +195,12 @@ export function OAuthConsent() {
         window.location.href = result.redirectUrl;
         return;
       }
-      if (!callbackWindow) {
-        window.location.href = result.redirectUrl;
-        return;
+      if (!isLoopbackCallbackUrl(result.redirectUrl)) {
+        throw new Error("Gateway returned an invalid loopback OAuth callback");
       }
-      callbackWindow.location.replace(result.redirectUrl);
-      setResult({ kind: "approved", redirectUrl: result.redirectUrl, delivered: true });
+      setResult({ kind: "approved", redirectUrl: result.redirectUrl });
       setIsSubmitting(false);
     } catch (err) {
-      callbackWindow?.close();
       setError(err instanceof Error ? err.message : "Authorization failed");
       setIsSubmitting(false);
     }
@@ -208,7 +208,6 @@ export function OAuthConsent() {
 
   const deny = async () => {
     if (!requestId) return;
-    const callbackWindow = preview?.redirect.isExternal ? null : openLoopbackCallbackWindow();
     setIsSubmitting(true);
     try {
       const result = await api.denyOAuthConsent(requestId);
@@ -216,15 +215,12 @@ export function OAuthConsent() {
         window.location.href = result.redirectUrl;
         return;
       }
-      if (!callbackWindow) {
-        window.location.href = result.redirectUrl;
-        return;
+      if (!isLoopbackCallbackUrl(result.redirectUrl)) {
+        throw new Error("Gateway returned an invalid loopback OAuth callback");
       }
-      callbackWindow.location.replace(result.redirectUrl);
-      setResult({ kind: "denied", redirectUrl: result.redirectUrl, delivered: true });
+      setResult({ kind: "denied", redirectUrl: result.redirectUrl });
       setIsSubmitting(false);
     } catch (err) {
-      callbackWindow?.close();
       setError(err instanceof Error ? err.message : "Could not deny authorization");
       setIsSubmitting(false);
     }
@@ -255,6 +251,13 @@ export function OAuthConsent() {
   if (result) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <iframe
+          title="OAuth callback delivery"
+          src={result.redirectUrl}
+          className="hidden"
+          sandbox=""
+          aria-hidden="true"
+        />
         <div className="w-full max-w-md border border-border bg-card p-5">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center border border-border bg-muted">

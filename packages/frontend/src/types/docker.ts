@@ -240,6 +240,7 @@ export type DockerComposeProjectStatus =
   | "discovered"
   | "validating"
   | "applying"
+  | "deleting"
   | "running"
   | "stopped"
   | "degraded"

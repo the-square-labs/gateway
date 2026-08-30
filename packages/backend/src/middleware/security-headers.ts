@@ -37,11 +37,22 @@ const docsContentSecurityPolicy = {
   imgSrc: ["'self'", SCALAR_CDN_ORIGIN, 'data:', 'blob:'],
 };
 
+const oauthConsentContentSecurityPolicy = {
+  ...baseContentSecurityPolicy,
+  frameSrc: ['http:'],
+};
+
 const appSecureHeaders = secureHeaders({ contentSecurityPolicy: baseContentSecurityPolicy });
 const docsSecureHeaders = secureHeaders({ contentSecurityPolicy: docsContentSecurityPolicy });
+const oauthConsentSecureHeaders = secureHeaders({ contentSecurityPolicy: oauthConsentContentSecurityPolicy });
 
 export const securityHeadersMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const path = new URL(c.req.url).pathname;
-  const middleware = path === '/docs' || path.startsWith('/docs/') ? docsSecureHeaders : appSecureHeaders;
+  const middleware =
+    path === '/docs' || path.startsWith('/docs/')
+      ? docsSecureHeaders
+      : path === '/oauth/consent'
+        ? oauthConsentSecureHeaders
+        : appSecureHeaders;
   await middleware(c, next);
 };

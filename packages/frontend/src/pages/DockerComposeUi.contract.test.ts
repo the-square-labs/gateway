@@ -141,6 +141,15 @@ describe("Compose UI contract", () => {
     expect(editor).toContain('const operationAction = projectId ? "apply" : "pull_apply"');
   });
 
+  it("treats project deletion as destructive runtime cleanup", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain("project-owned volumes, revisions, and secrets");
+    expect(detail).toContain('confirmLabel: "Delete everything"');
+    expect(detail).toContain("Compose project and runtime resources deleted");
+    expect(detail).not.toContain("const projectCanBeDeleted");
+    expect(detail).not.toContain("Bring the project down before deleting it");
+  });
+
   it("retains Activity details through the close animation and matches failed badge text", () => {
     const detail = source("pages/DockerComposeProjectDetail.tsx");
     expect(detail).toContain("open={activityDetailsOpen}");

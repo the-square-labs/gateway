@@ -185,6 +185,115 @@ describe('DockerComposeService', () => {
     expect(runtime.drifted).toBe(false);
   });
 
+  it('removes Compose runtime resources before deleting project metadata', async () => {
+    const compose = service();
+    const refreshNow = vi.fn().mockResolvedValue(undefined);
+    (compose as any).snapshotReconciler = { refreshNow };
+    vi.spyOn(compose as any, 'getRevision').mockResolvedValue({ configDigest: 'digest' });
+    vi.spyOn(compose as any, 'loadNodeRuntime')
+      .mockResolvedValueOnce({
+        containers: [
+          {
+            name: 'demo-web-1',
+            state: 'exited',
+            labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.service': 'web' },
+          },
+        ],
+        volumes: [
+          {
+            name: 'demo_data',
+            labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.volume': 'data' },
+          },
+        ],
+        networks: [
+          {
+            name: 'demo_default',
+            labels: { 'com.docker.compose.project': 'demo', 'com.docker.compose.network': 'default' },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ containers: [], volumes: [], networks: [] });
+    const startOperation = vi
+      .spyOn(compose, 'startOperation')
+      .mockResolvedValueOnce({ id: 'down-operation' } as never)
+      .mockResolvedValueOnce({ id: 'volume-operation' } as never);
+    const waitForOperation = vi.spyOn(compose, 'waitForOperation').mockResolvedValue({} as never);
+    const project = {
+      ...PROJECT,
+      managementState: 'managed',
+      activeRevisionId: '33333333-3333-4333-8333-333333333333',
+    };
+
+    await expect((compose as any).cleanupProjectRuntime(project, 'user-1')).resolves.toEqual({
+      removedVolumes: ['demo_data'],
+    });
+    expect(startOperation).toHaveBeenNthCalledWith(
+      1,
+      project.nodeId,
+      project.id,
+      'down',
+      expect.objectContaining({ removeOrphans: true }),
+      'user-1',
+      true
+    );
+    expect(startOperation).toHaveBeenNthCalledWith(
+      2,
+      project.nodeId,
+      project.id,
+      'delete_volumes',
+      expect.objectContaining({ volumeNames: ['demo_data'] }),
+      'user-1',
+      true
+    );
+    expect(waitForOperation).toHaveBeenCalledTimes(2);
+    expect(refreshNow).toHaveBeenCalledTimes(6);
+  });
+
+  it('blocks user lifecycle operations while project deletion owns runtime cleanup', async () => {
+    const limit = vi.fn().mockResolvedValue([{ status: 'deleting' }]);
+    const tx = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({ from: () => ({ where: () => ({ limit }) }) })),
+    };
+    const db = { transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)) };
+    const compose = new DockerComposeService(
+      db as never,
+      { log: vi.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
+      {} as never
+    );
+    (compose as any).dispatcher = { execute: vi.fn() };
+    vi.spyOn(compose as any, 'getProject').mockResolvedValue({
+      ...PROJECT,
+      managementState: 'managed',
+      activeRevisionId: '33333333-3333-4333-8333-333333333333',
+    } as never);
+    vi.spyOn(compose as any, 'getRevision').mockResolvedValue({ id: 'revision-1' });
+
+    await expect(
+      compose.startOperation(
+        PROJECT.nodeId,
+        PROJECT.id,
+        'start',
+        { idempotencyKey: 'start-during-delete', removeOrphans: false, volumeNames: [] },
+        'user-1'
+      )
+    ).rejects.toMatchObject({ code: 'COMPOSE_DELETE_IN_PROGRESS' });
+  });
+
+  it('uses the latest saved revision to clean up a failed first apply', async () => {
+    const compose = service();
+    const revision = { id: '33333333-3333-4333-8333-333333333333' };
+    vi.spyOn(compose, 'listRevisions').mockResolvedValue([revision] as never);
+
+    await expect(
+      (compose as any).resolveOperationRevision(
+        { ...PROJECT, activeRevisionId: null, managementState: 'managed' },
+        'down'
+      )
+    ).resolves.toBe(revision);
+  });
+
   it.each([
     'start',
     'stop',

@@ -116,7 +116,12 @@ type ComposeService = DockerComposeProject["services"][number];
 function projectStatusVariant(status: DockerComposeProject["status"]) {
   if (status === "running") return "success" as const;
   if (status === "failed" || status === "missing") return "destructive" as const;
-  if (status === "degraded" || status === "applying" || status === "validating") {
+  if (
+    status === "degraded" ||
+    status === "applying" ||
+    status === "validating" ||
+    status === "deleting"
+  ) {
     return "warning" as const;
   }
   return "secondary" as const;
@@ -299,6 +304,7 @@ export function DockerComposeProjectDetail() {
   const [node, setNode] = useState<NodeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState<DockerComposeOperationAction | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [selectedServiceName, setSelectedServiceName] = useState<string | null>(null);
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
@@ -529,18 +535,21 @@ export function DockerComposeProjectDetail() {
       !(await confirm({
         title: "Delete Compose project",
         description:
-          "Delete this stopped project record and its Gateway-managed revision history? Runtime volumes are not deleted.",
-        confirmLabel: "Delete project",
+          "Permanently remove this project, its containers, non-external networks, project-owned volumes, revisions, and secrets? External resources are not deleted.",
+        confirmLabel: "Delete everything",
       }))
     ) {
       return;
     }
+    setDeleting(true);
     try {
       await api.deleteDockerComposeProject(project.nodeId, project.id);
-      toast.success("Compose project deleted");
+      toast.success("Compose project and runtime resources deleted");
       navigate(dockerComposeRootRoute(), { replace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete Compose project");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -583,7 +592,6 @@ export function DockerComposeProjectDetail() {
   const inactiveRevisions = (project.revisions ?? []).filter(
     (revision) => revision.id !== project.activeRevisionId
   );
-  const projectCanBeDeleted = project.status === "stopped" || project.status === "missing";
   const pinAction: ResponsiveHeaderAction = {
     label: "Pin",
     icon: <Pin className="h-4 w-4" />,
@@ -625,19 +633,22 @@ export function DockerComposeProjectDetail() {
                       <Play className="h-4 w-4" />
                     ),
                   onClick: () => void runAction(project.status === "running" ? "stop" : "start"),
-                  disabled: !!currentOperation || !!action,
+                  disabled: !!currentOperation || !!action || project.status === "deleting",
                 },
                 {
                   label: "Pull & Apply",
                   icon: <UploadCloud className="h-4 w-4" />,
                   onClick: () => void runAction("pull_apply"),
-                  disabled: !!currentOperation || !!action,
+                  disabled: !!currentOperation || !!action || project.status === "deleting",
                 },
                 {
                   label: "Change revision",
                   icon: <History className="h-4 w-4" />,
                   onClick: () => setRevisionsOpen(true),
-                  disabled: !!currentOperation || inactiveRevisions.length === 0,
+                  disabled:
+                    !!currentOperation ||
+                    project.status === "deleting" ||
+                    inactiveRevisions.length === 0,
                   disabledReason: currentOperation
                     ? "Wait for the active operation to finish"
                     : inactiveRevisions.length === 0
@@ -662,11 +673,11 @@ export function DockerComposeProjectDetail() {
                   label: "Delete project",
                   icon: <Trash2 className="h-4 w-4" />,
                   onClick: () => void deleteProject(),
-                  disabled: !projectCanBeDeleted || !!currentOperation,
-                  disabledReason: !projectCanBeDeleted
-                    ? "Bring the project down before deleting it"
-                    : currentOperation
-                      ? "Wait for the active operation to finish"
+                  disabled: !!currentOperation || deleting || project.status === "deleting",
+                  disabledReason: currentOperation
+                    ? "Wait for the active operation to finish"
+                    : deleting || project.status === "deleting"
+                      ? "Deleting project runtime resources"
                       : undefined,
                   destructive: true,
                   separatorBefore: true,

@@ -741,6 +741,7 @@ export async function initializeContainer(): Promise<void> {
   );
   dockerComposeService.setDispatcher(new DockerComposeNodeDispatcher(nodeDispatch));
   dockerComposeService.setEventBus(eventBus);
+  dockerComposeService.setSnapshotReconciler(dockerSnapshotReconciler);
   container.registerInstance(DockerComposeService, dockerComposeService);
   const dockerDeploymentService = new DockerDeploymentService(
     db,

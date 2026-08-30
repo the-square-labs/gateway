@@ -7,6 +7,7 @@ import {
   dockerComposeProjects,
   dockerComposeRevisions,
   dockerContainerFolderAssignments,
+  dockerSecrets,
   managedDatabaseBindings,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -14,6 +15,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { DockerSecretService } from '../docker-secret.service.js';
 import type { DockerSnapshotService } from '../docker-snapshot.service.js';
+import type { DockerSnapshotReconciler } from '../docker-snapshot-reconciler.service.js';
 import type { DockerTaskService } from '../docker-task.service.js';
 import type {
   ComposeCreateInput,
@@ -79,6 +81,7 @@ function isManagedDatabaseSecret(key: string) {
 export class DockerComposeService {
   private dispatcher?: DockerComposeDispatcher;
   private eventBus?: EventBusService;
+  private snapshotReconciler?: Pick<DockerSnapshotReconciler, 'refreshNow'>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -94,6 +97,10 @@ export class DockerComposeService {
 
   setEventBus(eventBus: EventBusService) {
     this.eventBus = eventBus;
+  }
+
+  setSnapshotReconciler(reconciler: Pick<DockerSnapshotReconciler, 'refreshNow'>) {
+    this.snapshotReconciler = reconciler;
   }
 
   validate(input: ComposeYamlInput) {
@@ -396,11 +403,17 @@ export class DockerComposeService {
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-compose:${project.id}`}))`);
       const [currentProject] = await tx
-        .select({ activeRevisionId: dockerComposeProjects.activeRevisionId })
+        .select({
+          activeRevisionId: dockerComposeProjects.activeRevisionId,
+          status: dockerComposeProjects.status,
+        })
         .from(dockerComposeProjects)
         .where(and(eq(dockerComposeProjects.id, project.id), eq(dockerComposeProjects.nodeId, nodeId)))
         .limit(1);
       if (!currentProject) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+      if (currentProject.status === 'deleting') {
+        throw new AppError(409, 'COMPOSE_DELETE_IN_PROGRESS', 'Compose project deletion is running');
+      }
       if (currentProject.activeRevisionId === revision.id) {
         throw new AppError(409, 'COMPOSE_ACTIVE_REVISION', 'The active Compose revision cannot be deleted');
       }
@@ -440,7 +453,7 @@ export class DockerComposeService {
 
   async deleteProject(nodeId: string, projectId: string, userId: string) {
     const project = await this.getProject(nodeId, projectId);
-    await this.db.transaction(async (tx) => {
+    const previousStatus = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-compose:${project.id}`}))`);
       const [current] = await tx
         .select({ managementState: dockerComposeProjects.managementState, status: dockerComposeProjects.status })
@@ -451,8 +464,8 @@ export class DockerComposeService {
       if (current.managementState !== 'managed') {
         throw new AppError(409, 'COMPOSE_EXTERNAL_READ_ONLY', 'External Compose projects cannot be deleted');
       }
-      if (current.status !== 'stopped' && current.status !== 'missing') {
-        throw new AppError(409, 'COMPOSE_PROJECT_NOT_STOPPED', 'Down or stop the Compose project before deleting it');
+      if (current.status === 'deleting') {
+        throw new AppError(409, 'COMPOSE_DELETE_IN_PROGRESS', 'Compose project deletion is already running');
       }
       const [active] = await tx
         .select({ id: dockerComposeOperations.id })
@@ -482,26 +495,144 @@ export class DockerComposeService {
         );
       }
       await tx
-        .delete(dockerContainerFolderAssignments)
-        .where(
-          and(
-            eq(dockerContainerFolderAssignments.nodeId, nodeId),
-            eq(dockerContainerFolderAssignments.resourceType, 'compose'),
-            eq(dockerContainerFolderAssignments.resourceKey, project.id)
-          )
-        );
-      await tx.delete(dockerComposeProjects).where(eq(dockerComposeProjects.id, project.id));
+        .update(dockerComposeProjects)
+        .set({ status: 'deleting', updatedAt: new Date() })
+        .where(eq(dockerComposeProjects.id, project.id));
+      return current.status;
     });
 
-    await this.audit.log({
-      userId,
-      action: 'docker.compose.delete',
-      resourceType: 'docker-compose-project',
-      resourceId: project.id,
-      details: { nodeId, name: project.name },
-    });
-    await this.secrets.deleteImported(nodeId, composeSecretOwner(project.id));
-    this.emit('deleted', project);
+    try {
+      const cleanup = await this.cleanupProjectRuntime(project, userId);
+
+      await this.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-compose:${project.id}`}))`);
+        const [current] = await tx
+          .select({ managementState: dockerComposeProjects.managementState, status: dockerComposeProjects.status })
+          .from(dockerComposeProjects)
+          .where(and(eq(dockerComposeProjects.id, project.id), eq(dockerComposeProjects.nodeId, nodeId)))
+          .limit(1);
+        if (!current) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+        if (current.managementState !== 'managed') {
+          throw new AppError(409, 'COMPOSE_EXTERNAL_READ_ONLY', 'External Compose projects cannot be deleted');
+        }
+        if (current.status !== 'deleting') {
+          throw new AppError(409, 'COMPOSE_DELETE_INTERRUPTED', 'Compose project deletion lost its runtime fence');
+        }
+        const [active] = await tx
+          .select({ id: dockerComposeOperations.id })
+          .from(dockerComposeOperations)
+          .where(
+            and(
+              eq(dockerComposeOperations.projectId, project.id),
+              inArray(dockerComposeOperations.status, [...ACTIVE_OPERATION_STATUSES])
+            )
+          )
+          .limit(1);
+        if (active) throw new AppError(409, 'COMPOSE_OPERATION_IN_PROGRESS', 'Another Compose operation is running');
+        const bindings = await tx
+          .select({ targetResourceId: managedDatabaseBindings.targetResourceId })
+          .from(managedDatabaseBindings)
+          .where(
+            and(
+              eq(managedDatabaseBindings.targetNodeId, nodeId),
+              eq(managedDatabaseBindings.targetType, 'compose_service')
+            )
+          );
+        if (bindings.some((binding) => decodeComposeServiceTarget(binding.targetResourceId).projectId === project.id)) {
+          throw new AppError(
+            409,
+            'COMPOSE_DATABASE_BINDINGS_EXIST',
+            'Delete managed database links before deleting the Compose project'
+          );
+        }
+        await tx
+          .delete(dockerContainerFolderAssignments)
+          .where(
+            and(
+              eq(dockerContainerFolderAssignments.nodeId, nodeId),
+              eq(dockerContainerFolderAssignments.resourceType, 'compose'),
+              eq(dockerContainerFolderAssignments.resourceKey, project.id)
+            )
+          );
+        await tx
+          .delete(dockerSecrets)
+          .where(
+            and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, composeSecretOwner(project.id)))
+          );
+        await tx.delete(dockerComposeProjects).where(eq(dockerComposeProjects.id, project.id));
+      });
+
+      await this.audit.log({
+        userId,
+        action: 'docker.compose.delete',
+        resourceType: 'docker-compose-project',
+        resourceId: project.id,
+        details: { nodeId, name: project.name, removedVolumes: cleanup.removedVolumes },
+      });
+      this.emit('deleted', project);
+    } catch (error) {
+      await this.db
+        .update(dockerComposeProjects)
+        .set({ status: previousStatus, updatedAt: new Date() })
+        .where(and(eq(dockerComposeProjects.id, project.id), eq(dockerComposeProjects.status, 'deleting')));
+      throw error;
+    }
+  }
+
+  private async cleanupProjectRuntime(project: ProjectRow, userId: string) {
+    const runtime = await this.refreshProjectRuntime(project);
+    if (runtime.serviceCount > 0 || runtime.networkNames.length > 0) {
+      const down = await this.startOperation(
+        project.nodeId,
+        project.id,
+        'down',
+        {
+          idempotencyKey: `project-delete:${project.id}:down:${crypto.randomUUID()}`,
+          removeOrphans: true,
+          volumeNames: [],
+        },
+        userId,
+        true
+      );
+      await this.waitForOperation(down.id);
+    }
+    if (runtime.volumeNames.length > 0) {
+      const volumes = await this.startOperation(
+        project.nodeId,
+        project.id,
+        'delete_volumes',
+        {
+          idempotencyKey: `project-delete:${project.id}:volumes:${crypto.randomUUID()}`,
+          removeOrphans: false,
+          volumeNames: runtime.volumeNames,
+        },
+        userId,
+        true
+      );
+      await this.waitForOperation(volumes.id);
+    }
+    const remaining = await this.refreshProjectRuntime(project);
+    if (remaining.serviceCount > 0 || remaining.networkNames.length > 0 || remaining.volumeNames.length > 0) {
+      throw new AppError(
+        409,
+        'COMPOSE_DELETE_CLEANUP_INCOMPLETE',
+        'Compose runtime cleanup did not remove every project-owned container, network, and volume'
+      );
+    }
+    return { removedVolumes: runtime.volumeNames };
+  }
+
+  private async refreshProjectRuntime(project: ProjectRow) {
+    if (!this.snapshotReconciler) {
+      throw new AppError(503, 'COMPOSE_RUNTIME_REFRESH_UNAVAILABLE', 'Compose runtime cleanup is unavailable');
+    }
+    await this.snapshotReconciler.refreshNow(project.nodeId, 'containers');
+    await this.snapshotReconciler.refreshNow(project.nodeId, 'volumes');
+    await this.snapshotReconciler.refreshNow(project.nodeId, 'networks');
+    const activeRevision = project.activeRevisionId
+      ? await this.getRevision(project.id, project.activeRevisionId).catch(() => null)
+      : null;
+    return this.projectRuntime(await this.loadNodeRuntime(project.nodeId), project.name, project, activeRevision);
   }
 
   async startOperation(
@@ -509,7 +640,8 @@ export class DockerComposeService {
     projectId: string,
     action: DockerComposeOperationAction,
     input: ComposeOperationInput,
-    userId: string
+    userId: string,
+    allowProjectDeleting = false
   ): Promise<OperationRow> {
     const project = await this.getProject(nodeId, projectId);
     if (!this.dispatcher) {
@@ -537,6 +669,15 @@ export class DockerComposeService {
     const options = { removeOrphans: input.removeOrphans, volumeNames: input.volumeNames };
     const reserved = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-compose:${project.id}`}))`);
+      const [currentProject] = await tx
+        .select({ status: dockerComposeProjects.status })
+        .from(dockerComposeProjects)
+        .where(eq(dockerComposeProjects.id, project.id))
+        .limit(1);
+      if (!currentProject) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+      if (!allowProjectDeleting && currentProject.status === 'deleting') {
+        throw new AppError(409, 'COMPOSE_DELETE_IN_PROGRESS', 'Compose project deletion is running');
+      }
       const [existing] = await tx
         .select()
         .from(dockerComposeOperations)
@@ -606,7 +747,9 @@ export class DockerComposeService {
       throw error;
     }
 
-    void this.executeOperation(project, revision, reserved.operation.id, task.id, action).catch(() => {});
+    void this.executeOperation(project, revision, reserved.operation.id, task.id, action, allowProjectDeleting).catch(
+      () => {}
+    );
     this.emit('operation_started', project, { operationId: reserved.operation.id, action });
     return { ...reserved.operation, taskId: task.id };
   }
@@ -617,6 +760,10 @@ export class DockerComposeService {
       .set({ status: 'failed', error: INTERRUPTED_OPERATION_ERROR, completedAt: now })
       .where(inArray(dockerComposeOperations.status, [...ACTIVE_OPERATION_STATUSES]))
       .returning();
+    await this.db
+      .update(dockerComposeProjects)
+      .set({ status: 'failed', updatedAt: now })
+      .where(eq(dockerComposeProjects.status, 'deleting'));
     if (interrupted.length === 0) return 0;
 
     const projectIds = [...new Set(interrupted.map((operation) => operation.projectId))];
@@ -822,23 +969,29 @@ export class DockerComposeService {
     revision: RevisionRow | null,
     operationId: string,
     taskId: string,
-    action: DockerComposeOperationAction
+    action: DockerComposeOperationAction,
+    preserveProjectStatus = false
   ) {
     const startedAt = new Date();
-    await Promise.all([
+    const startUpdates: Promise<unknown>[] = [
       this.db
         .update(dockerComposeOperations)
         .set({ status: 'running', startedAt, progress: `Running ${action}` })
         .where(eq(dockerComposeOperations.id, operationId)),
       this.tasks.update(taskId, { status: 'running', progress: `Running Compose ${action}` }),
-      this.db
-        .update(dockerComposeProjects)
-        .set({
-          status: action === 'apply' || action === 'pull_apply' ? 'applying' : project.status,
-          updatedAt: startedAt,
-        })
-        .where(eq(dockerComposeProjects.id, project.id)),
-    ]);
+    ];
+    if (!preserveProjectStatus) {
+      startUpdates.push(
+        this.db
+          .update(dockerComposeProjects)
+          .set({
+            status: action === 'apply' || action === 'pull_apply' ? 'applying' : project.status,
+            updatedAt: startedAt,
+          })
+          .where(eq(dockerComposeProjects.id, project.id))
+      );
+    }
+    await Promise.all(startUpdates);
 
     let resolvedSecrets: Record<string, string> = {};
     try {
@@ -863,7 +1016,7 @@ export class DockerComposeService {
       const completedAt = new Date();
       const nextStatus =
         action === 'stop' || action === 'down' ? 'stopped' : action === 'delete_volumes' ? project.status : 'running';
-      await Promise.all([
+      const completedUpdates: Promise<unknown>[] = [
         this.db
           .update(dockerComposeOperations)
           .set({ status: 'succeeded', progress: result.message ?? `Compose ${action} completed`, completedAt })
@@ -873,19 +1026,24 @@ export class DockerComposeService {
           progress: result.message ?? `Compose ${action} completed`,
           completedAt,
         }),
-        this.db
-          .update(dockerComposeProjects)
-          .set({
-            ...(project.managementState === 'external' && (action === 'apply' || action === 'pull_apply')
-              ? { managementState: 'managed' as const }
-              : {}),
-            ...(revision && (action === 'apply' || action === 'pull_apply') ? { activeRevisionId: revision.id } : {}),
-            desiredState: nextStatus === 'stopped' ? 'stopped' : 'running',
-            status: nextStatus,
-            updatedAt: completedAt,
-          })
-          .where(eq(dockerComposeProjects.id, project.id)),
-      ]);
+      ];
+      if (!preserveProjectStatus) {
+        completedUpdates.push(
+          this.db
+            .update(dockerComposeProjects)
+            .set({
+              ...(project.managementState === 'external' && (action === 'apply' || action === 'pull_apply')
+                ? { managementState: 'managed' as const }
+                : {}),
+              ...(revision && (action === 'apply' || action === 'pull_apply') ? { activeRevisionId: revision.id } : {}),
+              desiredState: nextStatus === 'stopped' ? 'stopped' : 'running',
+              status: nextStatus,
+              updatedAt: completedAt,
+            })
+            .where(eq(dockerComposeProjects.id, project.id))
+        );
+      }
+      await Promise.all(completedUpdates);
       this.emit('operation_succeeded', project, { operationId, action });
     } catch (error) {
       const message = this.sanitizeOperationError(error, resolvedSecrets);
@@ -901,13 +1059,18 @@ export class DockerComposeService {
         )
         .returning({ id: dockerComposeOperations.id });
       if (failedOperation) {
-        await Promise.all([
+        const failedUpdates: Promise<unknown>[] = [
           this.tasks.update(taskId, { status: 'failed', error: message, completedAt }),
-          this.db
-            .update(dockerComposeProjects)
-            .set({ status: 'failed', updatedAt: completedAt })
-            .where(eq(dockerComposeProjects.id, project.id)),
-        ]);
+        ];
+        if (!preserveProjectStatus) {
+          failedUpdates.push(
+            this.db
+              .update(dockerComposeProjects)
+              .set({ status: 'failed', updatedAt: completedAt })
+              .where(eq(dockerComposeProjects.id, project.id))
+          );
+        }
+        await Promise.all(failedUpdates);
         this.emit('operation_failed', project, { operationId, action, error: message });
       }
       throw error;
@@ -921,6 +1084,15 @@ export class DockerComposeService {
   ): Promise<OperationRow> {
     const reserved = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-compose:${project.id}`}))`);
+      const [currentProject] = await tx
+        .select({ status: dockerComposeProjects.status })
+        .from(dockerComposeProjects)
+        .where(eq(dockerComposeProjects.id, project.id))
+        .limit(1);
+      if (!currentProject) throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+      if (currentProject.status === 'deleting') {
+        throw new AppError(409, 'COMPOSE_DELETE_IN_PROGRESS', 'Compose project deletion is running');
+      }
       const [existing] = await tx
         .select()
         .from(dockerComposeOperations)
@@ -1262,7 +1434,7 @@ export class DockerComposeService {
     if (action === 'cancel' || action === 'delete_volumes') return null;
     const selected = revisionId ?? project.activeRevisionId;
     if (selected) return this.getRevision(project.id, selected);
-    if (action === 'apply' || action === 'pull_apply') {
+    if (action === 'apply' || action === 'pull_apply' || action === 'down') {
       const latest = await this.listRevisions(project.id);
       return latest[0] ?? null;
     }

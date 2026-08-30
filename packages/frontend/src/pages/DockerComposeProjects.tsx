@@ -65,7 +65,12 @@ function statusVariant(
 ) {
   if (status === "running") return "success" as const;
   if (status === "failed" || status === "missing") return "destructive" as const;
-  if (status === "degraded" || status === "applying" || status === "validating")
+  if (
+    status === "degraded" ||
+    status === "applying" ||
+    status === "validating" ||
+    status === "deleting"
+  )
     return "warning" as const;
   return "secondary" as const;
 }

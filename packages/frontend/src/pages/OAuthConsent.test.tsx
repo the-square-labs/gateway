@@ -166,16 +166,11 @@ describe("OAuthConsent", () => {
     );
   });
 
-  it("delivers a loopback callback through a small popup and shows a result screen", async () => {
+  it("delivers a loopback callback without opening a popup and shows a result screen", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
     vi.spyOn(api, "approveOAuthConsent").mockResolvedValue({
       redirectUrl: "http://127.0.0.1:8765/callback?code=abc",
     });
-    const replace = vi.fn();
-    vi.mocked(window.open).mockReturnValue({
-      location: { replace },
-      close: vi.fn(),
-    } as unknown as Window);
 
     renderWithRouter(<OAuthConsent />, {
       path: "/oauth/consent",
@@ -191,48 +186,80 @@ describe("OAuthConsent", () => {
       "href",
       "http://127.0.0.1:8765/callback?code=abc"
     );
-    expect(window.open).toHaveBeenCalledWith(
-      "about:blank",
-      "gateway-oauth-callback",
-      expect.stringContaining("width=520")
+    expect(screen.getByTitle("OAuth callback delivery")).toHaveAttribute(
+      "src",
+      "http://127.0.0.1:8765/callback?code=abc"
     );
-    expect(replace).toHaveBeenCalledWith("http://127.0.0.1:8765/callback?code=abc");
+    expect(screen.getByTitle("OAuth callback delivery")).toHaveAttribute("sandbox", "");
+    expect(window.open).not.toHaveBeenCalled();
   });
 
-  it("falls back to browser navigation when the callback popup is blocked", async () => {
+  it("delivers a denied loopback callback without opening a popup", async () => {
+    vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
+    vi.spyOn(api, "denyOAuthConsent").mockResolvedValue({
+      redirectUrl: "http://127.0.0.1:8765/callback?error=access_denied",
+    });
+
+    renderWithRouter(<OAuthConsent />, {
+      path: "/oauth/consent",
+      route: "/oauth/consent?request=request-1",
+    });
+
+    await screen.findByText("Authorize Gateway API access");
+    await userEvent.click(screen.getByRole("button", { name: /Deny/i }));
+
+    expect(await screen.findByText("Authorization denied")).toBeInTheDocument();
+    expect(screen.getByTitle("OAuth callback delivery")).toHaveAttribute(
+      "src",
+      "http://127.0.0.1:8765/callback?error=access_denied"
+    );
+    expect(window.open).not.toHaveBeenCalled();
+  });
+
+  it("delivers an IPv6 loopback callback through the completion page", async () => {
+    vi.spyOn(api, "getOAuthConsent").mockResolvedValue({
+      ...preview,
+      redirect: { uri: "http://[::1]:8765/callback", isExternal: false },
+    });
+    vi.spyOn(api, "approveOAuthConsent").mockResolvedValue({
+      redirectUrl: "http://[::1]:8765/callback?code=abc",
+    });
+
+    renderWithRouter(<OAuthConsent />, {
+      path: "/oauth/consent",
+      route: "/oauth/consent?request=request-1",
+    });
+
+    await screen.findByText("Authorize Gateway API access");
+    await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
+
+    expect(await screen.findByText("Authorization complete")).toBeInTheDocument();
+    expect(screen.getByTitle("OAuth callback delivery")).toHaveAttribute(
+      "src",
+      "http://[::1]:8765/callback?code=abc"
+    );
+    expect(window.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-loopback callback returned for a loopback consent request", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
     vi.spyOn(api, "approveOAuthConsent").mockResolvedValue({
-      redirectUrl: "http://127.0.0.1:8765/callback?code=abc",
-    });
-    vi.mocked(window.open).mockReturnValue(null);
-    const hrefSetter = vi.fn();
-    const originalLocation = window.location;
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...originalLocation, href: "" },
-    });
-    Object.defineProperty(window.location, "href", {
-      configurable: true,
-      set: hrefSetter,
-      get: () => "",
+      redirectUrl: "http://client.example.com/callback?code=abc",
     });
 
-    try {
-      renderWithRouter(<OAuthConsent />, {
-        path: "/oauth/consent",
-        route: "/oauth/consent?request=request-1",
-      });
+    renderWithRouter(<OAuthConsent />, {
+      path: "/oauth/consent",
+      route: "/oauth/consent?request=request-1",
+    });
 
-      await screen.findByText("Authorize Gateway API access");
-      await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
+    await screen.findByText("Authorize Gateway API access");
+    await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
-      expect(hrefSetter).toHaveBeenCalledWith("http://127.0.0.1:8765/callback?code=abc");
-    } finally {
-      Object.defineProperty(window, "location", {
-        configurable: true,
-        value: originalLocation,
-      });
-    }
+    expect(
+      await screen.findByText("Gateway returned an invalid loopback OAuth callback")
+    ).toBeInTheDocument();
+    expect(screen.queryByTitle("OAuth callback delivery")).not.toBeInTheDocument();
+    expect(window.open).not.toHaveBeenCalled();
   });
 
   it("uses top-level navigation for external callback approvals", async () => {
