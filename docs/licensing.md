@@ -28,6 +28,7 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Infrastructure Node Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Multi-Node Nginx Ingress Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker Container Management — Default Runtime (`runc`) | Ready | ✅ | ✅ | ✅ | ✅ |
+| External Compose Project Discovery, Monitoring, and Logs | Ready | ✅ | ✅ | ✅ | ✅ |
 | Docker ↔ Nginx Secure Links | Ready | ✅ | ✅ | ✅ | ✅ |
 | Private Gateway-Managed Internal Docker Registry | Ready | ✅ | ✅ | ✅ | ✅ |
 | SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |
@@ -44,7 +45,7 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | AI Workspace, Plan Mode, Scenarios, and AI Sandboxes | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
-| Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Coming soon | ✅ | ✅ | ✅ | ✅ |
+| Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | In development | ✅ | ✅ | ✅ | ✅ |
 | Managed Nodes | Plan limit | 100 | Unlimited | Unlimited | Unlimited |
 | Users | Plan limit | 10 | Unlimited | Unlimited | Unlimited |
 | Custom Permission Groups | Plan limit | 5 | Unlimited | Unlimited | Unlimited |
@@ -52,12 +53,13 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Container Export and Import | Ready | — | ✅ | ✅ | ✅ |
 | Blue/Green Deployments | Ready | — | ✅ | ✅ | ✅ |
 | Cross-Node Container and Deployment Migration | Ready | — | ✅ | ✅ | ✅ |
+| Managed Single-node Compose Deployment and Lifecycle | Ready | — | ✅ | ✅ | ✅ |
 | Managed Databases with Secure Links | Ready | — | ✅ | ✅ | ✅ |
 | Public Status Pages | Ready, opt-in | — | ✅ | ✅ | ✅ |
 | Pages | Ready | — | ✅ | ✅ | ✅ |
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
-| Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
-| Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |
+| Managed Database Backup and Restore | In development, after Storage | — | ✅ | ✅ | ✅ |
+| Managed Storages with Secure Links | In development | — | ✅ | ✅ | ✅ |
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
@@ -67,8 +69,6 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Broader Workload Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
 | Horizontal Application Clusters Across Multiple Nodes | In development | — | — | ✅ | ✅ |
 | Multiple Instances of One Workload on One Machine | In development | — | — | ✅ | ✅ |
-| External Compose Project Discovery, Monitoring, and Logs | Ready | ✅ | ✅ | ✅ | ✅ |
-| Managed Single-node Compose Deployment and Lifecycle | Ready | — | ✅ | ✅ | ✅ |
 | Guided Onboarding and Configuration Review | Plan benefit | — | — | ✅ | ✅ |
 | Internal PKI | Ready | — | — | — | ✅ |
 | SIEM Audit Export | Ready, opt-in | — | — | — | ✅ |
@@ -76,7 +76,7 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Dedicated Technical Contact | Plan benefit | — | — | — | ✅ |
 | Assisted Deployment and Migration | Plan benefit | — | — | — | ✅ |
 
-`Coming soon` and `In development` identify product availability separately from plan entitlement. A checkmark on such a row means the feature is included in that plan when released.
+`In development` identifies product availability separately from plan entitlement. A checkmark on such a row means the feature is included in that plan when released.
 
 Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 
