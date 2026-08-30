@@ -567,8 +567,13 @@ function makeUpdateService(
   relayRuntime?: ConstructorParameters<typeof UpdateService>[3],
   envOverrides: Record<string, unknown> = {}
 ): UpdateService {
+  const db = {
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
+    })),
+  };
   return new UpdateService(
-    {} as never,
+    db as never,
     dockerService as never,
     {
       APP_VERSION: 'v2.4.2',

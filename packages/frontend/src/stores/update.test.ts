@@ -24,6 +24,7 @@ describe("useUpdateStore", () => {
       isChecking: false,
       isUpdating: false,
       updatingComponent: null,
+      updatingTargetVersion: null,
     });
     useAppStatusStore.setState({
       gatewayUpdatingActive: false,
@@ -101,8 +102,40 @@ describe("useUpdateStore", () => {
     expect(useUpdateStore.getState()).toMatchObject({
       isUpdating: true,
       updatingComponent: "relay",
+      updatingTargetVersion: "v2.6.13",
     });
     expect(useAppStatusStore.getState().gatewayUpdatingActive).toBe(false);
+  });
+
+  it("keeps the Relay update gate active when the immediate status response is stale", async () => {
+    vi.mocked(api.triggerRelayUpdate).mockResolvedValueOnce({
+      status: "started",
+      targetVersion: "v2.6.13",
+    });
+    vi.mocked(api.getVersionInfo).mockResolvedValueOnce({
+      currentVersion: "v2.6.12",
+      latestVersion: null,
+      updateAvailable: false,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.6.12",
+        latestVersion: "v2.6.13",
+        updateAvailable: true,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: null,
+      },
+    });
+
+    await useUpdateStore.getState().triggerRelayUpdate("v2.6.13");
+
+    expect(useUpdateStore.getState()).toMatchObject({
+      isUpdating: true,
+      updatingComponent: "relay",
+      updatingTargetVersion: "v2.6.13",
+    });
   });
 
   it("restores a Relay update operation from server status", async () => {

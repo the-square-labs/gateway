@@ -698,7 +698,7 @@ export class ProxySecureLinkService {
       const binding = await this.requireAdditional(host.id, bindingId);
       if (binding.status !== 'provisioning') return binding;
       try {
-        await this.syncTargetNode(binding.dockerNodeId);
+        await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
         await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
         await this.syncSourceNode(binding.sourceNodeId);
         await this.probeSecureLink(binding.sourceNodeId, {
@@ -862,7 +862,7 @@ export class ProxySecureLinkService {
     if (cutoverCommitted && host.secureLinkStatus === 'active' && !changed) {
       if (!force) return host;
       try {
-        await this.syncTargetNode(target.nodeId);
+        await this.syncTargetNode(target.nodeId, undefined, host.id);
         await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
         await this.syncSourceNode(host.nodeId);
         const probe = await this.probeSecureLink(host.nodeId, {
@@ -913,7 +913,7 @@ export class ProxySecureLinkService {
         await this.relayPolicy.revokeOwner('proxy_host_secure_link', host.id);
         await this.syncSourceNode(host.nodeId, host.id);
       }
-      await this.syncTargetNode(target.nodeId);
+      await this.syncTargetNode(target.nodeId, undefined, host.id);
       await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
       if (!activeUpdate) await this.syncSourceNode(host.nodeId);
       const probe = await this.probeSecureLink(host.nodeId, {
@@ -1280,9 +1280,11 @@ export class ProxySecureLinkService {
     };
   }
 
-  private async syncTargetNode(nodeId: string, excludedNetwork?: string): Promise<void> {
+  private async syncTargetNode(nodeId: string, excludedNetwork?: string, requiredLinkId?: string): Promise<void> {
     const previous = this.targetNodeSyncs.get(nodeId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => this.syncTargetNodeLocked(nodeId, excludedNetwork));
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.syncTargetNodeLocked(nodeId, excludedNetwork, requiredLinkId));
     this.targetNodeSyncs.set(nodeId, current);
     try {
       await current;
@@ -1291,7 +1293,7 @@ export class ProxySecureLinkService {
     }
   }
 
-  private async syncTargetNodeLocked(nodeId: string, excludedNetwork?: string): Promise<void> {
+  private async syncTargetNodeLocked(nodeId: string, excludedNetwork?: string, requiredLinkId?: string): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const hosts = await this.db.query.proxyHosts.findMany({
         where: and(
@@ -1336,12 +1338,24 @@ export class ProxySecureLinkService {
         (binding) => !excludedNetwork || (binding.targetNetwork !== excludedNetwork && !binding.allowNetworkReselection)
       );
       const additionalIds = new Set(additional.map((binding: ProxyAdditionalSecureLinkRow) => binding.id));
-      let result = await this.dispatch.sendProxySecureLinks(nodeId, targetBindings);
-      if (!result.success) throw new Error(result.error || 'Docker daemon rejected secure-link bindings');
+      let appliedBindings = targetBindings;
+      let result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
+      const unavailable = new Map<string, string>();
+      while (!result.success) {
+        const message = result.error || 'Docker daemon rejected secure-link bindings';
+        const unavailableLinkId = this.parseUnavailableTargetLinkId(message);
+        if (!unavailableLinkId || unavailableLinkId === requiredLinkId) throw new Error(message);
+        const nextBindings = appliedBindings.filter((binding) => binding.linkId !== unavailableLinkId);
+        if (nextBindings.length === appliedBindings.length) throw new Error(message);
+        unavailable.set(unavailableLinkId, message);
+        appliedBindings = nextBindings;
+        result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
+      }
+      await this.recordUnavailableTargets(unavailable, additionalIds);
       let statuses = this.parseBindings(result.detail);
       const statusByLink = new Map(statuses.map((binding) => [binding.linkId, binding]));
       let networkChanged = false;
-      const reconciledBindings = targetBindings.map((binding) => {
+      const reconciledBindings = appliedBindings.map((binding) => {
         const status = statusByLink.get(binding.linkId);
         if (!status?.targetNetwork || status.targetNetwork === binding.targetNetwork) return binding;
         networkChanged = true;
@@ -1354,7 +1368,7 @@ export class ProxySecureLinkService {
       if (networkChanged) {
         let desiredStateChanged = false;
         for (const binding of reconciledBindings) {
-          const original = targetBindings.find((candidate) => candidate.linkId === binding.linkId);
+          const original = appliedBindings.find((candidate) => candidate.linkId === binding.linkId);
           if (!original || original.targetNetwork === binding.targetNetwork) continue;
           const applied = additionalIds.has(binding.linkId)
             ? await this.db
@@ -1396,6 +1410,7 @@ export class ProxySecureLinkService {
             .set({
               connectorPort: binding.port,
               ...(binding.targetNetwork ? { targetNetwork: binding.targetNetwork } : {}),
+              lastError: null,
               updatedAt: new Date(),
             })
             .where(
@@ -1409,12 +1424,39 @@ export class ProxySecureLinkService {
             .update(proxyHosts)
             .set({
               secureLinkConnectorPort: binding.port,
+              secureLinkLastError: null,
               ...(binding.targetNetwork ? { secureLinkTargetNetwork: binding.targetNetwork } : {}),
             })
             .where(and(eq(proxyHosts.id, binding.linkId), eq(proxyHosts.secureLinkGeneration, binding.generation)));
         }
       }
       return;
+    }
+  }
+
+  private parseUnavailableTargetLinkId(message: string): string | null {
+    const match = message.match(
+      /resolve secure-link ([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): target container is unavailable/i
+    );
+    return match?.[1] ?? null;
+  }
+
+  private async recordUnavailableTargets(
+    unavailable: ReadonlyMap<string, string>,
+    additionalIds: ReadonlySet<string>
+  ): Promise<void> {
+    for (const [linkId, message] of unavailable) {
+      if (additionalIds.has(linkId)) {
+        await this.db
+          .update(proxyAdditionalSecureLinks)
+          .set({ lastError: message, updatedAt: new Date() })
+          .where(eq(proxyAdditionalSecureLinks.id, linkId));
+      } else {
+        await this.db
+          .update(proxyHosts)
+          .set({ secureLinkLastError: message, updatedAt: new Date() })
+          .where(eq(proxyHosts.id, linkId));
+      }
     }
   }
 

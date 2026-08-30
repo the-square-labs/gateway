@@ -120,6 +120,7 @@ function createExecutor(store: FakeStore, failAction?: string) {
     }
   };
   const executor: DockerRegistryMaintenanceExecutor = {
+    hasRepositories: async () => true,
     pauseAdmissions: () => invoke('pauseAdmissions'),
     drainUploads: () => invoke('drainUploads'),
     deleteManifest: () => invoke('deleteManifest'),
@@ -145,6 +146,27 @@ function createService(
 }
 
 describe('DockerInternalRegistryService', () => {
+  it('finishes empty registry maintenance without the write-drain delay or offline GC', async () => {
+    const store = new FakeStore([]);
+    const executor = createExecutor(store);
+    executor.hasRepositories = vi.fn().mockResolvedValue(false);
+    const { service } = createService(store, executor);
+
+    await expect(
+      service.runGarbageCollection({ requestedById: 'user-1', leaseOwner: 'owner-1' })
+    ).resolves.toMatchObject({
+      status: 'completed',
+      phase: 'idle',
+      progress: expect.objectContaining({
+        retainedArtifactIds: [],
+        candidateArtifactIds: [],
+        skippedEmptyRegistry: true,
+      }),
+    });
+    expect(store.events.filter((event) => event.startsWith('exec:'))).toEqual([]);
+    expect(store.state).toMatchObject({ status: 'ready', writable: true, maintenancePhase: 'idle' });
+  });
+
   it('retains the latest three approved artifacts per source plus every active pin', () => {
     const artifacts = [artifact('a', 0), artifact('b', 1), artifact('c', 2), artifact('d', 3), artifact('e', 4, true)];
     const result = selectRegistryRetentionCandidates(artifacts);

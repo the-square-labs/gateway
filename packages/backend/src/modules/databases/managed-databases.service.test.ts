@@ -1118,6 +1118,80 @@ describe('managed database catalog and input guardrails', () => {
     });
   });
 
+  it('uses the prepared PostgreSQL control owner for principal provisioning', async () => {
+    let current = {
+      ...managedRow,
+      status: 'ready' as const,
+      pendingOperation: null,
+      databaseConnectionId: null,
+      bindingIdentityVersion: 0,
+      directPrincipalVersion: 0,
+      ownerSeparationState: 'preparing' as const,
+      ownerSeparationOperationId: '77777777-7777-4777-8777-777777777777',
+      applicationPrincipalName: 'gw_app_orders',
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+      encryptedPendingOwnerCredentials: JSON.stringify({ encryptedKey: 'pending-key', encryptedDek: 'pending-dek' }),
+      encryptedDirectCredentials: JSON.stringify({ encryptedKey: 'direct-key', encryptedDek: 'direct-dek' }),
+    };
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => ({
+          where: vi.fn(() => ({
+            returning: vi.fn(async () => {
+              current = { ...current, ...values } as typeof current;
+              return [current];
+            }),
+          })),
+        })),
+      })),
+    };
+    const dispatch = { sendDockerDatabaseCommand: vi.fn().mockResolvedValue({ success: true }) };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi.fn((encrypted: { encryptedKey: string }) => {
+          if (encrypted.encryptedKey === 'pending-key') {
+            return JSON.stringify({
+              username: 'gateway_control',
+              password: 'control-password-123456',
+              databaseName: 'app',
+            });
+          }
+          if (encrypted.encryptedKey === 'direct-key') {
+            return JSON.stringify({
+              username: 'gateway_direct',
+              password: 'direct-password-123456',
+              databaseName: 'app',
+            });
+          }
+          return JSON.stringify({
+            username: 'legacy_owner',
+            password: 'legacy-password-123456',
+            databaseName: 'app',
+          });
+        }),
+        encryptString: vi.fn(),
+      } as never,
+      dispatch as never
+    ) as any;
+    vi.spyOn(service, 'getRow').mockImplementation(async () => current);
+    vi.spyOn(service, 'assertBindingPrincipalV2Capability').mockResolvedValue({});
+    vi.spyOn(service, 'prepareBindingIdentityRuntime').mockResolvedValue(undefined);
+    vi.spyOn(service, 'syncCanonicalConnectionCredentials').mockResolvedValue(undefined);
+
+    await service.ensureBindingIdentity(current.id, null);
+
+    const apply = dispatch.sendDockerDatabaseCommand.mock.calls.find(
+      (call) => call[1] === 'binding_principal_apply_v2'
+    );
+    expect(JSON.parse(apply![3])).toMatchObject({
+      ownerUsername: 'gateway_control',
+      ownerPassword: 'control-password-123456',
+      principalName: 'gateway_direct',
+    });
+  });
+
   it('does not finalize owner separation while any binding still uses the legacy principal model', async () => {
     const row = {
       ...managedRow,

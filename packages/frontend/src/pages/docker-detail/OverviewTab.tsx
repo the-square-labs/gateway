@@ -8,12 +8,14 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
 import { api } from "@/services/api";
 import { copyToClipboard, formatDate, type InspectData, STATUS_BADGE } from "./helpers";
+import { type ContainerDatabaseLink, LinkRuntimeTab } from "./LinkRuntimeTab";
 
 export function OverviewTab({
   nodeId,
   containerId,
   data,
   sourceIdentity,
+  databaseLinks,
 }: {
   nodeId: string;
   containerId: string;
@@ -22,6 +24,7 @@ export function OverviewTab({
     repositoryFullPath: string;
     deployedCommitSha: string | null;
   } | null;
+  databaseLinks: ContainerDatabaseLink[];
 }) {
   const transition = data._transition as string | undefined;
   const state = transition ?? data.State?.Status ?? (data.State?.Running ? "running" : "stopped");
@@ -251,6 +254,8 @@ export function OverviewTab({
           ))}
         </PanelShell>
       )}
+
+      {databaseLinks.length > 0 && <LinkRuntimeTab links={databaseLinks} />}
 
       {/* Recent Tasks */}
       {recentTasks.length > 0 && (

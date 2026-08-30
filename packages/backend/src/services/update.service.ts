@@ -23,6 +23,7 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import type { GeneralSettingsService, UpdateChannel } from '@/modules/settings/general-settings.service.js';
 import type { DockerService } from './docker.service.js';
+import { saveInstalledRelayArtifact } from './relay-installed-artifact.js';
 
 const logger = createChildLogger('UpdateService');
 export const DOCKER_COMPOSE_CLI_IMAGE_REF =
@@ -779,7 +780,7 @@ exit 1`,
         await this.updatePoolStep(step.id, 'ready', true);
         currentStepId = null;
       }
-      this.promoteRelayConnectorImages(artifact);
+      await this.promoteRelayConnectorImages(artifact);
       await this.db
         .update(relayPoolUpdateRuns)
         .set({ state: 'complete', completedAt: new Date(), terminalError: null, updatedAt: new Date() })
@@ -917,6 +918,14 @@ exit 1`,
         GATEWAY_RELAY_PROTOCOL_MAJOR: artifact.protocolMajor,
       });
       this.relayRuntime?.setExpectedArtifact(artifact.imageRef, artifact.buildVersion, artifact.protocolMajor);
+      await saveInstalledRelayArtifact(this.db, {
+        imageRef: artifact.imageRef,
+        buildVersion: artifact.buildVersion,
+        protocolMajor: artifact.protocolMajor,
+        secureLinkConnectorImage: artifact.secureLinkConnectorImage,
+      }).catch((error) => {
+        logger.error('Failed to persist the installed Relay artifact after a successful update', { error });
+      });
       if (promoteConnectors) await this.promoteRelayConnectorImages(artifact);
     } finally {
       await this.relayRuntime?.setMaintenance(false);

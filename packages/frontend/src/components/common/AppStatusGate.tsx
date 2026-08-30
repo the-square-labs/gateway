@@ -308,8 +308,12 @@ function GatewayOperationScreen() {
 
 function RelayOperationScreen() {
   const status = useUpdateStore((state) => state.status);
+  const optimisticTargetVersion = useUpdateStore((state) => state.updatingTargetVersion);
   const targetVersion =
-    status?.relay.operation?.targetVersion ?? status?.relay.latestVersion ?? "the latest version";
+    status?.relay.operation?.targetVersion ??
+    optimisticTargetVersion ??
+    status?.relay.latestVersion ??
+    "the latest version";
 
   return (
     <UpdateOperationScreen

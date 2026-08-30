@@ -119,6 +119,15 @@ export interface ManagedDatabaseBinding {
   targetResourceId: string;
   environment: ManagedDatabaseBindingEnvironment;
   status: "creating" | "ready" | "error" | "deleting";
+  observedState?:
+    | "legacy"
+    | "preparing"
+    | "principal_ready"
+    | "target_applied"
+    | "active"
+    | "disabled"
+    | "absent"
+    | "error";
   lastError: string | null;
   createdAt: string;
   updatedAt: string;

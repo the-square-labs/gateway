@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ComponentProps, FormEvent } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -184,7 +185,28 @@ describe("ManagedDatabaseLinksSection", () => {
 
     renderLinks();
 
-    expect(await screen.findByTitle(lastError)).toHaveTextContent("error");
+    const user = userEvent.setup();
+    const errorBadge = (await screen.findByText("error")).parentElement!;
+    expect(errorBadge).toHaveClass("h-5", "px-1");
+    await user.hover(errorBadge);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(lastError);
+  });
+
+  it("shows an unfinished legacy migration as reconciling instead of ready", async () => {
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([
+      { ...binding, observedState: "legacy" },
+    ]);
+    const user = userEvent.setup();
+
+    renderLinks();
+
+    const badge = (await screen.findByText("reconciling")).parentElement!;
+    expect(badge).toHaveClass("h-5", "px-1");
+    await user.hover(badge);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Database link migration or runtime reconciliation has not completed yet."
+    );
   });
 
   it("keeps links visible but unavailable when their databases node is offline", async () => {

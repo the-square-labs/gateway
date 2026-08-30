@@ -147,17 +147,6 @@ export class ManagedDatabaseBindingIdentityRuntime {
         continue;
       }
       if (
-        nodeId !== undefined &&
-        storedDatabase.nodeId !== nodeId &&
-        storedDatabase.bindingIdentityVersion !== PRINCIPAL_MODEL_VERSION
-      ) {
-        // A target-only reconnect cannot prove that the database daemon is
-        // available for owner separation or principal mutation. Leave the
-        // legacy row untouched until the database node reconnects (or a full
-        // reconciliation observes identity v2 already committed).
-        continue;
-      }
-      if (
         this.identityManager &&
         storedDatabase.status === 'ready' &&
         !storedDatabase.pendingOperation &&

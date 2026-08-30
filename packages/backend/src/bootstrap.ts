@@ -194,6 +194,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
 import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
+import { applyNewerInstalledRelayArtifact, loadInstalledRelayArtifact } from '@/services/relay-installed-artifact.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { RelayRegistryService } from '@/services/relay-registry.service.js';
@@ -225,6 +226,15 @@ export async function initializeContainer(): Promise<void> {
   logger.debug('Connecting to database...');
   const db = createDrizzleClient(env.DATABASE_URL);
   container.register(TOKENS.DrizzleClient, { useValue: db });
+  const installedRelayArtifact = await loadInstalledRelayArtifact(db).catch((error) => {
+    logger.warn('Failed to load persisted Relay artifact', { error });
+    return null;
+  });
+  if (applyNewerInstalledRelayArtifact(env, installedRelayArtifact)) {
+    logger.info('Restored newer managed Relay artifact from persisted update state', {
+      buildVersion: installedRelayArtifact!.buildVersion,
+    });
+  }
 
   // Initialize and register Redis client
   logger.debug('Connecting to Redis...');

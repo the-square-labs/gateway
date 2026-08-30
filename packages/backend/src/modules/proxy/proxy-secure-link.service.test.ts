@@ -2,6 +2,111 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it('quarantines an unavailable sibling target instead of blocking a new route on the same node', async () => {
+    const unavailableId = '6a7998b4-7a37-464d-905b-92f34cf6a32f';
+    const requiredId = '77777777-7777-4777-8777-777777777777';
+    const unavailableMessage = `resolve secure-link ${unavailableId}: target container is unavailable`;
+    const updates: Array<Record<string, unknown>> = [];
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: unavailableId,
+              dockerNodeId: 'docker-node',
+              upstreamKind: 'docker_container',
+              secureLinkStatus: 'active',
+              secureLinkGeneration: 2,
+              secureLinkTargetNetwork: 'dead-net',
+              secureLinkTargetContainer: 'dead-container',
+              secureLinkTargetHost: null,
+              dockerContainerPort: 8080,
+              dockerHostPort: 8080,
+            },
+            {
+              id: requiredId,
+              dockerNodeId: 'docker-node',
+              upstreamKind: 'docker_container',
+              secureLinkStatus: 'provisioning',
+              secureLinkGeneration: 1,
+              secureLinkTargetNetwork: 'live-net',
+              secureLinkTargetContainer: 'live-container',
+              secureLinkTargetHost: null,
+              dockerContainerPort: 8080,
+              dockerHostPort: 8080,
+            },
+          ]),
+        },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          updates.push(values);
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      })),
+    } as any;
+    const dispatch = {
+      sendProxySecureLinks: vi
+        .fn()
+        .mockResolvedValueOnce({ success: false, error: unavailableMessage })
+        .mockResolvedValueOnce({
+          success: true,
+          detail: JSON.stringify({
+            bindings: [{ linkId: requiredId, generation: 1, port: 41001, targetNetwork: 'live-net' }],
+          }),
+        }),
+    } as any;
+    const service = new ProxySecureLinkService(db, dispatch, {} as any, 'connector@sha256:test');
+
+    await expect((service as any).syncTargetNode('docker-node', undefined, requiredId)).resolves.toBeUndefined();
+
+    expect(dispatch.sendProxySecureLinks).toHaveBeenCalledTimes(2);
+    expect(dispatch.sendProxySecureLinks.mock.calls[0]?.[1]).toHaveLength(2);
+    expect(dispatch.sendProxySecureLinks.mock.calls[1]?.[1]).toEqual([
+      expect.objectContaining({ linkId: requiredId, targetContainer: 'live-container' }),
+    ]);
+    expect(updates).toContainEqual(expect.objectContaining({ secureLinkLastError: unavailableMessage }));
+    expect(updates).toContainEqual(
+      expect.objectContaining({ secureLinkConnectorPort: 41001, secureLinkLastError: null })
+    );
+  });
+
+  it('still rejects creation when the requested target itself is unavailable', async () => {
+    const requiredId = '77777777-7777-4777-8777-777777777777';
+    const message = `resolve secure-link ${requiredId}: target container is unavailable`;
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: requiredId,
+              dockerNodeId: 'docker-node',
+              upstreamKind: 'docker_container',
+              secureLinkStatus: 'provisioning',
+              secureLinkGeneration: 1,
+              secureLinkTargetNetwork: 'dead-net',
+              secureLinkTargetContainer: 'dead-container',
+              secureLinkTargetHost: null,
+              dockerContainerPort: 8080,
+              dockerHostPort: 8080,
+            },
+          ]),
+        },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      update: vi.fn(),
+    } as any;
+    const dispatch = {
+      sendProxySecureLinks: vi.fn().mockResolvedValue({ success: false, error: message }),
+    } as any;
+    const service = new ProxySecureLinkService(db, dispatch, {} as any, 'connector@sha256:test');
+
+    await expect((service as any).syncTargetNode('docker-node', undefined, requiredId)).rejects.toThrow(message);
+    expect(dispatch.sendProxySecureLinks).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
   it('stages a replacement route binding without deprovisioning the active binding', async () => {
     const host = {
       id: '11111111-1111-4111-8111-111111111111',

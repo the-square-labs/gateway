@@ -38,6 +38,7 @@ export function managedDatabaseBindingView(row: ManagedDatabaseBindingRow) {
     targetResourceId: row.targetResourceId,
     environment: row.environment,
     status: row.status,
+    observedState: row.observedState,
     lastError: row.lastError,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

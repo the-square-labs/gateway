@@ -1157,6 +1157,7 @@ function RealtimeBridge() {
         | undefined;
       if (typeof ev?.updating === "boolean") {
         if (ev.component === "relay") {
+          useUpdateStore.getState().setUpdating("relay", ev.updating, ev.targetVersion ?? null);
           void useUpdateStore.getState().fetchStatus();
         } else if (ev.updating) {
           useUpdateStore.getState().setUpdating("gateway", true);

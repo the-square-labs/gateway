@@ -166,7 +166,7 @@ export abstract class ManagedDatabaseIdentityService extends ManagedDatabaseServ
       return row;
     }
     await this.assertBindingPrincipalV2Capability(row.nodeId);
-    const owner = this.ownerCredentials(row);
+    let owner = this.ownerCredentials(row);
     if (row.bindingIdentityVersion !== MANAGED_DATABASE_BINDING_IDENTITY_VERSION) {
       await this.prepareBindingIdentityRuntime(row, owner);
     }
@@ -223,6 +223,7 @@ export abstract class ManagedDatabaseIdentityService extends ManagedDatabaseServ
         .where(eq(managedDatabaseInstances.id, row.id))
         .returning();
       row = preparedIdentity!;
+      owner = pending;
       await this.syncCanonicalConnectionCredentials(row, pending, userId);
       if (row.databaseConnectionId && this.databaseConnectionService) {
         await this.databaseConnectionService.disposeClient(row.databaseConnectionId);

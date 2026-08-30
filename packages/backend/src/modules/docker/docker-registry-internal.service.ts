@@ -359,6 +359,35 @@ export class DockerInternalRegistryService {
 
     try {
       if (!input.dryRun) {
+        const trackedArtifacts = await this.store.listRetentionArtifacts(now);
+        if (trackedArtifacts.length === 0 && !(await this.executor.hasRepositories())) {
+          progress = {
+            ...progress,
+            retainedArtifactIds: [],
+            candidateArtifactIds: [],
+            skippedEmptyRegistry: true,
+          };
+          run = await this.store.updateRun(run.id, {
+            phase: 'idle',
+            status: 'completed',
+            progress,
+            error: null,
+            completedAt: new Date(),
+          });
+          await this.store.updateState({
+            status: 'ready',
+            writable: true,
+            maintenancePhase: 'idle',
+            maintenanceLeaseOwner: null,
+            maintenanceLeaseExpiresAt: null,
+            lastGcAt: new Date(),
+            lastError: null,
+          });
+          return run;
+        }
+      }
+
+      if (!input.dryRun) {
         await phase('pausing_admission');
         await this.executor.pauseAdmissions();
         await phase('draining_uploads');

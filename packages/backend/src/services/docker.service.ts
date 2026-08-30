@@ -70,6 +70,16 @@ export class DockerService {
     return { exitCode: ExitCode, output };
   }
 
+  async managedRegistryHasRepositories(): Promise<boolean> {
+    const registryId = await this.managedRegistryContainerId();
+    const result = await this.execInContainer(registryId, [
+      'sh',
+      '-c',
+      'if [ ! -d /var/lib/registry/docker/registry/v2/repositories ]; then exit 1; fi; find /var/lib/registry/docker/registry/v2/repositories -mindepth 1 -maxdepth 1 -print -quit | grep -q .',
+    ]);
+    return result.exitCode === 0;
+  }
+
   async runManagedRegistryGarbageCollection(dryRun: boolean): Promise<void> {
     const registryId = await this.managedRegistryContainerId();
     const inspected = await this.request('GET', `${API_VERSION}/containers/${registryId}/json`);

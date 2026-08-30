@@ -30,7 +30,7 @@ const badgeVariants = cva(
 );
 
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends React.HTMLAttributes<HTMLElement>,
     VariantProps<typeof badgeVariants> {}
 
 function renderBadgeChildren(children: React.ReactNode) {
@@ -61,10 +61,11 @@ function renderBadgeChildren(children: React.ReactNode) {
 }
 
 function Badge({ className, variant, size, children, ...props }: BadgeProps) {
+  const Component = size === "inline" ? "span" : "div";
   return (
-    <div className={cn(badgeVariants({ variant, size }), className)} {...props}>
+    <Component className={cn(badgeVariants({ variant, size }), className)} {...props}>
       {renderBadgeChildren(children)}
-    </div>
+    </Component>
   );
 }
 

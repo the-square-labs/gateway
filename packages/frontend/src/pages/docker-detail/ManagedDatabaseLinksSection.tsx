@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
@@ -742,6 +743,40 @@ export const ManagedDatabaseLinksSection = forwardRef<
             const database = databaseForBinding(entry.binding);
             const databaseNode = database ? databaseNodeById.get(database.nodeId) : undefined;
             const unavailable = !!database && !!databaseNode && !databaseIsAvailable(database);
+            const reconciling =
+              entry.pending === null &&
+              entry.binding.status === "ready" &&
+              entry.binding.observedState !== undefined &&
+              entry.binding.observedState !== "active";
+            const statusLabel =
+              entry.pending === "remove"
+                ? "will unlink"
+                : entry.pending === "add"
+                  ? "pending"
+                  : reconciling
+                    ? "reconciling"
+                    : entry.binding.status;
+            const statusVariant =
+              entry.pending === "remove" || reconciling
+                ? "warning"
+                : entry.pending === "add"
+                  ? "secondary"
+                  : entry.binding.status === "ready"
+                    ? "success"
+                    : entry.binding.status === "error"
+                      ? "destructive"
+                      : "secondary";
+            const statusDetail =
+              entry.binding.lastError ??
+              (reconciling
+                ? "Database link migration or runtime reconciliation has not completed yet."
+                : entry.binding.status === "ready"
+                  ? "Database link is ready."
+                  : entry.binding.status === "creating"
+                    ? "Database link is being created."
+                    : entry.binding.status === "deleting"
+                      ? "Database link is being removed."
+                      : "Database link reconciliation failed.");
             return (
               <SettingsControlRow
                 key={entry.binding.id}
@@ -780,26 +815,18 @@ export const ManagedDatabaseLinksSection = forwardRef<
                     </Badge>
                   )}
                   {unavailable && <Badge variant="secondary">Unavailable</Badge>}
-                  <Badge
-                    variant={
-                      entry.pending === "remove"
-                        ? "warning"
-                        : entry.pending === "add"
-                          ? "secondary"
-                          : entry.binding.status === "ready"
-                            ? "success"
-                            : entry.binding.status === "error"
-                              ? "destructive"
-                              : "secondary"
-                    }
-                    title={entry.binding.lastError ?? undefined}
-                  >
-                    {entry.pending === "remove"
-                      ? "will unlink"
-                      : entry.pending === "add"
-                        ? "pending"
-                        : entry.binding.status}
-                  </Badge>
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant={statusVariant} size="inline" tabIndex={0}>
+                          {statusLabel}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-sm">
+                        {statusDetail}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <Button
                     type="button"
                     variant="ghost"

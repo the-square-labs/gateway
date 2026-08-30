@@ -437,7 +437,7 @@ export function AuthProvisioningSection({
                 <SelectTrigger className="w-full sm:w-56" aria-label="Update channel">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="w-80 max-w-[calc(100vw-2rem)]">
                   <SelectItem
                     value="stable"
                     description="Production-ready releases only. Recommended for production environments."

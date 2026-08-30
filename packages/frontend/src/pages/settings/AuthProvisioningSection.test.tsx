@@ -161,6 +161,7 @@ describe("AuthProvisioningSection inference setting", () => {
     render(<AuthProvisioningSection canEdit section="general" />);
 
     await user.click(await screen.findByRole("combobox", { name: "Update channel" }));
+    expect(screen.getByRole("listbox")).toHaveClass("w-80", "max-w-[calc(100vw-2rem)]");
     expect(
       screen.getByText("Production-ready releases only. Recommended for production environments.")
     ).toBeInTheDocument();
