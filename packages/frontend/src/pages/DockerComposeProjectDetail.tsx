@@ -855,7 +855,7 @@ export function DockerComposeProjectDetail() {
           <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
             <DropdownMenuItem
               disabled={!!currentOperation || revision.id === project.activeRevisionId}
-              onSelect={() => void runAction("apply", revision.id)}
+              onSelect={() => void runAction("pull_apply", revision.id)}
             >
               <RefreshCw className="mr-2 h-4 w-4" />
               Reapply

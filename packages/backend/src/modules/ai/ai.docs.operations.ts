@@ -11,6 +11,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - nodes
 - databases
 - domains
+- ssl_certificates
 - logging_environments
 - logging_schemas
 - admin_users
@@ -31,6 +32,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - nodes: list with nodes:details or nodes:folders:manage; mutate with nodes:folders:manage.
 - databases: list with databases:view or databases:folders:manage; mutate with databases:folders:manage.
 - domains: list with domains:view; mutate with domains:folders:manage.
+- ssl_certificates: list with ssl:cert:view; mutate with ssl:cert:folders:manage.
 - logging_environments: list with logs:environments:view, logs:environments:folders:manage, or logs:manage; mutate with logs:environments:folders:manage or logs:manage.
 - logging_schemas: list with logs:schemas:view, logs:schemas:folders:manage, or logs:manage; mutate with logs:schemas:folders:manage or logs:manage.
 - admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.

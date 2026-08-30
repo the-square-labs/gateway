@@ -552,6 +552,63 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       return this.unwrapData(this.request<{ data: SSLCertificate }>(`/ssl-certificates/${id}`));
     }
 
+    async listSSLCertificateFolders(): Promise<import("@/types").ResourceFolderTreeNode[]> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").ResourceFolderTreeNode[] }>(
+          "/ssl-certificates/folders"
+        )
+      );
+    }
+
+    async createSSLCertificateFolder(data: {
+      name: string;
+      parentId?: string;
+    }): Promise<import("@/types").ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").ResourceFolder }>("/ssl-certificates/folders", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateSSLCertificateFolder(
+      id: string,
+      data: { name: string }
+    ): Promise<import("@/types").ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").ResourceFolder }>(
+          `/ssl-certificates/folders/${id}`,
+          { method: "PUT", body: JSON.stringify(data) }
+        )
+      );
+    }
+
+    async deleteSSLCertificateFolder(id: string): Promise<void> {
+      await this.request(`/ssl-certificates/folders/${id}`, { method: "DELETE" });
+    }
+
+    async reorderSSLCertificateFolders(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/ssl-certificates/folders/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
+    async moveSSLCertificatesToFolder(ids: string[], folderId: string | null): Promise<void> {
+      await this.request("/ssl-certificates/folders/move-certificates", {
+        method: "POST",
+        body: JSON.stringify({ ids, folderId }),
+      });
+    }
+
+    async reorderSSLCertificates(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/ssl-certificates/folders/reorder-certificates", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
     async requestACMECert(data: RequestACMECertRequest): Promise<SSLCertificateOperationResult> {
       return this.unwrapData(
         this.request<{ data: SSLCertificateOperationResult }>("/ssl-certificates/acme", {

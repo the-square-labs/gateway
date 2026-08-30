@@ -286,6 +286,12 @@ export const CORE_TOKEN_SCOPES = [
     group: "SSL Certificates",
   },
   {
+    value: "ssl:cert:folders:manage",
+    label: "Manage SSL Certificate Folders",
+    desc: "Organize SSL certificates into folders",
+    group: "SSL Certificates",
+  },
+  {
     value: "ssl:cert:delete",
     label: "Delete SSL Certificates",
     desc: "Delete SSL certificates",

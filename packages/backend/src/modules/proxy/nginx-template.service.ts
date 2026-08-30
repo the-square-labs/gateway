@@ -113,6 +113,16 @@ function routeRegexPath(path: string): string {
   return path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function safePagesFallbackUrl(value: string | null | undefined): string | null {
+  if (!value || /[\s;'"{}\\`$#]/.test(value)) return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function renderAdditionalRouteLocation(
   route: ProxyAdditionalRouteConfig,
   hostId: string,
@@ -140,6 +150,14 @@ function renderAdditionalRouteLocation(
   if (route.targetKind === 'pages') {
     const scopedConfigPath = `${path}/_gateway/pages/config.js`;
     const escaped = routeRegexPath(path);
+    const notFoundLocation = `gateway_pages_not_found_${route.id.replace(/-/g, '_')}`;
+    const spaLocation = `gateway_pages_spa_${route.id.replace(/-/g, '_')}`;
+    const fallbackUrl = safePagesFallbackUrl(route.pagesFallbackUrl);
+    const errorPage = route.pagesSpaFallback
+      ? `        error_page 404 = @${spaLocation};`
+      : fallbackUrl
+        ? `        error_page 404 =302 ${fallbackUrl};`
+        : `        error_page 404 = @${notFoundLocation};`;
     const pageBody = [
       ...common,
       '        limit_except GET HEAD { deny all; }',
@@ -148,6 +166,7 @@ function renderAdditionalRouteLocation(
       `        rewrite ^${escaped}(?:/(.*))?$ /$1 break;`,
       `        include ${routeNginxValue(route.pagesRouteIncludePath ?? '')};`,
       ...advanced,
+      errorPage,
       // Resolve directory indexes explicitly so nginx does not internally redirect
       // a stripped Pages subpath (/) into the host's generic location /.
       '        try_files $uri/index.html $uri =404;',
@@ -163,6 +182,30 @@ function renderAdditionalRouteLocation(
       '        add_header Cache-Control "no-store" always;',
       '    }',
     ];
+    const fallbackLocations = [
+      ...(route.pagesSpaFallback
+        ? [
+            `    location @${spaLocation} {`,
+            ...common,
+            '        limit_except GET HEAD { deny all; }',
+            `        include ${routeNginxValue(route.pagesRouteIncludePath ?? '')};`,
+            `        try_files /index.html @${notFoundLocation};`,
+            '        sub_filter_once on;',
+            `        sub_filter '</head>' '<script src="${scopedConfigPath}"></script></head>';`,
+            '    }',
+            '',
+          ]
+        : []),
+      ...(!fallbackUrl
+        ? [
+            `    location @${notFoundLocation} {`,
+            '        default_type text/html;',
+            `        return 404 ${escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML)};`,
+            '    }',
+            '',
+          ]
+        : []),
+    ];
     return [
       `    location = ${path} {`,
       ...common,
@@ -177,6 +220,7 @@ function renderAdditionalRouteLocation(
       ...pageBody,
       '    }',
       '',
+      ...fallbackLocations,
       `    location ~ ^${escaped}/\\. { deny all; }`,
     ].join('\n');
   }
@@ -334,6 +378,11 @@ ${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
     include {{pagesRouteIncludePath}};
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy same-origin always;
+{{#if pagesFallbackUrl}}
+    error_page 404 =302 {{pagesFallbackUrl}};
+{{else}}
+    error_page 404 = @gateway_pages_not_found_{{id}};
+{{/if}}
     location ~ /\\. { deny all; }
 
     location = /_gateway/pages/config.js {
@@ -402,7 +451,11 @@ ${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
         limit_except GET HEAD { deny all; }
         sub_filter_once on;
         sub_filter '</head>' '<script src="/_gateway/pages/config.js"></script></head>';
+{{#if pagesSpaFallback}}
+        try_files $uri $uri/ /index.html;
+{{else}}
         try_files $uri $uri/ =404;
+{{/if}}
 {{else}}
 {{#if secureLinkUpstream}}
         # gateway-managed-secure-link-upstream {{id}}
@@ -448,6 +501,15 @@ ${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
         rewrite {{sanitize this.source}} {{sanitize this.destination}} {{#if (eq this.type "permanent")}}permanent{{else}}redirect{{/if}};
 {{/each}}
     }
+
+{{#if pagesRouteIncludePath}}
+{{#unless pagesFallbackUrl}}
+    location @gateway_pages_not_found_{{id}} {
+        default_type text/html;
+        return 404 ${escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML)};
+    }
+{{/unless}}
+{{/if}}
 
 {{#if advancedConfig}}
     {{{indent (applyAccessListToAdvancedLocations advancedConfig accessList) 4}}}
@@ -1294,6 +1356,8 @@ ${rendered}`;
       // are written last so their derived values cannot become internally inconsistent.
       ...templateVariables,
       pagesRouteIncludePath: host.pagesRouteIncludePath,
+      pagesSpaFallback: host.pagesSpaFallback === true,
+      pagesFallbackUrl: safePagesFallbackUrl(host.pagesFallbackUrl),
       additionalRoutes: host.additionalRoutes ?? [],
       cacheEnabled,
       cacheMaxAge,

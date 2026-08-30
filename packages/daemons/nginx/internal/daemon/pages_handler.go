@@ -90,7 +90,7 @@ func (h *Handler) handlePagesMaterializePreview(cmd *pb.PagesMaterializePreviewC
 	if h.pagesUnavailable(result) {
 		return
 	}
-	if err := h.pagesRuntime.MaterializePreview(cmd.ProfileId, cmd.DeploymentId, cmd.Hostname, cmd.CertificateId, cmd.CertificateVersion); err != nil {
+	if err := h.pagesRuntime.MaterializePreview(cmd.ProfileId, cmd.DeploymentId, cmd.Hostname, cmd.CertificateId, cmd.CertificateVersion, pages.PreviewFallback{SPAFallback: cmd.SpaFallback, URL: cmd.FallbackUrl}); err != nil {
 		h.pagesCommandError(result, "preview materialization", err)
 	}
 }

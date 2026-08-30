@@ -1,5 +1,18 @@
-import { boolean, index, jsonb, pgEnum, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  type AnyPgColumn,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { certificates } from './certificates.js';
+import { sslCertificateFolders } from './ssl-certificate-folders.js';
 import { users } from './users.js';
 
 export const sslCertTypeEnum = pgEnum('ssl_cert_type', ['acme', 'upload', 'internal']);
@@ -71,6 +84,8 @@ export const sslCertificates = pgTable(
 
     // System flag — locked certs cannot be deleted (e.g. management domain cert)
     isSystem: boolean('is_system').notNull().default(false),
+    folderId: uuid('folder_id').references((): AnyPgColumn => sslCertificateFolders.id, { onDelete: 'set null' }),
+    sortOrder: integer('sort_order').notNull().default(0),
 
     // Metadata
     createdById: uuid('created_by_id')
@@ -85,5 +100,6 @@ export const sslCertificates = pgTable(
     typeIdx: index('ssl_cert_type_idx').on(table.type),
     autoRenewProviderIdx: index('ssl_cert_auto_renew_provider_idx').on(table.autoRenewProvider),
     createdByIdx: index('ssl_cert_created_by_idx').on(table.createdById),
+    folderIdx: index('ssl_cert_folder_idx').on(table.folderId),
   })
 );

@@ -2,6 +2,7 @@ import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   pageDeployments,
+  pageProjects,
   pageTags,
   proxyAdditionalRoutes,
   proxyAdditionalSecureLinks,
@@ -144,6 +145,9 @@ export abstract class AdditionalRouteServiceRuntime {
         });
       } else if (row.targetKind === 'pages') {
         if (!row.includePath || !row.runtimeConfigPath || !row.activeDeploymentId) continue;
+        const project = row.pageProjectId
+          ? await this.db.query.pageProjects.findFirst({ where: eq(pageProjects.id, row.pageProjectId) })
+          : null;
         configs.push({
           id: row.id,
           path: row.path,
@@ -153,6 +157,8 @@ export abstract class AdditionalRouteServiceRuntime {
           forwardPort: null,
           pagesRouteIncludePath: row.includePath,
           pagesRuntimeConfigPath: row.runtimeConfigPath,
+          pagesSpaFallback: project?.spaFallback ?? false,
+          pagesFallbackUrl: project?.fallbackUrl ?? null,
           stripPrefix: true,
           websocketSupport: false,
           requestBuffering: false,

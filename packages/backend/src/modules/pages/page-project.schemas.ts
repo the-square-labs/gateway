@@ -21,11 +21,21 @@ export const MigratePageProjectSchema = z.object({
   targetNodeId: z.string().uuid(),
 });
 
+const PageFallbackUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .url()
+  .refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'Fallback URL must use HTTP or HTTPS')
+  .refine((value) => !/[\s;'"{}\\`$#]/.test(value), 'Fallback URL contains unsupported characters');
+
 export const UpdatePageProjectSchema = z
   .object({
     name: z.string().trim().min(1).max(255).optional(),
     description: z.string().trim().max(2000).optional().nullable(),
     appearanceColor: z.enum(NODE_APPEARANCE_COLORS).nullable().optional(),
+    spaFallback: z.boolean().optional(),
+    fallbackUrl: PageFallbackUrlSchema.nullable().optional(),
     maxDeployments: z.number().int().min(1).max(500).optional(),
     storageQuotaBytes: z.number().int().min(1_048_576).max(Number.MAX_SAFE_INTEGER).optional(),
   })

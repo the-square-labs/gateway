@@ -1,11 +1,90 @@
 import { appRoute, createdJson, IdParamSchema, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
 import {
+  CreateResourceFolderSchema,
+  MoveResourceFolderSchema,
+  MoveResourcesToFolderSchema,
+  ReorderResourceFoldersSchema,
+  ReorderResourcesSchema,
+  UpdateResourceFolderSchema,
+} from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
   LinkInternalCertSchema,
   RequestACMECertSchema,
   SetSslAutoRenewSchema,
   SSLCertListQuerySchema,
   UploadCertSchema,
 } from './ssl.schemas.js';
+
+export const listSslCertificateFoldersRoute = appRoute({
+  method: 'get',
+  path: '/folders',
+  tags: ['SSL Certificates'],
+  summary: 'List SSL certificate folders',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const createSslCertificateFolderRoute = appRoute({
+  method: 'post',
+  path: '/folders',
+  tags: ['SSL Certificates'],
+  summary: 'Create an SSL certificate folder',
+  request: jsonBody(CreateResourceFolderSchema),
+  responses: createdJson(UnknownDataResponseSchema),
+});
+
+export const reorderSslCertificateFoldersRoute = appRoute({
+  method: 'put',
+  path: '/folders/reorder',
+  tags: ['SSL Certificates'],
+  summary: 'Reorder SSL certificate folders',
+  request: jsonBody(ReorderResourceFoldersSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const moveSslCertificatesToFolderRoute = appRoute({
+  method: 'post',
+  path: '/folders/move-certificates',
+  tags: ['SSL Certificates'],
+  summary: 'Move SSL certificates to a folder',
+  request: jsonBody(MoveResourcesToFolderSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const reorderSslCertificatesRoute = appRoute({
+  method: 'put',
+  path: '/folders/reorder-certificates',
+  tags: ['SSL Certificates'],
+  summary: 'Reorder SSL certificates within a folder',
+  request: jsonBody(ReorderResourcesSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const updateSslCertificateFolderRoute = appRoute({
+  method: 'put',
+  path: '/folders/{id}',
+  tags: ['SSL Certificates'],
+  summary: 'Rename an SSL certificate folder',
+  request: { params: IdParamSchema, ...jsonBody(UpdateResourceFolderSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const moveSslCertificateFolderRoute = appRoute({
+  method: 'put',
+  path: '/folders/{id}/move',
+  tags: ['SSL Certificates'],
+  summary: 'Move an SSL certificate folder',
+  request: { params: IdParamSchema, ...jsonBody(MoveResourceFolderSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const deleteSslCertificateFolderRoute = appRoute({
+  method: 'delete',
+  path: '/folders/{id}',
+  tags: ['SSL Certificates'],
+  summary: 'Delete an SSL certificate folder',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
 
 export const listSslCertificatesRoute = appRoute({
   method: 'get',

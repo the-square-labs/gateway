@@ -334,9 +334,8 @@ export function PageProjectDetail({
     };
   }, [canEdit, project]);
 
-  const latestPreviewUrl = latestPreviewHostname
-    ? `${window.location.protocol}//${latestPreviewHostname}`
-    : null;
+  const publicHostname = project?.primaryDomain ?? latestPreviewHostname;
+  const latestPreviewUrl = publicHostname ? `${window.location.protocol}//${publicHostname}` : null;
   const visibleTab = PROJECT_TABS.includes(activeTab as (typeof PROJECT_TABS)[number])
     ? activeTab
     : "deployments";
@@ -428,7 +427,7 @@ export function PageProjectDetail({
                 ? [
                     {
                       id: "copy-latest-preview",
-                      label: "Copy latest preview",
+                      label: project?.primaryDomain ? "Copy domain" : "Copy latest preview",
                       icon: <Copy className="h-4 w-4" />,
                       onClick: () => {
                         void navigator.clipboard?.writeText(latestPreviewUrl);
@@ -503,8 +502,8 @@ export function PageProjectDetail({
 
         {latestPreviewUrl && (
           <CopyValueField
-            label="Latest immutable preview"
-            value={latestPreviewHostname ?? latestPreviewUrl}
+            label={project?.primaryDomain ? "Domain" : "Latest immutable preview"}
+            value={publicHostname ?? latestPreviewUrl}
             copyValue={latestPreviewUrl}
             actions={
               <Button

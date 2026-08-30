@@ -174,6 +174,7 @@ import { SetupWizardService } from '@/modules/setup/setup-wizard.service.js';
 import { ACMEService } from '@/modules/ssl/acme.service.js';
 import { resolveHttp01Ingress } from '@/modules/ssl/http01-ingress.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { UIBootstrapService } from '@/modules/ui-bootstrap/ui-bootstrap.service.js';
@@ -1078,6 +1079,9 @@ export async function initializeContainer(): Promise<void> {
   sslService.setProxyService(proxyService);
   integrationsService.setSSLService(sslService);
   container.registerInstance(SSLService, sslService);
+  const sslCertificateFolderService = new SSLCertificateFolderService(db, auditService);
+  sslCertificateFolderService.setEventBus(eventBus);
+  container.registerInstance(SSLCertificateFolderService, sslCertificateFolderService);
 
   // Monitoring services
   const monitoringService = new MonitoringService(db);
@@ -1211,6 +1215,7 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(PageNodeRuntimeService, pageNodeRuntimeService);
   pageProjectService.setRuntimeAdapter(pageNodeRuntimeService);
+  pageProjectService.setRouteRuntimeAdapter(proxyService);
   pageMaintenanceService.setMigrationReconciler(pageProjectService);
   const pageRouteService = new PageRouteService(db, pageNodeRuntimeService, auditService, pageRuntimeConfigService);
   container.registerInstance(PageRouteService, pageRouteService);

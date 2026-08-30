@@ -97,14 +97,24 @@ describe("scope constants", () => {
     expect(scopeMatches(["admin:users:impersonate"], "admin:users:impersonate")).toBe(true);
   });
 
-  it("keeps source-control and SSH integrations out of Gateway MCP scopes", () => {
+  it("allows connector discovery scopes while keeping mutating integrations out of Gateway MCP scopes", () => {
     const mcpValues = scopeValues(MCP_TOKEN_SCOPES);
 
     expect(mcpValues).toContain("nodes:details");
     expect(mcpValues).toContain("integrations:cloudflare:view");
-    expect(mcpValues.some((scope) => scope.startsWith("integrations:gitlab:"))).toBe(false);
-    expect(mcpValues.some((scope) => scope.startsWith("integrations:github:"))).toBe(false);
-    expect(mcpValues.some((scope) => scope.startsWith("integrations:git:"))).toBe(false);
-    expect(mcpValues.some((scope) => scope.startsWith("integrations:ssh:"))).toBe(false);
+    expect(mcpValues).toEqual(
+      expect.arrayContaining([
+        "integrations:gitlab:view",
+        "integrations:gitlab:projects:view",
+        "integrations:gitlab:repo:read",
+        "integrations:github:view",
+        "integrations:git:view",
+        "integrations:ssh:view",
+      ])
+    );
+    expect(mcpValues).not.toContain("integrations:gitlab:repo:write");
+    expect(mcpValues).not.toContain("integrations:github:manage");
+    expect(mcpValues).not.toContain("integrations:git:manage");
+    expect(mcpValues).not.toContain("integrations:ssh:use");
   });
 });

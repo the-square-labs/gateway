@@ -31,6 +31,7 @@ import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-p
 import type { DockerBuildAdmissionStatus, DockerComposeProject, Node } from "@/types";
 import { RepositorySourceFields } from "../docker-deploy/RepositorySourceFields";
 import { useDockerSourceRepositories } from "../docker-deploy/useDockerSourceRepositories";
+import { composeRevisionResumeSignature } from "./compose-adoption-resume";
 
 const DEFAULT_YAML = `services:
   web:
@@ -92,6 +93,11 @@ export function ComposeProjectEditor({
   const [sourceAutoBuild, setSourceAutoBuild] = useState(true);
   const [sourceAutoDeploy, setSourceAutoDeploy] = useState(true);
   const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
+  const [adoptionResume, setAdoptionResume] = useState<{
+    revisionId: string;
+    idempotencyKey: string;
+    inputSignature: string;
+  } | null>(null);
   const [loading, setLoading] = useState(!!projectId);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -291,30 +297,39 @@ export function ComposeProjectEditor({
       if (!result.valid) throw new Error("Fix validation errors before applying");
       let targetProjectId = projectId;
       let revisionId: string | undefined;
+      let idempotencyKey = createClientUuid();
+      let completionMessage = "Compose project created; Pull & Apply started";
+      const inputSignature = composeRevisionResumeSignature(values);
       if (!projectId) {
         const created = await api.createDockerComposeProject(nodeId, values);
         targetProjectId = created.project.id;
         revisionId = created.revision.id;
+      } else if (adoptionResume?.inputSignature === inputSignature) {
+        revisionId = adoptionResume.revisionId;
+        idempotencyKey = adoptionResume.idempotencyKey;
+        completionMessage = "Compose adopted; Pull & Apply retried";
+      } else if (adoptionResume) {
+        const revision = await api.createDockerComposeRevision(nodeId, projectId, values);
+        revisionId = revision.id;
+        setAdoptionResume(null);
+        completionMessage = "Revision saved; Pull & Apply started";
       } else if (adoption) {
         const prepared = await api.adoptDockerComposeProject(nodeId, projectId, values);
         revisionId = prepared.revision.id;
+        const resume = { revisionId, idempotencyKey, inputSignature };
+        setAdoptionResume(resume);
+        completionMessage = "Compose adopted; Pull & Apply started";
       } else {
         const revision = await api.createDockerComposeRevision(nodeId, projectId, values);
         revisionId = revision.id;
+        completionMessage = "Revision saved; Pull & Apply started";
       }
       if (!targetProjectId || !revisionId) throw new Error("Compose revision was not created");
-      const operationAction = projectId ? "apply" : "pull_apply";
-      await api.startDockerComposeOperation(nodeId, targetProjectId, operationAction, {
+      await api.startDockerComposeOperation(nodeId, targetProjectId, "pull_apply", {
         revisionId,
-        idempotencyKey: createClientUuid(),
+        idempotencyKey,
       });
-      toast.success(
-        adoption
-          ? "Adoption apply started"
-          : editing
-            ? "Revision apply started"
-            : "Compose project apply started"
-      );
+      toast.success(completionMessage);
       if (compactRevision && onClose) onClose();
       else navigate(dockerComposeProjectRoute(targetProjectId), { replace: true });
     } catch (error) {

@@ -111,6 +111,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `proxy:templates:delete` | Yes |
 | `ssl:cert:view` | Yes |
 | `ssl:cert:issue` |  |
+| `ssl:cert:folders:manage` | Yes |
 | `ssl:cert:delete` | Yes |
 | `ssl:cert:revoke` | Yes |
 | `ssl:cert:export` | Yes |

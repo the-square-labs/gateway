@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { getNodeAppearanceColor, NODE_APPEARANCE_COLOR_OPTIONS } from "@/lib/node-appearance";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -35,6 +36,8 @@ export function PageProjectSettingsDialog({
   const [appearanceColor, setAppearanceColor] = useState<NodeAppearanceColor | null>(
     project.appearanceColor
   );
+  const [spaFallback, setSpaFallback] = useState(project.spaFallback);
+  const [fallbackUrl, setFallbackUrl] = useState(project.fallbackUrl ?? "");
   const [maxDeployments, setMaxDeployments] = useState(String(project.maxDeployments));
   const [storageQuotaGiB, setStorageQuotaGiB] = useState(
     String((project.storageQuotaBytes / 1024 / 1024 / 1024).toFixed(2))
@@ -46,6 +49,8 @@ export function PageProjectSettingsDialog({
     setName(project.name);
     setDescription(project.description ?? "");
     setAppearanceColor(project.appearanceColor);
+    setSpaFallback(project.spaFallback);
+    setFallbackUrl(project.fallbackUrl ?? "");
     setMaxDeployments(String(project.maxDeployments));
     setStorageQuotaGiB(String((project.storageQuotaBytes / 1024 / 1024 / 1024).toFixed(2)));
   }, [open, project]);
@@ -62,6 +67,21 @@ export function PageProjectSettingsDialog({
       toast.error("Project storage quota must be at least 1 MiB");
       return;
     }
+    const normalizedFallbackUrl = fallbackUrl.trim();
+    if (normalizedFallbackUrl) {
+      try {
+        const parsed = new URL(normalizedFallbackUrl);
+        if (
+          (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+          /[\s;'"{}\\`$#]/.test(normalizedFallbackUrl)
+        ) {
+          throw new Error();
+        }
+      } catch {
+        toast.error("Custom fallback URL must be an absolute HTTP(S) URL");
+        return;
+      }
+    }
 
     setSaving(true);
     try {
@@ -69,6 +89,8 @@ export function PageProjectSettingsDialog({
         name: name.trim(),
         description: description.trim() || null,
         appearanceColor,
+        spaFallback,
+        fallbackUrl: normalizedFallbackUrl || null,
         maxDeployments: retention,
         storageQuotaBytes: Math.round(quotaGiB * 1024 * 1024 * 1024),
       });
@@ -152,6 +174,28 @@ export function PageProjectSettingsDialog({
                 </Badge>
               </div>
             </div>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="SPA fallback"
+            description="Serve index.html when a requested Pages path does not exist."
+          >
+            <Switch
+              checked={spaFallback}
+              onChange={setSpaFallback}
+              ariaLabel="Enable SPA fallback"
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Custom fallback URL"
+            description="Redirect missing paths to this absolute HTTP(S) URL when SPA fallback is disabled."
+          >
+            <Input
+              type="url"
+              value={fallbackUrl}
+              onChange={(event) => setFallbackUrl(event.target.value)}
+              placeholder="https://example.com/not-found"
+              disabled={spaFallback}
+            />
           </SettingsControlRow>
           <SettingsControlRow
             title="Maximum retained Deployments"

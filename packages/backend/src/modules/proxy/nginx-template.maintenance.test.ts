@@ -181,6 +181,69 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).not.toContain('proxy_pass');
   });
 
+  it('renders SPA fallback for Pages Routes', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        pagesRouteIncludePath: '/custom-nginx/conf.d/pages/routes/11111111-1111-4111-8111-111111111111.inc',
+        pagesSpaFallback: true,
+      },
+      null
+    );
+
+    expect(rendered).toContain('try_files $uri $uri/ /index.html;');
+    expect(rendered).toContain('error_page 404 = @gateway_pages_not_found_11111111-1111-4111-8111-111111111111;');
+  });
+
+  it('renders an absolute custom redirect for missing Pages paths', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        pagesRouteIncludePath: '/custom-nginx/conf.d/pages/routes/11111111-1111-4111-8111-111111111111.inc',
+        pagesFallbackUrl: 'https://errors.example.com/not-found',
+      },
+      null
+    );
+
+    expect(rendered).toContain('error_page 404 =302 https://errors.example.com/not-found;');
+    expect(rendered).not.toContain('location @gateway_pages_not_found_11111111-1111-4111-8111-111111111111');
+  });
+
+  it('applies Pages fallback settings to additional routes', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        additionalRoutes: [
+          {
+            id: '22222222-2222-4222-8222-222222222222',
+            path: '/docs',
+            targetKind: 'pages',
+            forwardScheme: 'http',
+            forwardHost: null,
+            forwardPort: null,
+            pagesRouteIncludePath: '/custom-nginx/conf.d/pages/routes/22222222-2222-4222-8222-222222222222.inc',
+            pagesRuntimeConfigPath: '/custom-nginx/pages/runtime-configs/routes/route/current.js',
+            pagesSpaFallback: true,
+            pagesFallbackUrl: 'https://errors.example.com/ignored-while-spa-is-enabled',
+            stripPrefix: true,
+            websocketSupport: false,
+            requestBuffering: false,
+            responseBuffering: false,
+            connectTimeoutSeconds: 60,
+            readTimeoutSeconds: 60,
+            sendTimeoutSeconds: 60,
+          },
+        ],
+      },
+      null
+    );
+
+    expect(rendered).toContain('error_page 404 = @gateway_pages_spa_22222222_2222_4222_8222_222222222222;');
+    expect(rendered).toContain('location @gateway_pages_spa_22222222_2222_4222_8222_222222222222');
+    expect(rendered).toContain('try_files /index.html @gateway_pages_not_found_22222222_2222_4222_8222_222222222222;');
+    expect(rendered).not.toContain('error_page 404 =302 https://errors.example.com/ignored-while-spa-is-enabled;');
+  });
+
   it('uses the shared minimal error-page layout without the Gateway header', () => {
     for (const page of [GATEWAY_NOT_FOUND_HTML, GATEWAY_MAINTENANCE_HTML]) {
       expect(page).toContain('Powered by <a href="https://thesquarelabs.com"');

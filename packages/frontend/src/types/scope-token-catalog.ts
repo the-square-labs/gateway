@@ -59,8 +59,18 @@ const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
   "integrations:ssh:",
 ] as const;
 
+const MCP_EXTERNAL_INTEGRATION_READ_SCOPE_VALUES = new Set([
+  "integrations:gitlab:view",
+  "integrations:gitlab:projects:view",
+  "integrations:gitlab:repo:read",
+  "integrations:github:view",
+  "integrations:git:view",
+  "integrations:ssh:view",
+]);
+
 export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter(
   (scope) =>
+    MCP_EXTERNAL_INTEGRATION_READ_SCOPE_VALUES.has(scope.value) ||
     !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.value.startsWith(prefix))
 );
 

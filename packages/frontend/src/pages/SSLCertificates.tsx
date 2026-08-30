@@ -1,15 +1,16 @@
-import { ArrowRight, Cloud, MoreVertical, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowRight, Cloud, FolderPlus, MoreVertical, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
+import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
-import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { DNSChallengeVerification } from "@/components/ssl/DNSChallengeVerification";
 import {
   SSLCertificateCreateDialog,
@@ -17,7 +18,6 @@ import {
 } from "@/components/ssl/SSLCertificateCreateDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
   Dialog,
   DialogContent,
@@ -39,9 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
-import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -121,6 +119,7 @@ export function SSLCertificates() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedCertificateId = searchParams.get("certificate");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const [domainRequiredOpen, setDomainRequiredOpen] = useState(false);
   const [cloudflareRequiredOpen, setCloudflareRequiredOpen] = useState(false);
   const [hasDomains, setHasDomains] = useState(false);
@@ -262,6 +261,7 @@ export function SSLCertificates() {
   }, []);
   const {
     certificates,
+    error,
     isLoading,
     isLoadingMore,
     filters,
@@ -275,7 +275,6 @@ export function SSLCertificates() {
     completeDNSVerify,
     deleteCert,
   } = useSSLStore();
-  const initialLoading = useInitialLoading(isLoading);
   const [searchInput, setSearchInput] = useState(filters.search);
   type PendingRenewal = {
     certId: string;
@@ -304,8 +303,6 @@ export function SSLCertificates() {
     setValue: setRenewingCert,
   } = useDeferredDialogState<RenewingCertificate>();
   const previewCleanupTimerRef = useRef<number | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void showSystemCertificates;
@@ -315,19 +312,13 @@ export function SSLCertificates() {
   useRealtime("ssl.cert.changed", () => {
     fetchCertificates();
   });
+  useRealtime("ssl.cert.folder.changed", () => {
+    fetchCertificates();
+  });
 
   useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel || !hasMore || isLoadingMore) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) void fetchNextPage();
-      },
-      { root: scrollRef.current, threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [fetchNextPage, hasMore, isLoadingMore]);
+    if (hasMore && !isLoading && !isLoadingMore && !error) void fetchNextPage();
+  }, [error, fetchNextPage, hasMore, isLoading, isLoadingMore]);
 
   useEffect(
     () => () => {
@@ -344,6 +335,7 @@ export function SSLCertificates() {
 
   const hasActiveFilters =
     filters.type !== "all" || filters.status !== "active" || filters.search !== "";
+  const canManageFolders = hasScope("ssl:cert:folders:manage");
 
   const handleRenew = async (cert: SSLCertificate) => {
     setRenewingCert({
@@ -494,12 +486,12 @@ export function SSLCertificates() {
     }, 250);
   };
 
-  const certificateColumns: DataTableColumn<SSLCertificate>[] = [
+  const certificateColumns: ResourceListColumn<SSLCertificate>[] = [
     {
-      key: "name",
-      header: "Name",
+      id: "name",
+      label: "Name",
       width: "minmax(200px, 1.25fr)",
-      render: (cert) => (
+      renderCell: (cert) => (
         <div className="flex min-w-0 items-center gap-2">
           <p className="truncate text-sm font-medium">{cert.name}</p>
           {cert.isSystem && (
@@ -511,11 +503,10 @@ export function SSLCertificates() {
       ),
     },
     {
-      key: "domains",
-      header: "Domains",
+      id: "domains",
+      label: "Domains",
       width: "minmax(200px, 1.25fr)",
-      truncate: true,
-      render: (cert) => (
+      renderCell: (cert) => (
         <div className="min-w-0">
           <p className="truncate text-sm text-muted-foreground">
             {cert.domainNames.slice(0, 2).join(", ") || "-"}
@@ -527,29 +518,29 @@ export function SSLCertificates() {
       ),
     },
     {
-      key: "type",
-      header: "Type",
+      id: "type",
+      label: "Type",
       width: "110px",
-      render: (cert) => <SSLTypeBadge type={cert.type} />,
+      renderCell: (cert) => <SSLTypeBadge type={cert.type} />,
     },
     {
-      key: "status",
-      header: "Status",
+      id: "status",
+      label: "Status",
       width: "120px",
-      render: (cert) => <SSLStatusBadge status={cert.status} />,
+      renderCell: (cert) => <SSLStatusBadge status={cert.status} />,
     },
     {
-      key: "tls",
-      header: "Deployments",
+      id: "tls",
+      label: "Deployments",
       width: "minmax(130px, 0.7fr)",
-      render: (cert) => <TLSDeploymentBadge distribution={cert.distribution} />,
+      renderCell: (cert) => <TLSDeploymentBadge distribution={cert.distribution} />,
     },
     {
-      key: "expires",
-      header: "Expires",
+      id: "expires",
+      label: "Expires",
       width: "190px",
-      className: "whitespace-nowrap",
-      render: (cert) => {
+      cellClassName: "whitespace-nowrap",
+      renderCell: (cert) => {
         const expDays = cert.notAfter ? daysUntil(cert.notAfter) : null;
         return cert.notAfter ? (
           <span
@@ -574,10 +565,10 @@ export function SSLCertificates() {
       },
     },
     {
-      key: "autoRenew",
-      header: "Auto-Renew",
+      id: "autoRenew",
+      label: "Auto-Renew",
       width: "150px",
-      render: (cert) => {
+      renderCell: (cert) => {
         if (cert.type !== "acme") return <Badge variant="secondary">No</Badge>;
         if (cert.autoRenew && cert.autoRenewProvider === "cloudflare") {
           return <Badge variant="success">Cloudflare</Badge>;
@@ -596,11 +587,11 @@ export function SSLCertificates() {
       },
     },
     {
-      key: "actions",
-      header: "",
+      id: "actions",
+      label: "",
       align: "right",
       width: "64px",
-      render: (cert) => {
+      renderCell: (cert) => {
         const hasPendingDNSVerification =
           (cert.acmePendingOperation === "issue" || cert.acmePendingOperation === "renewal") &&
           (cert.acmePendingChallenges?.length ?? 0) > 0;
@@ -716,8 +707,17 @@ export function SSLCertificates() {
             </div>
           </div>
           <ResponsiveHeaderActions
-            actions={
-              hasScope("ssl:cert:issue")
+            actions={[
+              ...(canManageFolders && createFolderAction
+                ? [
+                    {
+                      label: "Add Folder",
+                      icon: <FolderPlus className="h-4 w-4" />,
+                      onClick: createFolderAction,
+                    },
+                  ]
+                : []),
+              ...(hasScope("ssl:cert:issue")
                 ? [
                     {
                       label: "Add Certificate",
@@ -726,9 +726,15 @@ export function SSLCertificates() {
                       disabled: isCheckingDomains,
                     },
                   ]
-                : []
-            }
+                : []),
+            ]}
           >
+            {canManageFolders && (
+              <Button variant="outline" onClick={() => createFolderAction?.()}>
+                <FolderPlus className="h-4 w-4" />
+                Add Folder
+              </Button>
+            )}
             {hasScope("ssl:cert:issue") && (
               <Button onClick={() => void openCreateCertificate()} disabled={isCheckingDomains}>
                 <Plus className="h-4 w-4" />
@@ -738,95 +744,83 @@ export function SSLCertificates() {
           </ResponsiveHeaderActions>
         </div>
 
-        {/* Search and filters */}
-        <SearchFilterBar
-          className="shrink-0"
-          placeholder="Search by name or domain..."
-          search={searchInput}
-          onSearchChange={setSearchInput}
-          onSearchSubmit={handleSearch}
-          hasActiveFilters={hasActiveFilters}
-          onReset={() => {
-            resetFilters();
-            setSearchInput("");
-          }}
-          filters={
-            <>
-              <div className="w-40">
-                <Select
-                  value={filters.type}
-                  onValueChange={(v) => setFilters({ type: v as SSLCertType | "all" })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {typeOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="w-40">
-                <Select
-                  value={filters.status}
-                  onValueChange={(v) => setFilters({ status: v as SSLCertStatus | "all" })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {statusOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </>
-          }
-        />
-
-        {initialLoading && (certificates || []).length === 0 ? (
-          <Skeleton />
-        ) : (certificates || []).length > 0 ? (
-          <div className="min-h-0 shrink">
-            <DataTable
-              columns={certificateColumns}
-              data={certificates || []}
-              keyFn={(cert) => cert.id}
-              onRowClick={openCertificatePreview}
-              scrollRef={scrollRef}
-              horizontalScroll
-              minWidth="1128px"
-              footer={
-                hasMore ? (
-                  <div
-                    ref={sentinelRef}
-                    className="flex items-center justify-center py-3 text-xs text-muted-foreground"
-                  >
-                    {isLoadingMore ? "Loading more certificates..." : "Scroll to load more"}
-                  </div>
-                ) : undefined
-              }
-            />
-          </div>
-        ) : (
-          <EmptyState
-            message="No SSL certificates."
-            {...(hasScope("ssl:cert:issue")
-              ? { actionLabel: "Add one", onAction: () => void openCreateCertificate() }
-              : {})}
-            hasActiveFilters={hasActiveFilters}
-            onReset={() => {
+        <FolderedResourceList<SSLCertificate>
+          resourceType="ssl-certificate"
+          realtimeChannel="ssl.cert.folder.changed"
+          resources={certificates || []}
+          columns={certificateColumns}
+          search={{
+            placeholder: "Search by name or domain...",
+            search: searchInput,
+            onSearchChange: setSearchInput,
+            onSearchSubmit: handleSearch,
+            hasActiveFilters,
+            onReset: () => {
               resetFilters();
               setSearchInput("");
-            }}
-          />
-        )}
+            },
+            filters: (
+              <>
+                <div className="w-40">
+                  <Select
+                    value={filters.type}
+                    onValueChange={(v) => setFilters({ type: v as SSLCertType | "all" })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {typeOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-40">
+                  <Select
+                    value={filters.status}
+                    onValueChange={(v) => setFilters({ status: v as SSLCertStatus | "all" })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ),
+          }}
+          loading={isLoading || isLoadingMore}
+          loadingLabel="Loading SSL certificates..."
+          emptyState={
+            <EmptyState
+              message="No SSL certificates."
+              {...(hasScope("ssl:cert:issue")
+                ? { actionLabel: "Add one", onAction: () => void openCreateCertificate() }
+                : {})}
+              hasActiveFilters={hasActiveFilters}
+              onReset={() => {
+                resetFilters();
+                setSearchInput("");
+              }}
+            />
+          }
+          minWidth={1128}
+          canManageFolders={canManageFolders}
+          canReorganizeItem={(certificate) => canManageFolders && !certificate.isSystem}
+          getResourceLabel={(certificate) => certificate.name}
+          onItemClick={openCertificatePreview}
+          onRefresh={fetchCertificates}
+          onCreateFolderRef={(fn) => setCreateFolderAction(() => fn)}
+        />
       </div>
 
       <SSLCertificateCreateDialog

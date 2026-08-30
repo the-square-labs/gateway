@@ -135,6 +135,8 @@ export const pageProjects = pgTable(
     slug: varchar('slug', { length: 60 }).notNull(),
     description: text('description'),
     appearanceColor: varchar('appearance_color', { length: 32 }),
+    spaFallback: boolean('spa_fallback').notNull().default(false),
+    fallbackUrl: text('fallback_url'),
     nodeId: uuid('node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     migrationSourceNodeId: uuid('migration_source_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     migrationTargetNodeId: uuid('migration_target_node_id').references(() => nodes.id, { onDelete: 'restrict' }),

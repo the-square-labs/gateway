@@ -96,6 +96,12 @@ describe('Pages Project platform contract', () => {
     expect(() => UpdatePageProjectSchema.parse({})).toThrow();
     expect(UpdatePageProjectSchema.parse({ appearanceColor: 'purple' })).toEqual({ appearanceColor: 'purple' });
     expect(() => UpdatePageProjectSchema.parse({ appearanceColor: 'teal' })).toThrow();
+    expect(UpdatePageProjectSchema.parse({ spaFallback: true, fallbackUrl: null })).toEqual({
+      spaFallback: true,
+      fallbackUrl: null,
+    });
+    expect(() => UpdatePageProjectSchema.parse({ fallbackUrl: 'ftp://example.com/not-found' })).toThrow();
+    expect(() => UpdatePageProjectSchema.parse({ fallbackUrl: 'https://example.com/not-found#fragment' })).toThrow();
     expect(PageProjectListQuerySchema.parse({ folderId: null })).toMatchObject({ page: 1, limit: 20, folderId: null });
   });
 
@@ -147,7 +153,7 @@ describe('Pages Project platform contract', () => {
       .mockReturnValueOnce({ from: () => ({ where: async () => [{ nextSortOrder: null }] }) })
       .mockReturnValueOnce({ from: () => ({ where: async () => [{ deploymentCount: 0 }] }) })
       .mockReturnValueOnce({ from: () => ({ where: async () => [{ tagCount: 1 }] }) })
-      .mockReturnValueOnce({ from: () => ({ where: async () => [{ routeCount: 0 }] }) });
+      .mockReturnValueOnce({ from: () => ({ innerJoin: () => ({ where: async () => [] }) }) });
     const db = { select, transaction: vi.fn(async (callback) => callback(tx)) };
     const audit = { log: vi.fn().mockResolvedValue(undefined) };
     const eventBus = { publish: vi.fn() };
@@ -216,7 +222,7 @@ describe('Pages Project platform contract', () => {
       .mockReturnValueOnce({ from: () => ({ where: () => ({ limit: async () => [project] }) }) })
       .mockReturnValueOnce({ from: () => ({ where: async () => [{ deploymentCount: 0 }] }) })
       .mockReturnValueOnce({ from: () => ({ where: async () => [{ tagCount: 1 }] }) })
-      .mockReturnValueOnce({ from: () => ({ where: async () => [{ routeCount: 0 }] }) });
+      .mockReturnValueOnce({ from: () => ({ innerJoin: () => ({ where: async () => [] }) }) });
     const activationDelete = vi.fn().mockResolvedValue(undefined);
     const projectDelete = vi.fn().mockResolvedValue(undefined);
     const tx = {
@@ -244,6 +250,50 @@ describe('Pages Project platform contract', () => {
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'page_project.delete', resourceId: 'project-1' })
     );
+  });
+
+  it('selects the first bound domain using deterministic ASCII ordering', async () => {
+    const project = {
+      id: 'project-1',
+      name: 'Docs',
+      slug: 'docs',
+      description: null,
+      appearanceColor: null,
+      spaFallback: false,
+      fallbackUrl: null,
+      nodeId: null,
+      migrationSourceNodeId: null,
+      migrationTargetNodeId: null,
+      migrationStatus: null,
+      migrationGeneration: 0,
+      migrationError: null,
+      folderId: null,
+      sortOrder: 0,
+      maxDeployments: 20,
+      storageQuotaBytes: 1_073_741_824,
+      storageUsedBytes: 0,
+      nextDeploymentSequence: 1,
+      createdById: 'user-1',
+      updatedById: null,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+    const select = vi
+      .fn()
+      .mockReturnValueOnce({ from: () => ({ where: () => ({ limit: async () => [project] }) }) })
+      .mockReturnValueOnce({ from: () => ({ where: async () => [{ deploymentCount: 0 }] }) })
+      .mockReturnValueOnce({ from: () => ({ where: async () => [{ tagCount: 0 }] }) })
+      .mockReturnValueOnce({
+        from: () => ({
+          innerJoin: () => ({ where: async () => [{ domainNames: ['z.example.test', 'a.example.test'] }] }),
+        }),
+      });
+    const service = new PageProjectService({ select } as any, { log: vi.fn() } as any);
+
+    await expect(service.get(project.id)).resolves.toMatchObject({
+      primaryDomain: 'a.example.test',
+      routeCount: 1,
+    });
   });
 
   it('emits bounded events with the Project ID as the scope resource', () => {

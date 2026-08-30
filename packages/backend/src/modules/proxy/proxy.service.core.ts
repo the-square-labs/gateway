@@ -621,10 +621,10 @@ export abstract class ProxyServiceCore {
     if (host.upstreamKind === 'pages' && !this.pageRoutes) {
       throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
     }
-    const pagesRouteIncludePath =
-      host.upstreamKind === 'pages'
-        ? (pagesRouteIncludePathOverride ?? (await this.pageRoutes!.getIncludePath(host.id)))
-        : undefined;
+    const pagesRouteConfig = host.upstreamKind === 'pages' ? await this.pageRoutes!.getRenderConfig(host.id) : null;
+    const pagesRouteIncludePath = pagesRouteConfig
+      ? (pagesRouteIncludePathOverride ?? pagesRouteConfig.includePath)
+      : undefined;
     const registryAuthRealm = usesRegistryIngress
       ? new URL('/api/docker/registry/token', await this.generalSettings!.requirePublicUrl()).href
       : undefined;
@@ -670,6 +670,8 @@ export abstract class ProxyServiceCore {
       sslChainPath: certPaths.sslChainPath,
       templateVariables: (host.templateVariables ?? {}) as Record<string, string | number | boolean>,
       pagesRouteIncludePath,
+      pagesSpaFallback: pagesRouteConfig?.spaFallback,
+      pagesFallbackUrl: pagesRouteConfig?.fallbackUrl,
       additionalRoutes,
     };
 

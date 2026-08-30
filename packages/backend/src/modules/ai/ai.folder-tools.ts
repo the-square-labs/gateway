@@ -32,6 +32,7 @@ import {
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import type { FolderedResourceService } from '@/modules/resource-folders/resource-folder.service.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { User } from '@/types.js';
 import { allowedResourceIdsForScopes } from './ai.service-helpers.js';
 
@@ -41,6 +42,7 @@ type ResourceType =
   | 'nodes'
   | 'databases'
   | 'domains'
+  | 'ssl_certificates'
   | 'logging_environments'
   | 'logging_schemas'
   | 'admin_users'
@@ -79,6 +81,7 @@ function resourceTypeArg(value: unknown): ResourceType {
     value === 'nodes' ||
     value === 'databases' ||
     value === 'domains' ||
+    value === 'ssl_certificates' ||
     value === 'logging_environments' ||
     value === 'logging_schemas' ||
     value === 'admin_users' ||
@@ -139,6 +142,12 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         viewScope: 'domains:view',
         manageScope: 'domains:folders:manage',
       };
+    case 'ssl_certificates':
+      return {
+        service: container.resolve(SSLCertificateFolderService),
+        viewScope: 'ssl:cert:view',
+        manageScope: 'ssl:cert:folders:manage',
+      };
     case 'logging_environments':
       return {
         service: container.resolve(LoggingEnvironmentFolderService),
@@ -172,7 +181,7 @@ function genericListOptions(
   config: GenericFolderConfig
 ) {
   const isLoggingResource = resourceType === 'logging_environments' || resourceType === 'logging_schemas';
-  if (resourceType === 'domains') {
+  if (resourceType === 'domains' || resourceType === 'ssl_certificates') {
     if (!hasScopeBase(user.scopes, config.viewScope)) {
       throw new Error(`PERMISSION_DENIED: Missing required scope ${config.viewScope}`);
     }

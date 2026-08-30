@@ -171,6 +171,38 @@ func TestConfigSwitchRollsBackAndCleanupHonorsReferences(t *testing.T) {
 	}
 }
 
+func TestPreviewFallbackConfiguration(t *testing.T) {
+	runtime, _ := newRuntime(t)
+	stageRelease(t, runtime)
+
+	if err := runtime.MaterializePreview(profileID, deploymentID, "spa.pages.example", "", "", PreviewFallback{SPAFallback: true}); err != nil {
+		t.Fatal(err)
+	}
+	spaConfig, err := os.ReadFile(runtime.previewConfigPath("spa.pages.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(spaConfig), "try_files $uri $uri/ /index.html;") || !strings.Contains(string(spaConfig), "gateway_pages_not_found") {
+		t.Fatalf("SPA fallback is missing from preview config: %s", spaConfig)
+	}
+
+	customURL := "https://errors.example.com/not-found"
+	if err := runtime.MaterializePreview(profileID, deploymentID, "redirect.pages.example", "", "", PreviewFallback{URL: customURL}); err != nil {
+		t.Fatal(err)
+	}
+	redirectConfig, err := os.ReadFile(runtime.previewConfigPath("redirect.pages.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(redirectConfig), "error_page 404 =302 "+customURL+";") || strings.Contains(string(redirectConfig), "location @gateway_pages_not_found") {
+		t.Fatalf("custom fallback redirect is incorrect: %s", redirectConfig)
+	}
+
+	if err := runtime.MaterializePreview(profileID, deploymentID, "invalid.pages.example", "", "", PreviewFallback{URL: "https://example.com/bad#fragment"}); err == nil {
+		t.Fatal("expected unsafe fallback URL rejection")
+	}
+}
+
 func TestConfigSwitchSkipsNginxReloadWhenContentIsUnchanged(t *testing.T) {
 	runtime, nginx := newRuntime(t)
 	stageRelease(t, runtime)

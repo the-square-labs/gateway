@@ -3,6 +3,7 @@ import { container } from '@/container.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { executeFolderTool } from './ai.folder-tools.js';
 
 const BASE_USER = {
@@ -96,6 +97,25 @@ describe('AI folder tools', () => {
       })
     ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [] }]);
     expect(domainFolderService.getFolderTree).toHaveBeenCalledWith({ includeAllFolders: true });
+  });
+
+  it('uses the shared folder contract for SSL certificates', async () => {
+    const sslFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([{ id: 'folder-1', name: 'TLS', children: [] }]),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === SSLCertificateFolderService) return sslFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['ssl:cert:view', 'ssl:cert:folders:manage'] },
+        'list_resource_folders',
+        { resourceType: 'ssl_certificates' }
+      )
+    ).resolves.toEqual([{ id: 'folder-1', name: 'TLS', children: [] }]);
+    expect(sslFolderService.getFolderTree).toHaveBeenCalledWith({ includeAllFolders: true });
   });
 
   it('requires proxy edit scope for every proxy host reorder item', async () => {

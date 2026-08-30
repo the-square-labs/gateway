@@ -43,11 +43,11 @@ export function ComposeVariablesTab({
       secretKeys: secrets.map((secret) => secret.key),
     });
     if (recreatesRunningProject) {
-      await api.startDockerComposeOperation(project.nodeId, project.id, "apply", {
+      await api.startDockerComposeOperation(project.nodeId, project.id, "pull_apply", {
         revisionId: revision.id,
         idempotencyKey: createClientUuid(),
       });
-      toast.success("Variables saved in a new revision and apply started");
+      toast.success("Variables saved in a new revision and Pull & Apply started");
     } else {
       toast.success("Variables saved as a new inactive revision");
     }

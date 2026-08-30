@@ -85,6 +85,8 @@ export interface PageProject {
   slug: string;
   description: string | null;
   appearanceColor: NodeAppearanceColor | null;
+  spaFallback: boolean;
+  fallbackUrl: string | null;
   nodeId: string | null;
   migrationSourceNodeId: string | null;
   migrationTargetNodeId: string | null;
@@ -100,6 +102,7 @@ export interface PageProject {
   deploymentCount: number;
   tagCount: number;
   routeCount: number;
+  primaryDomain: string | null;
   createdById: string;
   updatedById: string | null;
   createdAt: string;
@@ -255,6 +258,8 @@ export interface UpdatePageProjectRequest {
   name?: string;
   description?: string | null;
   appearanceColor?: NodeAppearanceColor | null;
+  spaFallback?: boolean;
+  fallbackUrl?: string | null;
   maxDeployments?: number;
   storageQuotaBytes?: number;
 }

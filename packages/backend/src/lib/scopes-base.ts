@@ -63,6 +63,7 @@ export const ALL_SCOPES = [
   // ── SSL Certificates ─────────────────────────────────────────────
   'ssl:cert:view',
   'ssl:cert:issue',
+  'ssl:cert:folders:manage',
   'ssl:cert:delete',
   'ssl:cert:revoke',
   'ssl:cert:export',
@@ -304,8 +305,19 @@ export const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
   'integrations:ssh:',
 ] as const;
 
+export const MCP_EXTERNAL_INTEGRATION_READ_SCOPES = new Set<string>([
+  'integrations:gitlab:view',
+  'integrations:gitlab:projects:view',
+  'integrations:gitlab:repo:read',
+  'integrations:github:view',
+  'integrations:git:view',
+  'integrations:ssh:view',
+]);
+
 export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter(
-  (scope) => !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.startsWith(prefix))
+  (scope) =>
+    MCP_EXTERNAL_INTEGRATION_READ_SCOPES.has(scope) ||
+    !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.startsWith(prefix))
 );
 
 /** System-admin group: every scope including admin:system (protected) */

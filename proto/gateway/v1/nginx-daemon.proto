@@ -395,6 +395,9 @@ message PagesMaterializePreviewCommand {
   // certificate instead of observing a changed current pointer on a later
   // unrelated reload.
   string certificate_version = 5;
+  bool spa_fallback = 6;
+  // Absolute HTTP(S) redirect used for missing paths when spa_fallback is false.
+  string fallback_url = 7;
 }
 
 // Stages and atomically activates a versioned certificate for a Pages-only

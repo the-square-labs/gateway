@@ -301,7 +301,7 @@ func (r *Runtime) VerifyRelease(deploymentID, digest string) (releaseManifest, e
 	return manifest, nil
 }
 
-func (r *Runtime) MaterializePreview(profileID, deploymentID, hostname, certificateID, certificateVersion string) error {
+func (r *Runtime) MaterializePreview(profileID, deploymentID, hostname, certificateID, certificateVersion string, fallbackOptions ...PreviewFallback) error {
 	if profileID != defaultProfileID {
 		return errors.New("invalid Pages profile id")
 	}
@@ -317,6 +317,13 @@ func (r *Runtime) MaterializePreview(profileID, deploymentID, hostname, certific
 	if certificateID == "" && certificateVersion != "" {
 		return errors.New("certificate version requires certificate id")
 	}
+	fallback := PreviewFallback{}
+	if len(fallbackOptions) > 0 {
+		fallback = fallbackOptions[0]
+	}
+	if fallback.URL != "" && !validPagesFallbackURL(fallback.URL) {
+		return errors.New("invalid Pages fallback URL")
+	}
 	runtimeConfigPath, err := r.RuntimeConfigPath(RuntimeConfigBindingPreview, hostname)
 	if err != nil {
 		return err
@@ -324,7 +331,7 @@ func (r *Runtime) MaterializePreview(profileID, deploymentID, hostname, certific
 	if err := r.ensureRuntimeConfigPublicDirs(RuntimeConfigBindingPreview, hostname); err != nil {
 		return err
 	}
-	content := r.previewConfig(hostname, deploymentID, certificateID, certificateVersion, runtimeConfigPath)
+	content := r.previewConfig(hostname, deploymentID, certificateID, certificateVersion, runtimeConfigPath, fallback)
 	return r.applyConfig(r.previewConfigPath(hostname), []byte(content))
 }
 

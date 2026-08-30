@@ -1,6 +1,7 @@
 export type ResourceFolderType =
   | "node"
   | "domain"
+  | "ssl-certificate"
   | "database"
   | "logging-environment"
   | "logging-schema"

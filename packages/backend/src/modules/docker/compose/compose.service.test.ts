@@ -53,12 +53,20 @@ describe('DockerComposeService', () => {
     );
   });
 
-  it('keeps an adopted project external while only preparing its first revision', async () => {
+  it('completes adoption metadata before the runtime apply starts', async () => {
     const compose = service();
     vi.spyOn(compose as any, 'getProject').mockResolvedValue(PROJECT);
+    vi.spyOn(compose as any, 'getRevisionByDigest').mockResolvedValue(null);
     vi.spyOn(compose as any, 'insertRevision').mockResolvedValue({
       id: '33333333-3333-4333-8333-333333333333',
       revisionNumber: 1,
+    });
+    vi.spyOn(compose as any, 'completeAdoption').mockResolvedValue({
+      ...PROJECT,
+      managementState: 'managed',
+      desiredState: 'stopped',
+      status: 'stopped',
+      activeRevisionId: '33333333-3333-4333-8333-333333333333',
     });
 
     const result = await compose.adopt(
@@ -68,8 +76,92 @@ describe('DockerComposeService', () => {
       'user-1'
     );
 
-    expect(result.project.managementState).toBe('external');
+    expect(result.project.managementState).toBe('managed');
+    expect(result.project.status).toBe('stopped');
     expect(result.revision).toMatchObject({ revisionNumber: 1 });
+  });
+
+  it('reuses an already prepared adoption revision after an interrupted request', async () => {
+    const compose = service();
+    const revision = {
+      id: '33333333-3333-4333-8333-333333333333',
+      revisionNumber: 1,
+    };
+    vi.spyOn(compose as any, 'getProject').mockResolvedValue(PROJECT);
+    vi.spyOn(compose as any, 'getRevisionByDigest').mockResolvedValue(revision);
+    vi.spyOn(compose as any, 'completeAdoption').mockResolvedValue({
+      ...PROJECT,
+      managementState: 'managed',
+      desiredState: 'stopped',
+      status: 'stopped',
+      activeRevisionId: revision.id,
+    });
+    const insertRevision = vi.spyOn(compose as any, 'insertRevision');
+
+    const result = await compose.adopt(
+      PROJECT.nodeId,
+      PROJECT.id,
+      { yaml: 'services:\n  api:\n    image: nginx:alpine\n', variables: {}, secretKeys: [] },
+      'user-1'
+    );
+
+    expect(result.revision).toBe(revision);
+    expect(insertRevision).not.toHaveBeenCalled();
+  });
+
+  it('returns the active revision when a completed adoption is retried unchanged', async () => {
+    const compose = service();
+    const revision = {
+      id: '33333333-3333-4333-8333-333333333333',
+      revisionNumber: 1,
+    };
+    const managedProject = {
+      ...PROJECT,
+      managementState: 'managed',
+      desiredState: 'stopped',
+      status: 'stopped',
+      activeRevisionId: revision.id,
+    };
+    vi.spyOn(compose as any, 'getProject').mockResolvedValue(managedProject);
+    vi.spyOn(compose as any, 'getRevisionByDigest').mockResolvedValue(revision);
+    const completeAdoption = vi.spyOn(compose as any, 'completeAdoption');
+
+    const result = await compose.adopt(
+      PROJECT.nodeId,
+      PROJECT.id,
+      { yaml: 'services:\n  api:\n    image: nginx:alpine\n', variables: {}, secretKeys: [] },
+      'user-1'
+    );
+
+    expect(result.project).toBe(managedProject);
+    expect(result.revision).toBe(revision);
+    expect(completeAdoption).not.toHaveBeenCalled();
+  });
+
+  it('maps nested Postgres revision uniqueness errors to a stable conflict', async () => {
+    const databaseError = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'docker_compose_revisions_project_digest_unique',
+    });
+    const db = {
+      transaction: vi.fn().mockRejectedValue(Object.assign(new Error('Failed query'), { cause: databaseError })),
+    };
+    const compose = new DockerComposeService(
+      db as never,
+      { log: vi.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
+      {} as never
+    );
+
+    await expect(
+      (compose as any).insertRevision(
+        PROJECT,
+        { yaml: 'services: {}', variables: {}, secretKeys: [] },
+        { name: PROJECT.name, services: {} },
+        'digest',
+        'user-1'
+      )
+    ).rejects.toMatchObject({ statusCode: 409, code: 'COMPOSE_REVISION_EXISTS' });
   });
 
   it('stores clean source YAML separately from managed runtime overlays', async () => {
@@ -329,7 +421,7 @@ describe('DockerComposeService', () => {
     ).toThrowError(expect.objectContaining({ code: 'COMPOSE_IDEMPOTENCY_CONFLICT' }));
   });
 
-  it('accepts an idempotent retry after jsonb changes object key order', () => {
+  it('accepts a pull_apply retry for a legacy apply operation after jsonb changes object key order', () => {
     const compose = service();
     expect(() =>
       (compose as any).assertIdempotentOperation(
@@ -338,7 +430,7 @@ describe('DockerComposeService', () => {
           revisionId: '33333333-3333-4333-8333-333333333333',
           options: { volumeNames: [], removeOrphans: false },
         },
-        'apply',
+        'pull_apply',
         '33333333-3333-4333-8333-333333333333',
         { removeOrphans: false, volumeNames: [] }
       )

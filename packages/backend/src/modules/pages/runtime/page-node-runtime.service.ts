@@ -115,6 +115,14 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
     await this.materializePreview(target.nodeId, deploymentId, target.hostname, certificate);
   }
 
+  async refreshProjectFallback(projectId: string): Promise<void> {
+    const deployments = await this.db
+      .select({ id: pageDeployments.id })
+      .from(pageDeployments)
+      .where(and(eq(pageDeployments.projectId, projectId), eq(pageDeployments.status, 'ready')));
+    for (const deployment of deployments) await this.publish(deployment.id);
+  }
+
   async apply(profile: { domain: string; certificateId: string; labelTemplate: string }): Promise<void> {
     const rows = await this.db
       .select({ deployment: pageDeployments, projectSlug: pageProjects.slug, nodeId: pageProjects.nodeId })
@@ -587,10 +595,10 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
       await withPageProfileLock(this.db, async () => {
         await this.assertProfileEnabled();
         await this.ensureRelease(nodeId, deploymentId, 'preview', hostname);
-        const projectId = await this.previewProjectId(deploymentId);
+        const project = await this.previewProjectConfig(deploymentId);
         // Take the project lock before the deployment lock. Default publication
         // takes the same order when it updates existing preview replicas.
-        await withPageDefaultRuntimeConfigLock(this.db, projectId, () =>
+        await withPageDefaultRuntimeConfigLock(this.db, project.projectId, () =>
           this.withDeploymentLock(`${nodeId}:${deploymentId}`, async () => {
             for (let attempt = 0; attempt < 8; attempt += 1) {
               // The profile lock serializes the complete materialization and
@@ -603,6 +611,8 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
                   hostname,
                   certificateId: certificate.certificateId,
                   certificateVersion: certificate.certificateVersion,
+                  spaFallback: project.spaFallback,
+                  fallbackUrl: project.fallbackUrl ?? '',
                 },
               });
 
@@ -866,14 +876,23 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
     return { hostname, nodeId: row.projectNodeId, certificateId: row.profile.certificateId };
   }
 
-  private async previewProjectId(deploymentId: string): Promise<string> {
+  private async previewProjectConfig(deploymentId: string): Promise<{
+    projectId: string;
+    spaFallback: boolean;
+    fallbackUrl: string | null;
+  }> {
     const [deployment] = await this.db
-      .select({ projectId: pageDeployments.projectId })
+      .select({
+        projectId: pageDeployments.projectId,
+        spaFallback: pageProjects.spaFallback,
+        fallbackUrl: pageProjects.fallbackUrl,
+      })
       .from(pageDeployments)
+      .innerJoin(pageProjects, eq(pageDeployments.projectId, pageProjects.id))
       .where(eq(pageDeployments.id, deploymentId))
       .limit(1);
     if (!deployment) throw new AppError(409, 'PAGE_DEPLOYMENT_NOT_MATERIALIZABLE', 'Deployment is unavailable');
-    return deployment.projectId;
+    return deployment;
   }
 
   private async upsertReplica(

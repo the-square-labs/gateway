@@ -37,6 +37,7 @@ interface ResourceFolderState {
 const RESOURCE_TYPES: ResourceFolderType[] = [
   "node",
   "domain",
+  "ssl-certificate",
   "database",
   "logging-environment",
   "logging-schema",
@@ -222,6 +223,8 @@ function listFolders(type: ResourceFolderType): Promise<ResourceFolderTreeNode[]
       return api.listNodeFolders();
     case "domain":
       return api.listDomainFolders();
+    case "ssl-certificate":
+      return api.listSSLCertificateFolders();
     case "database":
       return api.listDatabaseFolders();
     case "logging-environment":
@@ -246,6 +249,8 @@ function createFolderByType(
       return api.createNodeFolder(data);
     case "domain":
       return api.createDomainFolder(data);
+    case "ssl-certificate":
+      return api.createSSLCertificateFolder(data);
     case "database":
       return api.createDatabaseFolder(data);
     case "logging-environment":
@@ -271,6 +276,8 @@ function updateFolderByType(
       return api.updateNodeFolder(id, data);
     case "domain":
       return api.updateDomainFolder(id, data);
+    case "ssl-certificate":
+      return api.updateSSLCertificateFolder(id, data);
     case "database":
       return api.updateDatabaseFolder(id, data);
     case "logging-environment":
@@ -292,6 +299,8 @@ function deleteFolderByType(type: ResourceFolderType, id: string): Promise<void>
       return api.deleteNodeFolder(id);
     case "domain":
       return api.deleteDomainFolder(id);
+    case "ssl-certificate":
+      return api.deleteSSLCertificateFolder(id);
     case "database":
       return api.deleteDatabaseFolder(id);
     case "logging-environment":
@@ -316,6 +325,8 @@ function reorderFoldersByType(
       return api.reorderNodeFolders(items);
     case "domain":
       return api.reorderDomainFolders(items);
+    case "ssl-certificate":
+      return api.reorderSSLCertificateFolders(items);
     case "database":
       return api.reorderDatabaseFolders(items);
     case "logging-environment":
@@ -341,6 +352,8 @@ function moveResourcesToFolderByType(
       return api.moveNodesToFolder(ids, folderId);
     case "domain":
       return api.moveDomainsToFolder(ids, folderId);
+    case "ssl-certificate":
+      return api.moveSSLCertificatesToFolder(ids, folderId);
     case "database":
       return api.moveDatabasesToFolder(ids, folderId);
     case "logging-environment":
@@ -365,6 +378,8 @@ function reorderResourcesByType(
       return api.reorderNodes(items);
     case "domain":
       return api.reorderDomains(items);
+    case "ssl-certificate":
+      return api.reorderSSLCertificates(items);
     case "database":
       return api.reorderDatabases(items);
     case "logging-environment":

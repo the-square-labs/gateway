@@ -80,15 +80,26 @@ function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
 }
 
 describe('canonical scope definitions', () => {
-  it('keeps external source-control and SSH integrations out of Gateway MCP delegation', () => {
+  it('allows connector discovery scopes while keeping mutating integrations out of Gateway MCP delegation', () => {
     expect(MCP_TOKEN_SCOPES).toContain('nodes:details');
     expect(MCP_TOKEN_SCOPES).toContain('integrations:cloudflare:view');
     expect(MCP_TOKEN_SCOPES).not.toContain('mcp:use');
-    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:gitlab:'))).toBe(false);
-    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:github:'))).toBe(false);
-    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:git:'))).toBe(false);
-    expect(MCP_TOKEN_SCOPES.some((scope) => scope.startsWith('integrations:ssh:'))).toBe(false);
-    expect(isMcpTokenScope('integrations:gitlab:repo:read')).toBe(false);
+    expect(MCP_TOKEN_SCOPES).toEqual(
+      expect.arrayContaining([
+        'integrations:gitlab:view',
+        'integrations:gitlab:projects:view',
+        'integrations:gitlab:repo:read',
+        'integrations:github:view',
+        'integrations:git:view',
+        'integrations:ssh:view',
+      ])
+    );
+    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:gitlab:repo:write');
+    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:github:manage');
+    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:git:manage');
+    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:ssh:use');
+    expect(isMcpTokenScope('integrations:gitlab:repo:read')).toBe(true);
+    expect(isMcpTokenScope('integrations:ssh:use')).toBe(false);
     expect(isMcpTokenScope('nodes:details:node-1')).toBe(true);
   });
 

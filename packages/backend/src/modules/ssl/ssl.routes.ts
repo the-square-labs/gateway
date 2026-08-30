@@ -8,17 +8,33 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import {
+  CreateResourceFolderSchema,
+  MoveResourceFolderSchema,
+  MoveResourcesToFolderSchema,
+  ReorderResourceFoldersSchema,
+  ReorderResourcesSchema,
+  UpdateResourceFolderSchema,
+} from '@/modules/resource-folders/resource-folder.schemas.js';
 import type { AppEnv } from '@/types.js';
 import {
   cancelPendingAcmeCertificateRoute,
+  createSslCertificateFolderRoute,
+  deleteSslCertificateFolderRoute,
   deleteSslCertificateRoute,
   getSslCertificateRoute,
   linkInternalSslCertificateRoute,
+  listSslCertificateFoldersRoute,
   listSslCertificatesRoute,
+  moveSslCertificateFolderRoute,
+  moveSslCertificatesToFolderRoute,
   renewSslCertificateRoute,
+  reorderSslCertificateFoldersRoute,
+  reorderSslCertificatesRoute,
   requestAcmeCertificateRoute,
   resyncSslCertificateDistributionRoute,
   setSslCertificateAutoRenewRoute,
+  updateSslCertificateFolderRoute,
   uploadSslCertificateRoute,
   verifyDnsSslCertificateRoute,
 } from './ssl.docs.js';
@@ -30,10 +46,95 @@ import {
   UploadCertSchema,
 } from './ssl.schemas.js';
 import { SSLService } from './ssl.service.js';
+import { SSLCertificateFolderService } from './ssl-certificate-folders.service.js';
 
 export const sslRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 sslRoutes.use('*', authMiddleware);
+
+sslRoutes.openapi({ ...listSslCertificateFoldersRoute, middleware: requireScopeBase('ssl:cert:view') }, async (c) => {
+  const service = container.resolve(SSLCertificateFolderService);
+  const scopes = c.get('effectiveScopes') || [];
+  const canManageFolders = hasScope(scopes, 'ssl:cert:folders:manage');
+  const hasGlobalView = hasScope(scopes, 'ssl:cert:view');
+  const data = await service.getFolderTree(
+    canManageFolders || hasGlobalView
+      ? { includeAllFolders: canManageFolders }
+      : { allowedResourceIds: getResourceScopedIds(scopes, 'ssl:cert:view') }
+  );
+  return c.json({ data });
+});
+
+sslRoutes.openapi(
+  { ...createSslCertificateFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    const data = await service.createFolder(CreateResourceFolderSchema.parse(await c.req.json()), c.get('user')!.id);
+    return c.json({ data }, 201);
+  }
+);
+
+sslRoutes.openapi(
+  { ...reorderSslCertificateFoldersRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    await service.reorderFolders(ReorderResourceFoldersSchema.parse(await c.req.json()));
+    return c.json({ success: true });
+  }
+);
+
+sslRoutes.openapi(
+  { ...moveSslCertificatesToFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    await service.moveResourcesToFolder(MoveResourcesToFolderSchema.parse(await c.req.json()), c.get('user')!.id);
+    return c.json({ success: true });
+  }
+);
+
+sslRoutes.openapi(
+  { ...reorderSslCertificatesRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    await service.reorderResources(ReorderResourcesSchema.parse(await c.req.json()));
+    return c.json({ success: true });
+  }
+);
+
+sslRoutes.openapi(
+  { ...updateSslCertificateFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    const data = await service.updateFolder(
+      c.req.param('id')!,
+      UpdateResourceFolderSchema.parse(await c.req.json()),
+      c.get('user')!.id
+    );
+    return c.json({ data });
+  }
+);
+
+sslRoutes.openapi(
+  { ...moveSslCertificateFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    const data = await service.moveFolder(
+      c.req.param('id')!,
+      MoveResourceFolderSchema.parse(await c.req.json()),
+      c.get('user')!.id
+    );
+    return c.json({ data });
+  }
+);
+
+sslRoutes.openapi(
+  { ...deleteSslCertificateFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    await service.deleteFolder(c.req.param('id')!, c.get('user')!.id);
+    return c.json({ success: true });
+  }
+);
 
 // List SSL certificates (paginated, filterable)
 sslRoutes.openapi({ ...listSslCertificatesRoute, middleware: requireScopeBase('ssl:cert:view') }, async (c) => {

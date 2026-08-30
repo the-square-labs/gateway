@@ -2,10 +2,27 @@ package pages
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
+
+const gatewayNotFoundHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>Page not found</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#fff;color:#09090b;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:100%;max-width:560px;text-align:center}.status{color:#71717a;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}h1{margin:16px 0 0;font-size:clamp(40px,8vw,64px);line-height:1.05;font-weight:700;letter-spacing:-.04em}p.message{margin:20px auto 0;max-width:440px;color:#71717a;font-size:15px;line-height:1.6}.footer{margin-top:48px;color:#71717a;font-size:12px}.footer a{color:inherit;text-decoration:none}.footer a:hover{text-decoration:underline}@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}.status,p.message,.footer{color:#a1a1aa}.footer a{color:#fafafa}}</style></head><body><main><section><div class="status">Error 404</div><h1>Page not found</h1><p class="message">The requested host or page is not available.</p></section><div class="footer">Powered by <a href="https://thesquarelabs.com" rel="noopener noreferrer">Square Labs</a></div></main></body></html>`
+
+type PreviewFallback struct {
+	SPAFallback bool
+	URL         string
+}
+
+func validPagesFallbackURL(value string) bool {
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 || strings.ContainsAny(value, ";'\"{}\\`$#") {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(value)
+	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
+}
 
 func (r *Runtime) applyConfig(configPath string, next []byte) error {
 	old, err := os.ReadFile(configPath)
@@ -62,12 +79,28 @@ func (r *Runtime) isReferenced(deploymentID string) bool {
 	return false
 }
 
-func (r *Runtime) previewConfig(hostname, deploymentID, certificateID, certificateVersion, runtimeConfigPath string) string {
+func (r *Runtime) previewConfig(hostname, deploymentID, certificateID, certificateVersion, runtimeConfigPath string, fallback PreviewFallback) string {
 	lines := []string{"# gateway-pages immutable preview", "server {", "    listen 80;"}
 	if certificateID != "" {
 		certRoot := filepath.Join(r.certsDir, certificateID, "versions", certificateVersion)
 		lines = append(lines, "    listen 443 ssl;", "    ssl_certificate "+filepath.Join(certRoot, "fullchain.pem")+";", "    ssl_certificate_key "+filepath.Join(certRoot, "privkey.pem")+";")
 	}
-	lines = append(lines, "    server_name "+hostname+";", "    root "+r.releaseContentDir(deploymentID)+";", "    index index.html;", "    add_header X-Content-Type-Options nosniff always;", "    add_header Referrer-Policy same-origin always;", "    location = /_gateway/pages/config.js {", "        limit_except GET HEAD { deny all; }", "        alias "+runtimeConfigPath+";", "        default_type application/javascript;", "        add_header Cache-Control \"no-store, max-age=0\" always;", "    }", "    location ~ /\\. { deny all; }", "    location / {", "        limit_except GET HEAD { deny all; }", "        sub_filter_once on;", "        sub_filter '</head>' '<script src=\"/_gateway/pages/config.js\"></script></head>';", "        try_files $uri $uri/ =404;", "    }", "    location ~* \\.(?:css|js|mjs|json|png|jpe?g|gif|svg|ico|webp|avif|woff2?)$ {", "        limit_except GET HEAD { deny all; }", "        expires 1y;", "        add_header Cache-Control \"public, max-age=31536000, immutable\" always;", "    }", "}")
+	lines = append(lines, "    server_name "+hostname+";", "    root "+r.releaseContentDir(deploymentID)+";", "    index index.html;", "    add_header X-Content-Type-Options nosniff always;", "    add_header Referrer-Policy same-origin always;")
+	if !fallback.SPAFallback && fallback.URL != "" {
+		lines = append(lines, "    error_page 404 =302 "+fallback.URL+";")
+	} else {
+		lines = append(lines, "    error_page 404 = @gateway_pages_not_found;")
+	}
+	lines = append(lines, "    location = /_gateway/pages/config.js {", "        limit_except GET HEAD { deny all; }", "        alias "+runtimeConfigPath+";", "        default_type application/javascript;", "        add_header Cache-Control \"no-store, max-age=0\" always;", "    }", "    location ~ /\\. { deny all; }", "    location / {", "        limit_except GET HEAD { deny all; }", "        sub_filter_once on;", "        sub_filter '</head>' '<script src=\"/_gateway/pages/config.js\"></script></head>';")
+	if fallback.SPAFallback {
+		lines = append(lines, "        try_files $uri $uri/ /index.html;")
+	} else {
+		lines = append(lines, "        try_files $uri $uri/ =404;")
+	}
+	lines = append(lines, "    }")
+	if fallback.SPAFallback || fallback.URL == "" {
+		lines = append(lines, "    location @gateway_pages_not_found {", "        default_type text/html;", "        return 404 '"+gatewayNotFoundHTML+"';", "    }")
+	}
+	lines = append(lines, "    location ~* \\.(?:css|js|mjs|json|png|jpe?g|gif|svg|ico|webp|avif|woff2?)$ {", "        limit_except GET HEAD { deny all; }", "        expires 1y;", "        add_header Cache-Control \"public, max-age=31536000, immutable\" always;", "    }", "}")
 	return strings.Join(lines, "\n") + "\n"
 }

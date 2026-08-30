@@ -56,6 +56,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | ssl:cert:view | List SSL certificates |
 | ssl:cert:view | View SSL certificate details |
 | ssl:cert:issue | Request ACME / upload / link internal certs |
+| ssl:cert:folders:manage | Manage SSL certificate folders and placement |
 | ssl:cert:delete | Delete SSL certificates (resource-scopable) |
 | ssl:cert:revoke | Revoke SSL certificates (resource-scopable) |
 | ssl:cert:export | Export SSL certificates (resource-scopable) |

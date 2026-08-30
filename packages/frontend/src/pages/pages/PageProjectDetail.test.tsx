@@ -44,6 +44,9 @@ const project: PageProject = {
   slug: "demo",
   description: null,
   appearanceColor: null,
+  spaFallback: false,
+  fallbackUrl: null,
+  primaryDomain: null,
   nodeId: null,
   migrationSourceNodeId: null,
   migrationTargetNodeId: null,
@@ -146,5 +149,47 @@ describe("PageProjectDetail deletion", () => {
     expect(await screen.findByText("Latest immutable preview")).toBeInTheDocument();
     expect(screen.getByText("preview-slug.pages.example.test")).toBeInTheDocument();
     expect(screen.queryByText("Pages Project")).not.toBeInTheDocument();
+  });
+
+  it("prefers the first bound domain over the immutable preview", async () => {
+    mocks.activeTab = "source";
+    vi.spyOn(api, "getPageProject").mockResolvedValue({
+      ...project,
+      primaryDomain: "docs.example.test",
+    });
+    vi.mocked(api.listPageDeployments).mockResolvedValue({
+      data: [
+        {
+          id: "deployment-1",
+          projectId: project.id,
+          sequence: 1,
+          publicSlug: "preview-slug",
+          previewHostname: "preview-slug.pages.example.test",
+          status: "ready",
+          artifactSha256: "a".repeat(64),
+          compressedSizeBytes: 1,
+          expandedSizeBytes: 1,
+          fileCount: 1,
+          sourceMetadata: {},
+          requestedTag: null,
+          pinned: false,
+          failureCode: null,
+          failureMessage: null,
+          createdById: "user-1",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          readyAt: new Date(0).toISOString(),
+          deletedAt: null,
+          credentialType: "user",
+        },
+      ],
+      pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+    });
+
+    render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
+
+    expect(await screen.findByText("Domain")).toBeInTheDocument();
+    expect(screen.getByText("docs.example.test")).toBeInTheDocument();
+    expect(screen.queryByText("preview-slug.pages.example.test")).not.toBeInTheDocument();
   });
 });

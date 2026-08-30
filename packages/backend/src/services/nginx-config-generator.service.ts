@@ -57,6 +57,8 @@ export interface ProxyHostConfig {
   sslChainPath: string | null;
   templateVariables?: Record<string, string | number | boolean>;
   pagesRouteIncludePath?: string;
+  pagesSpaFallback?: boolean;
+  pagesFallbackUrl?: string | null;
   additionalRoutes?: ProxyAdditionalRouteConfig[];
 }
 
@@ -71,6 +73,8 @@ export interface ProxyAdditionalRouteConfig {
   secureLinkSocketPath?: string;
   pagesRouteIncludePath?: string;
   pagesRuntimeConfigPath?: string;
+  pagesSpaFallback?: boolean;
+  pagesFallbackUrl?: string | null;
   advancedConfig?: string | null;
   stripPrefix: boolean;
   websocketSupport: boolean;

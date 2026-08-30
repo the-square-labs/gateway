@@ -415,6 +415,8 @@ export interface PagesMaterializePreviewCommand {
   hostname: string;
   certificateId: string;
   certificateVersion: string;
+  spaFallback: boolean;
+  fallbackUrl: string;
 }
 
 export interface PagesDeployCertificateCommand {

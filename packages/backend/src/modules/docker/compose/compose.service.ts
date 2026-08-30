@@ -78,6 +78,21 @@ function isManagedDatabaseSecret(key: string) {
   return key.startsWith('GATEWAY_DB_');
 }
 
+function databaseErrorDetails(error: unknown) {
+  let current = error;
+  for (let depth = 0; depth < 6 && current && typeof current === 'object'; depth += 1) {
+    const record = current as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (typeof record.code === 'string') {
+      return {
+        code: record.code,
+        constraint: typeof record.constraint === 'string' ? record.constraint : '',
+      };
+    }
+    current = record.cause;
+  }
+  return null;
+}
+
 export class DockerComposeService {
   private dispatcher?: DockerComposeDispatcher;
   private eventBus?: EventBusService;
@@ -269,27 +284,40 @@ export class DockerComposeService {
 
   async adopt(nodeId: string, projectId: string, input: ComposeRevisionCreateInput, userId: string) {
     const project = await this.getProject(nodeId, projectId);
-    if (project.managementState !== 'external') {
-      throw new AppError(409, 'COMPOSE_ALREADY_MANAGED', 'Only external Compose projects can be adopted');
-    }
     const validation = validateComposeYaml({ ...input, projectName: project.name });
     this.assertValid(validation);
-    const revision = await this.insertRevision(
-      project,
-      input,
-      validation.normalizedModel!,
-      validation.configDigest!,
-      userId
-    );
+    let revision = await this.getRevisionByDigest(project.id, validation.configDigest!);
+    if (project.managementState !== 'external') {
+      if (revision && project.activeRevisionId === revision.id) {
+        return { project, revision, validation };
+      }
+      throw new AppError(409, 'COMPOSE_ALREADY_MANAGED', 'Only external Compose projects can be adopted');
+    }
+    if (!revision) {
+      try {
+        revision = await this.insertRevision(
+          project,
+          input,
+          validation.normalizedModel!,
+          validation.configDigest!,
+          userId
+        );
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== 'COMPOSE_REVISION_EXISTS') throw error;
+        revision = await this.getRevisionByDigest(project.id, validation.configDigest!);
+        if (!revision) throw error;
+      }
+    }
+    const adoptedProject = await this.completeAdoption(project, revision.id, userId);
     await this.audit.log({
       userId,
-      action: 'docker.compose.adoption_prepared',
+      action: 'docker.compose.adopt',
       resourceType: 'docker-compose-project',
       resourceId: project.id,
       details: { nodeId, revisionId: revision.id },
     });
-    this.emit('adoption_prepared', project, { revisionId: revision.id });
-    return { project, revision, validation };
+    this.emit('adopted', adoptedProject, { revisionId: revision.id });
+    return { project: adoptedProject, revision, validation };
   }
 
   async createRevision(nodeId: string, projectId: string, input: ComposeRevisionCreateInput, userId: string) {
@@ -644,6 +672,7 @@ export class DockerComposeService {
     allowProjectDeleting = false
   ): Promise<OperationRow> {
     const project = await this.getProject(nodeId, projectId);
+    const effectiveAction: DockerComposeOperationAction = action === 'apply' ? 'pull_apply' : action;
     if (!this.dispatcher) {
       throw new AppError(
         409,
@@ -651,19 +680,19 @@ export class DockerComposeService {
         'This Docker node does not support managed Compose lifecycle operations'
       );
     }
-    if (project.managementState === 'external' && action !== 'apply' && action !== 'pull_apply') {
+    if (project.managementState === 'external' && effectiveAction !== 'pull_apply') {
       throw new AppError(409, 'COMPOSE_EXTERNAL_READ_ONLY', 'External Compose projects are read-only until adopted');
     }
 
-    if (action === 'cancel') {
+    if (effectiveAction === 'cancel') {
       return this.cancelActiveOperation(project, input.idempotencyKey, userId);
     }
 
-    const revision = await this.resolveOperationRevision(project, action, input.revisionId);
+    const revision = await this.resolveOperationRevision(project, effectiveAction, input.revisionId);
     if (project.managementState === 'external' && !revision) {
       throw new AppError(409, 'COMPOSE_ADOPTION_REVISION_REQUIRED', 'Adoption requires a validated revision');
     }
-    if (revision && (action === 'apply' || action === 'pull_apply')) {
+    if (revision && effectiveAction === 'pull_apply') {
       await this.assertManagedDatabaseBindingsPreserved(project, revision.originalYaml);
     }
     const options = { removeOrphans: input.removeOrphans, volumeNames: input.volumeNames };
@@ -689,7 +718,7 @@ export class DockerComposeService {
         )
         .limit(1);
       if (existing) {
-        this.assertIdempotentOperation(existing, action, revision?.id ?? null, options);
+        this.assertIdempotentOperation(existing, effectiveAction, revision?.id ?? null, options);
         return { operation: existing, created: false } as const;
       }
       if (revision) {
@@ -717,7 +746,7 @@ export class DockerComposeService {
           projectId: project.id,
           revisionId: revision?.id ?? null,
           idempotencyKey: input.idempotencyKey,
-          action,
+          action: effectiveAction,
           options,
           createdById: userId,
         })
@@ -733,7 +762,7 @@ export class DockerComposeService {
         nodeId,
         containerId: project.id,
         containerName: project.name,
-        type: `compose_${action}`,
+        type: `compose_${effectiveAction}`,
       });
       await this.db
         .update(dockerComposeOperations)
@@ -747,10 +776,15 @@ export class DockerComposeService {
       throw error;
     }
 
-    void this.executeOperation(project, revision, reserved.operation.id, task.id, action, allowProjectDeleting).catch(
-      () => {}
-    );
-    this.emit('operation_started', project, { operationId: reserved.operation.id, action });
+    void this.executeOperation(
+      project,
+      revision,
+      reserved.operation.id,
+      task.id,
+      effectiveAction,
+      allowProjectDeleting
+    ).catch(() => {});
+    this.emit('operation_started', project, { operationId: reserved.operation.id, action: effectiveAction });
     return { ...reserved.operation, taskId: task.id };
   }
 
@@ -879,7 +913,7 @@ export class DockerComposeService {
         const operation = await this.startOperation(
           nodeId,
           target.project.id,
-          'apply',
+          'pull_apply',
           {
             revisionId: revision.id,
             idempotencyKey: `database-binding:${bindingId}:apply:${crypto.randomUUID()}`,
@@ -930,7 +964,7 @@ export class DockerComposeService {
       const operation = await this.startOperation(
         nodeId,
         target.project.id,
-        'apply',
+        'pull_apply',
         {
           revisionId: revision.id,
           idempotencyKey: `database-binding:${bindingId}:remove:${crypto.randomUUID()}`,
@@ -1261,10 +1295,17 @@ export class DockerComposeService {
         return revision;
       });
     } catch (error) {
-      if (error instanceof Error && /project_digest_unique/i.test(error.message)) {
+      const databaseError = databaseErrorDetails(error);
+      if (
+        (databaseError?.code === '23505' && /project_digest_unique/i.test(databaseError.constraint)) ||
+        (error instanceof Error && /project_digest_unique/i.test(error.message))
+      ) {
         throw new AppError(409, 'COMPOSE_REVISION_EXISTS', 'This Compose configuration already has a revision');
       }
-      if (error instanceof Error && /project_revision_unique/i.test(error.message)) {
+      if (
+        (databaseError?.code === '23505' && /project_revision_unique/i.test(databaseError.constraint)) ||
+        (error instanceof Error && /project_revision_unique/i.test(error.message))
+      ) {
         throw new AppError(409, 'COMPOSE_REVISION_CONFLICT', 'Another Compose revision was created concurrently');
       }
       throw error;
@@ -1447,8 +1488,10 @@ export class DockerComposeService {
     revisionId: string | null,
     options: Record<string, unknown>
   ) {
+    const existingAction = existing.action === 'apply' ? 'pull_apply' : existing.action;
+    const requestedAction = action === 'apply' ? 'pull_apply' : action;
     if (
-      existing.action !== action ||
+      existingAction !== requestedAction ||
       existing.revisionId !== revisionId ||
       !isDeepStrictEqual(existing.options ?? {}, options)
     ) {
@@ -1486,6 +1529,34 @@ export class DockerComposeService {
       .limit(1);
     if (!revision) throw new AppError(404, 'COMPOSE_REVISION_NOT_FOUND', 'Compose revision not found');
     return revision;
+  }
+
+  private async getRevisionByDigest(projectId: string, configDigest: string) {
+    const [revision] = await this.db
+      .select()
+      .from(dockerComposeRevisions)
+      .where(
+        and(eq(dockerComposeRevisions.projectId, projectId), eq(dockerComposeRevisions.configDigest, configDigest))
+      )
+      .limit(1);
+    return revision ?? null;
+  }
+
+  private async completeAdoption(project: ProjectRow, revisionId: string, userId: string) {
+    const [updated] = await this.db
+      .update(dockerComposeProjects)
+      .set({
+        managementState: 'managed',
+        activeRevisionId: revisionId,
+        desiredState: 'stopped',
+        status: 'stopped',
+        updatedById: userId,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(dockerComposeProjects.id, project.id), eq(dockerComposeProjects.managementState, 'external')))
+      .returning();
+    if (!updated) throw new AppError(409, 'COMPOSE_ADOPTION_CONFLICT', 'Compose project adoption state changed');
+    return updated;
   }
 
   private async getOperation(operationId: string) {

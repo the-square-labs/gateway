@@ -10,6 +10,8 @@ import {
   pageRuntimeConfigs,
   pageTagActivations,
   pageTags,
+  proxyAdditionalRoutes,
+  proxyHosts,
 } from '@/db/schema/index.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -29,12 +31,18 @@ import type { PageRetentionService } from './retention/page-retention.service.js
 export interface PageProjectRuntimeAdapter {
   stageProjectMigration(projectId: string, targetNodeId: string): Promise<void>;
   cleanupProjectNode(projectId: string, nodeId: string): Promise<void>;
+  refreshProjectFallback(projectId: string): Promise<void>;
+}
+
+export interface PageProjectRouteRuntimeAdapter {
+  reconcileAdditionalRouteHost(hostId: string): Promise<void>;
 }
 
 export class PageProjectService {
   private eventBus?: EventBusService;
   private retentionService?: PageRetentionService;
   private runtimeAdapter?: PageProjectRuntimeAdapter;
+  private routeRuntimeAdapter?: PageProjectRouteRuntimeAdapter;
   private readonly migrationLocks = new Map<string, Promise<void>>();
 
   constructor(
@@ -52,6 +60,10 @@ export class PageProjectService {
 
   setRuntimeAdapter(runtimeAdapter: PageProjectRuntimeAdapter): void {
     this.runtimeAdapter = runtimeAdapter;
+  }
+
+  setRouteRuntimeAdapter(routeRuntimeAdapter: PageProjectRouteRuntimeAdapter): void {
+    this.routeRuntimeAdapter = routeRuntimeAdapter;
   }
 
   private emit(projectId: string, action: string): void {
@@ -380,6 +392,18 @@ export class PageProjectService {
     if (input.maxDeployments !== undefined || input.storageQuotaBytes !== undefined) {
       await this.retentionService?.runProject(id);
     }
+    if (input.spaFallback !== undefined || input.fallbackUrl !== undefined) {
+      try {
+        await this.refreshFallbackRuntime(id);
+      } catch (error) {
+        throw new AppError(
+          502,
+          'PAGE_PROJECT_FALLBACK_APPLY_FAILED',
+          'Project settings were saved, but the Pages fallback could not be applied to every active route',
+          { cause: error instanceof Error ? error.message : String(error) }
+        );
+      }
+    }
     return this.withCounts(updated);
   }
 
@@ -433,15 +457,39 @@ export class PageProjectService {
   }
 
   private async withCounts(project: typeof pageProjects.$inferSelect) {
-    const [[{ deploymentCount }], [{ tagCount }], [{ routeCount }]] = await Promise.all([
+    const [[{ deploymentCount }], [{ tagCount }], routes] = await Promise.all([
       this.db
         .select({ deploymentCount: count() })
         .from(pageDeployments)
         .where(and(eq(pageDeployments.projectId, project.id), ne(pageDeployments.status, 'deleted'))),
       this.db.select({ tagCount: count() }).from(pageTags).where(eq(pageTags.projectId, project.id)),
-      this.db.select({ routeCount: count() }).from(pageRouteTargets).where(eq(pageRouteTargets.projectId, project.id)),
+      this.db
+        .select({ domainNames: proxyHosts.domainNames })
+        .from(pageRouteTargets)
+        .innerJoin(proxyHosts, eq(pageRouteTargets.proxyHostId, proxyHosts.id))
+        .where(and(eq(pageRouteTargets.projectId, project.id), eq(proxyHosts.enabled, true))),
     ]);
-    return { ...project, deploymentCount, tagCount, routeCount };
+    const primaryDomain =
+      routes.flatMap((route) => route.domainNames).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))[0] ?? null;
+    return { ...project, deploymentCount, tagCount, routeCount: routes.length, primaryDomain };
+  }
+
+  private async refreshFallbackRuntime(projectId: string): Promise<void> {
+    await this.runtimeAdapter?.refreshProjectFallback(projectId);
+    if (!this.routeRuntimeAdapter) return;
+    const [routes, additionalRoutes] = await Promise.all([
+      this.db
+        .select({ hostId: pageRouteTargets.proxyHostId })
+        .from(pageRouteTargets)
+        .where(eq(pageRouteTargets.projectId, projectId)),
+      this.db
+        .select({ hostId: proxyAdditionalRoutes.proxyHostId })
+        .from(proxyAdditionalRoutes)
+        .where(and(eq(proxyAdditionalRoutes.pageProjectId, projectId), eq(proxyAdditionalRoutes.targetKind, 'pages'))),
+    ]);
+    for (const hostId of new Set([...routes, ...additionalRoutes].map((route) => route.hostId))) {
+      await this.routeRuntimeAdapter.reconcileAdditionalRouteHost(hostId);
+    }
   }
 
   private async withMigrationLock<T>(projectId: string, work: () => Promise<T>): Promise<T> {

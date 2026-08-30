@@ -5,6 +5,8 @@ export const FOLDER_TOOL_REQUIREMENT_SCOPES = [
   'databases:folders:manage',
   'domains:view',
   'domains:folders:manage',
+  'ssl:cert:view',
+  'ssl:cert:folders:manage',
   'logs:environments:view',
   'logs:environments:folders:manage',
   'logs:schemas:view',

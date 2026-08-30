@@ -75,10 +75,7 @@ describe("scope catalog characterization", () => {
 
   it("preserves MCP token filtering and source object identity", () => {
     const removed = [
-      "integrations:gitlab:view",
       "integrations:gitlab:sync",
-      "integrations:gitlab:projects:view",
-      "integrations:gitlab:repo:read",
       "integrations:gitlab:repo:write",
       "integrations:gitlab:ci:view",
       "integrations:gitlab:ci:edit",
@@ -88,9 +85,6 @@ describe("scope catalog characterization", () => {
       "integrations:gitlab:webhooks:manage",
       "integrations:gitlab:registry:manage",
       "integrations:gitlab:sandbox:clone",
-      "integrations:github:view",
-      "integrations:git:view",
-      "integrations:ssh:view",
       "integrations:ssh:use",
     ];
 

@@ -138,7 +138,12 @@ describe("Compose UI contract", () => {
     expect(table).toContain("<EmptyState message={emptyMessage} embedded={embedded} />");
     expect(detail).toContain("<Button onClick={() => setRevisionOpen(true)}>");
     expect(detail).not.toContain('<Button size="sm" onClick={() => setRevisionOpen(true)}>');
-    expect(editor).toContain('const operationAction = projectId ? "apply" : "pull_apply"');
+    expect(editor).toContain('startDockerComposeOperation(nodeId, targetProjectId, "pull_apply"');
+    expect(editor).toContain("} else if (adoptionResume) {");
+    expect(editor).toContain("setAdoptionResume(resume)");
+    expect(editor).toContain("adoptionResume?.inputSignature === inputSignature");
+    expect(editor).toContain("idempotencyKey,");
+    expect(editor).not.toContain("const operationAction =");
   });
 
   it("treats project deletion as destructive runtime cleanup", () => {

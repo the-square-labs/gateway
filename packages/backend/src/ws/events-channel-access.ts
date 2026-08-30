@@ -177,6 +177,12 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'domain.changed') {
     return hasScopeBase(scopes, 'domains:view') || hasScope(scopes, 'domains:folders:manage');
   }
+  if (channel === 'ssl.cert.folder.changed') {
+    return hasScopeBase(scopes, 'ssl:cert:view') || hasScope(scopes, 'ssl:cert:folders:manage');
+  }
+  if (channel === 'ssl.cert.changed') {
+    return hasScopeBase(scopes, 'ssl:cert:view');
+  }
   if (channel.startsWith('proxy.host')) {
     return hasScopeBase(scopes, 'proxy:view') || hasScope(scopes, 'proxy:folders:manage');
   }

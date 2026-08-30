@@ -3,6 +3,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import {
   nodes,
   pageDeployments,
+  pageProjects,
   pageRouteTargets,
   pageTagActivations,
   pageTags,
@@ -175,16 +176,34 @@ export class PageRouteService implements PageTagPublicationAdapter, PageRuntimeC
     });
   }
 
-  async getIncludePath(proxyHostId: string): Promise<string> {
+  async getRenderConfig(proxyHostId: string): Promise<{
+    includePath: string;
+    spaFallback: boolean;
+    fallbackUrl: string | null;
+  }> {
     const [target] = await this.db
-      .select({ includePath: pageRouteTargets.includePath, status: pageRouteTargets.status })
+      .select({
+        includePath: pageRouteTargets.includePath,
+        status: pageRouteTargets.status,
+        spaFallback: pageProjects.spaFallback,
+        fallbackUrl: pageProjects.fallbackUrl,
+      })
       .from(pageRouteTargets)
+      .innerJoin(pageProjects, eq(pageRouteTargets.projectId, pageProjects.id))
       .where(eq(pageRouteTargets.proxyHostId, proxyHostId))
       .limit(1);
     if (!target?.includePath || target.status !== 'ready') {
       throw new AppError(409, 'PAGES_ROUTE_NOT_READY', 'Pages Route target is not ready');
     }
-    return validatePageRouteIncludePath(proxyHostId, target.includePath);
+    return {
+      includePath: validatePageRouteIncludePath(proxyHostId, target.includePath),
+      spaFallback: target.spaFallback,
+      fallbackUrl: target.fallbackUrl,
+    };
+  }
+
+  async getIncludePath(proxyHostId: string): Promise<string> {
+    return (await this.getRenderConfig(proxyHostId)).includePath;
   }
 
   async getTarget(proxyHostId: string) {

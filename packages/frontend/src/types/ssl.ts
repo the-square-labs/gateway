@@ -53,6 +53,8 @@ export interface SSLCertificate {
   status: SSLCertStatus;
   distribution?: CertificateDistributionState;
   isSystem?: boolean;
+  folderId?: string | null;
+  sortOrder?: number;
   createdAt: string;
   updatedAt: string;
 }

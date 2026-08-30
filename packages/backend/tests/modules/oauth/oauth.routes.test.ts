@@ -216,9 +216,13 @@ describe('OAuth metadata routes', () => {
       expect(body.scopes_supported).toContain('nodes:details');
       expect(body.scopes_supported).toContain('integrations:cloudflare:view');
       expect(body.scopes_supported).not.toContain('integrations:cloudflare:dns:view');
-      expect(body.scopes_supported).not.toContain('integrations:gitlab:repo:read');
-      expect(body.scopes_supported).not.toContain('integrations:github:view');
-      expect(body.scopes_supported).not.toContain('integrations:git:view');
+      expect(body.scopes_supported).toContain('integrations:gitlab:repo:read');
+      expect(body.scopes_supported).toContain('integrations:github:view');
+      expect(body.scopes_supported).toContain('integrations:git:view');
+      expect(body.scopes_supported).toContain('integrations:ssh:view');
+      expect(body.scopes_supported).not.toContain('integrations:gitlab:repo:write');
+      expect(body.scopes_supported).not.toContain('integrations:github:manage');
+      expect(body.scopes_supported).not.toContain('integrations:git:manage');
       expect(body.scopes_supported).not.toContain('integrations:ssh:use');
     }
   });
