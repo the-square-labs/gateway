@@ -23,6 +23,7 @@ describe('ManagedDatabaseBindingIdentityRuntime reconnect reconciliation', () =>
     const callbacks = {
       getBinding: vi.fn().mockResolvedValue(migratedBinding),
       getDatabase: vi.fn().mockResolvedValue(migratedDatabase),
+      assertDatabaseReady: vi.fn().mockResolvedValue(undefined),
       assertTargetReady: vi.fn().mockResolvedValue(undefined),
       markError: vi.fn(),
       deprovision: vi.fn(),
@@ -55,6 +56,7 @@ describe('ManagedDatabaseBindingIdentityRuntime reconnect reconciliation', () =>
     await runtime.reconcile('target-node');
 
     expect(callbacks.assertTargetReady).toHaveBeenCalledWith('target-node');
+    expect(callbacks.assertDatabaseReady).toHaveBeenCalledWith('database-node');
     expect(identityManager.ensureBindingIdentity).toHaveBeenCalledWith(database.id, null);
     expect(callbacks.reconcileDesired).toHaveBeenCalledWith(migratedDatabase, migratedBinding);
     expect(callbacks.markError).not.toHaveBeenCalled();

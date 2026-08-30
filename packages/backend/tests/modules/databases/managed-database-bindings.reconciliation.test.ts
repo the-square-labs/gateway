@@ -25,11 +25,27 @@ describe('managed database binding reconnect reconciliation', () => {
     const update = vi.fn(() => {
       throw new Error('an unrelated binding must not be updated');
     });
+    const select = vi
+      .fn()
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({ innerJoin: vi.fn().mockResolvedValue([{ database, binding }]) })),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([
+              {
+                type: 'databases',
+                status: 'offline',
+                capabilities: { capabilities: ['managed_database_binding_principals_v2'] },
+              },
+            ]),
+          })),
+        })),
+      });
     const instance = new ManagedDatabaseBindingService(
       {
-        select: vi.fn(() => ({
-          from: vi.fn(() => ({ innerJoin: vi.fn().mockResolvedValue([{ database, binding }]) })),
-        })),
+        select,
         update,
       } as never,
       {} as never,

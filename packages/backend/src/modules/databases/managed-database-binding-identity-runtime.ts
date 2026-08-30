@@ -26,6 +26,7 @@ interface ManagedDatabaseIdentityManager {
 interface IdentityRuntimeCallbacks {
   getBinding(managedDatabaseId: string, bindingId: string): Promise<ManagedDatabaseBindingRow>;
   getDatabase(managedDatabaseId: string): Promise<ManagedDatabaseRow>;
+  assertDatabaseReady(nodeId: string): Promise<void>;
   assertTargetReady(nodeId: string): Promise<void>;
   markError(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow, error: unknown): Promise<void>;
   deprovision(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow): Promise<void>;
@@ -128,15 +129,16 @@ export class ManagedDatabaseBindingIdentityRuntime {
       legacyTargetsByDatabase.set(binding.managedDatabaseId, targets);
     }
     const migrationReadiness = new Map<string, Promise<void>>();
-    const ensureMigrationReady = (managedDatabaseId: string) => {
-      let readiness = migrationReadiness.get(managedDatabaseId);
+    const ensureMigrationReady = (database: ManagedDatabaseRow) => {
+      let readiness = migrationReadiness.get(database.id);
       if (!readiness) {
-        readiness = Promise.all(
-          [...(legacyTargetsByDatabase.get(managedDatabaseId) ?? [])].map((targetNodeId) =>
+        readiness = Promise.all([
+          this.callbacks.assertDatabaseReady(database.nodeId),
+          ...[...(legacyTargetsByDatabase.get(database.id) ?? [])].map((targetNodeId) =>
             this.callbacks.assertTargetReady(targetNodeId)
-          )
-        ).then(() => undefined);
-        migrationReadiness.set(managedDatabaseId, readiness);
+          ),
+        ]).then(() => undefined);
+        migrationReadiness.set(database.id, readiness);
       }
       return readiness;
     };
@@ -153,7 +155,7 @@ export class ManagedDatabaseBindingIdentityRuntime {
         storedBinding.principalModelVersion !== PRINCIPAL_MODEL_VERSION
       ) {
         try {
-          await ensureMigrationReady(storedDatabase.id);
+          await ensureMigrationReady(storedDatabase);
           if (storedDatabase.bindingIdentityVersion !== PRINCIPAL_MODEL_VERSION) {
             await this.identityManager.ensureBindingIdentity(storedDatabase.id, null);
           }

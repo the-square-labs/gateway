@@ -102,6 +102,7 @@ export class ManagedDatabaseBindingService {
       {
         getBinding: (managedDatabaseId, bindingId) => this.getBinding(managedDatabaseId, bindingId),
         getDatabase: (managedDatabaseId) => this.getDatabase(managedDatabaseId),
+        assertDatabaseReady: (nodeId) => this.assertDatabaseIdentityMigrationReady(nodeId),
         assertTargetReady: (nodeId) => this.assertBindingTargetMigrationReady(nodeId),
         markError: (database, binding, error) => this.markBindingReconciliationError(database, binding, error),
         deprovision: (database, binding) => this.deprovisionBinding(database, binding, SYSTEM_USER_ID, {}),
@@ -731,6 +732,27 @@ export class ManagedDatabaseBindingService {
         409,
         'MANAGED_DATABASE_TARGET_DAEMON_UPDATE_REQUIRED',
         'Update the target Docker daemon before creating or migrating managed database listeners'
+      );
+    }
+  }
+
+  private async assertDatabaseIdentityMigrationReady(nodeId: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Database node not found');
+    if (node.type !== 'databases') {
+      throw new AppError(400, 'INVALID_DATABASE_NODE', 'Managed databases require a database node');
+    }
+    if (node.status !== 'online') throw new AppError(409, 'NODE_OFFLINE', 'Database node is offline');
+    const capabilities = (node.capabilities as { capabilities?: unknown } | null)?.capabilities;
+    if (!Array.isArray(capabilities) || !capabilities.includes('managed_database_binding_principals_v2')) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_DAEMON_UPDATE_REQUIRED',
+        'Update the database daemon before migrating isolated database bindings'
       );
     }
   }
