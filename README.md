@@ -2,9 +2,9 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/gateway-lockup-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/brand/gateway-lockup-light.png">
-    <img src="docs/assets/brand/gateway-lockup-light.png" width="720" alt="Good Gateway">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/brand/good-gateway-lockup-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/brand/good-gateway-lockup-light.png">
+    <img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/brand/good-gateway-lockup-light.png" width="720" alt="Good Gateway">
   </picture>
 </p>
 
@@ -86,24 +86,24 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 <td align="center"><strong>AI Workspace planning</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/product-tour/dashboard.png" width="100%" alt="Gateway dashboard with routes, databases, nodes, health, and resource utilization"></td>
-<td><img src="docs/screenshots/product-tour/ai-workspace.png" width="100%" alt="AI Workspace presenting a reviewed infrastructure deployment plan"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/dashboard-overview.png" width="100%" alt="Gateway dashboard with routes, databases, nodes, health, and resource utilization"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/ai-workspace.png" width="100%" alt="AI Workspace presenting a reviewed infrastructure deployment plan"></td>
 </tr>
 <tr>
 <td align="center"><strong>Workload and Secure Link runtime</strong></td>
 <td align="center"><strong>Managed database observability</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/product-tour/container-secure-link.png" width="100%" alt="Docker workload overview with Secure Link runtime metrics"></td>
-<td><img src="docs/screenshots/product-tour/managed-database.png" width="100%" alt="Managed PostgreSQL database health and performance overview"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/container-secure-link.png" width="100%" alt="Docker workload overview with Secure Link runtime metrics"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/managed-database.png" width="100%" alt="Managed PostgreSQL database health and performance overview"></td>
 </tr>
 <tr>
 <td align="center"><strong>Ingress route and health</strong></td>
 <td align="center"><strong>Distributed node inventory</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/product-tour/ingress-route.png" width="100%" alt="Healthy ingress route backed by a Docker Secure Link"></td>
-<td><img src="docs/screenshots/product-tour/nodes.png" width="100%" alt="Gateway node inventory with ingress, Docker, database, monitoring, build, and relay roles"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/ingress-route.png" width="100%" alt="Healthy ingress route backed by a Docker Secure Link"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/nodes.png" width="100%" alt="Gateway node inventory with ingress, Docker, database, monitoring, build, and relay roles"></td>
 </tr>
 </table>
 

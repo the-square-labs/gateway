@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/gateway-lockup-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/brand/gateway-lockup-light.png">
-    <img src="docs/assets/brand/gateway-lockup-light.png" width="720" alt="Good Gateway">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/brand/good-gateway-lockup-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/brand/good-gateway-lockup-light.png">
+    <img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/brand/good-gateway-lockup-light.png" width="720" alt="Good Gateway">
   </picture>
 </p>
 
@@ -81,24 +81,24 @@ Installer запускает Gateway и выводит одноразовый к
 <td align="center"><strong>Планирование в AI Workspace</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/product-tour/dashboard.png" width="100%" alt="Dashboard Gateway с маршрутами, базами данных, нодами, health status и использованием ресурсов"></td>
-<td><img src="docs/screenshots/product-tour/ai-workspace.png" width="100%" alt="AI Workspace с проверенным планом развертывания инфраструктуры"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/dashboard-overview.png" width="100%" alt="Dashboard Gateway с маршрутами, базами данных, нодами, health status и использованием ресурсов"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/ai-workspace.png" width="100%" alt="AI Workspace с проверенным планом развертывания инфраструктуры"></td>
 </tr>
 <tr>
 <td align="center"><strong>Workload и Secure Link runtime</strong></td>
 <td align="center"><strong>Наблюдаемость managed database</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/product-tour/container-secure-link.png" width="100%" alt="Обзор Docker workload с метриками Secure Link runtime"></td>
-<td><img src="docs/screenshots/product-tour/managed-database.png" width="100%" alt="Health и performance overview managed PostgreSQL database"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/container-secure-link.png" width="100%" alt="Обзор Docker workload с метриками Secure Link runtime"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/managed-database.png" width="100%" alt="Health и performance overview managed PostgreSQL database"></td>
 </tr>
 <tr>
 <td align="center"><strong>Ingress route и health</strong></td>
 <td align="center"><strong>Распределённые ноды</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/product-tour/ingress-route.png" width="100%" alt="Работающий ingress route с Docker Secure Link"></td>
-<td><img src="docs/screenshots/product-tour/nodes.png" width="100%" alt="Список нод Gateway с ingress, Docker, database, monitoring, build и relay ролями"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/ingress-route.png" width="100%" alt="Работающий ingress route с Docker Secure Link"></td>
+<td><img src="https://raw.githubusercontent.com/the-square-labs/gateway-docs/main/public/screenshots/product-tour/nodes.png" width="100%" alt="Список нод Gateway с ingress, Docker, database, monitoring, build и relay ролями"></td>
 </tr>
 </table>
 
