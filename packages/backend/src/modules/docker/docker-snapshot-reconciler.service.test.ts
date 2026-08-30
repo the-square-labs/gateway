@@ -294,6 +294,33 @@ describe('DockerSnapshotReconciler', () => {
     reconciler.stop();
   });
 
+  it('does not dispatch an explicit detail refresh while a container recreate is active', async () => {
+    const { reconciler, dispatch, eventBus } = createReconciler();
+    reconciler.start();
+
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-old',
+      name: 'web',
+      action: 'transitioning',
+      transition: 'updating',
+    });
+    await vi.waitFor(() =>
+      expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'list', {}, 10_000)
+    );
+    dispatch.sendDockerContainerCommand.mockClear();
+
+    await reconciler.refreshNow('node-1', 'container-detail', 'web');
+
+    expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalledWith(
+      'node-1',
+      'inspect',
+      expect.anything(),
+      10_000
+    );
+    reconciler.stop();
+  });
+
   it('purges on explicit deletion and refreshes all inventory kinds on reconnect', async () => {
     const { reconciler, dispatch, snapshots, eventBus } = createReconciler();
     reconciler.start();

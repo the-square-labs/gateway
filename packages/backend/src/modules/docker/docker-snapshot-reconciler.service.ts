@@ -548,6 +548,7 @@ export class DockerSnapshotReconciler {
   private async refreshDetail(nodeId: string, kind: DockerDetailKind, key: string) {
     const id = jobId({ nodeId, kind, key });
     if (this.snapshots.isNodeDeleted(nodeId) || this.cancelledJobs.has(id)) return;
+    if (kind === 'container-detail' && this.activeContainerTransitions.has(`${nodeId}:${key}`)) return;
     const inspectKey = kind === 'container-detail' ? await this.resolveContainerInspectKey(nodeId, key) : key;
     const result =
       kind === 'container-detail'
