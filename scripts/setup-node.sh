@@ -994,24 +994,33 @@ ensure_nginx_worker_limits() {
     rm -f "$tmp_file"
 }
 
-current_nginx_master_nofile_limit() {
+current_nginx_worker_nofile_limit() {
     local master_pid
+    local child_pid
+    local child_args
 
     [[ -r "$NGINX_PID_FILE" ]] || return 0
     master_pid=$(cat "$NGINX_PID_FILE")
-    [[ "$master_pid" =~ ^[0-9]+$ && -r "/proc/${master_pid}/limits" ]] || return 0
-    awk '$1 == "Max" && $2 == "open" && $3 == "files" { print $4; exit }' "/proc/${master_pid}/limits"
+    [[ "$master_pid" =~ ^[0-9]+$ && -r "/proc/${master_pid}/task/${master_pid}/children" ]] || return 0
+
+    for child_pid in $(cat "/proc/${master_pid}/task/${master_pid}/children"); do
+        [[ "$child_pid" =~ ^[0-9]+$ && -r "/proc/${child_pid}/cmdline" && -r "/proc/${child_pid}/limits" ]] || continue
+        child_args=$(tr '\0' ' ' < "/proc/${child_pid}/cmdline")
+        [[ "$child_args" == *"nginx: worker process"* ]] || continue
+        awk '$1 == "Max" && $2 == "open" && $3 == "files" { print $4; exit }' "/proc/${child_pid}/limits"
+        return 0
+    done
 }
 
-nginx_master_requires_restart() {
+nginx_worker_requires_restart() {
     local running_nofile=""
 
-    running_nofile=$(current_nginx_master_nofile_limit)
-    [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_SERVICE_NOFILE_MIN ))
+    running_nofile=$(current_nginx_worker_nofile_limit)
+    [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_WORKER_NOFILE_MIN ))
 }
 
 ensure_nginx_service_limit() {
-    if nginx_master_requires_restart; then
+    if nginx_worker_requires_restart; then
         NGINX_SERVICE_RESTART_REQUIRED=1
     fi
 
@@ -1077,7 +1086,6 @@ verify_nginx_fd_limits() {
     local worker_nofile
     local worker_connections
     local service_nofile=""
-    local master_pid=""
     local process_nofile=""
 
     rendered=$(nginx -T 2>&1) || die "Failed to inspect the effective nginx configuration"
@@ -1097,15 +1105,10 @@ verify_nginx_fd_limits() {
         fi
     fi
 
-    if [[ -r "$NGINX_PID_FILE" ]]; then
-        master_pid=$(cat "$NGINX_PID_FILE")
-        if [[ "$master_pid" =~ ^[0-9]+$ && -r "/proc/${master_pid}/limits" ]]; then
-            process_nofile=$(awk '$1 == "Max" && $2 == "open" && $3 == "files" { print $4; exit }' "/proc/${master_pid}/limits")
-            if [[ "$process_nofile" != "unlimited" ]]; then
-                [[ "$process_nofile" =~ ^[0-9]+$ ]] && (( process_nofile >= NGINX_SERVICE_NOFILE_MIN )) || \
-                    die "Running nginx master process still has a nofile limit below ${NGINX_SERVICE_NOFILE_MIN}"
-            fi
-        fi
+    process_nofile=$(current_nginx_worker_nofile_limit)
+    if [[ -n "$process_nofile" && "$process_nofile" != "unlimited" ]]; then
+        [[ "$process_nofile" =~ ^[0-9]+$ ]] && (( process_nofile >= NGINX_WORKER_NOFILE_MIN )) || \
+            die "Running nginx worker process still has a nofile limit below ${NGINX_WORKER_NOFILE_MIN}"
     fi
 
     ok "nginx file-descriptor limits verified"
@@ -1246,14 +1249,14 @@ configure_nginx() {
     if nginx -t >> "$LOG_FILE" 2>&1; then
         verify_nginx_server_tokens
         if has_systemd; then
-            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_master_requires_restart; then
+            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then
                 systemctl restart nginx >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
             else
                 systemctl reload nginx >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \
                     die "Failed to reload nginx"
             fi
         elif has_openrc; then
-            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_master_requires_restart; then
+            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then
                 rc-service nginx restart >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
             else
                 rc-service nginx reload >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \
