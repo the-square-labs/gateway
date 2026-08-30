@@ -1003,11 +1003,15 @@ current_nginx_master_nofile_limit() {
     awk '$1 == "Max" && $2 == "open" && $3 == "files" { print $4; exit }' "/proc/${master_pid}/limits"
 }
 
-ensure_nginx_service_limit() {
+nginx_master_requires_restart() {
     local running_nofile=""
 
     running_nofile=$(current_nginx_master_nofile_limit)
-    if [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_SERVICE_NOFILE_MIN )); then
+    [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_SERVICE_NOFILE_MIN ))
+}
+
+ensure_nginx_service_limit() {
+    if nginx_master_requires_restart; then
         NGINX_SERVICE_RESTART_REQUIRED=1
     fi
 
@@ -1242,14 +1246,14 @@ configure_nginx() {
     if nginx -t >> "$LOG_FILE" 2>&1; then
         verify_nginx_server_tokens
         if has_systemd; then
-            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]]; then
+            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_master_requires_restart; then
                 systemctl restart nginx >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
             else
                 systemctl reload nginx >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \
                     die "Failed to reload nginx"
             fi
         elif has_openrc; then
-            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]]; then
+            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_master_requires_restart; then
                 rc-service nginx restart >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
             else
                 rc-service nginx reload >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \

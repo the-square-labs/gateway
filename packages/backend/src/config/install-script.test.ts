@@ -33,6 +33,9 @@ describe('nginx node installer baseline', () => {
     expect(source).toContain('remove_legacy_gateway_sites_include');
     expect(source).toContain('[[ "$effective_content" == "$expected_line" ]] || return 0');
     expect(source).toContain('backup_if_exists "$legacy_file"');
+    expect(source).toContain(
+      'if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_master_requires_restart; then'
+    );
     const configTest = source.indexOf('if nginx -t >> "$LOG_FILE" 2>&1; then');
     const tokenCheck = source.indexOf('verify_nginx_server_tokens', configTest);
     const serviceAction = source.indexOf('systemctl restart nginx', tokenCheck);
