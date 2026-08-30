@@ -435,11 +435,12 @@ Nodes are remote servers running Gateway daemons. Each daemon type manages diffe
 - **docker**: Container runtime node — manages Docker containers, deployments, images, volumes, and networks. Requires Docker Engine. Provides console, files, logs, environment, and secret management.
 - **builder**: Restricted Build Worker profile of the existing \`docker-daemon\`. It has no Docker Engine socket and accepts only Git build, cancellation, and registry-binding commands. It supervises dedicated BuildKit and containerd services on a separate worker host or outer unprivileged container and must advertise execution, dedicated-runtime, and enforced-resource-profile capabilities before Repository mode is admitted.
 - **databases**: Restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse only. It runs as root, validates ext4 image storage before enrollment, and rejects generic Docker workloads.
+- **relay**: Secure Link Relay Pool node — runs the signed relay supervisor and worker on a separate physical host. It uses the standard node enrollment lifecycle, requires an advertised address reachable by participating managed hosts, and appears in the Relay Pool only after enrollment succeeds.
 
 ## How to Enroll a New Node (Step by Step)
 
 ### Step 1: Create the node in Gateway UI
-Go to **Nodes** page → click **Enroll Node** → select the node type (nginx, docker, builder, databases, or monitoring) → optionally set a display name → click **Create**. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands.
+Go to **Nodes** page → click **Add Node** → select the node type (nginx, docker, builder, databases, monitoring, or relay) → set a display name → click **Create Node**. Relay nodes also require the address advertised to participating hosts. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands. **Settings → Relay → Add relay node** opens the same flow with Relay preselected.
 
 ### Step 2: Run the setup script on the target server
 The UI shows ready-to-copy commands. Run one of these on the target server as root:

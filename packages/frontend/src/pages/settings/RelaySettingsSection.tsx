@@ -19,10 +19,9 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { NumericInput } from "@/components/ui/numeric-input";
 import {
   Select,
@@ -136,9 +135,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [saving, setSaving] = useState(false);
   const [poolAction, setPoolAction] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
-  const [enrollName, setEnrollName] = useState("");
-  const [enrollAddress, setEnrollAddress] = useState("");
-  const [enrollCommand, setEnrollCommand] = useState("");
 
   const recordStatus = useCallback((next: DashboardRelaySnapshot | null) => {
     setStatus(next);
@@ -309,32 +305,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       toast.success("Relay node removed");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay removal failed");
-    } finally {
-      setPoolAction(false);
-    }
-  };
-
-  const createRelayEnrollment = async () => {
-    if (!enrollName.trim() || !enrollAddress.trim()) return;
-    setPoolAction(true);
-    try {
-      const result = await api.createNode({
-        type: "relay",
-        hostname: "pending",
-        displayName: enrollName.trim(),
-        serviceAddresses: [enrollAddress.trim()],
-        servicePort: 9443,
-      });
-      const target =
-        result.gatewayEnrollmentTargets?.public?.gateway ??
-        result.gatewayEnrollmentTargets?.local?.gateway;
-      if (!target) throw new Error("Gateway enrollment address is unavailable");
-      setEnrollCommand(
-        `curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-relay-node.sh | sudo bash -s -- --gateway ${target} --token ${result.enrollmentToken} --gateway-cert-sha256 ${result.gatewayCertSha256} --advertise-address ${enrollAddress.trim()}`
-      );
-      toast.success("Relay enrollment created");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create relay enrollment");
     } finally {
       setPoolAction(false);
     }
@@ -850,55 +820,14 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         </SettingsControlRow>
       </PanelShell>
 
-      <Dialog
+      <NodeEnrollmentDialog
         open={enrollOpen}
-        onOpenChange={(open) => {
-          setEnrollOpen(open);
-          if (!open) setEnrollCommand("");
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add relay node</DialogTitle>
-          </DialogHeader>
-          {enrollCommand ? (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Run this command as root on the relay host:
-              </p>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap border border-border bg-muted p-3 text-xs">
-                {enrollCommand}
-              </pre>
-              <Button onClick={() => void navigator.clipboard.writeText(enrollCommand)}>
-                Copy command
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <Input
-                value={enrollName}
-                onChange={(event) => setEnrollName(event.target.value)}
-                placeholder="Relay name"
-              />
-              <Input
-                value={enrollAddress}
-                onChange={(event) => setEnrollAddress(event.target.value)}
-                placeholder="Reachable IP or hostname"
-              />
-              <p className="text-xs text-muted-foreground">
-                Gateway does not open firewall or NAT rules. TCP 9443 must be reachable by
-                participating nodes.
-              </p>
-              <Button
-                onClick={() => void createRelayEnrollment()}
-                disabled={poolAction || !enrollName.trim() || !enrollAddress.trim()}
-              >
-                Create enrollment
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setEnrollOpen}
+        initialType="relay"
+        lockType
+        onNodeCreated={() => void load()}
+        onNodeEnrolled={() => void load()}
+      />
     </div>
   );
 }

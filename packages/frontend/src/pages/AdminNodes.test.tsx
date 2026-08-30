@@ -91,8 +91,15 @@ describe("AdminNodes", () => {
     if (!addNodeButton) throw new Error("Primary Add Node button not found");
     await user.click(addNodeButton);
     expect(
-      screen.getByText("Serve public domains and routes with the Nginx daemon")
+      screen.getByText("Terminates TLS and serves public domains and routes.")
     ).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Node Type" }));
+    expect(screen.getByRole("option", { name: "Relay" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Bastion/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Adds a physical host to the Secure Link Relay Pool.")
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Ingress" }));
     await user.type(screen.getByPlaceholderText("US-East Ingress"), "Branch Edge");
     await user.click(screen.getByRole("button", { name: /create node/i }));
 
@@ -143,7 +150,7 @@ describe("AdminNodes", () => {
     await user.click(screen.getByRole("option", { name: "Build Worker" }));
 
     expect(
-      screen.getByText("Dedicated isolated worker for Git builds and artifact scanning")
+      screen.getByText("Builds Git revisions and scans artifacts on an isolated Docker worker.")
     ).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText("US-East Ingress"), "Build Worker EU");
     await user.click(screen.getByRole("button", { name: /create node/i }));

@@ -1,26 +1,16 @@
 import { FolderPlus, Plus, Server, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
-import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -28,80 +18,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daemonTypeForNode, nodeIconClassNames, nodeTypeLabel } from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
-import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
-import { handleLicenseApiError } from "@/stores/license-paywall";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import type { Node, NodeStatus } from "@/types";
 import { effectiveNodeStatus, isNodeIncompatible, isNodeUpdating } from "@/types";
-
-type EnrollmentTargets = {
-  public?: {
-    label: string;
-    gateway: string | null;
-  };
-  local?: {
-    label: string;
-    gateway: string;
-  };
-};
-
-const NODE_TYPES = [
-  {
-    value: "nginx",
-    label: "Ingress",
-    description: "Serve public domains and routes with the Nginx daemon",
-    disabled: false,
-  },
-  {
-    value: "docker",
-    label: "Docker",
-    description: "Docker container management agent",
-    disabled: false,
-  },
-  {
-    value: "builder",
-    label: "Build Worker",
-    description: "Dedicated isolated worker for Git builds and artifact scanning",
-    disabled: false,
-  },
-  {
-    value: "databases",
-    label: "Databases",
-    description: "Dedicated managed PostgreSQL, Redis, and ClickHouse node",
-    disabled: false,
-  },
-  {
-    value: "monitoring",
-    label: "Monitoring",
-    description: "System monitoring agent — no nginx required",
-    disabled: false,
-  },
-  {
-    value: "bastion",
-    label: "Bastion",
-    description: "SSH bastion host (coming soon)",
-    disabled: true,
-  },
-];
-
-const DAEMON_INSTALLER_URL =
-  "https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts";
-const DAEMON_INSTALLER_BY_TYPE: Partial<Record<(typeof NODE_TYPES)[number]["value"], string>> = {
-  nginx: "setup-node.sh",
-  docker: "setup-docker-node.sh",
-  builder: "setup-docker-node.sh",
-  databases: "setup-database-node.sh",
-  monitoring: "setup-monitoring-node.sh",
-};
 
 const STATUS_BADGE: Record<
   string,
@@ -137,20 +64,7 @@ export function AdminNodes() {
 
   const [searchInput, setSearchInput] = useState(filters.search);
   const [enrollDialogOpen, setEnrollDialogOpen] = useState(false);
-  const [enrollResultDialogOpen, setEnrollResultDialogOpen] = useState(false);
-  const [enrollType, setEnrollType] = useState<string>("nginx");
-  const [enrollDisplayName, setEnrollDisplayName] = useState("");
-  const [enrollResult, setEnrollResult] = useState<{
-    type: string;
-    token: string;
-    gatewayCertSha256: string;
-    targets?: EnrollmentTargets;
-  } | null>(null);
-  const [enrolling, setEnrolling] = useState(false);
-  const [enrollmentTargetId, setEnrollmentTargetId] = useState("public");
-  const [enrollmentTransport, setEnrollmentTransport] = useState<"curl" | "wget">("curl");
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
-  const enrollResultResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const daemonUpdates = useDaemonUpdatesStore((s) => s.statuses);
   const fetchDaemonUpdates = useDaemonUpdatesStore((s) => s.fetchDaemonUpdates);
 
@@ -179,12 +93,6 @@ export function AdminNodes() {
     void loadDaemonUpdates();
   }, [loadDaemonUpdates]);
 
-  useEffect(() => {
-    return () => {
-      if (enrollResultResetTimerRef.current) clearTimeout(enrollResultResetTimerRef.current);
-    };
-  }, []);
-
   const handleSearch = () => setFilters({ search: searchInput });
   const hasActiveFilters = filters.search !== "" || filters.status !== "all";
   const canManageFolders = hasScope("nodes:folders:manage");
@@ -202,105 +110,6 @@ export function AdminNodes() {
     },
     [fetchNodes]
   );
-
-  const handleEnroll = async () => {
-    const displayName = enrollDisplayName.trim();
-    if (!displayName) {
-      toast.error("Node name is required");
-      return;
-    }
-
-    setEnrolling(true);
-    try {
-      const result = await api.createNode({
-        type: enrollType,
-        hostname: "pending",
-        displayName,
-      });
-      setEnrollResult({
-        type: enrollType,
-        token: result.enrollmentToken,
-        gatewayCertSha256: result.gatewayCertSha256,
-        targets: result.gatewayEnrollmentTargets,
-      });
-      setEnrollmentTargetId("public");
-      setEnrollmentTransport("curl");
-      setEnrollDialogOpen(false);
-      setEnrollResultDialogOpen(true);
-      fetchNodes();
-    } catch (err) {
-      if (!handleLicenseApiError(err, "Managed nodes")) {
-        toast.error(err instanceof Error ? err.message : "Failed to create node");
-      }
-    } finally {
-      setEnrolling(false);
-    }
-  };
-
-  const closeEnrollDialog = () => {
-    setEnrollDialogOpen(false);
-  };
-
-  const handleEnrollDialogOpenChange = (open: boolean) => {
-    if (open) {
-      setEnrollType("nginx");
-      setEnrollDisplayName("");
-      setEnrollDialogOpen(true);
-      return;
-    }
-
-    closeEnrollDialog();
-  };
-
-  const closeEnrollResultDialog = () => {
-    setEnrollResultDialogOpen(false);
-    if (enrollResultResetTimerRef.current) clearTimeout(enrollResultResetTimerRef.current);
-    enrollResultResetTimerRef.current = setTimeout(() => {
-      setEnrollResult(null);
-      enrollResultResetTimerRef.current = null;
-    }, 220);
-  };
-
-  const fallbackGatewayAddr = `${window.location.hostname}:9443`;
-  const enrollmentTargets = enrollResult
-    ? [
-        {
-          id: "public",
-          label: enrollResult.targets?.public?.label ?? "Public node",
-          gateway: enrollResult.targets?.public?.gateway ?? fallbackGatewayAddr,
-        },
-        ...(enrollResult.targets?.local
-          ? [
-              {
-                id: "local",
-                label: enrollResult.targets.local.label,
-                gateway: enrollResult.targets.local.gateway,
-              },
-            ]
-          : []),
-      ]
-    : [];
-
-  const commandForTarget = (gateway: string, transport: "curl" | "wget") => {
-    if (!enrollResult) return "";
-    const scriptName =
-      DAEMON_INSTALLER_BY_TYPE[enrollResult.type as (typeof NODE_TYPES)[number]["value"]];
-    if (!scriptName) return "";
-    const scriptUrl = `${DAEMON_INSTALLER_URL}/${scriptName}`;
-    const fetcher = transport === "curl" ? `curl -sSL ${scriptUrl}` : `wget -qO- ${scriptUrl}`;
-    const profileArgument = enrollResult.type === "builder" ? " \\\n  --mode builder" : "";
-    return `${fetcher} | sudo bash -s -- \\
-  --gateway ${gateway} \\
-  --token ${enrollResult.token} \\
-  --gateway-cert-sha256 ${enrollResult.gatewayCertSha256}${profileArgument}`;
-  };
-
-  const copyCommandValue = (command: string) => command.replace(/\s*\\\n\s*/g, " ");
-  const selectedEnrollmentTarget =
-    enrollmentTargets.find((target) => target.id === enrollmentTargetId) ?? enrollmentTargets[0];
-  const canCreateNode = enrollDisplayName.trim().length > 0;
-  const warningClassName =
-    "border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground";
 
   const columns = useMemo<ResourceListColumn<Node>[]>(
     () => [
@@ -501,149 +310,12 @@ export function AdminNodes() {
         />
       </div>
 
-      {/* Enrollment Create Dialog */}
-      <Dialog open={enrollDialogOpen} onOpenChange={handleEnrollDialogOpenChange}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add Node</DialogTitle>
-            <DialogDescription>
-              Create a node entry and get the setup command to run on the target host.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Type</label>
-              <Select value={enrollType} onValueChange={setEnrollType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {NODE_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value} disabled={t.disabled}>
-                      <div className="flex items-center gap-2">
-                        <span>{t.label}</span>
-                        {t.disabled && (
-                          <span className="text-xs text-muted-foreground">(coming soon)</span>
-                        )}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {NODE_TYPES.find((t) => t.value === enrollType)?.description}
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Name</label>
-              <Input
-                value={enrollDisplayName}
-                onChange={(e) => setEnrollDisplayName(e.target.value)}
-                placeholder="US-East Ingress"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={closeEnrollDialog}>
-              Cancel
-            </Button>
-            <Button onClick={handleEnroll} disabled={enrolling || !canCreateNode}>
-              {enrolling ? "Creating..." : "Create Node"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Enrollment Result Dialog */}
-      <Dialog
-        open={enrollResultDialogOpen}
-        onOpenChange={(open) => !open && closeEnrollResultDialog()}
-      >
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Node Created</DialogTitle>
-          </DialogHeader>
-
-          {enrollResult && (
-            <div className="space-y-4">
-              <div className={warningClassName}>
-                <p className="font-medium">
-                  The enrollment token is single-use and will not be shown again.
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Setup Command</label>
-                <p className="text-xs text-muted-foreground">
-                  Run on the target host as root.{" "}
-                  {enrollResult.type === "docker"
-                    ? "Installs the Docker management daemon and enrolls with this Gateway."
-                    : enrollResult.type === "databases"
-                      ? "Verifies safe ext4 image storage, then installs the managed database daemon and enrolls with this Gateway."
-                      : enrollResult.type === "monitoring"
-                        ? "Installs the monitoring agent and enrolls with this Gateway."
-                        : "Installs nginx, the daemon, and enrolls with this Gateway."}
-                </p>
-                {enrollmentTargets.length > 1 && (
-                  <p className="text-xs text-muted-foreground">
-                    Use the public command for remote hosts and the local command for nodes on the
-                    private network.
-                  </p>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
-                  {enrollmentTargets.length > 1 && (
-                    <Tabs
-                      value={selectedEnrollmentTarget?.id ?? "public"}
-                      onValueChange={setEnrollmentTargetId}
-                    >
-                      <TabsList>
-                        {enrollmentTargets.map((target) => (
-                          <TabsTrigger key={target.id} value={target.id}>
-                            {target.label}
-                          </TabsTrigger>
-                        ))}
-                      </TabsList>
-                    </Tabs>
-                  )}
-                  <Tabs
-                    value={enrollmentTransport}
-                    onValueChange={(value) => setEnrollmentTransport(value as "curl" | "wget")}
-                  >
-                    <TabsList>
-                      <TabsTrigger value="curl">curl</TabsTrigger>
-                      <TabsTrigger value="wget">wget</TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                </div>
-                {selectedEnrollmentTarget && (
-                  <CopyCodeBlock
-                    label={`${enrollmentTransport} command`}
-                    value={commandForTarget(selectedEnrollmentTarget.gateway, enrollmentTransport)}
-                    copyValue={copyCommandValue(
-                      commandForTarget(selectedEnrollmentTarget.gateway, enrollmentTransport)
-                    )}
-                    className="[&>p]:hidden"
-                  />
-                )}
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Enrollment Token</label>
-                <p className="text-xs text-muted-foreground">
-                  For manual setup. See the documentation for details.
-                </p>
-                <CopyValueField label="Enrollment token" value={enrollResult.token} />
-              </div>
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button onClick={closeEnrollResultDialog}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <NodeEnrollmentDialog
+        open={enrollDialogOpen}
+        onOpenChange={setEnrollDialogOpen}
+        onNodeCreated={() => fetchNodes()}
+        onNodeEnrolled={() => fetchNodes()}
+      />
     </PageTransition>
   );
 }

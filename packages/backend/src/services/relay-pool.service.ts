@@ -46,6 +46,10 @@ function chooseCandidates(endpointId: string, instances: RelayInstanceRow[], des
   return selected;
 }
 
+function isEnrolledRelayInstance(instance: RelayInstanceRow): boolean {
+  return instance.kind === 'local' || Boolean(instance.certificateIdentity && instance.certificateFingerprint);
+}
+
 function effectiveCount(spread: RelayAssignmentSpread, readyCount: number): number {
   return Math.min(readyCount, spread.mode === 'all' ? readyCount : spread.count);
 }
@@ -118,7 +122,7 @@ export class RelayPoolService {
   }
 
   async getSnapshot() {
-    const [instances, endpoints, generations, assignments, generalSettings] = await Promise.all([
+    const [persistedInstances, endpoints, generations, assignments, generalSettings] = await Promise.all([
       this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system')),
       this.db.select().from(relayEndpoints).where(eq(relayEndpoints.status, 'active')),
       this.db
@@ -128,6 +132,7 @@ export class RelayPoolService {
       this.db.select().from(relayEndpointAssignments),
       this.settings.getConfig(),
     ]);
+    const instances = persistedInstances.filter(isEnrolledRelayInstance);
     const effectiveSpreads = await this.resolveEffectiveSpreads(endpoints, generalSettings.relay.assignmentSpread);
     const assignmentsByGeneration = new Map<string, typeof assignments>();
     for (const assignment of assignments) {
@@ -427,7 +432,13 @@ export class RelayPoolService {
     const remoteNodes = await this.db
       .select({ nodeId: relayInstances.nodeId })
       .from(relayInstances)
-      .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.kind, 'remote')));
+      .where(
+        and(
+          eq(relayInstances.poolId, 'system'),
+          eq(relayInstances.kind, 'remote'),
+          inArray(relayInstances.state, ['synchronizing', 'ready', 'draining'])
+        )
+      );
     await Promise.allSettled(
       remoteNodes.flatMap(({ nodeId }) => (nodeId ? [this.policy.syncRemoteInstancePolicy(nodeId)] : []))
     );
@@ -734,4 +745,4 @@ export class RelayPoolService {
   }
 }
 
-export const relayPoolInternals = { chooseCandidates };
+export const relayPoolInternals = { chooseCandidates, isEnrolledRelayInstance };

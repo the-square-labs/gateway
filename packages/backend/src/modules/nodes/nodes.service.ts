@@ -301,21 +301,6 @@ export class NodesService {
               serviceAddresses: input.type === 'relay' ? input.serviceAddresses : [],
             })
             .returning();
-          if (input.type === 'relay') {
-            await executor.insert(relayInstances).values({
-              poolId: 'system',
-              kind: 'remote',
-              nodeId: created.id,
-              // Enrollment replaces this provisional value with the persisted
-              // physical-host identity and lets the pool uniqueness constraint
-              // reject a second relay on the same host.
-              faultDomainId: created.id,
-              displayName: input.displayName?.trim() || input.hostname,
-              advertisedAddresses: input.serviceAddresses ?? [],
-              servicePort: input.servicePort ?? 9443,
-              state: 'joining',
-            });
-          }
           return created;
         },
       });
@@ -597,7 +582,12 @@ export class NodesService {
           );
         }
         const disconnectedOfflineRelay = node.status === 'offline' && !this.registry.getNode(id);
-        if (!disconnectedOfflineRelay && !['draining', 'offline', 'error'].includes(relayInstance.state)) {
+        const pendingRelayEnrollment = node.status === 'pending' && !node.certificateSerial;
+        if (
+          !pendingRelayEnrollment &&
+          !disconnectedOfflineRelay &&
+          !['draining', 'offline', 'error'].includes(relayInstance.state)
+        ) {
           throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINED', 'Drain the relay instance before removal');
         }
         if ((relayInstance.health?.activeTunnels ?? 0) > 0) {

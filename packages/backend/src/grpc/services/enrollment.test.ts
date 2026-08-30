@@ -281,6 +281,86 @@ describe('Enroll token lookup', () => {
     );
   });
 
+  it('creates the Relay Pool instance only when a pending Relay actually enrolls', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const hostIdentityId = '22222222-2222-4222-8222-222222222222';
+    const instanceId = '33333333-3333-4333-8333-333333333333';
+    const pending = {
+      ...makePendingNode(tokenHash, enrollmentToken.selector),
+      type: 'relay',
+      displayName: 'EU Relay',
+      serviceAddresses: ['relay.example.test'],
+    };
+    const insertedValues = vi.fn();
+    const db = {
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: async () => (table === nodes ? [pending] : []),
+          }),
+        }),
+      })),
+      insert: vi.fn(() => ({
+        values: (values: unknown) => {
+          insertedValues(values);
+          return {
+            returning: vi.fn(async () => [
+              {
+                id: instanceId,
+                nodeId,
+                poolId: 'system',
+                advertisedAddresses: ['relay.example.test'],
+              },
+            ]),
+          };
+        },
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+      })),
+    } as any;
+    const deps = makeDeps(db);
+    deps.relayPolicy = {
+      getPolicyEnrollmentTrust: vi.fn(async () => ({
+        keyId: 'policy-key-1',
+        publicKey: Buffer.alloc(32, 7),
+        fingerprint: `sha256:${'a'.repeat(64)}`,
+      })),
+      refreshNodeIdentity: vi.fn(async () => undefined),
+    };
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(
+      {
+        request: {
+          token: enrollmentToken.token,
+          hostname: 'relay-host',
+          daemonVersion: '1.2.3',
+          osInfo: 'linux/amd64',
+          nginxVersion: '',
+          daemonType: 'relay',
+          hostIdentityId,
+        },
+      } as any,
+      callback
+    );
+
+    expect(insertedValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        poolId: 'system',
+        kind: 'remote',
+        nodeId,
+        faultDomainId: hostIdentityId,
+        displayName: 'EU Relay',
+        advertisedAddresses: ['relay.example.test'],
+        state: 'joining',
+      })
+    );
+    expect(deps.systemCA.issueRelayServerCert).toHaveBeenCalledWith(instanceId, ['relay.example.test']);
+    expect(callback).toHaveBeenCalledWith(null, expect.objectContaining({ relayInstanceId: instanceId }));
+  });
+
   it('enrolls a v2 token with a selector lookup and one bcrypt comparison', async () => {
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);

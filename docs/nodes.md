@@ -199,7 +199,7 @@ Managed nodes do not need inbound management ports for Gateway.
 
 ## Relay Nodes
 
-Create relay nodes from **Settings > Relay > Add relay node**. The generated command installs a signed `relay-supervisor` and its separately signed worker, pins the Gateway certificate before sending the one-time enrollment token, and persists a physical host identity used as the Relay Pool fault domain. Two relay processes on the same physical host do not count as redundant.
+Relay hosts use the same enrollment lifecycle as every other managed node. Create one from **Nodes > Add Node > Relay**, or use **Settings > Relay > Add relay node** to open that same flow with Relay preselected. The node remains pending and can be deleted normally until its supervisor enrolls successfully; only then does it appear in the Relay Pool. The generated command installs a signed `relay-supervisor` and its separately signed worker, pins the Gateway certificate before sending the one-time enrollment token, and persists a physical host identity used as the Relay Pool fault domain. Two relay processes on the same physical host do not count as redundant.
 
 The supervisor connects outbound to Gateway. The worker listens on the advertised address and port (TCP `9443` by default), which must be reachable from participating Docker, nginx, database, and Gateway hosts. Gateway does not open that port, alter firewall rules, create an overlay, or traverse NAT. Adding a healthy relay does not remap existing endpoints; use explicit **Rebalance** after confirming reachability.
 

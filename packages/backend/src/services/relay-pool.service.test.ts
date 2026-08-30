@@ -42,4 +42,17 @@ describe('RelayPoolService assignment selection', () => {
     expect(selected).toHaveLength(1);
     expect(selected[0]?.id).toBe(first.id);
   });
+
+  it('keeps provisional Relay enrollment records out of the visible pool', () => {
+    const provisional = instance('00000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001');
+    provisional.state = 'joining';
+    provisional.certificateIdentity = null;
+    provisional.certificateFingerprint = null;
+    const enrolled = instance('00000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002');
+    enrolled.certificateIdentity = 'relay-enrolled';
+    enrolled.certificateFingerprint = `sha256:${'a'.repeat(64)}`;
+
+    expect(relayPoolInternals.isEnrolledRelayInstance(provisional)).toBe(false);
+    expect(relayPoolInternals.isEnrolledRelayInstance(enrolled)).toBe(true);
+  });
 });

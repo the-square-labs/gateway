@@ -65,6 +65,49 @@ describe('NodesService enrollment token creation', () => {
     expect(result.gatewayCertSha256).toBe('sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
   });
 
+  it('keeps a new Relay as a plain pending node until the supervisor enrolls', async () => {
+    const insertedTables: unknown[] = [];
+    const insertedValues: unknown[] = [];
+    const pendingRelay = { id: 'relay-node-1', type: 'relay', hostname: 'pending', status: 'pending' };
+    const db = {
+      insert: vi.fn((table) => ({
+        values: vi.fn((value) => {
+          insertedTables.push(table);
+          insertedValues.push(value);
+          return { returning: vi.fn(async () => [pendingRelay]) };
+        }),
+      })),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn(async () => undefined) } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn(async () => `sha256:${'a'.repeat(64)}`) } as any,
+      {} as any
+    );
+    service.setLicenseQuotaService({ run: vi.fn((_resource, _count, write) => write(db)) } as never);
+
+    await service.create(
+      {
+        type: 'relay',
+        hostname: 'pending',
+        displayName: 'EU Relay',
+        serviceAddresses: ['relay.example.com'],
+        servicePort: 9443,
+      },
+      'user-1'
+    );
+
+    expect(insertedTables).toHaveLength(1);
+    expect(insertedValues[0]).toEqual(
+      expect.objectContaining({
+        type: 'relay',
+        status: 'pending',
+        serviceAddresses: ['relay.example.com'],
+      })
+    );
+  });
+
   it('keeps the slug when an appearance save repeats the current display name', async () => {
     const existing = {
       id: 'node-1',
@@ -517,6 +560,61 @@ describe('NodesService enrollment token creation', () => {
       statusCode: 409,
     });
     expect(proxyService.deleteProxyHost).not.toHaveBeenCalled();
+  });
+
+  it('removes a legacy pending Relay without requiring drain', async () => {
+    const existing = {
+      id: 'relay-node-1',
+      type: 'relay',
+      hostname: 'pending',
+      status: 'pending',
+      certificateSerial: null,
+    };
+    const relayInstance = {
+      id: 'relay-instance-1',
+      state: 'joining',
+      health: null,
+    };
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => [relayInstance]) },
+      Promise.resolve([]),
+      Promise.resolve([]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([]),
+    ];
+    const deletedTables: unknown[] = [];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => selections.shift()),
+          innerJoin: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+          leftJoin: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+        })),
+      })),
+      transaction: vi.fn(async (callback) =>
+        callback({
+          delete: vi.fn((table) => {
+            deletedTables.push(table);
+            return { where: vi.fn(async () => undefined) };
+          }),
+        })
+      ),
+    } as any;
+    const auditService = { log: vi.fn(async () => undefined) };
+    const service = new NodesService(
+      db,
+      auditService as any,
+      { getNode: vi.fn(() => undefined), deregister: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.remove(existing.id, 'user-1')).resolves.toBeUndefined();
+
+    expect(deletedTables).toHaveLength(4);
+    expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'node.remove' }));
   });
 
   it('returns only the public enrollment target when local gRPC IP is not configured', async () => {

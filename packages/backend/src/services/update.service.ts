@@ -965,7 +965,15 @@ exit 1`,
       }
       return existing;
     }
-    const instances = await this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'));
+    const instances = await this.db
+      .select()
+      .from(relayInstances)
+      .where(
+        and(
+          eq(relayInstances.poolId, 'system'),
+          inArray(relayInstances.state, ['synchronizing', 'ready', 'draining', 'offline', 'error'])
+        )
+      );
     if (!instances.length) throw new Error('Relay Pool has no instances');
     const readyFaultDomains = new Set(
       instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)

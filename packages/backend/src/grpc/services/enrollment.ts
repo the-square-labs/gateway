@@ -112,15 +112,33 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             }
           | undefined;
         if (matchedNode.type === 'relay') {
-          const [instance] = await deps.db
+          let [instance] = await deps.db
             .select()
             .from(relayInstances)
             .where(eq(relayInstances.nodeId, nodeId))
             .limit(1);
-          if (!instance || !deps.relayPolicy) throw new Error('Relay instance enrollment is not initialized');
+          if (!deps.relayPolicy) throw new Error('Relay instance enrollment is not initialized');
+          const advertisedAddresses = instance?.advertisedAddresses ?? matchedNode.serviceAddresses ?? [];
+          if (!advertisedAddresses.length) throw new Error('Relay node has no advertised service address');
+          if (!instance) {
+            [instance] = await deps.db
+              .insert(relayInstances)
+              .values({
+                poolId: 'system',
+                kind: 'remote',
+                nodeId,
+                faultDomainId: hostIdentityId,
+                displayName: matchedNode.displayName?.trim() ?? req.hostname,
+                advertisedAddresses,
+                servicePort: 9443,
+                state: 'joining',
+              })
+              .returning();
+          }
+          if (!instance) throw new Error('Relay instance enrollment could not be initialized');
           const [trust, server] = await Promise.all([
             deps.relayPolicy.getPolicyEnrollmentTrust(),
-            deps.systemCA.issueRelayServerCert(instance.id, instance.advertisedAddresses),
+            deps.systemCA.issueRelayServerCert(instance.id, advertisedAddresses),
           ]);
           relayBundle = {
             instanceId: instance.id,
@@ -162,19 +180,17 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             })
             .where(eq(nodes.id, nodeId));
           if (relayBundle) {
-            await tx
-              .update(relayInstances)
-              .set({
-                faultDomainId: hostIdentityId,
-                state: 'synchronizing',
-                certificateIdentity: relayBundle.serverIdentity,
-                certificateFingerprint: relayBundle.serverFingerprint,
-                certificateExpiresAt: relayBundle.serverExpiresAt,
-                policySigningKeyId: relayBundle.policyKeyId,
-                policyPublicKeyFingerprint: relayBundle.policyFingerprint,
-                updatedAt: new Date(),
-              })
-              .where(eq(relayInstances.id, relayBundle.instanceId));
+            const relayValues = {
+              faultDomainId: hostIdentityId,
+              state: 'synchronizing' as const,
+              certificateIdentity: relayBundle.serverIdentity,
+              certificateFingerprint: relayBundle.serverFingerprint,
+              certificateExpiresAt: relayBundle.serverExpiresAt,
+              policySigningKeyId: relayBundle.policyKeyId,
+              policyPublicKeyFingerprint: relayBundle.policyFingerprint,
+              updatedAt: new Date(),
+            };
+            await tx.update(relayInstances).set(relayValues).where(eq(relayInstances.id, relayBundle.instanceId));
           }
         });
 
