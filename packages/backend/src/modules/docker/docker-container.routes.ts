@@ -322,7 +322,9 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       if (c.req.query('_t')) {
-        await container.resolve(DockerSnapshotReconciler).refreshNow(nodeId, 'container-detail', containerId);
+        const reconciler = container.resolve(DockerSnapshotReconciler);
+        await reconciler.refreshNow(nodeId, 'containers');
+        await reconciler.refreshNow(nodeId, 'container-detail', containerId);
       }
       const detail = await snapshots.getContainerDetailSnapshot(nodeId, containerId);
       assertUserContainerSnapshot(detail.data);

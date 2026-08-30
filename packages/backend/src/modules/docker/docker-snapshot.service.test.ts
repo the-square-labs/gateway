@@ -252,6 +252,23 @@ describe('DockerSnapshotService', () => {
     });
   });
 
+  it('resolves a stale runtime ID to the replacement container with the same stable name', async () => {
+    const { service } = createService();
+    await service.replaceList('node-1', 'containers', [{ id: 'new-id', name: 'api' }]);
+    await service.replaceDetail('node-1', 'container-detail', 'old-id', {
+      Id: 'old-id',
+      Name: '/api',
+    });
+    await service.replaceDetail('node-1', 'container-detail', 'api', {
+      Id: 'new-id',
+      Name: '/api',
+    });
+
+    await expect(service.getContainerDetailSnapshot('node-1', 'old-id')).resolves.toMatchObject({
+      data: { Id: 'new-id', Name: '/api' },
+    });
+  });
+
   it('does not recreate snapshot keys after a node tombstone and purge', async () => {
     const { service } = createService();
     await service.replaceList('node-1', 'containers', [{ id: 'before-delete' }]);

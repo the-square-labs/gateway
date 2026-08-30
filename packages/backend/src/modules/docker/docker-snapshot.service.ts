@@ -280,12 +280,18 @@ export class DockerSnapshotService {
     await this.assertDockerNode(nodeId);
     const direct = await this.getDetail<any>(nodeId, 'container-detail', key);
     const list = await this.getList<Record<string, unknown>[]>(nodeId, 'containers');
-    const match = Array.isArray(list.data)
+    let match = Array.isArray(list.data)
       ? list.data.find(
           (item) =>
             String(item.id ?? item.Id ?? '') === key || String(item.name ?? item.Name ?? '').replace(/^\/+/, '') === key
         )
       : undefined;
+    if (!match && direct && Array.isArray(list.data)) {
+      const directName = String(direct.data?.name ?? direct.data?.Name ?? '').replace(/^\/+/, '');
+      if (directName) {
+        match = list.data.find((item) => String(item.name ?? item.Name ?? '').replace(/^\/+/, '') === directName);
+      }
+    }
     const liveId = String(match?.id ?? match?.Id ?? '');
     const directId = String(direct?.data?.id ?? direct?.data?.Id ?? '');
     if (direct && (!liveId || !directId || liveId === directId)) return direct;

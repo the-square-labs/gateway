@@ -82,6 +82,25 @@ describe('DockerSnapshotReconciler', () => {
     expect(snapshots.replaceDetail).toHaveBeenCalledWith('node-1', 'volume-metrics', 'data', metrics);
   });
 
+  it('inspects a recreated container by its current stable name instead of a stale runtime ID', async () => {
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify({ Id: 'new-id', Name: '/api' }),
+    });
+    const { reconciler, snapshots } = createReconciler({ sendDockerContainerCommand });
+    snapshots.getList.mockResolvedValue({ data: [{ id: 'new-id', name: 'api' }] });
+    snapshots.getDetail.mockResolvedValue({ data: { Id: 'old-id', Name: '/api' } });
+
+    await reconciler.refreshNow('node-1', 'container-detail', 'old-id');
+
+    expect(sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'inspect', { containerId: 'api' }, 10_000);
+    expect(sendDockerContainerCommand).not.toHaveBeenCalledWith('node-1', 'inspect', { containerId: 'old-id' }, 10_000);
+    expect(snapshots.replaceDetail).toHaveBeenCalledWith('node-1', 'container-detail', 'old-id', {
+      Id: 'new-id',
+      Name: '/api',
+    });
+  });
+
   it('coalesces an in-flight duplicate into exactly one follow-up refresh', async () => {
     const first = deferred<{ success: boolean; detail: string }>();
     const send = vi
@@ -177,7 +196,14 @@ describe('DockerSnapshotReconciler', () => {
   });
 
   it('turns a write event into targeted list/detail refreshes without purging old data', async () => {
-    const { reconciler, dispatch, snapshots, eventBus } = createReconciler();
+    const sendDockerContainerCommand = vi.fn((_nodeId: string, action: string) =>
+      Promise.resolve({
+        success: true,
+        detail: action === 'list' ? JSON.stringify([{ id: 'container-1', name: 'web' }]) : '{}',
+      })
+    );
+    const { reconciler, dispatch, snapshots, eventBus } = createReconciler({ sendDockerContainerCommand });
+    snapshots.getList.mockResolvedValue({ data: [{ id: 'container-1', name: 'web' }] });
     reconciler.start();
 
     eventBus.publish('docker.container.changed', {
@@ -203,9 +229,18 @@ describe('DockerSnapshotReconciler', () => {
   });
 
   it('does not persist a transient exited inspect while a container recreate is active', async () => {
-    const { reconciler, dispatch, snapshots, eventBus } = createReconciler();
+    let currentContainer = { id: 'container-old', name: 'web' };
+    const sendDockerContainerCommand = vi.fn((_nodeId: string, action: string) =>
+      Promise.resolve({
+        success: true,
+        detail: action === 'list' ? JSON.stringify([currentContainer]) : '{}',
+      })
+    );
+    const { reconciler, dispatch, snapshots, eventBus } = createReconciler({ sendDockerContainerCommand });
+    snapshots.getList.mockImplementation(async () => ({ data: [currentContainer] }));
     reconciler.start();
 
+    currentContainer = { id: 'container-new', name: 'web' };
     eventBus.publish('docker.container.changed', {
       nodeId: 'node-1',
       id: 'container-old',
@@ -252,7 +287,7 @@ describe('DockerSnapshotReconciler', () => {
       expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith(
         'node-1',
         'inspect',
-        { containerId: 'container-new' },
+        { containerId: 'web' },
         10_000
       )
     );
@@ -376,7 +411,8 @@ describe('DockerSnapshotReconciler', () => {
       if (action === 'inspect' && options.containerId === 'first') return first.promise;
       return Promise.resolve({ success: true, detail: action === 'list' ? '[]' : '{}' });
     });
-    const { reconciler } = createReconciler({ sendDockerContainerCommand: containerSend });
+    const { reconciler, snapshots } = createReconciler({ sendDockerContainerCommand: containerSend });
+    snapshots.getList.mockResolvedValue({ data: [{ name: 'first' }, { name: 'second' }] });
 
     reconciler.enqueue({ nodeId: 'node-1', kind: 'container-detail', key: 'first' });
     reconciler.enqueue({ nodeId: 'node-1', kind: 'container-detail', key: 'second' });

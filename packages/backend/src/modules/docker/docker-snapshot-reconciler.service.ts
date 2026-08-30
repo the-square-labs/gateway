@@ -525,12 +525,38 @@ export class DockerSnapshotReconciler {
     await this.snapshots.reconcileComposeProjects(nodeId);
   }
 
+  private async resolveContainerInspectKey(nodeId: string, key: string): Promise<string> {
+    const list = await this.snapshots.getList<Record<string, unknown>[]>(nodeId, 'containers');
+    const items = Array.isArray(list.data) ? list.data : [];
+    let match = items.find(
+      (item) =>
+        String(item.id ?? item.Id ?? '') === key || String(item.name ?? item.Name ?? '').replace(/^\/+/, '') === key
+    );
+
+    if (!match) {
+      const stale = await this.snapshots.getDetail<any>(nodeId, 'container-detail', key);
+      const staleName = String(stale?.data?.name ?? stale?.data?.Name ?? '').replace(/^\/+/, '');
+      if (staleName) {
+        match = items.find((item) => String(item.name ?? item.Name ?? '').replace(/^\/+/, '') === staleName);
+      }
+    }
+
+    if (!match) throw new Error(`Container ${key} is not present in the current Docker snapshot`);
+    return String(match.name ?? match.Name ?? match.id ?? match.Id ?? key).replace(/^\/+/, '');
+  }
+
   private async refreshDetail(nodeId: string, kind: DockerDetailKind, key: string) {
     const id = jobId({ nodeId, kind, key });
     if (this.snapshots.isNodeDeleted(nodeId) || this.cancelledJobs.has(id)) return;
+    const inspectKey = kind === 'container-detail' ? await this.resolveContainerInspectKey(nodeId, key) : key;
     const result =
       kind === 'container-detail'
-        ? await this.dispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId: key }, DAEMON_TIMEOUT_MS)
+        ? await this.dispatch.sendDockerContainerCommand(
+            nodeId,
+            'inspect',
+            { containerId: inspectKey },
+            DAEMON_TIMEOUT_MS
+          )
         : await this.dispatch.sendDockerVolumeCommand(
             nodeId,
             kind === 'volume-metrics' ? 'metrics' : 'inspect',

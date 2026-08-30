@@ -267,6 +267,19 @@ describe('Docker snapshot routes', () => {
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(2, NODE_1, 'container-detail', 'one');
   });
 
+  it('cache-busted runtime-ID inspect refreshes the list before the detail snapshot', async () => {
+    const { snapshots, reconciler } = await setup();
+    await snapshots.replaceDetail(NODE_1, 'container-detail', 'c1', { Id: 'c1', Name: '/one' });
+    const app = appWithScopes(['docker:containers:view']);
+    registerContainerRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/containers/c1?_t=123`);
+
+    expect(response.status).toBe(200);
+    expect(reconciler.refreshNow).toHaveBeenNthCalledWith(1, NODE_1, 'containers');
+    expect(reconciler.refreshNow).toHaveBeenNthCalledWith(2, NODE_1, 'container-detail', 'c1');
+  });
+
   it('serves volume metrics from the snapshot cache without live daemon dispatch', async () => {
     const { snapshots, dispatch, reconciler } = await setup();
     const metrics = {
