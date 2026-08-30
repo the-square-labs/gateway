@@ -174,6 +174,43 @@ describe('update artifact trust', () => {
     expect(artifact.secureLinkConnectorImage).toContain('/secure-link-connector@sha256:');
   });
 
+  it('verifies a release-candidate Relay manifest and Gateway compatibility floor', () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        kind: 'relay-image',
+        version: 'v2.10.0-rc.2',
+        tag: 'v2.10.0-rc.2-relay',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+        digest: `sha256:${checksum}`,
+        imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
+        protocolMajor: 1,
+        minGatewayVersion: 'v2.10.0-rc.1',
+        secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
+        createdAt: '2026-08-30T00:00:00.000Z',
+      })
+    );
+    const manifest = JSON.stringify({
+      schemaVersion: 1,
+      keyId: 'wiolett-update-v1',
+      payload: payload.toString('base64url'),
+      signature: sign(null, payload, gatewaySigningKey.privateKey).toString('base64url'),
+    });
+
+    const artifact = verifyRelayImageManifest(
+      manifest,
+      {
+        version: 'v2.10.0-rc.2',
+        tag: 'v2.10.0-rc.2-relay',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+        protocolMajor: 1,
+      },
+      gatewayPublicKey
+    );
+
+    expect(artifact.buildVersion).toBe('v2.10.0-rc.2');
+    expect(artifact.minGatewayVersion).toBe('v2.10.0-rc.1');
+  });
+
   it('uses the signed Relay version as the compatibility floor for legacy manifests', () => {
     const payload = Buffer.from(
       JSON.stringify({

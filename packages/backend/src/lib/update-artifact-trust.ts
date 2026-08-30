@@ -11,6 +11,7 @@ export const OPENCODEX_SIGNING_PUBLIC_KEY_PEM = loadSigningPublicKey('opencodex-
 const UPDATE_SCHEMA_VERSION = 1;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
+const GATEWAY_COMPONENT_VERSION_RE = /^v?\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
 
 export class UpdateArtifactTrustError extends Error {
   constructor(message: string) {
@@ -238,13 +239,13 @@ export function verifyRelayImageManifest(
   if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
     throw new UpdateArtifactTrustError('Relay update image reference is not digest pinned');
   }
-  if (!/^v?\d+\.\d+\.\d+$/.test(payload.version)) {
+  if (!GATEWAY_COMPONENT_VERSION_RE.test(payload.version)) {
     throw new UpdateArtifactTrustError('Relay update build version is invalid');
   }
   if (!Number.isInteger(payload.protocolMajor) || payload.protocolMajor !== expected.protocolMajor) {
     throw new UpdateArtifactTrustError('Relay update protocol major is incompatible');
   }
-  if (payload.minGatewayVersion !== undefined && !/^v?\d+\.\d+\.\d+$/.test(payload.minGatewayVersion)) {
+  if (payload.minGatewayVersion !== undefined && !GATEWAY_COMPONENT_VERSION_RE.test(payload.minGatewayVersion)) {
     throw new UpdateArtifactTrustError('Relay update minimum Gateway version is invalid');
   }
   const gatewayRepository = payload.image.endsWith('/relay') ? payload.image.slice(0, -'/relay'.length) : '';
