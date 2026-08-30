@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createChildLogger } from '@/lib/logger.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { CacheService } from '@/services/cache.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
   DatabaseConnectionConfig,
   DatabaseConnectionService,
@@ -64,8 +65,8 @@ export class DatabaseMonitoringService extends EventEmitter {
   // Serialize monitoring collections per node so a concurrent full metric scrape
   // cannot head-of-line block another database's lightweight health probe.
   private readonly managedNodePollTails = new Map<string, Promise<void>>();
-  private backgroundStartTimeout: ReturnType<typeof setTimeout> | null = null;
   private backgroundInterval: ReturnType<typeof setInterval> | null = null;
+  private eventBusUnsubscribe: (() => void) | null = null;
 
   constructor(
     private readonly databaseService: DatabaseConnectionService,
@@ -74,11 +75,36 @@ export class DatabaseMonitoringService extends EventEmitter {
   ) {
     super();
     this.setMaxListeners(100);
-    this.startBackgroundPolling();
   }
 
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.evaluator = evaluator;
+  }
+
+  setEventBus(eventBus: EventBusService) {
+    this.eventBusUnsubscribe?.();
+    this.eventBusUnsubscribe = eventBus.subscribe('database.changed', (payload) => {
+      const event = payload as {
+        id?: unknown;
+        action?: unknown;
+        resourceKind?: unknown;
+      } | null;
+      if (typeof event?.id !== 'string' || typeof event.action !== 'string') return;
+      if (event.action === 'deleted') {
+        this.stopPolling(event.id);
+        return;
+      }
+      const shouldPoll =
+        event.resourceKind === 'managed_database'
+          ? event.action === 'ready' || event.action === 'connection.backfilled'
+          : event.action === 'created';
+      if (shouldPoll) void this.pollOnce(event.id);
+    });
+  }
+
+  start(): void {
+    if (this.backgroundInterval) return;
+    this.startBackgroundPolling();
   }
 
   async getHistory(databaseId: string): Promise<DatabaseMetricSnapshot[]> {
@@ -104,8 +130,9 @@ export class DatabaseMonitoringService extends EventEmitter {
   }
 
   destroy(): void {
-    if (this.backgroundStartTimeout) clearTimeout(this.backgroundStartTimeout);
     if (this.backgroundInterval) clearInterval(this.backgroundInterval);
+    this.eventBusUnsubscribe?.();
+    this.eventBusUnsubscribe = null;
     for (const interval of this.pollIntervals.values()) clearInterval(interval);
     this.pollIntervals.clear();
   }
@@ -126,11 +153,8 @@ export class DatabaseMonitoringService extends EventEmitter {
           });
         });
     };
-    this.backgroundStartTimeout = setTimeout(() => {
-      this.backgroundStartTimeout = null;
-      sweep();
-      this.backgroundInterval = setInterval(sweep, BACKGROUND_POLL_INTERVAL_MS);
-    }, 5000);
+    sweep();
+    this.backgroundInterval = setInterval(sweep, BACKGROUND_POLL_INTERVAL_MS);
   }
 
   private startPolling(databaseId: string) {

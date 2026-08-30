@@ -14,6 +14,21 @@ vi.mock("@/hooks/use-realtime", () => ({
 }));
 
 describe("NodeEnrollmentDialog", () => {
+  it("animates the Relay-only field inside the existing dialog", async () => {
+    const user = userEvent.setup();
+
+    render(<NodeEnrollmentDialog open onOpenChange={vi.fn()} />);
+
+    expect(screen.queryByPlaceholderText("relay.example.com")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+    await user.click(screen.getByRole("combobox", { name: "Node Type" }));
+    await user.click(screen.getByRole("option", { name: /Relay/ }));
+
+    expect(await screen.findByPlaceholderText("relay.example.com")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
   it("uses the standard locked Relay enrollment flow and closes after that node connects", async () => {
     const user = userEvent.setup();
     const pendingNode = makeNode({ id: "relay-node-1", type: "relay", status: "pending" });

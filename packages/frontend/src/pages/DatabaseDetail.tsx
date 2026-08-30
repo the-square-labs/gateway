@@ -265,7 +265,6 @@ export function DatabaseDetail({
       setLiveHealthHistory(healthHistory);
       setLiveHealthStatus(healthStatus);
       updateDatabaseMonitoringCache(database.id, { healthHistory, healthStatus });
-      setMonitoringLoading(false);
     });
     es.addEventListener("history", (event: MessageEvent) => {
       const message = JSON.parse(event.data);

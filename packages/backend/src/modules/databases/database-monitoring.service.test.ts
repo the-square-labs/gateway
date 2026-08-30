@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { EventBusService } from '@/services/event-bus.service.js';
 import {
   DatabaseMonitoringService,
   measureConfirmedClickHousePingLatency,
@@ -76,20 +77,45 @@ describe('redisPersistedSizeBytes', () => {
 });
 
 describe('database monitoring poll scheduling', () => {
-  it('runs the first background sweep after the startup delay without a registered client', async () => {
-    vi.useFakeTimers();
+  it('runs the first background sweep immediately without a registered client', async () => {
     const databaseService = {
       listAllRows: vi.fn().mockResolvedValue([{ id: 'database-1' }]),
       get: vi.fn().mockResolvedValue({ managed: { status: 'paused' } }),
     };
     const service = new DatabaseMonitoringService(databaseService as never, null);
+    service.start();
 
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(() => expect(databaseService.get).toHaveBeenCalledWith('database-1'));
 
     expect(databaseService.listAllRows).toHaveBeenCalledOnce();
-    expect(databaseService.get).toHaveBeenCalledWith('database-1');
     service.destroy();
-    vi.useRealTimers();
+  });
+
+  it('polls newly ready managed databases without waiting for the next background sweep', async () => {
+    const databaseService = {
+      listAllRows: vi.fn().mockResolvedValue([]),
+      get: vi.fn().mockResolvedValue({ managed: { status: 'paused' } }),
+    };
+    const service = new DatabaseMonitoringService(databaseService as never, null);
+    const eventBus = new EventBusService();
+    service.setEventBus(eventBus);
+
+    eventBus.publish('database.changed', {
+      resourceKind: 'managed_database',
+      id: 'database-1',
+      action: 'created',
+    });
+    await Promise.resolve();
+    expect(databaseService.get).not.toHaveBeenCalled();
+
+    eventBus.publish('database.changed', {
+      resourceKind: 'managed_database',
+      id: 'database-1',
+      action: 'ready',
+    });
+
+    await vi.waitFor(() => expect(databaseService.get).toHaveBeenCalledWith('database-1'));
+    service.destroy();
   });
 
   it('stops cleanly when a connection is deleted during an in-flight poll', async () => {

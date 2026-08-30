@@ -141,9 +141,11 @@ export async function initializeBackgroundServices(): Promise<void> {
   dockerManagementService.setEvaluator(notifEvaluatorService);
   dockerHealthCheckService.setEvaluator(notifEvaluatorService);
   databaseMonitoringService.setEvaluator(notifEvaluatorService);
+  databaseMonitoringService.setEventBus(eventBus);
   nodeRegistry.setEvaluator(notifEvaluatorService);
   proxyService.setEvaluator(notifEvaluatorService);
   notifEvaluatorService.start();
+  databaseMonitoringService.start();
   container.registerInstance(NotificationEvaluatorService, notifEvaluatorService);
   await licenseEntitlementReconciler.start();
 

@@ -1,5 +1,7 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { Button } from "@/components/ui/button";
@@ -76,6 +78,13 @@ const INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   monitoring: "setup-monitoring-node.sh",
   relay: "setup-relay-node.sh",
 };
+
+const RELAY_FIELD_ANIMATION = {
+  initial: { height: 0, opacity: 0, y: 8 },
+  animate: { height: "auto", opacity: 1, y: 0 },
+  exit: { height: 0, opacity: 0, y: 8 },
+  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] },
+} as const;
 
 type EnrollmentResult = {
   nodeId: string;
@@ -285,56 +294,64 @@ export function NodeEnrollmentDialog({
               Create a pending node and run its one-time setup command on the target host.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Type</label>
-              <Select
-                value={type}
-                onValueChange={(value) => setType(value as NodeType)}
-                disabled={lockType}
-              >
-                <SelectTrigger aria-label="Node Type">
-                  <SelectValue>{selectedType.label}</SelectValue>
-                </SelectTrigger>
-                <SelectContent className="w-[min(28rem,calc(100vw-2rem))]">
-                  {NODE_ENROLLMENT_TYPES.map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      textValue={option.label}
-                      description={option.description}
-                      className="items-start py-2"
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">{selectedType.description}</p>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Name</label>
-              <Input
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                placeholder={type === "relay" ? "EU Relay" : "US-East Ingress"}
-              />
-            </div>
-            {type === "relay" && (
+          <AnimatedHeight>
+            <div className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Relay Address</label>
-                <Input
-                  value={relayAddress}
-                  onChange={(event) => setRelayAddress(event.target.value)}
-                  placeholder="relay.example.com"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Reachable IP or hostname advertised to participating nodes. TCP 9443 must be
-                  accessible.
-                </p>
+                <label className="text-sm font-medium">Node Type</label>
+                <Select
+                  value={type}
+                  onValueChange={(value) => setType(value as NodeType)}
+                  disabled={lockType}
+                >
+                  <SelectTrigger aria-label="Node Type">
+                    <SelectValue>{selectedType.label}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="w-[min(28rem,calc(100vw-2rem))]">
+                    {NODE_ENROLLMENT_TYPES.map((option) => (
+                      <SelectItem
+                        key={option.value}
+                        value={option.value}
+                        textValue={option.label}
+                        description={option.description}
+                        className="items-start py-2"
+                      >
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{selectedType.description}</p>
               </div>
-            )}
-          </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Node Name</label>
+                <Input
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  placeholder={type === "relay" ? "EU Relay" : "US-East Ingress"}
+                />
+              </div>
+              <AnimatePresence initial={false}>
+                {type === "relay" && (
+                  <motion.div
+                    key="relay-address"
+                    {...RELAY_FIELD_ANIMATION}
+                    className="space-y-1.5 overflow-hidden"
+                  >
+                    <label className="text-sm font-medium">Relay Address</label>
+                    <Input
+                      value={relayAddress}
+                      onChange={(event) => setRelayAddress(event.target.value)}
+                      placeholder="relay.example.com"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Reachable IP or hostname advertised to participating nodes. TCP 9443 must be
+                      accessible.
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </AnimatedHeight>
           <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
