@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CreateProxyHostSchema } from './proxy.schemas.js';
 import { ProxyService } from './proxy.service.js';
 
 describe('ProxyService create rollback', () => {
@@ -41,30 +42,18 @@ describe('ProxyService create rollback', () => {
     vi.spyOn(service as any, 'applyConfigToNode').mockRejectedValue(new Error('post-persist validation failed'));
     const removeConfig = vi.spyOn(service as any, 'removeConfigFromNode').mockResolvedValue(undefined);
 
-    await expect(
-      service.createProxyHost(
-        {
-          type: 'proxy',
-          nodeId: host.nodeId,
-          domainNames: host.domainNames,
-          upstreamKind: 'manual',
-          forwardHost: host.forwardHost,
-          forwardPort: host.forwardPort,
-          forwardScheme: 'http',
-          sslEnabled: false,
-          sslForced: false,
-          http2Support: true,
-          websocketSupport: false,
-          customHeaders: [],
-          cacheEnabled: false,
-          rateLimitEnabled: false,
-          rateLimitMode: 'inherit',
-          customRewrites: [],
-          healthCheckEnabled: false,
-        },
-        '33333333-3333-4333-8333-333333333333'
-      )
-    ).rejects.toMatchObject({ code: 'NGINX_CONFIG_FAILED' });
+    const input = CreateProxyHostSchema.parse({
+      type: 'proxy',
+      nodeId: host.nodeId,
+      domainNames: host.domainNames,
+      upstreamKind: 'manual',
+      forwardHost: host.forwardHost,
+      forwardPort: host.forwardPort,
+    });
+
+    await expect(service.createProxyHost(input, '33333333-3333-4333-8333-333333333333')).rejects.toMatchObject({
+      code: 'NGINX_CONFIG_FAILED',
+    });
 
     expect(removeConfig).toHaveBeenCalledWith(host.id, host.nodeId);
     expect(deleteWhere).toHaveBeenCalledOnce();
