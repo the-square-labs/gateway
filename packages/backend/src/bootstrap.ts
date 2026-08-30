@@ -958,6 +958,14 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
+  dockerManagementService.setContainerRecreateCompletedHandler(async (nodeId, newContainerId) => {
+    // A recreated workload keeps its persisted binding metadata, but the
+    // daemon-owned listeners and Relay lanes still need to be proven against
+    // the replacement container before the lifecycle task can report success.
+    await managedDatabaseBindingService.reconcileBindingPrincipals(nodeId);
+    await proxyService.reconcileDockerContainerRecreate(nodeId);
+    await dockerSnapshotReconciler.finalizeContainerRecreate(nodeId, newContainerId);
+  });
   if (relayPolicyService && relayRegistryService) {
     const relayRegistryIngressService = new RelayRegistryIngressService(
       relayPolicyService,

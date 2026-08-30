@@ -75,6 +75,25 @@ export async function waitForContainerVisible(
   return null;
 }
 
+export async function waitForDockerTask(
+  ctx: Parameters<TestCase['run']>[0],
+  taskId: string,
+  timeoutMs = 180_000
+): Promise<Row> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await ctx.client.get(`/api/docker/tasks/${encodeURIComponent(taskId)}`);
+    expectApiAccessible(response, `GET docker task ${taskId}`);
+    const task = asRow(response.body);
+    if (task.status === 'succeeded') return task;
+    if (task.status === 'failed' || task.status === 'cancelled') {
+      throw new Error(`Docker task ${taskId} ${task.status}: ${task.error ?? 'unknown error'}`);
+    }
+    await sleep(500);
+  }
+  throw new Error(`Docker task ${taskId} did not finish within ${timeoutMs}ms`);
+}
+
 export async function resolveDockerRuntimeImage(ctx: Parameters<TestCase['run']>[0], nodeId: string) {
   if (ctx.config.dockerImage) return ctx.config.dockerImage;
 

@@ -140,6 +140,7 @@ export class DockerManagementService {
   private migrationGuard?: DockerMigrationGuard;
   private accessResourceService?: DockerAccessResourceService;
   private licensePolicy?: LicensePolicyService;
+  private containerRecreateCompletedHandler?: (nodeId: string, newContainerId: string) => Promise<void>;
 
   constructor(
     private db: DrizzleClient,
@@ -207,6 +208,10 @@ export class DockerManagementService {
 
   setLicensePolicyService(service: LicensePolicyService): void {
     this.licensePolicy = service;
+  }
+
+  setContainerRecreateCompletedHandler(handler: (nodeId: string, newContainerId: string) => Promise<void>): void {
+    this.containerRecreateCompletedHandler = handler;
   }
 
   private emitContainer(
@@ -1124,14 +1129,12 @@ export class DockerManagementService {
     }
   ) {
     await this.assertContainerMigrationAllowed(nodeId, containerId);
-    return recreateDockerContainerWithConfig(
-      this.containerMutationContext(),
-      nodeId,
-      containerId,
-      config,
-      userId,
-      options
-    );
+    return recreateDockerContainerWithConfig(this.containerMutationContext(), nodeId, containerId, config, userId, {
+      ...options,
+      onComplete: this.containerRecreateCompletedHandler
+        ? async (newContainerId) => this.containerRecreateCompletedHandler?.(nodeId, newContainerId)
+        : undefined,
+    });
   }
 
   async updateContainerEnv(

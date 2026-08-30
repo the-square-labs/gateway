@@ -9,6 +9,10 @@ import { isDockerUpstream, logger, type ProxyHostRow } from './proxy.service.cor
 import { ProxyServiceListing } from './proxy.service.listing.js';
 
 export class ProxyServiceReconciliation extends ProxyServiceListing {
+  async reconcileDockerContainerRecreate(_nodeId: string): Promise<void> {
+    await this.reconcileDockerUpstreams(true);
+  }
+
   protected runImmediateHealthCheck(hostId: string): void {
     runImmediateProxyHealthCheck({
       db: this.db,

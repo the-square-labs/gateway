@@ -338,9 +338,7 @@ export abstract class ProxyServiceCore {
   }
 
   protected configOwnershipForHost(host: ProxyHostRow): 'managed_secure_link' | 'user_owned' {
-    const committedSecureConfig =
-      host.secureLinkMigratedAt != null &&
-      (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
+    const committedSecureConfig = host.secureLinkGeneration > 0 && host.secureLinkMigratedAt != null;
     return host.type === 'proxy' &&
       !host.rawConfigEnabled &&
       isDockerUpstream(host.upstreamKind) &&
@@ -612,10 +610,7 @@ export abstract class ProxyServiceCore {
     if ((host.type === 'raw' || host.rawConfigEnabled) && host.rawConfig) return host.rawConfig;
 
     const usesSecureLink =
-      isDockerUpstream(host.upstreamKind) &&
-      host.secureLinkGeneration > 0 &&
-      host.secureLinkMigratedAt != null &&
-      (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
+      isDockerUpstream(host.upstreamKind) && host.secureLinkGeneration > 0 && host.secureLinkMigratedAt != null;
     const usesRegistryIngress = host.isSystem && host.systemKind === 'docker_registry';
     if (usesSecureLink && !host.secureLinkListenerPort) {
       throw new Error('Secure Link listener port is unavailable');

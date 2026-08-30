@@ -42,6 +42,34 @@ function createService(dispatch: {
 }
 
 describe('DockerManagementService recreate registry auth', () => {
+  it('runs the registered binding reconciliation after the replacement container is ready', async () => {
+    const inspect = {
+      Id: 'container-1',
+      Name: '/app',
+      Config: { Image: 'nginx:old', Labels: {} },
+      State: { Status: 'running' },
+    };
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn(async (_nodeId: string, action: string) => {
+        if (action === 'inspect') return { success: true, detail: JSON.stringify(inspect) };
+        if (action === 'recreate') return { success: true, detail: JSON.stringify({ Id: 'container-2' }) };
+        return { success: false, error: `unexpected action ${action}` };
+      }),
+      sendDockerImageCommand: vi.fn(),
+    };
+    const service = createService(dispatch);
+    const reconcile = vi.fn().mockResolvedValue(undefined);
+    service.setContainerRecreateCompletedHandler(reconcile);
+
+    await service.recreateWithConfig('node-1', 'container-1', {}, 'user-1', { skipImagePull: true });
+
+    const watch = vi.mocked((service as any).watchRecreateByName);
+    const onComplete = watch.mock.calls[0]?.[7] as ((newContainerId: string) => Promise<void>) | undefined;
+    expect(onComplete).toBeTypeOf('function');
+    await onComplete?.('container-2');
+    expect(reconcile).toHaveBeenCalledWith('node-1', 'container-2');
+  });
+
   it('returns a pending task response before a replacement image finishes pulling', async () => {
     let finishPull: ((value: { success: boolean; detail: string }) => void) | undefined;
     const pullResult = new Promise<{ success: boolean; detail: string }>((resolve) => {

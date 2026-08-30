@@ -983,30 +983,39 @@ export class ProxySecureLinkService {
   async commitCutover(hostId: string): Promise<ProxyHostRow> {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
     if (!host || host.secureLinkGeneration < 1) throw new Error('Secure Link is not prepared for cutover');
-    if (host.secureLinkMigratedAt) return host;
-
     if (!host.nodeId) throw new Error('Secure Link source node is unavailable');
-    // A staged assignment becoming active changes the source grant bundle and
-    // rebuilds its relay lanes asynchronously. Serialize the final source sync
-    // and prove the new lanes before making the cutover durable; otherwise the
-    // immediate Nginx config probe can race that rebuild and reset a healthy
-    // Secure Link.
-    await this.syncSourceNode(host.nodeId);
-    const probe = await this.probeSecureLink(host.nodeId, {
-      linkId: host.id,
-      scheme: host.forwardScheme ?? 'http',
-      path: host.healthCheckUrl || '/',
-      timeoutSeconds: 10,
-    });
-    if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link cutover probe failed');
+    if (!host.secureLinkMigratedAt) {
+      // A staged assignment becoming active changes the source grant bundle and
+      // rebuilds its relay lanes asynchronously. Serialize the final source sync
+      // and prove the new lanes before making the cutover durable; otherwise the
+      // immediate Nginx config probe can race that rebuild and reset a healthy
+      // Secure Link.
+      await this.syncSourceNode(host.nodeId);
+      const probe = await this.probeSecureLink(host.nodeId, {
+        linkId: host.id,
+        scheme: host.forwardScheme ?? 'http',
+        path: host.healthCheckUrl || '/',
+        timeoutSeconds: 10,
+      });
+      if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link cutover probe failed');
 
-    const [committed] = await this.db
-      .update(proxyHosts)
-      .set({ secureLinkMigratedAt: new Date(), updatedAt: new Date() })
-      .where(eq(proxyHosts.id, hostId))
-      .returning();
-    if (!committed) throw new Error('Secure Link cutover state was not persisted');
-    return committed;
+      const [committed] = await this.db
+        .update(proxyHosts)
+        .set({ secureLinkMigratedAt: new Date(), updatedAt: new Date() })
+        .where(eq(proxyHosts.id, hostId))
+        .returning();
+      if (!committed) throw new Error('Secure Link cutover state was not persisted');
+    }
+
+    // Listener reconciliation and cutover persistence use separate writes and
+    // may overlap another create/reconcile caller. Never render Nginx from the
+    // pre-cutover row (whose durable Docker endpoint is the safety sentinel).
+    const authoritative = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
+    if (!authoritative?.secureLinkMigratedAt) throw new Error('Secure Link cutover state was not persisted');
+    if (!authoritative.secureLinkListenerPort) {
+      throw new Error('Secure Link listener port is unavailable after cutover');
+    }
+    return authoritative;
   }
 
   async markCutoverError(hostId: string, error: unknown): Promise<void> {

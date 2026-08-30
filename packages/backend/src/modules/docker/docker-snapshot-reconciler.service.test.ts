@@ -63,6 +63,45 @@ describe('DockerSnapshotReconciler', () => {
     expect(snapshots.reconcileComposeProjects).toHaveBeenCalledWith('node-1');
   });
 
+  it('publishes the replacement container id before recreate completion is reported', async () => {
+    const replacement = { id: 'container-new', name: 'web', state: 'running' };
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify([replacement, { id: 'other-new', name: 'other', state: 'running' }]),
+    });
+    const { reconciler, snapshots, eventBus } = createReconciler({ sendDockerContainerCommand });
+    snapshots.getList.mockResolvedValue({
+      data: [
+        { id: 'container-old', name: 'web', state: 'running' },
+        { id: 'other-old', name: 'other', state: 'running' },
+      ],
+    });
+    reconciler.start();
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-old',
+      name: 'web',
+      action: 'transitioning',
+      transition: 'recreating',
+    });
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'other-old',
+      name: 'other',
+      action: 'transitioning',
+      transition: 'recreating',
+    });
+
+    await reconciler.finalizeContainerRecreate('node-1', 'container-new');
+
+    expect(snapshots.replaceList).toHaveBeenLastCalledWith('node-1', 'containers', [
+      replacement,
+      { id: 'other-old', name: 'other', state: 'running' },
+    ]);
+    expect(snapshots.reconcileComposeProjects).toHaveBeenCalledWith('node-1');
+    await reconciler.stop();
+  });
+
   it('collects volume metrics through the snapshot reconciler instead of the request path', async () => {
     const metrics = {
       storageKind: 'regular',

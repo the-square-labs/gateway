@@ -480,6 +480,49 @@ describe('ProxyService legacy Docker link compatibility', () => {
     expect(applyConfig).toHaveBeenCalledWith('nginx-node', active.id, 'secure config', false, 'managed_secure_link');
   });
 
+  it.each([
+    'provisioning',
+    'updating',
+  ])('keeps the committed socket upstream while link status is %s', async (secureLinkStatus) => {
+    const committed = makeActiveSecureHost({ secureLinkStatus });
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([committed]),
+          findFirst: vi.fn().mockResolvedValue(committed),
+        },
+      },
+    } as any;
+    const renderForHost = vi.fn().mockResolvedValue('secure config');
+    const applyConfig = vi.fn().mockResolvedValue({ success: true });
+    const service = new ProxyService(
+      db,
+      { renderForHost } as any,
+      { log: vi.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+      { resolveNodeId: vi.fn().mockResolvedValue('nginx-node'), applyConfig } as any,
+      { supportsNode: vi.fn().mockResolvedValue(true) } as any,
+      undefined,
+      {
+        getActiveAdditional: vi.fn().mockResolvedValue([]),
+        assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
+      } as any
+    );
+
+    await service.resyncAllHostsOnNode('nginx-node');
+
+    expect(renderForHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forwardHost: '127.0.0.1',
+        forwardPort: committed.secureLinkListenerPort,
+        secureLinkUpstream: true,
+      }),
+      null,
+      false
+    );
+    expect(applyConfig).toHaveBeenCalledWith('nginx-node', committed.id, 'secure config', false, 'managed_secure_link');
+  });
+
   it('restores basic auth credentials before applying host config during node resync', async () => {
     const host = makeActiveSecureHost({ accessListId: 'access-list-1' });
     const db = {

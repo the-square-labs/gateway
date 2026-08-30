@@ -855,6 +855,7 @@ export async function recreateWithConfig(
     skipWebhookCleanup?: boolean;
     actorScopes?: string[];
     backgroundImagePull?: boolean;
+    onComplete?: (newContainerId: string) => Promise<void>;
   }
 ) {
   await ctx.validateDockerNode(nodeId);
@@ -975,7 +976,7 @@ export async function recreateWithConfig(
         'Container recreated',
         expectedState,
         daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
-        undefined,
+        options?.onComplete,
         daemonTaskId
       );
       return data && typeof data === 'object'

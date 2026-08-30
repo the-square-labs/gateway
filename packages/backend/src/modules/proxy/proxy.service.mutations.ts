@@ -161,6 +161,16 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         hostId: host.id,
         error,
       });
+      // Applying a config can fail after nginx-daemon has already persisted the
+      // file (for example while the relay policy is being committed). Remove
+      // that partial deployment before deleting the row or a stale server_name
+      // can shadow the next successful create for the same domain.
+      await this.removeConfigFromNode(host.id, host.nodeId).catch((cleanupError) => {
+        logger.warn('Failed to remove partially applied proxy config after create rollback', {
+          hostId: host.id,
+          cleanupError,
+        });
+      });
       await this.secureLinks?.cleanup(host).catch((cleanupError) => {
         logger.warn('Failed to cleanup secure link after proxy create rollback', { hostId: host.id, cleanupError });
       });

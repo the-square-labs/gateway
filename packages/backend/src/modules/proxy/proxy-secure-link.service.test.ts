@@ -511,6 +511,49 @@ describe('ProxySecureLinkService migration rollback', () => {
     expect(relayPolicy.ensureProxySecureLink).not.toHaveBeenCalled();
   });
 
+  it('returns the authoritative post-cutover row after the source listener is persisted', async () => {
+    const migratedAt = new Date('2026-08-30T04:00:00Z');
+    const before = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      upstreamKind: 'docker_container',
+      nodeId: 'nginx-node',
+      forwardScheme: 'http',
+      healthCheckUrl: '/',
+      secureLinkGeneration: 1,
+      secureLinkStatus: 'cutover_ready',
+      secureLinkMigratedAt: null,
+      secureLinkListenerPort: null,
+    } as any;
+    const staleReturningRow = { ...before, secureLinkMigratedAt: migratedAt };
+    const authoritative = {
+      ...staleReturningRow,
+      secureLinkListenerPort: 41001,
+      updatedAt: migratedAt,
+    } as any;
+    const returning = vi.fn().mockResolvedValue([staleReturningRow]);
+    const db = {
+      query: {
+        proxyHosts: {
+          findFirst: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(authoritative),
+        },
+      },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(() => ({ returning })) })),
+      })),
+    } as any;
+    const dispatch = { probeProxySecureLink: vi.fn().mockResolvedValue({ httpStatus: 200 }) } as any;
+    const service = new ProxySecureLinkService(db, dispatch, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+
+    const result = await service.commitCutover(before.id);
+
+    expect(returning).toHaveBeenCalledOnce();
+    expect(db.query.proxyHosts.findFirst).toHaveBeenCalledTimes(2);
+    expect(result).toBe(authoritative);
+    expect(result.secureLinkListenerPort).toBe(41001);
+  });
+
   it('takes the production route and listener out of service before applying an active target candidate', async () => {
     const host = {
       id: '11111111-1111-4111-8111-111111111111',

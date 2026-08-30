@@ -180,6 +180,32 @@ export class DockerSnapshotReconciler {
     await this.refreshDetail(nodeId, kind as DockerDetailKind, key);
   }
 
+  async finalizeContainerRecreate(nodeId: string, newContainerId: string): Promise<void> {
+    if (this.snapshots.isNodeDeleted(nodeId)) return;
+    const result = await this.dispatch.sendDockerContainerCommand(nodeId, 'list', {}, DAEMON_TIMEOUT_MS);
+    const data = resultData(result);
+    if (!Array.isArray(data)) throw new Error('Docker containers list returned an invalid payload');
+
+    const incoming = data as Record<string, unknown>[];
+    const replacement = incoming.find((item) => this.containerSnapshotAliases(item).includes(newContainerId));
+    if (!replacement) throw new Error(`Replacement container ${newContainerId} is not present in Docker inventory`);
+
+    const replacementAliases = new Set(this.containerSnapshotAliases(replacement));
+    const current = await this.snapshots.getList<Record<string, unknown>[]>(nodeId, 'containers');
+    const previous = (Array.isArray(current.data) ? current.data : []).find((item) =>
+      this.containerSnapshotAliases(item).some((alias) => replacementAliases.has(alias))
+    );
+    const completedAliases = new Set([
+      ...replacementAliases,
+      ...(previous ? this.containerSnapshotAliases(previous) : []),
+    ]);
+    for (const alias of completedAliases) this.activeContainerTransitions.delete(`${nodeId}:${alias}`);
+
+    const stableData = await this.preserveTransitioningContainers(nodeId, incoming);
+    await this.snapshots.replaceList(nodeId, 'containers', stableData);
+    await this.snapshots.reconcileComposeProjects(nodeId);
+  }
+
   async enqueueDueDetails(): Promise<void> {
     for (const node of this.registry.getNodesByType('docker')) {
       await this.enqueueStaleDetails(node.nodeId, 'container-detail', 'containers');

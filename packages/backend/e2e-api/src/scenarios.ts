@@ -15,6 +15,7 @@ import {
   skipWithoutRuntimeMutations,
   sleep,
   waitForContainerVisible,
+  waitForDockerTask,
 } from './scenario-helpers.js';
 import {
   expectApiAccessible,
@@ -394,6 +395,10 @@ export const scenarios: TestCase[] = [
         content: templateContent,
         variables: [],
       });
+      if (template.status === 403 && template.text.includes('"code":"BROWSER_SESSION_REQUIRED"')) {
+        expectSessionOnly(template, 'POST /api/nginx-templates with template content');
+        return;
+      }
       expectOk(template, 'POST /api/nginx-templates');
       const templateId = asRow(template.body).id;
       if (templateId) {
@@ -912,13 +917,16 @@ export const scenarios: TestCase[] = [
         );
       }
 
-      expectOk(
-        await ctx.client.put(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/env`, {
+      const envUpdate = await ctx.client.put(
+        `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/env`,
+        {
           env: { CODEX_E2E_ENV: 'updated' },
           removeEnv: ['CODEX_E2E_REMOVED'],
-        }),
-        'PUT docker container env'
+        }
       );
+      expectOk(envUpdate, 'PUT docker container env');
+      const envTaskId = asRow(envUpdate.body).taskId;
+      if (typeof envTaskId === 'string') await waitForDockerTask(ctx, envTaskId);
       const afterEnv = await waitForContainerVisible(ctx, node.id, renamedName);
       containerId = ((afterEnv?.id ?? afterEnv?.Id) as string | undefined) ?? containerId;
       expectApiAccessible(
@@ -960,18 +968,25 @@ export const scenarios: TestCase[] = [
         });
       });
 
-      expectOk(
-        await ctx.client.post(`/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/recreate`, {
+      const recreate = await ctx.client.post(
+        `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/recreate`,
+        {
           ports: [{ hostPort: 0, containerPort: 8080, protocol: 'tcp' }],
           mounts: [{ name: volumeName, containerPath: '/tmp/codex-e2e-data', readOnly: false }],
           env: { CODEX_E2E_RECREATE: 'true' },
           labels: { 'wiolett.e2e.recreated': 'true' },
           restartPolicy: 'no',
-        }),
-        'POST docker recreate with runtime settings'
+        }
       );
+      expectOk(recreate, 'POST docker recreate with runtime settings');
+      const recreateTaskId = asRow(recreate.body).taskId;
+      if (typeof recreateTaskId === 'string') await waitForDockerTask(ctx, recreateTaskId);
       const afterRecreate = await waitForContainerVisible(ctx, node.id, renamedName);
-      containerId = ((afterRecreate?.id ?? afterRecreate?.Id) as string | undefined) ?? containerId;
+      const replacementId = (afterRecreate?.id ?? afterRecreate?.Id) as string | undefined;
+      if (!replacementId || replacementId === containerId) {
+        throw new Error('Docker recreate task completed without exposing the replacement container id');
+      }
+      containerId = replacementId;
 
       const startResponse = await ctx.client.post(
         `/api/docker/nodes/${node.id}/containers/${encodeURIComponent(containerId)}/start`
