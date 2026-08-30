@@ -4,7 +4,7 @@ import type { AIApprovalMode } from "@/lib/ai-approval-mode";
 export interface User {
   id: string;
   oidcSubject: string | null;
-  authMethod?: "oidc" | "password" | "email_otp";
+  authMethod?: "oidc" | "password" | "email_otp" | "demo_email_otp";
   email: string;
   name: string | null;
   avatarUrl: string | null;

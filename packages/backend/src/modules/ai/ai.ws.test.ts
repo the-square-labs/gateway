@@ -13,6 +13,10 @@ import { authenticateWSConnection, createWSHandlers } from './ai.ws.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.service.js';
 
+process.env.DATABASE_URL ||= 'http://localhost/db';
+process.env.REDIS_URL ||= 'redis://localhost:6379';
+process.env.PKI_MASTER_KEY ||= '0000000000000000000000000000000000000000000000000000000000000000';
+
 const USER: User = {
   id: '11111111-1111-4111-8111-111111111111',
   oidcSubject: 'oidc-user',

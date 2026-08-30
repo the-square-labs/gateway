@@ -1,6 +1,7 @@
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { authenticateBearerToken } from '@/modules/auth/auth.middleware.js';
 import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
+import { isDemoRealtimeCapabilityAllowed } from '@/modules/demo/demo-mode.js';
 import type { User } from '@/types.js';
 import {
   getAcceptedSessionCookieNames,
@@ -85,6 +86,7 @@ export async function resolveWebSocketCredential(
   requiredScope: string
 ): Promise<WebSocketAuthResult | null> {
   const result = await resolveWebSocketCredentialContext(credential);
+  if (result && !isDemoRealtimeCapabilityAllowed(result.user, result.scopes, requiredScope)) return null;
   if (!result || !hasScope(result.scopes, requiredScope)) return null;
   return result;
 }
@@ -94,6 +96,7 @@ export async function resolveWebSocketCredentialForScopeBase(
   requiredScopeBase: string
 ): Promise<WebSocketAuthResult | null> {
   const result = await resolveWebSocketCredentialContext(credential);
+  if (result && !isDemoRealtimeCapabilityAllowed(result.user, result.scopes, requiredScopeBase)) return null;
   if (!result || !hasScopeBase(result.scopes, requiredScopeBase)) return null;
   return result;
 }

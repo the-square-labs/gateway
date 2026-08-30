@@ -4,6 +4,7 @@ import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { DemoAuthService } from '@/modules/demo/demo-auth.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { SessionService } from '@/services/session.service.js';
@@ -66,6 +67,25 @@ function registerDependencies() {
 
 afterEach(() => {
   container.reset();
+});
+
+describe('standard-installation demo auth isolation', () => {
+  it('returns 404 before parsing or invoking demo auth outside demo mode', async () => {
+    const requestCode = vi.fn();
+    container.registerInstance(DemoAuthService, { requestCode } as unknown as DemoAuthService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+
+    const response = await app.request('/auth/demo/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{not-json',
+    });
+
+    expect(response.status).toBe(404);
+    expect(requestCode).not.toHaveBeenCalled();
+  });
 });
 
 describe('browser-session routes', () => {

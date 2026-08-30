@@ -11,6 +11,7 @@ import {
   requiresSessionMfaReauthentication,
   resolveLiveSessionUser,
 } from '@/modules/auth/live-session-user.js';
+import { isDemoRealtimeCapabilityAllowed } from '@/modules/demo/demo-mode.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import { AISettingsService } from './ai.settings.service.js';
@@ -394,7 +395,13 @@ export function createWSHandlers() {
           if (state.sessionId) {
             const freshIdentity = await authenticateFromSession(state.sessionId);
             const freshUser = freshIdentity?.user;
-            if (!freshIdentity || !freshUser || freshUser.isBlocked || !canUseAI(freshUser.scopes)) {
+            if (
+              !freshIdentity ||
+              !freshUser ||
+              freshUser.isBlocked ||
+              !isDemoRealtimeCapabilityAllowed(freshUser, freshIdentity.effectiveScopes, 'ai:workspace') ||
+              !canUseAI(freshUser.scopes)
+            ) {
               send(ws, { type: 'auth_error', message: 'Session expired or role changed' });
               try {
                 ws.close();
@@ -1250,6 +1257,11 @@ export async function authenticateWSConnection(ws: WSContext, sessionId: string)
 
   if (user.isBlocked) {
     send(ws, { type: 'auth_error', message: 'Account is blocked' });
+    return false;
+  }
+
+  if (!isDemoRealtimeCapabilityAllowed(user, identity.effectiveScopes, 'ai:workspace')) {
+    send(ws, { type: 'auth_error', message: 'AI Workspace is unavailable in demo mode' });
     return false;
   }
 

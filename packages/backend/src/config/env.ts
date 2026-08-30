@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE = 'gateway-secure-link-connector:dev';
 export const BUILT_IN_GITHUB_OAUTH_CLIENT_ID = 'Ov23likbDL1gM8asWzfC';
 const IMMUTABLE_CONNECTOR_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/i;
+const deploymentModeSchema = z.enum(['standard', 'demo']).default('standard');
 
 const optionalNonEmptyString = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
@@ -32,6 +33,7 @@ const envSchema = z.object({
   // App
   APP_URL: z.string().url().default('http://localhost:3000'),
   APP_VERSION: z.string().default('dev'),
+  GATEWAY_DEPLOYMENT_MODE: deploymentModeSchema,
   BIND_HOST: z.string().default('0.0.0.0'),
   GATEWAY_LOCAL_HOSTS: z.string().optional(),
   WEB_TLS_BOOTSTRAP_MODE: z.enum(['http', 'https']).optional(),
@@ -133,6 +135,12 @@ export function getEnv(): Env {
     cachedEnv.SECURE_LINK_CONNECTOR_IMAGE = DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE;
   }
   return cachedEnv;
+}
+
+export function getDeploymentMode(): Env['GATEWAY_DEPLOYMENT_MODE'] {
+  const result = deploymentModeSchema.safeParse(process.env.GATEWAY_DEPLOYMENT_MODE);
+  if (!result.success) throw new Error('Invalid GATEWAY_DEPLOYMENT_MODE');
+  return result.data;
 }
 
 export function isDevelopment(): boolean {

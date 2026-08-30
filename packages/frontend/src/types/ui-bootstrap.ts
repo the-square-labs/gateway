@@ -22,6 +22,9 @@ export interface ReadModelSnapshot<T> {
 }
 
 export interface UIBootstrapShell {
+  demo?: {
+    ctaUrl: "https://goodgateway.dev";
+  };
   access: {
     fingerprint: string;
     scopes: string[];

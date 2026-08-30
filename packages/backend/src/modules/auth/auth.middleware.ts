@@ -5,6 +5,7 @@ import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
 import { getAuditRequestContext, setAuditImpersonationContext } from '@/modules/audit/audit-request-context.js';
 import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
+import { assertDemoRequestAllowed } from '@/modules/demo/demo-mode.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
@@ -162,6 +163,7 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       throw new HTTPException(401, { message: 'Invalid or expired bearer token' });
     }
     applyBearerContext(c, result);
+    assertDemoRequestAllowed(c);
   } else {
     const sessionService = container.resolve(SessionService);
     const session = await sessionService.getSession(credential.value);
@@ -214,6 +216,7 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     }
     c.set('isTokenAuth', false);
     c.set('authType', 'session');
+    assertDemoRequestAllowed(c);
     const requestContext = getAuditRequestContext();
     await sessionService.updateSession(credential.value, {
       user,

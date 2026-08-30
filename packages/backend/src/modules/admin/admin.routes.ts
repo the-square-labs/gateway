@@ -33,6 +33,7 @@ import { MfaService } from '@/modules/auth/mfa.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { getSessionCookieNameForUrl } from '@/modules/auth/session-cookie.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
+import { isDemoVisitor } from '@/modules/demo/demo-mode.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
@@ -146,7 +147,8 @@ async function refreshActiveGrpcServerIdentity(): Promise<void> {
 adminRoutes.openapi({ ...listAdminUsersRoute, middleware: requireScope('admin:users') }, async (c) => {
   const authService = container.resolve(AuthService);
   const userList = await authService.listUsers();
-  return c.json(userList);
+  const actor = c.get('user');
+  return c.json(isDemoVisitor(actor) ? userList.filter((user) => user.id === actor?.id) : userList);
 });
 
 // Deleted accounts are operationally invisible; only system administrators can inspect them.

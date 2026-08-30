@@ -3,6 +3,7 @@ import { container } from '@/container.js';
 import { getClientIpForContext } from '@/lib/request-ip.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { getAuditRequestContext, runWithAuditRequestContext } from '@/modules/audit/audit-request-context.js';
+import { isDemoVisitor } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -24,6 +25,7 @@ const FALLBACK_AUDIT_SKIP_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/auth\/mfa\/enrollment\/totp\/setup$/ },
   { method: 'POST', pattern: /^\/auth\/mfa\/enrollment\/passkey\/options$/ },
   { method: 'POST', pattern: /^\/auth\/(?:mfa\/)?passkeys?\/options$/ },
+  { method: 'POST', pattern: /^\/auth\/demo\/(?:request|verify)$/ },
   { method: 'POST', pattern: /^\/api\/finalize-setup\/mfa-reminder\/hide$/ },
   { method: 'PUT', pattern: /^\/api\/finalize-setup\/steps\/[^/]+$/ },
   { method: 'POST', pattern: /^\/api\/setup\/(?:unlock|wizard\/session)$/ },
@@ -570,6 +572,10 @@ function shouldEmitFallbackAudit(c: Parameters<MiddlewareHandler<AppEnv>>[0]): b
   }
 
   if (shouldSkipFallbackAudit(c.req.method, c.req.path)) {
+    return false;
+  }
+
+  if (isDemoVisitor(c.get('user')) && c.req.path.startsWith('/auth/')) {
     return false;
   }
 

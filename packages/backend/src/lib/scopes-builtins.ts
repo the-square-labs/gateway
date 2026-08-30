@@ -206,6 +206,84 @@ export const ADMIN_SCOPES: readonly string[] = [
   'status-page:incidents:delete',
 ];
 
+const DEMO_ADMIN_EXCLUDED_SCOPES = new Set([
+  'pki:cert:export',
+  'ssl:cert:export',
+  'proxy:raw:read',
+  'proxy:raw:write',
+  'proxy:raw:bypass',
+  'nodes:console',
+  'nodes:config:view',
+  'nodes:files:read',
+  'nodes:files:write',
+  'pages:tokens:manage',
+  'docker:containers:webhooks',
+  'docker:containers:console',
+  'docker:containers:files:read',
+  'docker:containers:files:write',
+  'docker:containers:export',
+  'docker:containers:secrets',
+  'docker:containers:environment',
+  'docker:volumes:export',
+  'docker:volumes:files:read',
+  'docker:volumes:files:write',
+  'docker:registries:internal:pull',
+  'docker:registries:internal:push',
+  'databases:query:read',
+  'databases:query:write',
+  'databases:query:admin',
+  'databases:credentials:reveal',
+  'admin:audit',
+  'audit:siem:view',
+  'audit:siem:manage',
+  'logs:tokens:view',
+  'logs:tokens:create',
+  'logs:tokens:delete',
+  'integrations:gitlab:manage',
+  'integrations:gitlab:sync',
+  'integrations:gitlab:system',
+  'integrations:gitlab:repo:write',
+  'integrations:gitlab:ci:edit',
+  'integrations:gitlab:variables:view',
+  'integrations:gitlab:variables:edit',
+  'integrations:gitlab:variables:delete',
+  'integrations:gitlab:webhooks:manage',
+  'integrations:gitlab:registry:manage',
+  'integrations:gitlab:sandbox:clone',
+  'integrations:github:manage',
+  'integrations:github:system',
+  'integrations:git:manage',
+  'integrations:git:system',
+  'integrations:ssh:manage',
+  'integrations:ssh:use',
+  'integrations:cloudflare:manage',
+  'notifications:webhooks:view',
+  'notifications:webhooks:create',
+  'notifications:webhooks:edit',
+  'notifications:webhooks:delete',
+]);
+
+/**
+ * Demo visitors retain ordinary resource-management scopes so the existing UI
+ * remains explorable. DemoModePolicy is the authorization boundary. Remove
+ * capabilities that would expose secrets or external execution even while
+ * rendering a read-only screen.
+ */
+export const DEMO_ADMIN_SCOPES: readonly string[] = ADMIN_SCOPES.filter(
+  (scope) =>
+    !DEMO_ADMIN_EXCLUDED_SCOPES.has(scope) &&
+    !scope.startsWith('ai:') &&
+    !scope.startsWith('feat:ai:') &&
+    !scope.startsWith('mcp:') &&
+    !scope.startsWith('inference:')
+);
+
+export const DEMO_ADMIN_GROUP = {
+  name: 'demo-admin',
+  description: 'Public demo administrator — UI access governed by immutable demo restrictions',
+  scopes: DEMO_ADMIN_SCOPES,
+} as const;
+
 /** Operator group: operational + management scopes */
 export const OPERATOR_SCOPES: readonly string[] = [
   'pki:ca:view:root',
@@ -365,5 +443,9 @@ export const BUILTIN_GROUPS = [
 ] as const;
 
 export const BUILTIN_GROUP_NAMES: string[] = BUILTIN_GROUPS.map((g) => g.name);
+
+export function getBootstrapBuiltinGroups(deploymentMode: 'standard' | 'demo') {
+  return deploymentMode === 'demo' ? [...BUILTIN_GROUPS, DEMO_ADMIN_GROUP] : [...BUILTIN_GROUPS];
+}
 
 /** Scopes that support resource-level suffixes (e.g., pki:cert:issue:ca-uuid) */

@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { demoRestriction, isDemoMode } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 import {
   deleteContainerWebhookRoute,
@@ -121,6 +122,11 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
 // ─── Trigger route (public — token IS the auth) ────────────────────
 
 export const dockerWebhookTriggerRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
+
+dockerWebhookTriggerRoutes.use('*', async (_c, next) => {
+  if (isDemoMode()) throw demoRestriction('Trigger Docker automation through a webhook');
+  await next();
+});
 
 dockerWebhookTriggerRoutes.openapi(triggerDockerWebhookRoute, async (c) => {
   const service = container.resolve(DockerWebhookService);

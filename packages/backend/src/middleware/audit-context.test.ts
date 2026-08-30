@@ -186,6 +186,8 @@ describe('shouldSkipFallbackAudit', () => {
     '/auth/mfa/enrollment/passkey/options',
     '/auth/passkeys/options',
     '/auth/mfa/passkey/options',
+    '/auth/demo/request',
+    '/auth/demo/verify',
   ])('skips ephemeral authentication initialization at %s', (path) => {
     expect(__testOnly.shouldSkipFallbackAudit('POST', path)).toBe(true);
   });

@@ -1,5 +1,12 @@
 import { ApiClientBase, type ApiRequestError, DEFAULT_CACHE_TTL } from "@/services/api-base";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useAuthStore } from "@/stores/auth";
+import { useDemoModeStore } from "@/stores/demo-mode";
+
+afterEach(() => {
+  useDemoModeStore.setState({ enabled: false, open: false });
+  useAuthStore.setState({ user: null, isAuthenticated: false });
+});
 
 class TestApiClient extends ApiClientBase {
   getThing() {
@@ -32,6 +39,67 @@ class TestApiClient extends ApiClientBase {
 }
 
 describe("ApiClientBase", () => {
+  it("blocks demo mutations before CSRF or network work", async () => {
+    const client = new TestApiClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    useDemoModeStore.setState({ enabled: true, open: false });
+
+    await expect(client.updateThing()).rejects.toMatchObject({
+      status: 403,
+      code: "DEMO_MODE_RESTRICTED",
+    } satisfies Partial<ApiRequestError>);
+    expect(useDemoModeStore.getState().open).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows the canonical system administrator to mutate in demo mode", async () => {
+    const client = new TestApiClient();
+    useDemoModeStore.setState({ enabled: true, open: false });
+    useAuthStore.setState({
+      user: {
+        id: "system-admin",
+        oidcSubject: null,
+        email: "admin@example.test",
+        name: "System Admin",
+        avatarUrl: null,
+        groupId: "system-admin-group",
+        groupName: "system-admin",
+        scopes: ["admin:system"],
+        isBlocked: false,
+      },
+      isAuthenticated: true,
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(client.updateThing()).resolves.toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(useDemoModeStore.getState().open).toBe(false);
+  });
+
+  it("preserves the demo restriction code returned by the backend", async () => {
+    const client = new TestApiClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          code: "DEMO_MODE_RESTRICTED",
+          message: "This action is unavailable in demo mode.",
+          details: { capability: "Change Gateway configuration" },
+        }),
+        { status: 403, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    await expect(client.getThing()).rejects.toMatchObject({
+      status: 403,
+      code: "DEMO_MODE_RESTRICTED",
+      details: { capability: "Change Gateway configuration" },
+    } satisfies Partial<ApiRequestError>);
+    expect(useDemoModeStore.getState().open).toBe(true);
+  });
+
   it("reports caller cancellation without switching the Gateway into maintenance mode", async () => {
     const client = new TestApiClient();
     const abortController = new AbortController();

@@ -14,7 +14,7 @@ import {
 import { adminUserFolders } from './admin-user-folders.js';
 import { permissionGroups } from './permission-groups.js';
 
-export const USER_AUTH_METHODS = ['oidc', 'password', 'email_otp'] as const;
+export const USER_AUTH_METHODS = ['oidc', 'password', 'email_otp', 'demo_email_otp'] as const;
 export type UserAuthMethod = (typeof USER_AUTH_METHODS)[number];
 
 export const users = pgTable(

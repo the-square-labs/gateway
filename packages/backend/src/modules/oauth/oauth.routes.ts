@@ -4,6 +4,7 @@ import { container } from '@/container.js';
 import { API_TOKEN_SCOPES, MCP_TOKEN_SCOPES } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, optionalAuthMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { isDemoMode } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 import {
   OAuthAuthorizeQuerySchema,
@@ -16,6 +17,14 @@ import { OAuthService } from './oauth.service.js';
 
 export const oauthRoutes = new Hono<AppEnv>();
 export const oauthMetadataRoutes = new Hono<AppEnv>();
+
+const disableOAuthInDemo = async (c: Context<AppEnv>, next: () => Promise<void>) => {
+  if (isDemoMode()) return c.json({ code: 'NOT_FOUND', message: 'Not found' }, 404);
+  await next();
+};
+
+oauthRoutes.use('*', disableOAuthInDemo);
+oauthMetadataRoutes.use('*', disableOAuthInDemo);
 
 function oauthService() {
   return container.resolve(OAuthService);

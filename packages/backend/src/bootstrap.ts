@@ -342,6 +342,11 @@ export async function initializeContainer(): Promise<void> {
       generalSettingsService
     )
   );
+  const { DemoAuthService } = await import('@/modules/demo/demo-auth.service.js');
+  container.registerInstance(
+    DemoAuthService,
+    new DemoAuthService(db, cacheService, container.resolve(AuthMailService))
+  );
   container.registerInstance(MfaService, new MfaService(db, cacheService, cryptoService));
   container.registerInstance(
     PasskeyService,
@@ -509,10 +514,10 @@ export async function initializeContainer(): Promise<void> {
 
   // Upsert built-in groups (creates on fresh install, syncs scopes on upgrade)
   {
-    const { BUILTIN_GROUPS, canonicalizeScopes } = await import('@/lib/scopes.js');
+    const { getBootstrapBuiltinGroups, canonicalizeScopes } = await import('@/lib/scopes.js');
     const { permissionGroups } = await import('@/db/schema/index.js');
     const { eq } = await import('drizzle-orm');
-    for (const bg of BUILTIN_GROUPS) {
+    for (const bg of getBootstrapBuiltinGroups(env.GATEWAY_DEPLOYMENT_MODE)) {
       await db
         .insert(permissionGroups)
         .values({
@@ -526,7 +531,6 @@ export async function initializeContainer(): Promise<void> {
           set: { scopes: [...bg.scopes], description: bg.description, isBuiltin: true },
         });
     }
-
     const groups = await db.select().from(permissionGroups);
     for (const group of groups) {
       const originalScopes = Array.isArray(group.scopes) ? group.scopes : [];

@@ -59,6 +59,46 @@ describe("LoginPage password reset", () => {
 });
 
 describe("LoginPage email-first sign-in", () => {
+  it("uses the isolated demo OTP endpoints without touching ordinary email OTP", async () => {
+    const onComplete = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === "/auth/demo/request") return Response.json({ challengeId: "demo-challenge" });
+      if (path === "/auth/demo/verify") return Response.json({ ok: true });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    renderWithRouter(
+      <LoginPage
+        initialMethods={{
+          oidc: false,
+          password: false,
+          emailOtp: false,
+          passkeyLogin: false,
+          demoEmailOtp: true,
+        }}
+        onComplete={onComplete}
+      />,
+      { path: "/login", route: "/login" }
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explore the demo" }));
+    fireEvent.change(screen.getByPlaceholderText("Email"), {
+      target: { value: "visitor@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(await screen.findByPlaceholderText("6-digit code"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Verify email code" }));
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledWith("/"));
+    expect(fetchSpy.mock.calls.map(([path]) => String(path))).toEqual([
+      "/auth/demo/request",
+      "/auth/demo/verify",
+    ]);
+  });
+
   it("renders injected methods immediately without requesting them again", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 

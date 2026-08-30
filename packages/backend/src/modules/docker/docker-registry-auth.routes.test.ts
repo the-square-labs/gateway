@@ -8,9 +8,30 @@ import type { AppEnv } from '@/types.js';
 import { __testOnly, dockerRegistryAuthRoutes } from './docker-registry-auth.routes.js';
 import { DockerInternalRegistryService } from './docker-registry-internal.service.js';
 
-afterEach(() => container.reset());
+const ORIGINAL_DEPLOYMENT_MODE = process.env.GATEWAY_DEPLOYMENT_MODE;
+
+afterEach(() => {
+  container.reset();
+  if (ORIGINAL_DEPLOYMENT_MODE === undefined) delete process.env.GATEWAY_DEPLOYMENT_MODE;
+  else process.env.GATEWAY_DEPLOYMENT_MODE = ORIGINAL_DEPLOYMENT_MODE;
+});
 
 describe('docker registry external token request parsing', () => {
+  it('disables external registry token issuance before service work in demo mode', async () => {
+    process.env.GATEWAY_DEPLOYMENT_MODE = 'demo';
+    const assertExternalAccessEntitled = vi.fn();
+    container.registerInstance(DockerInternalRegistryService, { assertExternalAccessEntitled } as never);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/registry', dockerRegistryAuthRoutes);
+
+    const response = await app.request('/registry/token');
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'DEMO_MODE_RESTRICTED' });
+    expect(assertExternalAccessEntitled).not.toHaveBeenCalled();
+  });
+
   it('accepts a Gateway API token only as the Basic password', () => {
     expect(__testOnly.basicPassword(`Basic ${Buffer.from('gateway:gw_secret').toString('base64')}`)).toBe('gw_secret');
     expect(__testOnly.basicPassword(`Basic ${Buffer.from('gateway:gwo_oauth').toString('base64')}`)).toBeNull();

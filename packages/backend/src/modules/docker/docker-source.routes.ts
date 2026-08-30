@@ -9,6 +9,7 @@ import { dockerComposeProjects, dockerDeployments } from '@/db/schema/index.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { demoRestriction, isDemoMode } from '@/modules/demo/demo-mode.js';
 import { ComposeProjectNameSchema } from '@/modules/docker/compose/compose.schemas.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
@@ -429,6 +430,11 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
 }
 
 export const dockerSourceWebhookRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
+
+dockerSourceWebhookRoutes.use('*', async (_c, next) => {
+  if (isDemoMode()) throw demoRestriction('Trigger source automation through a webhook');
+  await next();
+});
 
 dockerSourceWebhookRoutes.post('/:sourceBindingId', async (c) => {
   const sourceBindingId = SourceBindingIdSchema.parse(c.req.param('sourceBindingId'));

@@ -8,9 +8,11 @@ import {
   API_TOKEN_SCOPES,
   BUILTIN_GROUPS,
   canonicalizeScopes,
+  DEMO_ADMIN_SCOPES,
   extractBaseScope,
   FOLDER_SCOPABLE,
   GUEST_SCOPES,
+  getBootstrapBuiltinGroups,
   isApiTokenScope,
   isMcpTokenScope,
   isValidBaseScope,
@@ -142,6 +144,31 @@ describe('canonical scope definitions', () => {
     expect(ADMIN_SCOPES).not.toContain('admin:system');
     expect(hasScope(['admin:users'], 'admin:users:impersonate')).toBe(false);
     expect(hasScope(['admin:users:impersonate'], 'admin:users:impersonate')).toBe(true);
+  });
+
+  it('keeps demo-admin visible but strips system, secret, execution, and external automation capabilities', () => {
+    expect(DEMO_ADMIN_SCOPES).toContain('docker:containers:create');
+    expect(DEMO_ADMIN_SCOPES).toContain('admin:update');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('admin:system');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('nodes:console');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('nodes:files:read');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('nodes:config:view');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('docker:containers:secrets');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('docker:containers:environment');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('docker:containers:webhooks');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('logs:tokens:view');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('notifications:webhooks:view');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('admin:audit');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('audit:siem:view');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('databases:credentials:reveal');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('mcp:use');
+    expect(DEMO_ADMIN_SCOPES.some((scope) => scope.startsWith('ai:'))).toBe(false);
+    expect(DEMO_ADMIN_SCOPES.some((scope) => scope.startsWith('inference:'))).toBe(false);
+  });
+
+  it('does not create demo-admin metadata on standard installations', () => {
+    expect(getBootstrapBuiltinGroups('standard').map((group) => group.name)).not.toContain('demo-admin');
+    expect(getBootstrapBuiltinGroups('demo').map((group) => group.name)).toContain('demo-admin');
   });
 
   it('grants Docker mount editing only to built-in admin tiers by default', () => {

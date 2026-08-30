@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
+import { assertDemoRequestAllowed } from '@/modules/demo/demo-mode.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceTokenService } from './inference-token.service.js';
@@ -29,6 +30,7 @@ export const inferenceSetupAuthMiddleware: MiddlewareHandler<AppEnv> = async (c,
     c.set('effectiveScopes', result.user.scopes);
     c.set('isTokenAuth', true);
     c.set('authType', 'inference-token');
+    assertDemoRequestAllowed(c);
     await next();
     return;
   }
@@ -43,6 +45,7 @@ export const inferenceSetupAuthMiddleware: MiddlewareHandler<AppEnv> = async (c,
   c.set('effectiveScopes', result.scopes);
   c.set('isTokenAuth', true);
   c.set('authType', 'oauth-token');
+  assertDemoRequestAllowed(c);
   await next();
 };
 

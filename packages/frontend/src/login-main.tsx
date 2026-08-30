@@ -17,7 +17,8 @@ function readInjectedAuthMethods(): AuthMethods | null {
       typeof methods.oidc !== "boolean" ||
       typeof methods.password !== "boolean" ||
       typeof methods.emailOtp !== "boolean" ||
-      typeof methods.passkeyLogin !== "boolean"
+      typeof methods.passkeyLogin !== "boolean" ||
+      (methods.demoEmailOtp !== undefined && typeof methods.demoEmailOtp !== "boolean")
     ) {
       return null;
     }

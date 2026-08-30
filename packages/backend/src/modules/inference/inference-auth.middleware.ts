@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import { container } from '@/container.js';
+import { assertDemoRequestAllowed } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 import { inferenceErrorResponse } from './inference-error.js';
 import { InferenceTokenService } from './inference-token.service.js';
@@ -35,6 +36,7 @@ export const inferenceAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next
   c.set('authType', 'inference-token');
   // Kept only in request-local state so WebSocket response.create events can revalidate it.
   c.set('inferenceAuth', { tokenId: result.tokenId, tokenPrefix: result.tokenPrefix, rawToken });
+  assertDemoRequestAllowed(c);
   await next();
 };
 

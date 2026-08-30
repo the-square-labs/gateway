@@ -52,6 +52,7 @@ import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
 import { createManagedDatabaseLogStreamWSHandlers } from '@/modules/databases/managed-database-logs.ws.js';
+import { isDemoMode } from '@/modules/demo/demo-mode.js';
 import { dockerRoutes } from '@/modules/docker/docker.routes.js';
 import { DOCKER_LOG_TAIL_MAX } from '@/modules/docker/docker.schemas.js';
 import { createComposeLogsWSHandlers } from '@/modules/docker/docker-compose-logs.ws.js';
@@ -637,6 +638,10 @@ export function createApp(): GatewayAppRuntime {
   app.use('/auth/password/reset/request', authLoginRateLimitMiddleware);
   app.use('/auth/email-otp/request', authLoginRateLimitMiddleware);
   app.use('/auth/email-otp/verify', authLoginRateLimitMiddleware);
+  if (isDemoMode()) {
+    app.use('/auth/demo/request', authLoginRateLimitMiddleware);
+    app.use('/auth/demo/verify', authLoginRateLimitMiddleware);
+  }
   app.use('/auth/password/reset/complete', authLoginRateLimitMiddleware);
   app.use('/auth/mfa/*', authLoginRateLimitMiddleware);
   app.use('/auth/passkeys/*', authLoginRateLimitMiddleware);

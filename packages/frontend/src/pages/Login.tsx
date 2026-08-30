@@ -41,6 +41,7 @@ export type AuthMethods = {
   password: boolean;
   emailOtp: boolean;
   passkeyLogin: boolean;
+  demoEmailOtp?: boolean;
 };
 type PendingMfa = { challengeId: string; passkeyAvailable: boolean };
 type PendingEnrollment = {
@@ -68,6 +69,7 @@ const EMPTY_METHODS: AuthMethods = {
   password: false,
   emailOtp: false,
   passkeyLogin: false,
+  demoEmailOtp: false,
 };
 const redirectToGateway = (path: string) => window.location.assign(path);
 
@@ -132,7 +134,7 @@ export function LoginPage({
   const prefersReducedMotion = useReducedMotion();
   const resetToken = new URLSearchParams(location.search).get("token");
   const returnTo = resolveAuthReturnTo(location.search);
-  const emailEnabled = methods.password || methods.emailOtp;
+  const emailEnabled = methods.password || methods.emailOtp || methods.demoEmailOtp;
   const validEmail = /^\S+@\S+\.\S+$/.test(email.trim());
   const activeLoginStep = pendingEnrollment?.recoveryCodes
     ? "recovery_codes"
@@ -222,6 +224,15 @@ export function LoginPage({
 
   const continueWithEmail = () =>
     run(async () => {
+      if (methods.demoEmailOtp) {
+        const result = await authRequest<{ challengeId: string }>("/auth/demo/request", {
+          email,
+        });
+        setOtpChallengeId(result.challengeId);
+        setCode("");
+        setLoginStep("otp");
+        return;
+      }
       const result = await authRequest<EmailSignInContinuation>("/auth/email/continue", {
         email,
       });
@@ -237,6 +248,17 @@ export function LoginPage({
 
   const verifyOtp = () =>
     run(async () => {
+      if (methods.demoEmailOtp) {
+        const result = await authRequest<{
+          mfaRequired?: boolean;
+          mfaPasskeyAvailable?: boolean;
+          challengeId?: string;
+          mfaEnrollmentRequired?: boolean;
+          enrollmentToken?: string;
+        }>("/auth/demo/verify", { challengeId: otpChallengeId, code });
+        handlePrimaryResult(result);
+        return;
+      }
       const result = await authRequest<{
         mfaRequired?: boolean;
         mfaPasskeyAvailable?: boolean;
@@ -718,7 +740,7 @@ export function LoginPage({
                     disabled={busy}
                   >
                     <Mail className="h-4 w-4" />
-                    Sign in with Email
+                    {methods.demoEmailOtp ? "Explore the demo" : "Sign in with Email"}
                   </Button>
                 )}
                 {methods.passkeyLogin && (
@@ -744,9 +766,13 @@ export function LoginPage({
                 }}
               >
                 <div className="text-center">
-                  <h2 className="text-lg font-semibold">Sign in with Email</h2>
+                  <h2 className="text-lg font-semibold">
+                    {methods.demoEmailOtp ? "Explore the demo" : "Sign in with Email"}
+                  </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Enter your work email to continue.
+                    {methods.demoEmailOtp
+                      ? "Enter your email to receive a one-time demo access code."
+                      : "Enter your work email to continue."}
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -811,7 +837,7 @@ export function LoginPage({
                     onClick={() => setLoginStep("email")}
                   >
                     <ArrowLeft className="h-4 w-4" />
-                    Back to email sign-in
+                    {methods.demoEmailOtp ? "Back to demo access" : "Back to email sign-in"}
                   </Button>
                 </div>
               </form>
@@ -856,7 +882,7 @@ export function LoginPage({
                     }}
                   >
                     <ArrowLeft className="h-4 w-4" />
-                    Back to email sign-in
+                    {methods.demoEmailOtp ? "Back to demo access" : "Back to email sign-in"}
                   </Button>
                 </div>
               </form>

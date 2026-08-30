@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { demoRestriction, isDemoMode } from '@/modules/demo/demo-mode.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerInternalRegistryService } from './docker-registry-internal.service.js';
@@ -50,6 +51,7 @@ function requestedRegistryGrants(url: URL) {
 }
 
 dockerRegistryAuthRoutes.get('/token', async (c) => {
+  if (isDemoMode()) throw demoRestriction('Use external registry automation');
   const registry = container.resolve(DockerInternalRegistryService);
   await registry.assertExternalAccessEntitled();
 

@@ -1,6 +1,12 @@
 import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
+import {
+  DEMO_MODE_RESTRICTED,
+  handleDemoModeApiError,
+  shouldBlockDemoRequest,
+  useDemoModeStore,
+} from "@/stores/demo-mode";
 import type { ApiError } from "@/types";
 import { mutationCachePrefixes } from "./mutation-cache";
 import {
@@ -88,6 +94,32 @@ function extractApiErrorMessage(payload: unknown, fallback: string): string {
   if (typeof firstDetailMessage === "string" && firstDetailMessage.trim())
     return firstDetailMessage;
   return fallback;
+}
+
+function extractApiErrorDetails(payload: unknown): unknown {
+  return payload && typeof payload === "object" ? (payload as ApiError).details : undefined;
+}
+
+function forbiddenError(payload: unknown, status: number): ApiRequestError {
+  const code = getApiErrorCode(payload) ?? "FORBIDDEN";
+  handleDemoModeApiError(code);
+  return new ApiRequestError(extractApiErrorMessage(payload, "Insufficient permissions"), {
+    status,
+    code,
+    details: extractApiErrorDetails(payload),
+  });
+}
+
+function assertDemoRequestAllowed(url: string, method: string): void {
+  const user = useAuthStore.getState().user;
+  if (user?.groupName === "system-admin" && user.scopes.includes("admin:system")) return;
+  const path = new URL(url, window.location.origin).pathname;
+  if (!shouldBlockDemoRequest(path, method)) return;
+  useDemoModeStore.getState().show();
+  throw new ApiRequestError("This action is unavailable in demo mode.", {
+    status: 403,
+    code: DEMO_MODE_RESTRICTED,
+  });
 }
 
 function getApiErrorCode(payload: unknown): string | undefined {
@@ -338,6 +370,7 @@ export class ApiClientBase {
     let response: Response;
     const generation = this.sessionGeneration;
     const method = (options.method || "GET").toUpperCase();
+    assertDemoRequestAllowed(url, method);
     const headers = new Headers(this.getHeaders());
     if (options.headers) {
       new Headers(options.headers).forEach((value, key) => headers.set(key, value));
@@ -429,10 +462,7 @@ export class ApiClientBase {
             code: "ACCOUNT_BLOCKED",
           });
         }
-        throw new ApiRequestError(extractApiErrorMessage(body, "Insufficient permissions"), {
-          status: response.status,
-          code: "FORBIDDEN",
-        });
+        throw forbiddenError(body, response.status);
       }
 
       const error: ApiError = await response.json().catch(() => ({
@@ -510,6 +540,7 @@ export class ApiClientBase {
         : `${API_BASE}${endpoint}`;
     const generation = this.sessionGeneration;
     const method = (options.method || "GET").toUpperCase();
+    assertDemoRequestAllowed(url, method);
     const headers = new Headers(this.getHeaders());
     if (options.headers) {
       new Headers(options.headers).forEach((value, key) => headers.set(key, value));
@@ -575,10 +606,7 @@ export class ApiClientBase {
             code: "ACCOUNT_BLOCKED",
           });
         }
-        throw new ApiRequestError(message, {
-          status: response.status,
-          code: "FORBIDDEN",
-        });
+        throw forbiddenError(parsedError, response.status);
       }
 
       const fallback = response.status >= 500 ? "Service unavailable" : "An unknown error occurred";
@@ -642,6 +670,7 @@ export class ApiClientBase {
         ? endpoint
         : `${API_BASE}${endpoint}`;
     const generation = this.sessionGeneration;
+    assertDemoRequestAllowed(url, method);
     const requestHeaders = new Headers(headers);
     requestHeaders.set("X-CSRF-Token", await this.getCsrfToken());
 
@@ -740,12 +769,7 @@ export class ApiClientBase {
             );
             return;
           }
-          reject(
-            new ApiRequestError(message, {
-              status: xhr.status,
-              code: "FORBIDDEN",
-            })
-          );
+          reject(forbiddenError(parsedError, xhr.status));
           return;
         }
 

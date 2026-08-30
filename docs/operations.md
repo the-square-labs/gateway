@@ -55,6 +55,7 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `DATABASE_URL` | PostgreSQL connection URL. |
 | `REDIS_URL` | Redis connection URL. |
 | `GATEWAY_IMAGE_REF` | Gateway image reference used by Compose. The installer writes the selected release tag; signed self-updates replace it with `image@sha256:<digest>`. |
+| `GATEWAY_DEPLOYMENT_MODE` | Immutable process mode: `standard` (default) or `demo`. Demo enables the dedicated public demo OTP flow and centrally denies visitor mutations, secret access, consoles, AI/MCP/OAuth, and automation tokens. Invalid values fail startup; changing the mode requires recreating the Gateway process. |
 | `GATEWAY_RELAY_IMAGE_REF` | Independently pinned immutable image reference used by relay. Only a digest change updates relay. |
 | `GATEWAY_RELAY_BUILD_VERSION` | Expected build version reported by the pinned relay image. |
 | `GATEWAY_RELAY_PROTOCOL_MAJOR` | Supported relay wire-protocol major. |
@@ -73,6 +74,8 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `EXPIRY_CHECK_CRON` | Certificate expiry check schedule. |
 
 Legacy product-setting variables are imported into PostgreSQL by the target image before an update replaces the app container. The migration preserves explicit legacy values, fills missing fields from the target release defaults, and removes the migrated keys from both host `.env` and the app service's Compose environment only after the database import succeeds.
+
+Before enabling demo mode, configure the canonical `system-admin` account for email OTP and its required MFA factors. Demo mode intentionally exposes no password, OIDC, or direct passkey primary login, including for administrators; this avoids turning the public demo OTP endpoint into an alternate login for identities governed by another authentication provider.
 
 See [.env.example](../.env.example) for the common development values. Runtime-only and installer-managed image, registry, relay, storage, DNS, and update variables retain their schema defaults when omitted.
 

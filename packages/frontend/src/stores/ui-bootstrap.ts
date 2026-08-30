@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/services/api";
+import { useDemoModeStore } from "@/stores/demo-mode";
 import type { UIBootstrapShell } from "@/types";
 
 interface UIBootstrapState {
@@ -33,6 +34,7 @@ export const useUIBootstrapStore = create<UIBootstrapState>()((set, get) => ({
       Number.POSITIVE_INFINITY
     )?.data;
     if (!get().snapshot && cached) {
+      useDemoModeStore.getState().setEnabled(Boolean(cached.demo));
       set({ snapshot: cached, loading: false, error: false });
     }
     const version = ++requestVersion;
@@ -41,6 +43,7 @@ export const useUIBootstrapStore = create<UIBootstrapState>()((set, get) => ({
       .getUIBootstrap()
       .then((snapshot) => {
         if (currentKey === key && version === requestVersion) {
+          useDemoModeStore.getState().setEnabled(Boolean(snapshot.demo));
           set({ snapshot, loading: false, error: false });
         }
         return snapshot;
@@ -87,6 +90,7 @@ export const useUIBootstrapStore = create<UIBootstrapState>()((set, get) => ({
     refreshQueued = false;
     if (invalidationTimer) clearTimeout(invalidationTimer);
     invalidationTimer = null;
+    useDemoModeStore.getState().setEnabled(false);
     set({ snapshot: null, loading: false, error: false });
   },
 }));

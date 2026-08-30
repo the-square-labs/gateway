@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScope } from '@/lib/permissions.js';
+import { assertDemoRequestAllowed } from '@/modules/demo/demo-mode.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import type { AppEnv } from '@/types.js';
 
@@ -55,6 +56,7 @@ export const mcpAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       authType: 'oauth',
       clientId: result.clientId,
     });
+    assertDemoRequestAllowed(c);
 
     await next();
     return;

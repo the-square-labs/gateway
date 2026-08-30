@@ -15,6 +15,7 @@ import { InferenceModelService } from './models/inference-model.service.js';
 
 vi.mock('@/config/env.js', () => ({
   getEnv: () => ({ APP_URL: 'https://gateway.example.com' }),
+  getDeploymentMode: () => 'standard',
 }));
 
 const USER: User = {

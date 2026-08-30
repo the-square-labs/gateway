@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 
-export type AuthMethod = 'oidc' | 'password' | 'email_otp';
+export type AuthMethod = 'oidc' | 'password' | 'email_otp' | 'demo_email_otp';
 
 export interface User {
   id: string;

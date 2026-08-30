@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
 import type { AISettingsService } from '@/modules/ai/ai.settings.service.js';
 import type { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
+import { DEMO_MODE_CTA_URL, isDemoMode } from '@/modules/demo/demo-mode.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import type { LicensePolicyService, SafeLicenseSummary } from '@/modules/license/license-policy.service.js';
@@ -42,6 +43,9 @@ const DOCKER_VIEW_SCOPES = [
 type ShellNode = Awaited<ReturnType<NodesService['list']>>['data'][number];
 
 export interface UIBootstrapShell {
+  demo?: {
+    ctaUrl: typeof DEMO_MODE_CTA_URL;
+  };
   access: {
     fingerprint: string;
     scopes: string[];
@@ -153,6 +157,7 @@ export class UIBootstrapService {
     const dockerNodes = this.visibleDockerNodes(nodeSnapshot.data, scopes);
 
     return {
+      ...(isDemoMode() ? { demo: { ctaUrl: DEMO_MODE_CTA_URL } } : {}),
       access: {
         fingerprint: createHash('sha256')
           .update(`${user.id}\u0000${[...scopes].sort().join('\u0000')}`)

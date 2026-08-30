@@ -50,6 +50,20 @@ describe('getEnv gRPC TLS config', () => {
     expect(env.GRPC_TLS_AUTO_DIR).toBe('/var/lib/gateway/tls');
   });
 
+  it('keeps public demo mode strictly opt-in', async () => {
+    const unset = await loadEnv();
+    const standard = await loadEnv({ GATEWAY_DEPLOYMENT_MODE: 'standard' });
+    const demo = await loadEnv({ GATEWAY_DEPLOYMENT_MODE: 'demo' });
+
+    expect(unset.GATEWAY_DEPLOYMENT_MODE).toBe('standard');
+    expect(standard.GATEWAY_DEPLOYMENT_MODE).toBe('standard');
+    expect(demo.GATEWAY_DEPLOYMENT_MODE).toBe('demo');
+  });
+
+  it('fails closed on an invalid deployment mode', async () => {
+    await expect(loadEnv({ GATEWAY_DEPLOYMENT_MODE: 'dem0' })).rejects.toThrow('Invalid environment variables');
+  });
+
   it('does not expose browser-owned settings through runtime env', async () => {
     const env = await loadEnv({
       OIDC_ISSUER: 'https://legacy-idp.example.test',
