@@ -30,6 +30,9 @@ describe('nginx node installer baseline', () => {
     expect(source).toContain('rc_ulimit="$' + '{rc_ulimit:-} -n %s"');
     expect(source).toContain('Effective nginx server_tokens must be off');
     expect(source.indexOf('nginx_version() {')).toBeLessThan(source.indexOf('dry_run_preview() {'));
+    expect(source).toContain('remove_legacy_gateway_sites_include');
+    expect(source).toContain('[[ "$effective_content" == "$expected_line" ]] || return 0');
+    expect(source).toContain('backup_if_exists "$legacy_file"');
     const configTest = source.indexOf('if nginx -t >> "$LOG_FILE" 2>&1; then');
     const tokenCheck = source.indexOf('verify_nginx_server_tokens', configTest);
     const serviceAction = source.indexOf('systemctl restart nginx', tokenCheck);

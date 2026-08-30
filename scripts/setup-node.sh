@@ -883,6 +883,20 @@ ensure_http_include() {
     return 0
 }
 
+remove_legacy_gateway_sites_include() {
+    local legacy_file="/etc/nginx/conf.d/gateway-managed.conf"
+    local expected_line="include ${NGINX_SITES_DIR}/*.conf;"
+    local effective_content
+
+    [[ -f "$legacy_file" ]] || return 0
+    effective_content=$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$legacy_file")
+    [[ "$effective_content" == "$expected_line" ]] || return 0
+
+    backup_if_exists "$legacy_file"
+    rm -f "$legacy_file"
+    log "Removed legacy duplicate Gateway sites include"
+}
+
 ensure_nginx_worker_limits() {
     local global_conf="$NGINX_GLOBAL_CONF"
     local tmp_file
@@ -1185,6 +1199,8 @@ configure_nginx_integrated() {
     local stub_conf="/etc/nginx/gateway/stub_status.conf"
 
     log "Configuring nginx in integrate mode..."
+
+    remove_legacy_gateway_sites_include
 
     cat > "$include_file" << 'EOF'
 include __GATEWAY_SITES_DIR__/*.conf;
