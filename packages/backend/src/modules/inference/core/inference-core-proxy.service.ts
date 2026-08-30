@@ -594,24 +594,30 @@ export class InferenceCoreProxyService {
     ) => ProxyRequestBody;
   }> {
     if (operation === 'images/edits') {
-      let form: FormData;
-      let units: number;
       if (isJsonContentType(c.req.header('content-type'))) {
-        const converted = codexImageEditForm(await readJsonObject(c));
-        form = converted.form;
-        units = converted.units;
-      } else {
-        try {
-          form = await c.req.formData();
-        } catch {
-          throw new InferenceProtocolError(
-            400,
-            'invalid_request_error',
-            'Image edits require multipart form data or a Codex JSON image edit body'
-          );
-        }
-        units = positiveUnits(Number(form.get('n') ?? 1));
+        const body = await readJsonObject(c);
+        const units = validateCodexImageEditBody(body);
+        const model = requiredModel(body.model);
+        return {
+          publicModelId: model,
+          units,
+          headers: { 'content-type': 'application/json' },
+          isCompaction: false,
+          existingThread: false,
+          rewrite: (upstreamModel) => JSON.stringify({ ...body, model: upstreamModel }),
+        };
       }
+      let form: FormData;
+      try {
+        form = await c.req.formData();
+      } catch {
+        throw new InferenceProtocolError(
+          400,
+          'invalid_request_error',
+          'Image edits require multipart form data or a Codex JSON image edit body'
+        );
+      }
+      const units = positiveUnits(Number(form.get('n') ?? 1));
       const model = requiredModel(form.get('model'));
       return {
         publicModelId: model,
@@ -745,7 +751,7 @@ function isJsonContentType(contentType: string | undefined): boolean {
   return mediaType === 'application/json' || mediaType.endsWith('+json');
 }
 
-function codexImageEditForm(body: Record<string, unknown>): { form: FormData; units: number } {
+function validateCodexImageEditBody(body: Record<string, unknown>): number {
   const images = body.images;
   if (!Array.isArray(images) || images.length < 1 || images.length > MAX_CODEX_IMAGE_EDIT_IMAGES) {
     throw new InferenceProtocolError(
@@ -755,7 +761,6 @@ function codexImageEditForm(body: Record<string, unknown>): { form: FormData; un
     );
   }
 
-  const form = new FormData();
   images.forEach((image, index) => {
     if (!image || typeof image !== 'object' || Array.isArray(image)) {
       throw new InferenceProtocolError(400, 'invalid_request_error', `images[${index}] must be an object`);
@@ -764,22 +769,16 @@ function codexImageEditForm(body: Record<string, unknown>): { form: FormData; un
     if (typeof imageUrl !== 'string') {
       throw new InferenceProtocolError(400, 'invalid_request_error', `images[${index}].image_url is required`);
     }
-    const decoded = decodeCodexImageDataUrl(imageUrl, index);
-    form.append(
-      'image[]',
-      new Blob([decoded.bytes], { type: decoded.mimeType }),
-      `image-${index + 1}.${decoded.extension}`
-    );
+    decodeCodexImageDataUrl(imageUrl, index);
   });
 
-  form.set('model', requiredModel(body.model));
-  form.set('prompt', requiredImageEditString(body.prompt, 'prompt'));
+  requiredModel(body.model);
+  requiredImageEditString(body.prompt, 'prompt');
   for (const field of ['background', 'quality', 'size'] as const) {
-    if (body[field] !== undefined) form.set(field, requiredImageEditString(body[field], field));
+    if (body[field] !== undefined) requiredImageEditString(body[field], field);
   }
   const units = positiveUnits(Number(body.n ?? 1));
-  if (body.n !== undefined) form.set('n', String(units));
-  return { form, units };
+  return units;
 }
 
 function requiredImageEditString(value: unknown, field: string): string {
