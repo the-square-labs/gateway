@@ -157,8 +157,8 @@ describe('managed database binding target runtime', () => {
   it('disconnects a deleted binding network before recreating the target environment', async () => {
     const inspect = vi
       .fn()
-      .mockResolvedValueOnce({ Id: 'container-old', Name: '/api' })
-      .mockResolvedValueOnce({ Id: 'container-new', Name: '/api', State: { Running: true } });
+      .mockResolvedValueOnce({ Id: 'container-old', Name: '/api', State: { Running: true, Status: 'running' } })
+      .mockResolvedValueOnce({ Id: 'container-new', Name: '/api', State: { Running: true, Status: 'running' } });
     const test = harness({ inspect });
 
     await test.runtime.remove(database, { ...binding }, credentials, 'user-1');
@@ -168,5 +168,18 @@ describe('managed database binding target runtime', () => {
       containerId: binding.targetResourceId,
     });
     expect(test.order.indexOf('network:disconnect')).toBeLessThan(test.order.indexOf('container:update-env'));
+  });
+
+  it('finishes binding removal when a recreated workload intentionally remains created', async () => {
+    const inspect = vi
+      .fn()
+      .mockResolvedValueOnce({ Id: 'container-old', Name: '/api', State: { Running: false, Status: 'created' } })
+      .mockResolvedValueOnce({ Id: 'container-new', Name: '/api', State: { Running: false, Status: 'created' } });
+    const test = harness({ inspect });
+
+    await expect(test.runtime.remove(database, { ...binding }, credentials, 'user-1')).resolves.toBeUndefined();
+
+    expect(test.order.indexOf('network:disconnect')).toBeLessThan(test.order.indexOf('container:update-env'));
+    expect(inspect).toHaveBeenCalledTimes(2);
   });
 });

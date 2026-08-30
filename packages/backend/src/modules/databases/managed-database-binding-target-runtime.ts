@@ -333,6 +333,7 @@ export class ManagedDatabaseBindingTargetRuntime {
     assertUserBindingTarget(targetBefore);
     const targetName = String(targetBefore?.Name ?? '').replace(/^\/+/, '');
     const targetRuntimeId = String(targetBefore?.Id ?? '');
+    const expectedState = targetBefore?.State?.Status === 'running' ? 'running' : 'created';
     requireNetworkConnectSuccess(
       await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
         networkId: binding.networkName,
@@ -362,7 +363,7 @@ export class ManagedDatabaseBindingTargetRuntime {
     );
     const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : targetName;
     if (updatedName && targetRuntimeId)
-      await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId);
+      await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId, expectedState);
   }
 
   async remove(
@@ -447,6 +448,7 @@ export class ManagedDatabaseBindingTargetRuntime {
       const targetBefore = await this.dockerManagement.inspectContainer(binding.targetNodeId, binding.targetResourceId);
       const targetName = String(targetBefore?.Name ?? '').replace(/^\/+/, '');
       const targetRuntimeId = String(targetBefore?.Id ?? '');
+      const expectedState = targetBefore?.State?.Status === 'running' ? 'running' : 'created';
       const updated = await this.dockerManagement.updateContainerEnv(
         binding.targetNodeId,
         binding.targetResourceId,
@@ -456,7 +458,7 @@ export class ManagedDatabaseBindingTargetRuntime {
       );
       const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : targetName;
       if (updatedName && targetRuntimeId)
-        await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId);
+        await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId, expectedState);
     } catch (error) {
       if (!isMissingContainerError(error)) throw error;
     }
@@ -522,14 +524,24 @@ export class ManagedDatabaseBindingTargetRuntime {
       .where(eq(managedDatabaseBindings.id, bindingId));
   }
 
-  private async waitForConvergence(nodeId: string, containerName: string, previousId: string) {
+  private async waitForConvergence(
+    nodeId: string,
+    containerName: string,
+    previousId: string,
+    expectedState: 'running' | 'created'
+  ) {
     const deadline = Date.now() + 120_000;
     while (Date.now() < deadline) {
       try {
         const inspect = await this.dockerManagement.inspectContainer(nodeId, containerName);
         const currentId = String(inspect?.Id ?? '');
-        const running = inspect?.State?.Running === true || inspect?.State?.Status === 'running';
-        if (currentId && currentId !== previousId && running && !inspect?._transition) return;
+        const state = String(inspect?.State?.Status ?? '').toLowerCase();
+        const reachedExpectedState = state
+          ? state === expectedState
+          : expectedState === 'running'
+            ? inspect?.State?.Running === true
+            : inspect?.State?.Running === false;
+        if (currentId && currentId !== previousId && reachedExpectedState && !inspect?._transition) return;
       } catch {
         // The stable name is briefly absent while the daemon swaps containers.
       }
