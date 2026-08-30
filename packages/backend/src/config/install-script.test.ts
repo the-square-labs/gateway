@@ -16,6 +16,28 @@ const daemonInstaller = fileURLToPath(new URL('../../../../scripts/setup-daemon.
 const releaseWorkflow = fileURLToPath(new URL('../../../../.github/workflows/release.yml', import.meta.url));
 const relayNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-relay-node.sh', import.meta.url));
 
+describe('nginx node installer baseline', () => {
+  it('configures production-safe worker and version-token defaults', () => {
+    const source = readFileSync(nginxNodeInstaller, 'utf8');
+
+    expect(source).toContain('NGINX_WORKER_NOFILE_MIN=65535');
+    expect(source).toContain('NGINX_SERVICE_NOFILE_MIN=65536');
+    expect(source).toContain('NGINX_WORKER_CONNECTIONS_MIN=8192');
+    expect(source).toContain('worker_rlimit_nofile 65535;');
+    expect(source).toContain('worker_connections 8192;');
+    expect(source).toContain('server_tokens off;');
+    expect(source).toContain('LimitNOFILE=$' + '{NGINX_SERVICE_NOFILE_MIN}');
+    expect(source).toContain('rc_ulimit="$' + '{rc_ulimit:-} -n %s"');
+    expect(source).toContain('Effective nginx server_tokens must be off');
+    const configTest = source.indexOf('if nginx -t >> "$LOG_FILE" 2>&1; then');
+    const tokenCheck = source.indexOf('verify_nginx_server_tokens', configTest);
+    const serviceAction = source.indexOf('systemctl restart nginx', tokenCheck);
+    expect(configTest).toBeGreaterThanOrEqual(0);
+    expect(tokenCheck).toBeGreaterThan(configTest);
+    expect(serviceAction).toBeGreaterThan(tokenCheck);
+  });
+});
+
 describe('setup-relay-node.sh', () => {
   it('verifies separately scoped supervisor and worker artifacts and installs rollback supervision', () => {
     const syntax = spawnSync('bash', ['-n', relayNodeInstaller], { encoding: 'utf8' });

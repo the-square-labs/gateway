@@ -911,6 +911,7 @@ ensure_nginx_worker_limits() {
             events_seen = 0
             in_events = 0
             connections_seen = connections_present
+            http_seen = 0
         }
         /^[[:space:]]*worker_rlimit_nofile[[:space:]]+[0-9]+[[:space:]]*;/ {
             nofile_seen = 1
@@ -950,9 +951,21 @@ ensure_nginx_worker_limits() {
             print
             next
         }
+        /^[[:space:]]*server_tokens[[:space:]]+[^;]+[[:space:]]*;/ {
+            line = $0
+            sub(/server_tokens[[:space:]]+[^;]+[[:space:]]*;/, "", line)
+            if (line !~ /^[[:space:]]*$/) print line
+            next
+        }
+        /^[[:space:]]*http[[:space:]]*\{/ {
+            print
+            print "    server_tokens off;"
+            http_seen = 1
+            next
+        }
         { print }
         END {
-            if (!nofile_seen || !events_seen || !connections_seen) exit 1
+            if (!nofile_seen || !events_seen || !connections_seen || !http_seen) exit 1
         }
     ' "$global_conf" > "$tmp_file"; then
         rm -f "$tmp_file"
@@ -962,7 +975,7 @@ ensure_nginx_worker_limits() {
     if ! cmp -s "$tmp_file" "$global_conf"; then
         backup_if_exists "$global_conf"
         cat "$tmp_file" > "$global_conf"
-        log "Raised nginx worker limits to safe minimums"
+        log "Applied nginx worker limits and disabled version tokens"
     fi
     rm -f "$tmp_file"
 }
@@ -1080,6 +1093,19 @@ verify_nginx_fd_limits() {
     ok "nginx file-descriptor limits verified"
 }
 
+verify_nginx_server_tokens() {
+    local rendered
+    local server_tokens
+    local unsafe_server_tokens
+
+    rendered=$(nginx -T 2>&1) || die "Failed to inspect the effective nginx configuration"
+    server_tokens=$(printf '%s\n' "$rendered" | awk '/^[[:space:]]*server_tokens[[:space:]]+[^;]+[[:space:]]*;/ { value=$2; gsub(/;/, "", value); print value; exit }')
+    unsafe_server_tokens=$(printf '%s\n' "$rendered" | awk '/^[[:space:]]*server_tokens[[:space:]]+[^;]+[[:space:]]*;/ { value=$2; gsub(/;/, "", value); if (value != "off") print value }')
+
+    [[ "$server_tokens" == "off" && -z "$unsafe_server_tokens" ]] || \
+        die "Effective nginx server_tokens must be off"
+}
+
 configure_nginx_managed() {
     log "Configuring nginx in managed mode..."
     backup_if_exists "/etc/nginx/nginx.conf"
@@ -1096,6 +1122,7 @@ events {
 }
 
 http {
+    server_tokens off;
     sendfile on;
     tcp_nopush on;
     tcp_nodelay on;
@@ -1197,6 +1224,7 @@ configure_nginx() {
     ensure_nginx_service_limit
 
     if nginx -t >> "$LOG_FILE" 2>&1; then
+        verify_nginx_server_tokens
         if has_systemd; then
             if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]]; then
                 systemctl restart nginx >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
