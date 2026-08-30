@@ -55,6 +55,20 @@ describe("AIButton", () => {
     window.removeEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
   });
 
+  it("opens the Operations Console side panel from the header star", () => {
+    useAuthStore.setState({ user: makeUser({ scopes: [AI_SCOPE] }) });
+
+    render(
+      <TooltipProvider>
+        <AIButton />
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(useUIStore.getState().aiPanelOpen).toBe(true);
+  });
+
   it("renders the expanded sidebar CTA and keeps it actionable without Workspace access", () => {
     const onOpenAIWorkspace = vi.fn();
     window.addEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);

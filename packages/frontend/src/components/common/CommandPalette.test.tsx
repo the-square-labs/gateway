@@ -514,6 +514,48 @@ describe("CommandPalette", () => {
     });
   });
 
+  it("renders Compose projects, Docker builds, and forward-compatible resource types safely", async () => {
+    vi.mocked(api.searchResources).mockResolvedValue({
+      query: "gateway",
+      results: [
+        {
+          type: "docker_compose_project",
+          id: "compose-1",
+          name: "gateway-stack",
+          summary: {},
+        },
+        {
+          type: "docker_build",
+          id: "build-1",
+          name: "gateway-build",
+          summary: {},
+        },
+        {
+          type: "future_resource_type",
+          id: "future-1",
+          name: "gateway-future",
+          summary: {},
+        } as never,
+      ],
+      total: 3,
+      truncated: false,
+    });
+
+    renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
+    await userEvent.type(
+      screen.getByPlaceholderText("Search or type > for commands..."),
+      "gateway"
+    );
+
+    expect(
+      await screen.findByRole("option", { name: /gateway-stack.*Compose project/ })
+    ).toBeVisible();
+    expect(screen.getByRole("option", { name: /gateway-build.*Docker build/ })).toBeVisible();
+    expect(
+      screen.getByRole("option", { name: /gateway-future.*Future Resource Type/ })
+    ).toBeVisible();
+  });
+
   it("finds deep settings and profile destinations without cluttering the default list", async () => {
     act(() => {
       useAuthStore.setState({

@@ -3,10 +3,12 @@ import {
   Award,
   Bell,
   Box,
+  Boxes,
   Database,
   FileText,
   Globe,
   Globe2,
+  Hammer,
   HardDrive,
   Image,
   KeyRound,
@@ -24,6 +26,7 @@ import type { AIResourceReference, AIResourceReferenceType } from "@/types/ai";
 import type { ResourceSearchResult, ResourceSearchType } from "@/types/resource-search";
 import {
   databaseRoute,
+  dockerComposeProjectRoute,
   dockerContainerRoute,
   dockerDeploymentRoute,
   dockerVolumeRoute,
@@ -45,6 +48,8 @@ export const RESOURCE_LABELS: Record<ResourceSearchType, string> = {
   pki_template: "Certificate template",
   docker_container: "Container",
   docker_deployment: "Deployment",
+  docker_compose_project: "Compose project",
+  docker_build: "Docker build",
   docker_image: "Docker image",
   docker_volume: "Docker volume",
   docker_network: "Docker network",
@@ -71,6 +76,8 @@ export const RESOURCE_ICONS: Record<ResourceSearchType, ElementType> = {
   pki_template: Award,
   docker_container: Box,
   docker_deployment: Layers,
+  docker_compose_project: Boxes,
+  docker_build: Hammer,
   docker_image: Image,
   docker_volume: HardDrive,
   docker_network: Network,
@@ -84,6 +91,19 @@ export const RESOURCE_ICONS: Record<ResourceSearchType, ElementType> = {
   notification_rule: Bell,
   notification_webhook: Webhook,
 };
+
+export function resourceTypeIcon(type: string): ElementType {
+  return RESOURCE_ICONS[type as ResourceSearchType] ?? Box;
+}
+
+export function resourceTypeLabel(type: string): string {
+  const fallback = type
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+  return RESOURCE_LABELS[type as ResourceSearchType] ?? (fallback || "Resource");
+}
 
 function summaryString(result: ResourceSearchResult, key: string): string | undefined {
   const value = result.summary[key];
@@ -148,6 +168,10 @@ function resourceHref(resource: {
       return resource.nodeSlug
         ? dockerDeploymentRoute(resource.nodeSlug, resource.label)
         : "/docker/deployments";
+    case "docker_compose_project":
+      return dockerComposeProjectRoute(resource.resourceId);
+    case "docker_build":
+      return `/docker/builds?build=${encodeURIComponent(resource.resourceId)}`;
     case "docker_image":
       return "/docker/images";
     case "docker_volume":
@@ -174,6 +198,8 @@ function resourceHref(resource: {
       return "/notifications/alerts";
     case "notification_webhook":
       return "/notifications/webhooks";
+    default:
+      return "/";
   }
 }
 
@@ -201,6 +227,10 @@ function resourceParentHref(type: AIResourceReferenceType): string {
       return "/docker/containers";
     case "docker_deployment":
       return "/docker/deployments";
+    case "docker_compose_project":
+      return "/docker/compose";
+    case "docker_build":
+      return "/docker/builds";
     case "docker_image":
       return "/docker/images";
     case "docker_volume":
@@ -225,5 +255,7 @@ function resourceParentHref(type: AIResourceReferenceType): string {
       return "/notifications/alerts";
     case "notification_webhook":
       return "/notifications/webhooks";
+    default:
+      return "/";
   }
 }

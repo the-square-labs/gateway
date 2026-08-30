@@ -10,6 +10,8 @@ export type ResourceSearchType =
   | "pki_template"
   | "docker_container"
   | "docker_deployment"
+  | "docker_compose_project"
+  | "docker_build"
   | "docker_image"
   | "docker_volume"
   | "docker_network"

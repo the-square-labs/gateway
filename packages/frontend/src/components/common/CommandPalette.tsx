@@ -44,7 +44,11 @@ import {
 import { type AppNavigationItemId, visibleNavigationGroups } from "@/lib/app-navigation";
 import { setDevForcedUpdateMode } from "@/lib/dev-force-updates";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
-import { RESOURCE_ICONS, RESOURCE_LABELS, resourceSearchHref } from "@/lib/resource-presentation";
+import {
+  resourceSearchHref,
+  resourceTypeIcon,
+  resourceTypeLabel,
+} from "@/lib/resource-presentation";
 import { dockerContainerRoute, dockerDeploymentRoute, nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
@@ -1189,7 +1193,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               <>
                 <CommandGroup heading="Resources">
                   {resourceResults.map((result) => {
-                    const Icon = RESOURCE_ICONS[result.type];
+                    const Icon = resourceTypeIcon(result.type);
                     return (
                       <CommandItem
                         key={`${result.type}:${result.nodeId ?? ""}:${result.id}`}
@@ -1199,7 +1203,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                         <Icon className="mr-2 h-4 w-4" />
                         <span className="min-w-0 truncate">{result.name}</span>
                         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                          {RESOURCE_LABELS[result.type]}
+                          {resourceTypeLabel(result.type)}
                         </span>
                       </CommandItem>
                     );

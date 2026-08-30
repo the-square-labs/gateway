@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useUIStore } from "@/stores/ui";
 import type { AIResourceReference } from "@/types/ai";
 import { getNodeAppearanceColor } from "./node-appearance";
-import { aiResourceHref, RESOURCE_ICONS, RESOURCE_LABELS } from "./resource-presentation";
+import { aiResourceHref, resourceTypeIcon, resourceTypeLabel } from "./resource-presentation";
 import { createReturnNavigationState } from "./return-navigation";
 
 const MARKER_RE = /\[\[resource:(gwr_[a-f0-9]{24})\|((?:[^[\]\r\n]|\[[^[\]\r\n]*\]){1,240})\]\]/g;
@@ -47,8 +47,8 @@ export function AIResourceLink({ reference }: { reference: AIResourceReference }
   const aiWorkspace = useUIStore((state) => state.aiLiteMode);
   const setAILiteMode = useUIStore((state) => state.setAILiteMode);
   const setAIPanelOpen = useUIStore((state) => state.setAIPanelOpen);
-  const Icon = RESOURCE_ICONS[reference.type];
-  const typeLabel = RESOURCE_LABELS[reference.type];
+  const Icon = resourceTypeIcon(reference.type);
+  const typeLabel = resourceTypeLabel(reference.type);
   const displayLabel =
     reference.type === "proxy_host"
       ? (reference.label.split(",")[0]?.trim() ?? reference.label)
