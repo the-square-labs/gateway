@@ -321,6 +321,48 @@ describe('DockerSnapshotReconciler', () => {
     reconciler.stop();
   });
 
+  it('keeps the previous container inventory entry visible until recreate completes', async () => {
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify([{ id: 'container-new', name: 'web', state: 'created' }]),
+    });
+    const { reconciler, snapshots, eventBus } = createReconciler({ sendDockerContainerCommand });
+    snapshots.getList.mockResolvedValue({
+      data: [{ id: 'container-old', name: 'web', state: 'created' }],
+    });
+    reconciler.start();
+
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-old',
+      name: 'web',
+      action: 'transitioning',
+      transition: 'updating',
+    });
+
+    await vi.waitFor(() =>
+      expect(snapshots.replaceList).toHaveBeenCalledWith('node-1', 'containers', [
+        { id: 'container-old', name: 'web', state: 'created' },
+      ])
+    );
+
+    snapshots.replaceList.mockClear();
+    eventBus.publish('docker.container.changed', {
+      nodeId: 'node-1',
+      id: 'container-old',
+      name: 'web',
+      action: 'transitioning',
+      transition: null,
+    });
+
+    await vi.waitFor(() =>
+      expect(snapshots.replaceList).toHaveBeenCalledWith('node-1', 'containers', [
+        { id: 'container-new', name: 'web', state: 'created' },
+      ])
+    );
+    reconciler.stop();
+  });
+
   it('purges on explicit deletion and refreshes all inventory kinds on reconnect', async () => {
     const { reconciler, dispatch, snapshots, eventBus } = createReconciler();
     reconciler.start();

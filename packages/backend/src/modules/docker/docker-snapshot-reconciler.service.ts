@@ -299,6 +299,40 @@ export class DockerSnapshotReconciler {
     return keys;
   }
 
+  private containerSnapshotAliases(item: Record<string, unknown>): string[] {
+    const aliases: string[] = [];
+    for (const field of ['id', 'Id', 'name', 'Name'] as const) {
+      const value = item[field];
+      if (typeof value === 'string' && value) aliases.push(value.replace(/^\/+/, ''));
+    }
+    return aliases;
+  }
+
+  private async preserveTransitioningContainers(
+    nodeId: string,
+    incoming: Record<string, unknown>[]
+  ): Promise<Record<string, unknown>[]> {
+    const prefix = `${nodeId}:`;
+    const activeAliases = new Set(
+      [...this.activeContainerTransitions]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length))
+    );
+    if (activeAliases.size === 0) return incoming;
+
+    const current = await this.snapshots.getList<Record<string, unknown>[]>(nodeId, 'containers');
+    const preserved = (Array.isArray(current.data) ? current.data : []).filter((item) =>
+      this.containerSnapshotAliases(item).some((alias) => activeAliases.has(alias))
+    );
+    if (preserved.length === 0) return incoming;
+
+    const preservedAliases = new Set(preserved.flatMap((item) => this.containerSnapshotAliases(item)));
+    return [
+      ...incoming.filter((item) => !this.containerSnapshotAliases(item).some((alias) => preservedAliases.has(alias))),
+      ...preserved,
+    ];
+  }
+
   private onContainerChanged(payload: unknown) {
     if (!payload || typeof payload !== 'object') return;
     const event = payload as Record<string, unknown>;
@@ -521,7 +555,11 @@ export class DockerSnapshotReconciler {
     if (this.snapshots.isNodeDeleted(nodeId)) return;
     const data = resultData(result);
     if (!Array.isArray(data)) throw new Error(`Docker ${kind} list returned an invalid payload`);
-    await this.snapshots.replaceList(nodeId, kind, data);
+    const stableData =
+      kind === 'containers'
+        ? await this.preserveTransitioningContainers(nodeId, data as Record<string, unknown>[])
+        : data;
+    await this.snapshots.replaceList(nodeId, kind, stableData);
     await this.snapshots.reconcileComposeProjects(nodeId);
   }
 
