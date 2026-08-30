@@ -150,7 +150,7 @@ export class DockerManagementService {
 
   setTaskService(taskService: DockerTaskService) {
     this.taskService = taskService;
-    taskService.setContainerTaskTerminalHandler(({ nodeId, containerId, containerName }) => {
+    taskService.setContainerTaskTerminalHandler?.(({ nodeId, containerId, containerName }) => {
       if (!containerName) return;
       this.clearTransition(nodeId, containerName);
       this.emitTransition(nodeId, containerName, containerId ?? containerName, null);
