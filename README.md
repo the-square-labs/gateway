@@ -12,6 +12,8 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 
 AI-first but not AI-dependent infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
+**Documentation:** [docs.goodgateway.dev](https://docs.goodgateway.dev)
+
 ## Why Gateway
 
 Gateway gives infrastructure, platform, and SRE teams one product for the daily work that usually lives across nginx configs, shell scripts, Docker hosts, certificate folders, database clients, dashboards, and alert tools.

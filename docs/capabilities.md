@@ -4,7 +4,7 @@
 
 Gateway is an AI-first but not AI-dependent infrastructure control plane. Operators can work through AI Workspace or use the complete Operations Console, REST API, OAuth, and MCP surfaces without AI. The product is built around a central web app and host daemons that connect outbound to the app, so operators can manage common infrastructure workflows without direct shell access to every server.
 
-Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
+Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). Capabilities marked `In development` are not generally available runtime features until released.
 
 For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, Git source automation stops while source history remains readable/removable, and Business-only external registry ingress is disabled. Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
 
@@ -211,7 +211,7 @@ Credential reveal and query execution are intentionally separate permissions. Us
 
 ## Storage
 
-Storage is the next product capability family and is marked **Coming soon**.
+Storage is the next product capability family and is marked **In development**.
 
 Planned connection types:
 
@@ -222,18 +222,20 @@ Planned connection types:
 - SFTP.
 - SMB.
 
-Managed storages with Secure Links and managed-database backup and restore are also coming soon. Database backup and restore follows the Storage foundation and should not be described as generally available before that release.
+Managed storages with Secure Links and managed-database backup and restore are also **In development**. Database backup and restore follows the Storage foundation and should not be described as generally available before that release.
 
 ## Nodes And Monitoring
 
-Gateway supports four daemon types:
+Gateway exposes six node enrollment roles. Several roles intentionally reuse the same daemon binary with a restricted profile rather than granting one process every host capability:
 
 | Type | Daemon | Purpose |
 |------|--------|---------|
 | nginx | `nginx-daemon` | Public ingress, routes, TLS termination, access lists, nginx configuration, logs, and stats. |
 | docker | `docker-daemon` | Docker container and deployment management. |
+| builder | `docker-daemon` | Restricted Build Worker profile supervising dedicated BuildKit and containerd services without a Docker Engine socket. |
 | databases | `docker-daemon` | Restricted profile for Gateway-managed Postgres, Redis, and ClickHouse instances. |
 | monitoring | `monitoring-daemon` | Host metrics without nginx or Docker control. |
+| relay | `relay-supervisor` | Enrolls a physical host into the Secure Link Relay Pool and supervises its Relay worker. |
 
 Node features:
 
@@ -279,7 +281,7 @@ Gateway includes connector and operational communication surfaces:
 - GitLab connectors with project/group allowlists, scheduled project synchronization, repository and CI operations, variables, webhooks, and sandbox clone support. Automatic container-registry discovery and import requires Personal or higher; ordinary Git integration remains available on Community.
 - GitHub connectors for repository discovery, tree/file operations, branches, commits, Actions workflows and secrets, using the built-in Device Flow or an explicitly configured token.
 - Generic Git connectors for authenticated repository access outside the first-class GitLab and GitHub providers.
-- External SSH connectors with encrypted credentials, host-key verification, explicit scopes, and controlled command/file operations against administrator-configured hosts. This is distinct from the future Gateway-managed bastion daemon.
+- External SSH connectors with encrypted credentials, host-key verification, explicit scopes, and controlled command/file operations against administrator-configured hosts. This is an external integration, not a Gateway-managed node role.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
 - Enterprise SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
 - Threshold and event alert rules for nodes, containers, Git builds, Compose Projects, routes, Pages, Gateway/relay health, logging, integrations, certificates, security events, PostgreSQL, ClickHouse, and Redis. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.

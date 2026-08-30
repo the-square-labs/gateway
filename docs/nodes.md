@@ -253,7 +253,7 @@ Gateway verifies the signed daemon release manifest before dispatching an update
 
 Daemons installed before signed-manifest support can perform one transition update: Gateway verifies the signed manifest and sends the verified checksum, while the old daemon enforces the checksum. After that update, daemon-side signature verification is enforced.
 
-Release and update units are independent: nginx, Docker, monitoring, the Relay Pool supervisor, and the Relay Pool worker have their own signed artifact contracts. The local Gateway relay image, database connector image, and Secure Link connector image are also pinned and verified independently rather than inheriting the Gateway app version.
+Release and update units are independent: nginx, Docker, monitoring, the Relay Pool supervisor, and the Relay Pool worker have their own signed artifact contracts. The local Relay image and the nginx/workload Secure Link connector image are digest-pinned and signed as one Relay release contract rather than inheriting the Gateway application version. Managed database application bindings do not require a database connector image; their listeners are owned by the target Docker daemon.
 
 The installation-wide update channel applies to managed daemon checks. `stable` offers production tags only, while `preview` also allows matching `vX.Y.Z-rc.N-<component>` GitHub prereleases. Gateway resolves one staged target per daemon type from the oldest compatible installed version cohort, preferring a newer patch on that minor and otherwise the baseline release of the next minor. This avoids advertising a later target that would skip an older cohort's required upgrade step.
 
