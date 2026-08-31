@@ -144,12 +144,12 @@ export class NodeMonitoringService extends EventEmitter {
   }
 
   pushSnapshot(nodeId: string, health: any, stats: any, traffic?: any): void {
-    const snapshot: MonitoringSnapshot = {
+    const snapshot = compactMonitoringHistorySnapshot({
       timestamp: new Date().toISOString(),
       health,
       stats,
       traffic: traffic ?? null,
-    };
+    });
     let buf = this.history.get(nodeId);
     if (!buf) {
       buf = [];
@@ -161,7 +161,7 @@ export class NodeMonitoringService extends EventEmitter {
 
     if (this.cache) {
       const key = `${NODE_MONITORING_HISTORY_KEY_PREFIX}${nodeId}`;
-      const entry = JSON.stringify(compactMonitoringHistorySnapshot(snapshot));
+      const entry = JSON.stringify(snapshot);
       this.cache
         .getClient()
         .multi()

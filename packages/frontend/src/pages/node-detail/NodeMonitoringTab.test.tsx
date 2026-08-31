@@ -97,6 +97,54 @@ it("renders monitoring sparklines from bootstrap history before SSE connects", (
   expect(cpuCard?.querySelectorAll("svg")).toHaveLength(2);
 });
 
+it("uses the Redis bootstrap snapshot unchanged until SSE publishes a newer snapshot", () => {
+  vi.spyOn(api, "createNodeMonitoringStream").mockReturnValue({
+    addEventListener: vi.fn((name: string, listener: EventListener) => {
+      listeners.set(name, listener as (event: MessageEvent) => void);
+    }),
+    close: vi.fn(),
+  } as unknown as EventSource);
+  const redisHealth = healthReport();
+  const newerRegistryHealth = {
+    ...healthReport(),
+    nginxRunning: false,
+    configValid: false,
+    timestamp: Date.parse("2026-08-31T08:00:10.000Z") / 1000,
+  };
+  const redisHistory = [
+    {
+      timestamp: "2026-08-31T08:00:00.000Z",
+      health: redisHealth,
+      stats: null,
+      traffic: null,
+    },
+  ];
+  const { container } = render(
+    <NodeMonitoringTab
+      nodeId="11111111-1111-4111-8111-111111111111"
+      nodeStatus="online"
+      nodeType="nginx"
+      initialHealthReport={newerRegistryHealth}
+      initialMonitoringHistory={redisHistory}
+    />
+  );
+
+  expect(screen.getByText("Running")).toBeInTheDocument();
+  expect(screen.getByText("Config valid")).toBeInTheDocument();
+  expect(screen.queryByText("Stopped")).not.toBeInTheDocument();
+  const initialMarkup = container.innerHTML;
+
+  act(() => {
+    listeners.get("connected")?.(
+      new MessageEvent("connected", {
+        data: JSON.stringify({ history: redisHistory }),
+      })
+    );
+  });
+
+  expect(container.innerHTML).toBe(initialMarkup);
+});
+
 it("discards the previous node history and closes its stream when nodeId changes", () => {
   const close = vi.fn();
   vi.spyOn(api, "createNodeMonitoringStream").mockImplementation(

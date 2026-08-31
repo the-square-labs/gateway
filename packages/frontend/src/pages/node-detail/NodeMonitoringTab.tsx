@@ -173,6 +173,20 @@ function mergeSeededDiskMounts(snapshot: Snapshot, seededSnapshot: Snapshot | nu
   };
 }
 
+function buildMonitoringBootstrap(
+  history: NodeMonitoringSnapshot[],
+  health: NodeHealthReport | null | undefined
+) {
+  const seededSnapshot = buildDiskMountSeed(health);
+  const normalizedHistory = history.map((snapshot) =>
+    mergeSeededDiskMounts(snapshot, seededSnapshot)
+  );
+  return {
+    history: normalizedHistory,
+    latest: normalizedHistory.at(-1) ?? seededSnapshot,
+  };
+}
+
 export function NodeMonitoringTab({
   nodeId,
   nodeStatus,
@@ -182,18 +196,20 @@ export function NodeMonitoringTab({
 }: NodeMonitoringTabProps) {
   const initialHealthRef = useRef(initialHealthReport);
   initialHealthRef.current = initialHealthReport;
-  const monitoringBootstrapRef = useRef({ nodeId, history: initialMonitoringHistory });
-  if (monitoringBootstrapRef.current.nodeId !== nodeId) {
-    monitoringBootstrapRef.current = { nodeId, history: initialMonitoringHistory };
-  }
-  const [history, setHistory] = useState<Snapshot[]>(() => initialMonitoringHistory);
-  const [latest, setLatest] = useState<Snapshot | null>(() => {
-    const seededSnapshot = buildDiskMountSeed(initialHealthReport);
-    const historyLatest = initialMonitoringHistory.at(-1) ?? null;
-    return snapshotTime(historyLatest) >= snapshotTime(seededSnapshot)
-      ? historyLatest
-      : seededSnapshot;
+  const monitoringBootstrapRef = useRef({
+    nodeId,
+    ...buildMonitoringBootstrap(initialMonitoringHistory, initialHealthReport),
   });
+  if (monitoringBootstrapRef.current.nodeId !== nodeId) {
+    monitoringBootstrapRef.current = {
+      nodeId,
+      ...buildMonitoringBootstrap(initialMonitoringHistory, initialHealthReport),
+    };
+  }
+  const [history, setHistory] = useState<Snapshot[]>(() => monitoringBootstrapRef.current.history);
+  const [latest, setLatest] = useState<Snapshot | null>(
+    () => monitoringBootstrapRef.current.latest
+  );
   const [recentBuilds, setRecentBuilds] = useState<DockerBuild[] | null>(null);
   const buildRequestId = useRef(0);
 
@@ -240,12 +256,9 @@ export function NodeMonitoringTab({
 
   useEffect(() => {
     const seededSnapshot = buildDiskMountSeed(initialHealthRef.current);
-    const bootstrapHistory = monitoringBootstrapRef.current.history;
-    setHistory(bootstrapHistory);
-    const initialLatest = bootstrapHistory.at(-1) ?? null;
-    setLatest(
-      snapshotTime(initialLatest) >= snapshotTime(seededSnapshot) ? initialLatest : seededSnapshot
-    );
+    const bootstrap = monitoringBootstrapRef.current;
+    setHistory(bootstrap.history);
+    setLatest(bootstrap.latest);
 
     if (nodeStatus !== "online") return;
     const es = api.createNodeMonitoringStream(nodeId, { focused: true });

@@ -150,15 +150,19 @@ describe('NodeMonitoringService active polling', () => {
     const cache = { getClient: () => ({ multi: () => pipeline }) };
     const { registry } = createService();
     const service = new NodeMonitoringService(registry as never, cache as never);
+    const emitted = vi.fn();
+    service.on('snapshot', emitted);
 
     service.pushSnapshot('node-1', { cpuPercent: 12, privateField: 'omitted' }, { requests: 34 });
 
     expect(pipeline.rpush).toHaveBeenCalledOnce();
     expect(pipeline.rpush.mock.calls[0]?.[0]).toBe('node-monitoring-history:v1:node-1');
-    expect(JSON.parse(String(pipeline.rpush.mock.calls[0]?.[1]))).toMatchObject({
+    const persistedSnapshot = JSON.parse(String(pipeline.rpush.mock.calls[0]?.[1]));
+    expect(persistedSnapshot).toMatchObject({
       health: { cpuPercent: 12 },
       stats: { requests: 34 },
     });
+    expect(emitted).toHaveBeenCalledWith({ nodeId: 'node-1', snapshot: persistedSnapshot });
     expect(String(pipeline.rpush.mock.calls[0]?.[1])).not.toContain('privateField');
     expect(pipeline.ltrim).toHaveBeenCalledWith('node-monitoring-history:v1:node-1', -60, -1);
     expect(pipeline.expire).toHaveBeenCalledWith('node-monitoring-history:v1:node-1', 3600);
