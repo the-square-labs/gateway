@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -25,7 +26,8 @@ const testSecureLinkID = "11111111-1111-4111-8111-111111111111"
 
 func testSourceLinkManager(t *testing.T, opener func(string, net.Conn)) *sourceLinkManager {
 	t.Helper()
-	manager := newSourceLinkManager(opener)
+	manager := newSourceLinkManager(opener, "", nil)
+	manager.authorizeUnixPeer = func(net.Conn) bool { return true }
 	directory, err := os.MkdirTemp("/tmp", "gw-sl-")
 	if err != nil {
 		t.Fatal(err)
@@ -35,10 +37,223 @@ func testSourceLinkManager(t *testing.T, opener func(string, net.Conn)) *sourceL
 	return manager
 }
 
+func TestSourceLinkManagerSocketOnlyClosesLegacyTCPWithoutReplacingUnixSocket(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	legacy, err := manager.sync(sourceCommand(0, 1))
+	if err != nil || len(legacy) != 1 || legacy[0].Port == 0 {
+		t.Fatalf("legacy sync: statuses=%#v err=%v", legacy, err)
+	}
+	socketPath := legacy[0].SocketPath
+	command := sourceCommand(uint32(legacy[0].Port), 2)
+	command.Bindings[0].SocketOnly = true
+	current, err := manager.sync(command)
+	if err != nil || len(current) != 1 || current[0].Port != 0 || current[0].SocketPath != socketPath {
+		t.Fatalf("socket-only sync: statuses=%#v err=%v", current, err)
+	}
+	if connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", stringPort(legacy[0].Port)), 100*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatal("legacy TCP listener still accepts socket-only traffic")
+	}
+	connection, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("socket-only Unix listener is unavailable: %v", err)
+	}
+	_ = connection.Close()
+	info, err := os.Stat(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("socket permissions: mode=%v", info.Mode().Perm())
+	}
+}
+
+func TestSourceLinkManagerSocketOnlyClosesAcceptedLegacyTCPConnection(t *testing.T) {
+	accepted := make(chan struct{}, 1)
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		accepted <- struct{}{}
+		_, _ = io.Copy(io.Discard, connection)
+	})
+	legacy, err := manager.sync(sourceCommand(0, 1))
+	if err != nil || len(legacy) != 1 || legacy[0].Port == 0 {
+		t.Fatalf("legacy sync: statuses=%#v err=%v", legacy, err)
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", stringPort(legacy[0].Port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("legacy connection was not accepted")
+	}
+
+	command := sourceCommand(uint32(legacy[0].Port), 2)
+	command.Bindings[0].SocketOnly = true
+	if _, err := manager.sync(command); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := connection.Read(make([]byte, 1)); err == nil {
+		t.Fatal("accepted legacy TCP connection survived socket-only transition")
+	}
+}
+
+func TestSourceLinkManagerFailedMultiBindingRotationKeepsExistingSocketReachable(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	initial, err := manager.sync(sourceCommand(0, 1))
+	if err != nil || len(initial) != 1 {
+		t.Fatalf("initial sync: statuses=%#v err=%v", initial, err)
+	}
+	originalPath := initial[0].SocketPath
+	secondID := "22222222-2222-4222-8222-222222222222"
+	secondPath := filepath.Join(manager.socketDir, secondID+".sock")
+	if err := os.WriteFile(secondPath, []byte("user-owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := sourceCommand(0, 2)
+	command.Bindings[0].RotateListener = true
+	command.Bindings = append(command.Bindings, &pb.ProxySecureLinkBinding{
+		LinkId: secondID, Role: "source", Generation: 1, SocketOnly: true,
+	})
+
+	if _, err := manager.sync(command); err == nil {
+		t.Fatal("expected the second non-socket path to reject synchronization")
+	}
+	connection, err := net.DialTimeout("unix", originalPath, time.Second)
+	if err != nil {
+		t.Fatalf("failed rotation removed the original listener: %v", err)
+	}
+	_ = connection.Close()
+	if current := manager.bindings[testSecureLinkID]; current == nil || current.generation != 1 {
+		t.Fatalf("failed rotation replaced in-memory state: %#v", current)
+	}
+}
+
+func TestSourceLinkManagerRawRotationPreservesTCPPort(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	initial, err := manager.sync(sourceCommand(0, 1))
+	if err != nil || len(initial) != 1 || initial[0].Port == 0 {
+		t.Fatalf("initial sync: statuses=%#v err=%v", initial, err)
+	}
+	command := sourceCommand(uint32(initial[0].Port), 2)
+	command.Bindings[0].RotateListener = true
+	command.Bindings[0].SocketOnly = false
+
+	rotated, err := manager.sync(command)
+	if err != nil || len(rotated) != 1 {
+		t.Fatalf("rotated sync: statuses=%#v err=%v", rotated, err)
+	}
+	if rotated[0].Port != initial[0].Port {
+		t.Fatalf("raw TCP port changed during socket rotation: got=%d want=%d", rotated[0].Port, initial[0].Port)
+	}
+	connection, err := net.DialTimeout(
+		"tcp",
+		net.JoinHostPort("127.0.0.1", stringPort(initial[0].Port)),
+		time.Second,
+	)
+	if err != nil {
+		t.Fatalf("preserved raw TCP listener is unreachable: %v", err)
+	}
+	_ = connection.Close()
+}
+
+func TestSourceLinkManagerRollbackRestoresCanonicalSocketWhenMoveBackFails(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	secondID := "22222222-2222-4222-8222-222222222222"
+	initialCommand := sourceCommand(0, 1)
+	initialCommand.Bindings[0].SocketOnly = true
+	initialCommand.Bindings = append(initialCommand.Bindings, &pb.ProxySecureLinkBinding{
+		LinkId: secondID, Role: "source", Generation: 1, SocketOnly: true,
+	})
+	initial, err := manager.sync(initialCommand)
+	if err != nil || len(initial) != 2 {
+		t.Fatalf("initial sync: statuses=%#v err=%v", initial, err)
+	}
+	paths := map[string]string{}
+	for _, status := range initial {
+		paths[status.LinkID] = status.SocketPath
+	}
+	rotation := sourceCommand(0, 2)
+	rotation.Bindings[0].SocketOnly = true
+	rotation.Bindings[0].RotateListener = true
+	rotation.Bindings = append(rotation.Bindings, &pb.ProxySecureLinkBinding{
+		LinkId: secondID, Role: "source", Generation: 2, RotateListener: true, SocketOnly: true,
+	})
+	renameCalls := 0
+	manager.renameSocket = func(oldPath, newPath string) error {
+		renameCalls++
+		if renameCalls == 4 {
+			return errors.New("injected second publish failure")
+		}
+		if renameCalls == 6 {
+			return errors.New("injected rollback move failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+
+	if _, err := manager.sync(rotation); err == nil {
+		t.Fatal("expected injected multi-rotation failure")
+	}
+	for _, id := range []string{testSecureLinkID, secondID} {
+		connection, err := net.DialTimeout("unix", paths[id], time.Second)
+		if err != nil {
+			t.Fatalf("restored socket %s is unreachable: %v", id, err)
+		}
+		_ = connection.Close()
+		if manager.bindings[id].generation != 1 {
+			t.Fatalf("failed rotation changed generation for %s", id)
+		}
+	}
+}
+
+func TestSourceLinkManagerRejectsUnauthorizedUnixPeerBeforeOpeningRelay(t *testing.T) {
+	opened := make(chan struct{}, 1)
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		opened <- struct{}{}
+		_ = connection.Close()
+	})
+	manager.authorizeUnixPeer = func(net.Conn) bool { return false }
+	command := sourceCommand(0, 1)
+	command.Bindings[0].SocketOnly = true
+	statuses, err := manager.sync(command)
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("socket-only sync: statuses=%#v err=%v", statuses, err)
+	}
+	connection, err := net.DialTimeout("unix", statuses[0].SocketPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.Close()
+	select {
+	case <-opened:
+		t.Fatal("unauthorized Unix peer reached the relay opener")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func sourceCommand(port uint32, generation uint64) *pb.SyncProxySecureLinksCommand {
 	return &pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{{
 		LinkId: testSecureLinkID, Role: "source", Generation: generation, ListenerPort: port, SourceConfigManaged: true,
 	}}}
+}
+
+func TestCanonicalExecutablePathResolvesPathNames(t *testing.T) {
+	trueBinary, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("true binary unavailable")
+	}
+	resolved := canonicalExecutablePath("true")
+	if resolved == "" || !filepath.IsAbs(resolved) {
+		t.Fatalf("PATH executable was not canonicalized: %q", resolved)
+	}
+	if expected, err := filepath.EvalSymlinks(trueBinary); err == nil && resolved != filepath.Clean(expected) {
+		t.Fatalf("canonical executable = %q, want %q", resolved, filepath.Clean(expected))
+	}
+	if resolved := canonicalExecutablePath("gateway-definitely-missing-nginx-binary"); resolved != "" {
+		t.Fatalf("unresolved executable did not fail closed: %q", resolved)
+	}
 }
 
 func TestProxySecureLinkSetupTimeoutOnlyCoversHandshake(t *testing.T) {
@@ -156,7 +371,7 @@ func TestSourceLinkManagerRejectedSnapshotKeepsThePreviousSet(t *testing.T) {
 	}
 }
 
-func TestSourceLinkManagerRotatesListenerBeforeActiveTargetCutover(t *testing.T) {
+func TestSourceLinkManagerRotatesManagedSocketBeforeActiveTargetCutover(t *testing.T) {
 	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
 	before, err := manager.sync(sourceCommand(0, 2))
 	if err != nil {
@@ -164,13 +379,13 @@ func TestSourceLinkManagerRotatesListenerBeforeActiveTargetCutover(t *testing.T)
 	}
 	command := sourceCommand(uint32(before[0].Port), 3)
 	command.Bindings[0].RotateListener = true
-	command.Bindings[0].SourceConfigManaged = false
+	command.Bindings[0].SocketOnly = true
 	after, err := manager.sync(command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after[0].Port == before[0].Port {
-		t.Fatal("active update reused the production listener")
+	if after[0].Port != 0 {
+		t.Fatalf("managed rotation retained a TCP listener: %d", after[0].Port)
 	}
 	if connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", stringPort(before[0].Port)), 100*time.Millisecond); err == nil {
 		_ = connection.Close()

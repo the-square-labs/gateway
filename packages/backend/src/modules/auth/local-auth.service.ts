@@ -38,6 +38,40 @@ redis.call('EXPIRE', key, ttl)
 return 1
 `;
 
+const CONSUME_AUTH_CHALLENGE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return {0, ''} end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then
+  redis.call('DEL', KEYS[1])
+  return {0, ''}
+end
+local challenge = cjson.decode(raw)
+local allowedPurposes = cjson.decode(ARGV[2])
+local purposeAllowed = false
+for _, purpose in ipairs(allowedPurposes) do
+  if challenge.purpose == purpose then purposeAllowed = true break end
+end
+if not purposeAllowed then return {0, ''} end
+local attempts = tonumber(challenge.attempts) or 0
+if attempts >= tonumber(ARGV[3]) then
+  redis.call('DEL', KEYS[1])
+  return {0, ''}
+end
+if challenge.secretHash == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+  return {1, raw}
+end
+attempts = attempts + 1
+if attempts >= tonumber(ARGV[3]) then
+  redis.call('DEL', KEYS[1])
+else
+  challenge.attempts = attempts
+  redis.call('SET', KEYS[1], cjson.encode(challenge), 'PX', ttl)
+end
+return {0, ''}
+`;
+
 type ChallengePurpose = 'email_otp' | 'password_setup' | 'password_reset';
 
 export interface PasswordLinkProfile {
@@ -179,9 +213,9 @@ export class LocalAuthService {
     if (separator <= 0) throw new AppError(400, 'INVALID_RESET_TOKEN', 'Invalid or expired password link');
     const challengeId = token.slice(0, separator);
     const secret = token.slice(separator + 1);
+    await this.validatePassword(password);
     const challenge = await this.consumeChallenge(challengeId, ['password_setup', 'password_reset'], secret);
     if (!challenge) throw new AppError(400, 'INVALID_RESET_TOKEN', 'Invalid or expired password link');
-    await this.validatePassword(password);
     const passwordHash = await bcrypt.hash(password, 12);
     await this.db
       .insert(userPasswordCredentials)
@@ -279,24 +313,24 @@ export class LocalAuthService {
     secret: string
   ): Promise<string | null> {
     const key = `local_auth:challenge:${challengeId}`;
-    const challenge = await this.cacheService.get<AuthChallenge>(key);
     const allowedPurposes =
-      expectedPurpose === undefined ? undefined : Array.isArray(expectedPurpose) ? expectedPurpose : [expectedPurpose];
-    if (
-      !challenge ||
-      (allowedPurposes && !allowedPurposes.includes(challenge.purpose)) ||
-      challenge.attempts >= MAX_CHALLENGE_ATTEMPTS
-    )
-      return null;
-    const candidate = Buffer.from(hashSecret(secret));
-    const expected = Buffer.from(challenge.secretHash);
-    const valid = candidate.length === expected.length && timingSafeEqual(candidate, expected);
-    if (!valid) {
-      challenge.attempts += 1;
-      await this.cacheService.set(key, challenge, EMAIL_CHALLENGE_TTL_SECONDS);
-      return null;
-    }
-    await this.cacheService.delete(key);
+      expectedPurpose === undefined
+        ? (['email_otp', 'password_setup', 'password_reset'] satisfies ChallengePurpose[])
+        : Array.isArray(expectedPurpose)
+          ? expectedPurpose
+          : [expectedPurpose];
+    const consumed = await this.cacheService
+      .getClient()
+      .eval(
+        CONSUME_AUTH_CHALLENGE_SCRIPT,
+        1,
+        key,
+        hashSecret(secret),
+        JSON.stringify(allowedPurposes),
+        MAX_CHALLENGE_ATTEMPTS
+      );
+    if (!Array.isArray(consumed) || Number(consumed[0]) !== 1 || typeof consumed[1] !== 'string') return null;
+    const challenge = JSON.parse(consumed[1]) as AuthChallenge;
     return challenge.userId;
   }
 }

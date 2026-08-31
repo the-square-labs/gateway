@@ -9,6 +9,7 @@ import type { DispatchedCommand, NodeRegistryService } from './node-registry.ser
 import type { RelayGrantBundle } from './relay-policy.service.js';
 
 const logger = createChildLogger('NodeDispatch');
+const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_v1';
 
 // The database daemon caps its operation and rollback at 14 minutes. Keep this
 // controller deadline slightly longer so it always receives the final result
@@ -503,10 +504,16 @@ export class NodeDispatchService {
       targetPort?: number;
       connectorImage?: string;
       allowNetworkReselection?: boolean;
+      sourceConfigManaged?: boolean;
+      rotateListener?: boolean;
+      socketOnly?: boolean;
     }>,
     timeoutMs = 60_000
   ): Promise<CommandResult> {
-    await this.assertProxySecureLinkNode(nodeId);
+    await this.assertProxySecureLinkNode(
+      nodeId,
+      bindings.some((binding) => binding.role === 'source' && binding.socketOnly === true)
+    );
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
@@ -570,7 +577,7 @@ export class NodeDispatchService {
     }>,
     timeoutMs = 30_000
   ): Promise<CommandResult> {
-    await this.assertNginxRegistryIngressNode(nodeId);
+    await this.assertNginxRegistryIngressNode(nodeId, bindings.length > 0);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
@@ -623,7 +630,60 @@ export class NodeDispatchService {
     }
   }
 
-  private async assertProxySecureLinkNode(nodeId: string) {
+  async probePagesRoute(
+    nodeId: string,
+    input: {
+      routeId: string;
+      domain: string;
+      tls: boolean;
+      path: string;
+      expectedStatus?: number | null;
+      expectedBody?: string | null;
+      bodyMatchMode?: string | null;
+      timeoutSeconds?: number;
+    }
+  ): Promise<{ ok: boolean; skipped?: boolean; httpStatus?: number; responseMs?: number; error?: string }> {
+    const [node] = await this.db
+      .select({ type: nodes.type, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (node.type !== 'nginx' || !Array.isArray(reported) || !reported.includes('nginx_pages_route_probe_v1')) {
+      return { ok: false, skipped: true, error: 'Pages Route health probe requires an updated Nginx daemon' };
+    }
+    const result = await this.registry.sendCommand(
+      nodeId,
+      {
+        probePagesRoute: {
+          routeId: input.routeId,
+          domain: input.domain,
+          tls: input.tls,
+          path: input.path,
+          expectedStatus: input.expectedStatus ?? 0,
+          expectedBody: input.expectedBody ?? '',
+          bodyMatchMode: input.bodyMatchMode ?? 'includes',
+          timeoutSeconds: input.timeoutSeconds ?? 10,
+        },
+      },
+      ((input.timeoutSeconds ?? 10) + 5) * 1000
+    );
+    if (!result.success) return { ok: false, error: result.error || 'Pages Route probe failed' };
+    try {
+      const parsed = JSON.parse(result.detail || '{}') as {
+        ok?: unknown;
+        httpStatus?: number;
+        responseMs?: number;
+      };
+      if (typeof parsed.ok !== 'boolean') throw new Error('missing probe outcome');
+      return { ok: parsed.ok, httpStatus: parsed.httpStatus, responseMs: parsed.responseMs };
+    } catch {
+      return { ok: false, error: 'Nginx daemon returned an invalid Pages Route probe result' };
+    }
+  }
+
+  private async assertProxySecureLinkNode(nodeId: string, requireSocketOnly = false) {
     const [node] = await this.db
       .select({ capabilities: nodes.capabilities })
       .from(nodes)
@@ -636,6 +696,13 @@ export class NodeDispatchService {
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
         'Update both Nginx and Docker daemons before creating this Docker proxy link'
+      );
+    }
+    if (requireSocketOnly && !reported.includes(NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY)) {
+      throw new AppError(
+        409,
+        'PROXY_SECURE_LINK_UPDATE_REQUIRED',
+        'Update the Nginx daemon before enabling socket-only Secure Links'
       );
     }
   }
@@ -657,7 +724,7 @@ export class NodeDispatchService {
     }
   }
 
-  private async assertNginxRegistryIngressNode(nodeId: string) {
+  private async assertNginxRegistryIngressNode(nodeId: string, requireSocketOnly = false) {
     const [node] = await this.db
       .select({ type: nodes.type, capabilities: nodes.capabilities })
       .from(nodes)
@@ -670,6 +737,13 @@ export class NodeDispatchService {
         409,
         'NGINX_REGISTRY_INGRESS_UPDATE_REQUIRED',
         'Update the selected Nginx daemon before enabling external registry access'
+      );
+    }
+    if (requireSocketOnly && !reported.includes(NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY)) {
+      throw new AppError(
+        409,
+        'NGINX_REGISTRY_INGRESS_UPDATE_REQUIRED',
+        'Update the selected Nginx daemon before enabling socket-only registry ingress'
       );
     }
   }

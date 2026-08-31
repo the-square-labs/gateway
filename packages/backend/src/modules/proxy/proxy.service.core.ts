@@ -612,9 +612,6 @@ export abstract class ProxyServiceCore {
     const usesSecureLink =
       isDockerUpstream(host.upstreamKind) && host.secureLinkGeneration > 0 && host.secureLinkMigratedAt != null;
     const usesRegistryIngress = host.isSystem && host.systemKind === 'docker_registry';
-    if (usesSecureLink && !host.secureLinkListenerPort) {
-      throw new Error('Secure Link listener port is unavailable');
-    }
     const additionalSecureLinks = this.secureLinks ? await this.secureLinks.getActiveAdditional(host.id) : [];
     const additionalRoutes = this.additionalRoutes ? await this.additionalRoutes.getRenderConfig(host.id) : [];
     await this.secureLinks?.assertAdditionalReferences(host.id, host.advancedConfig);
@@ -634,7 +631,7 @@ export abstract class ProxyServiceCore {
       domainNames: host.domainNames,
       enabled: host.enabled,
       forwardHost: usesSecureLink || usesRegistryIngress ? '127.0.0.1' : host.forwardHost,
-      forwardPort: usesSecureLink ? host.secureLinkListenerPort : host.forwardPort,
+      forwardPort: usesSecureLink ? (host.secureLinkListenerPort ?? host.forwardPort) : host.forwardPort,
       forwardScheme: host.forwardScheme ?? 'http',
       upstreamIpv6Enabled: host.upstreamIpv6Enabled,
       secureLinkUpstream: usesSecureLink || usesRegistryIngress,

@@ -152,6 +152,7 @@ export class UIBootstrapService {
         : Promise.resolve(false),
     ]);
     const config = configSnapshot.data;
+    const canViewGatewaySettings = hasScope(scopes, 'settings:gateway:view');
 
     const visibleNodes = this.visibleNodes(nodeSnapshot.data, scopes);
     const dockerNodes = this.visibleDockerNodes(nodeSnapshot.data, scopes);
@@ -168,9 +169,9 @@ export class UIBootstrapService {
         publicUrl: config.publicUrl,
         fileUploadMaxBytes: config.fileUploadMaxBytes,
         fileOpenMaxBytes: config.fileOpenMaxBytes,
-        gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
-        gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
-        relayAutoRecovery: config.relayAutoRecovery,
+        gatewayGrpcPublicTarget: canViewGatewaySettings ? config.gatewayGrpcPublicTarget : null,
+        gatewayGrpcLocalIp: canViewGatewaySettings ? config.gatewayGrpcLocalIp : null,
+        relayAutoRecovery: canViewGatewaySettings ? config.relayAutoRecovery : false,
         features: {
           pkiEnabled: config.features.pkiEnabled,
           domainsEnabled: config.features.domainsEnabled,

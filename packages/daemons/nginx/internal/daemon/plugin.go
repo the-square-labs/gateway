@@ -55,6 +55,7 @@ type NginxPlugin struct {
 
 var _ lifecycle.ProxySecureLinkPlugin = (*NginxPlugin)(nil)
 var _ lifecycle.ProxySecureLinkProbePlugin = (*NginxPlugin)(nil)
+var _ lifecycle.PagesRouteProbePlugin = (*NginxPlugin)(nil)
 
 func secureLinkProxyPassPattern(linkID string, port int) *regexp.Regexp {
 	portPattern := `[0-9]+`
@@ -131,8 +132,13 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
-	p.secureLinks = newSourceLinkManager(p.openProxySecureLink)
-	p.registryLinks = newSourceLinkManagerAt(p.openRegistrySecureLink, registrySecureLinkSocketDir)
+	p.secureLinks = newSourceLinkManager(p.openProxySecureLink, p.cfg.Nginx.Binary, p.mgr.GetPID)
+	p.registryLinks = newSourceLinkManagerAt(
+		p.openRegistrySecureLink,
+		registrySecureLinkSocketDir,
+		p.cfg.Nginx.Binary,
+		p.mgr.GetPID,
+	)
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)
@@ -321,12 +327,12 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 }
 
 func (p *NginxPlugin) capabilities() []string {
-	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_registry_ingress_v1"}
+	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_secure_link_socket_only_v1", "nginx_registry_ingress_v1"}
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
 	}
 	if p.pagesV1Available && p.pagesRuntime != nil {
-		capabilities = append(capabilities, "nginx_pages_v1")
+		capabilities = append(capabilities, "nginx_pages_v1", "nginx_pages_route_probe_v1")
 	}
 	if p.pagesRuntimeConfigAvailable && p.pagesRuntime != nil {
 		capabilities = append(capabilities, "nginx_pages_config_v1")

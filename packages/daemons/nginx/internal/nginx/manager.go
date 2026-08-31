@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +18,8 @@ type Manager struct {
 	certsDir  string
 	globalCfg string
 }
+
+var effectivePIDDirectivePattern = regexp.MustCompile(`(?m)^\s*pid\s+(?:"([^"]+)"|'([^']+)'|([^;\s]+))\s*;`)
 
 func NewManager(binary, configDir, certsDir, globalConfig string) *Manager {
 	return &Manager{
@@ -97,6 +100,160 @@ func (m *Manager) IsRunning() bool {
 	}
 
 	return m.hasRunningProcess()
+}
+
+// GetPID returns the PID of the nginx master process owned by this manager's
+// configured pid file.
+func (m *Manager) GetPID() (int, error) {
+	pidFile, err := m.authoritativePidFile()
+	if err != nil {
+		return 0, err
+	}
+	data, pidFileModifiedAt, err := readTrustedPIDFile(pidFile)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("parse pid file %s", pidFile)
+	}
+	expectedBinary, err := canonicalBinaryPath(m.binary)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateNginxMasterPID(pid, expectedBinary); err != nil {
+		return 0, err
+	}
+	startedAt, err := processStartTime(pid)
+	if err != nil {
+		return 0, err
+	}
+	if pidFileModifiedAt.Before(startedAt.Add(-2 * time.Second)) {
+		return 0, fmt.Errorf("authoritative pid file predates the nginx master process")
+	}
+	return pid, nil
+}
+
+func validateNginxMasterPID(pid int, expectedBinary string) error {
+	actualBinary, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return fmt.Errorf("read nginx master executable: %w", err)
+	}
+	actualBinary = strings.TrimSuffix(actualBinary, " (deleted)")
+	if filepath.Clean(actualBinary) != expectedBinary {
+		return fmt.Errorf("authoritative pid does not belong to configured nginx executable")
+	}
+	commandLine, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || !strings.Contains(strings.ReplaceAll(string(commandLine), "\x00", " "), "nginx: master process") {
+		return fmt.Errorf("authoritative pid is not an nginx master process")
+	}
+	return nil
+}
+
+func canonicalBinaryPath(binary string) (string, error) {
+	path, err := exec.LookPath(binary)
+	if err != nil {
+		return "", fmt.Errorf("resolve nginx executable: %w", err)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(path); resolveErr == nil {
+		path = resolved
+	}
+	return filepath.Clean(path), nil
+}
+
+func (m *Manager) authoritativePidFile() (string, error) {
+	args := []string{"-T"}
+	if m.globalCfg != "" {
+		args = append(args, "-c", m.globalCfg)
+	}
+	effectiveConfig, err := exec.Command(m.binary, args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve effective nginx configuration: %w", err)
+	}
+	configured, err := effectivePIDDirective(effectiveConfig)
+	if err != nil {
+		return "", err
+	}
+	if configured != "" {
+		return m.resolveNginxPath(configured)
+	}
+	pidPath, err := m.configureArgument("--pid-path=")
+	if err != nil || pidPath == "" {
+		return "", fmt.Errorf("authoritative nginx pid path is unavailable")
+	}
+	return m.resolveNginxPath(pidPath)
+}
+
+func effectivePIDDirective(effectiveConfig []byte) (string, error) {
+	matches := effectivePIDDirectivePattern.FindAllSubmatch(effectiveConfig, -1)
+	if len(matches) > 1 {
+		return "", fmt.Errorf("effective nginx pid directive is ambiguous")
+	}
+	if len(matches) == 1 {
+		for _, capture := range matches[0][1:] {
+			if len(capture) > 0 {
+				return string(capture), nil
+			}
+		}
+		return "", fmt.Errorf("effective nginx pid directive is invalid")
+	}
+	return "", nil
+}
+
+func (m *Manager) resolveNginxPath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	prefix, err := m.configureArgument("--prefix=")
+	if err != nil || prefix == "" {
+		return "", fmt.Errorf("relative nginx pid path has no authoritative prefix")
+	}
+	return filepath.Clean(filepath.Join(prefix, path)), nil
+}
+
+func (m *Manager) configureArgument(prefix string) (string, error) {
+	output, err := exec.Command(m.binary, "-V").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("read nginx configure arguments: %w", err)
+	}
+	for _, field := range strings.Fields(string(output)) {
+		if strings.HasPrefix(field, prefix) {
+			return strings.Trim(strings.TrimPrefix(field, prefix), "'\""), nil
+		}
+	}
+	return "", nil
+}
+
+func processStartTime(pid int) (time.Time, error) {
+	statData, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read nginx master process stat: %w", err)
+	}
+	fields := strings.Fields(string(statData))
+	if len(fields) < 22 {
+		return time.Time{}, fmt.Errorf("unexpected nginx master process stat format")
+	}
+	startTicks, err := strconv.ParseInt(fields[21], 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse nginx master process start time: %w", err)
+	}
+	uptimeData, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read system uptime: %w", err)
+	}
+	uptimeFields := strings.Fields(string(uptimeData))
+	if len(uptimeFields) == 0 {
+		return time.Time{}, fmt.Errorf("unexpected system uptime format")
+	}
+	systemUptime, err := strconv.ParseFloat(uptimeFields[0], 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse system uptime: %w", err)
+	}
+	processUptime := systemUptime - float64(startTicks)/100
+	if processUptime < 0 || processUptime > systemUptime {
+		return time.Time{}, fmt.Errorf("nginx master process start time is outside system uptime")
+	}
+	return time.Now().Add(-time.Duration(processUptime * float64(time.Second))), nil
 }
 
 func (m *Manager) GetUptime() (time.Duration, error) {

@@ -10,11 +10,21 @@ import type { User } from '@/types.js';
 const mocks = vi.hoisted(() => ({
   resolveLiveSessionUser: vi.fn(),
   resolveLiveUser: vi.fn(),
+  requiresSessionMfaReauthentication: vi.fn(() => false),
 }));
 
 vi.mock('@/modules/auth/live-session-user.js', () => ({
-  resolveLiveSessionUser: mocks.resolveLiveSessionUser,
+  resolveLiveSessionUser: async (...args: unknown[]) => {
+    const value = await mocks.resolveLiveSessionUser(...args);
+    return value
+      ? {
+          session: { purpose: 'user' },
+          ...value,
+        }
+      : null;
+  },
   resolveLiveUser: mocks.resolveLiveUser,
+  requiresSessionMfaReauthentication: mocks.requiresSessionMfaReauthentication,
 }));
 
 import { authenticateEventsConnection, createEventsWSHandlers } from '@/ws/events.ws.js';
@@ -44,6 +54,19 @@ afterEach(() => {
 });
 
 describe('events websocket authentication', () => {
+  it('rejects a session that requires MFA reauthentication', async () => {
+    mocks.resolveLiveSessionUser.mockResolvedValue({ user: USER, effectiveScopes: USER.scopes });
+    mocks.requiresSessionMfaReauthentication.mockReturnValueOnce(true);
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+
+    expect(ws.close).toHaveBeenCalledWith(4001, 'unauthenticated');
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('delivers personal resource changes only to the owning user session', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
@@ -981,6 +1004,74 @@ describe('events websocket authentication', () => {
 
     expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('build-hidden'));
     expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('build-visible'));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('delivers Pages build events only through the matching Pages project scope', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['pages:view:project-visible'] },
+      effectiveScopes: ['pages:view:project-visible'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.build.changed'] }),
+      }),
+      ws as any
+    );
+    eventBus.publish('docker.build.changed', {
+      buildId: 'build-hidden',
+      scopeResourceId: 'project-hidden',
+      targetKind: 'pages_project',
+      status: 'building',
+    });
+    eventBus.publish('docker.build.changed', {
+      buildId: 'build-visible',
+      scopeResourceId: 'project-visible',
+      targetKind: 'pages_project',
+      status: 'building',
+    });
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['docker.build.changed'], rejected: [] })
+    );
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('build-hidden'));
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('build-visible'));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('does not deliver Pages build events through Docker-only scopes', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['docker:containers:view'] },
+      effectiveScopes: ['docker:containers:view'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.build.changed'] }),
+      }),
+      ws as any
+    );
+    eventBus.publish('docker.build.changed', {
+      buildId: 'pages-build',
+      scopeResourceId: 'project-visible',
+      targetKind: 'pages_project',
+      status: 'building',
+    });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('pages-build'));
     handlers.onClose(new Event('close'), ws as any);
   });
 

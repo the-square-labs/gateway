@@ -276,7 +276,7 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
   ]);
   const assignableGroups = groups.filter((group) => isScopeSubset(getEffectiveGroupScopes(group), actorScopes));
 
-  return c.json({
+  const response = {
     ...settings,
     smtp,
     oidc,
@@ -293,6 +293,78 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
       name: group.name,
       isBuiltin: group.isBuiltin,
     })),
+  };
+
+  if (!isDemoVisitor(c.get('user'))) return c.json(response);
+
+  return c.json({
+    ...response,
+    oidcAutoCreateUsers: false,
+    oidcDefaultGroupId: '',
+    oidcRequireVerifiedEmail: true,
+    oauthExtendedCallbackCompatibility: false,
+    mfaExistingSessionGracePeriodDays: 3,
+    methods: { oidc: false, password: false, emailOtp: true, passkeyLogin: false },
+    passwordPolicy: {
+      minLength: 12,
+      maxLength: 72,
+      requireUppercase: false,
+      requireLowercase: false,
+      requireDigit: false,
+      requireSymbol: false,
+    },
+    smtp: {
+      configured: false,
+      host: null,
+      port: null,
+      tlsMode: null,
+      username: null,
+      passwordLast4: null,
+      senderName: null,
+      senderEmail: null,
+      verifiedAt: null,
+    },
+    oidc: {
+      configured: false,
+      issuer: null,
+      clientId: null,
+      clientSecretLast4: null,
+      redirectUri: null,
+      scopes: 'openid email profile',
+    },
+    logging: {
+      mode: 'disabled' as const,
+      url: '',
+      username: '',
+      passwordLast4: null,
+      database: 'gateway_logs',
+      table: 'logs',
+      requestTimeoutMs: 5000,
+    },
+    mcpServerEnabled: false,
+    mcpExtendedCompatibility: false,
+    webTransport: { tlsEnabled: false, restartRequired: false, directAccess: false, targetUrl: null },
+    generalSettings: {
+      publicUrl: generalSettings.publicUrl,
+      updateChannel: 'stable' as const,
+      hideExternalBranding: generalSettings.hideExternalBranding,
+      fileUploadMaxBytes: generalSettings.fileUploadMaxBytes,
+      fileOpenMaxBytes: generalSettings.fileOpenMaxBytes,
+      gatewayGrpcPublicTarget: null,
+      gatewayGrpcLocalIp: null,
+      relayAutoRecovery: false,
+      relayGrantTtlHours: 4,
+      shutdown: {
+        userRequestDrainSeconds: 30,
+        structuredLogDrainSeconds: 5,
+        finalizationTimeoutSeconds: 10,
+      },
+      features: generalSettings.features,
+    },
+    networkSecurity: { clientIpSource: 'auto' as const, trustedProxyCidrs: [], trustCloudflareHeaders: false },
+    outboundWebhookPolicy: { allowPrivateNetworks: false, allowedPrivateCidrs: [] },
+    currentRequestIp: { source: 'unknown' },
+    availableGroups: [],
   });
 });
 

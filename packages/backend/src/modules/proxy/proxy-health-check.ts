@@ -28,13 +28,13 @@ export function resolveProxyHealthCheckUrl(host: {
   forwardPort?: number | null;
 }): string | null {
   const path = host.healthCheckUrl || '/';
-  if (host.upstreamKind === 'pages') {
-    const domain = host.domainNames?.find((candidate) => candidate && !candidate.startsWith('*.'));
-    if (!domain) return null;
-    return `${host.sslEnabled ? 'https' : 'http'}://${domain}${path}`;
-  }
+  if (host.upstreamKind === 'pages') return null;
   if (!host.forwardHost || !host.forwardPort) return null;
   return `${host.forwardScheme || 'http'}://${formatHostPort(host.forwardHost, host.forwardPort)}${path}`;
+}
+
+export function resolvePagesRouteProbeDomain(host: { domainNames?: string[] | null }): string | null {
+  return host.domainNames?.find((candidate) => candidate && !candidate.startsWith('*.')) ?? null;
 }
 
 export function runImmediateProxyHealthCheck({
@@ -64,15 +64,40 @@ export function runImmediateProxyHealthCheck({
       const secureLinkProbe =
         (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
         host.secureLinkMigratedAt != null;
-      if (!secureLinkProbe && !url) return;
+      const pagesRouteProbe = host.upstreamKind === 'pages';
+      if (!secureLinkProbe && !pagesRouteProbe && !url) return;
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
 
-      let status: 'online' | 'offline' | 'degraded' = 'offline';
+      let status: 'online' | 'offline' | 'degraded' | 'unknown' = 'offline';
       let responseMs: number | undefined;
       try {
-        if (secureLinkProbe) {
+        if (pagesRouteProbe) {
+          const domain = resolvePagesRouteProbeDomain(host);
+          if (!host.nodeId || !nodeDispatch || !domain) {
+            clearTimeout(timeout);
+            status = 'unknown';
+          } else {
+            const probe = await nodeDispatch.probePagesRoute(host.nodeId, {
+              routeId: host.id,
+              domain,
+              tls: host.sslEnabled ?? false,
+              path,
+              expectedStatus: host.healthCheckExpectedStatus,
+              expectedBody: host.healthCheckExpectedBody,
+              bodyMatchMode: host.healthCheckBodyMatchMode,
+              timeoutSeconds: 10,
+            });
+            clearTimeout(timeout);
+            if (probe.error === 'daemon is busy handling long-running commands; retry shortly') return;
+            responseMs = probe.responseMs;
+            if (probe.skipped) status = 'unknown';
+            else if (probe.ok) status = 'online';
+            else if (!host.healthCheckExpectedStatus && probe.httpStatus && probe.httpStatus < 500) status = 'degraded';
+            else status = 'offline';
+          }
+        } else if (secureLinkProbe) {
           if (!host.nodeId || !nodeDispatch) throw new Error('Secure Link health probe is unavailable');
           const probe = await nodeDispatch.probeProxySecureLink(host.nodeId, {
             linkId: host.id,

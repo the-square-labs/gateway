@@ -336,6 +336,8 @@ export class OAuthService {
       throw new AppError(403, 'SCOPE_NOT_ALLOWED', 'At least one scope must be selected');
     }
 
+    await this.claimConsentRequest(requestId, pending);
+
     const code = randomSecret('gwo_code_');
     const [record] = await this.db
       .insert(oauthAuthorizationCodes)
@@ -351,8 +353,6 @@ export class OAuthService {
         expiresAt: new Date(Date.now() + AUTH_CODE_TTL_SECONDS * 1000),
       })
       .returning();
-
-    await this.cacheService.delete(`${CONSENT_PREFIX}${requestId}`);
     await this.auditService.log({
       userId: user.id,
       action: 'oauth.authorize',
@@ -369,7 +369,7 @@ export class OAuthService {
 
   async denyConsent(requestId: string, user: User): Promise<string> {
     const pending = await this.getConsentRequest(requestId, user);
-    await this.cacheService.delete(`${CONSENT_PREFIX}${requestId}`);
+    await this.claimConsentRequest(requestId, pending);
     await this.auditService.log({
       userId: user.id,
       action: 'oauth.deny',
@@ -382,6 +382,13 @@ export class OAuthService {
     redirect.searchParams.set('error', 'access_denied');
     if (pending.state) redirect.searchParams.set('state', pending.state);
     return redirect.href;
+  }
+
+  private async claimConsentRequest(requestId: string, expected: PendingConsent): Promise<void> {
+    const claimed = await this.cacheService.take<PendingConsent>(`${CONSENT_PREFIX}${requestId}`);
+    if (!claimed || claimed.id !== expected.id || claimed.userId !== expected.userId) {
+      throw new AppError(404, 'OAUTH_REQUEST_EXPIRED', 'OAuth authorization request expired');
+    }
   }
 
   async exchangeToken(input: OAuthTokenRequest) {

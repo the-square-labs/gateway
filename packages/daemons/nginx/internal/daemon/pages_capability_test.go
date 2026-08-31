@@ -25,6 +25,9 @@ func TestPagesCapabilityRequiresCompleteRuntimeInitialization(t *testing.T) {
 	if hasCapability(plugin.capabilities(), "nginx_pages_v1") {
 		t.Fatal("Pages capability advertised without a initialized v1 runtime")
 	}
+	if hasCapability(plugin.capabilities(), "nginx_pages_route_probe_v1") {
+		t.Fatal("Pages Route probe capability advertised without an initialized v1 runtime")
+	}
 	runtime, err := pages.New(filepath.Join(t.TempDir(), "pages"), filepath.Join(t.TempDir(), "conf"), filepath.Join(t.TempDir(), "certs"), pagesNginx{})
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +41,9 @@ func TestPagesCapabilityRequiresCompleteRuntimeInitialization(t *testing.T) {
 	plugin.pagesV1Available = true
 	if !hasCapability(plugin.capabilities(), "nginx_pages_v1") {
 		t.Fatal("Pages capability missing after complete v1 runtime initialization")
+	}
+	if !hasCapability(plugin.capabilities(), "nginx_pages_route_probe_v1") {
+		t.Fatal("Pages Route probe capability missing after complete v1 runtime initialization")
 	}
 	if hasCapability(plugin.capabilities(), "nginx_pages_config_v1") {
 		t.Fatal("runtime config capability advertised without http_sub_module preflight")

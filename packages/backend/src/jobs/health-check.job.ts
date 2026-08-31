@@ -4,7 +4,7 @@ import { proxyHosts } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
-import { resolveProxyHealthCheckUrl } from '@/modules/proxy/proxy-health-check.js';
+import { resolvePagesRouteProbeDomain, resolveProxyHealthCheckUrl } from '@/modules/proxy/proxy-health-check.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
@@ -113,6 +113,10 @@ export class HealthCheckJob {
         await this.recordProbeIndeterminate(host);
         return { hostId: host.id, status: 'skipped' as const };
       }
+      if (checkStatus === 'unknown') {
+        await this.recordProbeUnknown(host);
+        return { hostId: host.id, status: 'unknown' as const };
+      }
 
       const now = Date.now();
       const existingHistory: HealthEntry[] = (host.healthHistory as HealthEntry[]) ?? [];
@@ -209,24 +213,24 @@ export class HealthCheckJob {
     };
 
     const directHosts: typeof hosts = [];
-    const secureHostsByNode = new Map<string, typeof hosts>();
+    const daemonHostsByNode = new Map<string, typeof hosts>();
     for (const host of hosts) {
       const relayBacked =
         (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
         host.secureLinkMigratedAt != null;
-      if (!relayBacked) {
+      if (!relayBacked && host.upstreamKind !== 'pages') {
         directHosts.push(host);
         continue;
       }
       const nodeKey = host.nodeId ?? '__missing_node__';
-      const nodeHosts = secureHostsByNode.get(nodeKey) ?? [];
+      const nodeHosts = daemonHostsByNode.get(nodeKey) ?? [];
       nodeHosts.push(host);
-      secureHostsByNode.set(nodeKey, nodeHosts);
+      daemonHostsByNode.set(nodeKey, nodeHosts);
     }
 
     const resultGroups = await Promise.all([
       allSettledBounded(directHosts, HEALTH_CHECK_CONCURRENCY, check),
-      ...Array.from(secureHostsByNode.values(), (nodeHosts) =>
+      ...Array.from(daemonHostsByNode.values(), (nodeHosts) =>
         allSettledBounded(nodeHosts, SECURE_LINK_PROBE_CONCURRENCY_PER_NODE, check)
       ),
     ]);
@@ -305,9 +309,90 @@ export class HealthCheckJob {
       );
   }
 
+  private async recordProbeUnknown(host: typeof proxyHosts.$inferSelect): Promise<void> {
+    const now = Date.now();
+    const existingHistory: HealthEntry[] = (host.healthHistory as HealthEntry[]) ?? [];
+    const healthHistory = compactHealthHistory(
+      [...existingHistory, { ts: new Date(now).toISOString(), status: 'unknown' }],
+      { nowMs: now }
+    );
+    const persisted = await this.db
+      .update(proxyHosts)
+      .set({ healthStatus: 'unknown', lastHealthCheckAt: new Date(now), healthHistory })
+      .where(
+        and(
+          eq(proxyHosts.id, host.id),
+          eq(proxyHosts.enabled, true),
+          eq(proxyHosts.healthCheckEnabled, true),
+          eq(proxyHosts.maintenanceEnabled, false)
+        )
+      )
+      .returning({ id: proxyHosts.id });
+    if (persisted.length > 0) {
+      this.eventBus?.publish('proxy.host.changed', {
+        id: host.id,
+        action: 'health.unknown',
+        domain: host.domainNames?.[0],
+        health_status: 'unknown',
+      });
+    }
+  }
+
   private async checkHost(
     host: typeof proxyHosts.$inferSelect
-  ): Promise<{ status: 'online' | 'offline' | 'skipped'; responseMs?: number }> {
+  ): Promise<{ status: 'online' | 'offline' | 'skipped' | 'unknown'; responseMs?: number }> {
+    if (host.upstreamKind === 'pages') {
+      const domain = resolvePagesRouteProbeDomain(host);
+      if (!host.nodeId || !this.nodeDispatch || !domain) return { status: 'unknown' };
+      try {
+        const result = await this.nodeDispatch.probePagesRoute(host.nodeId, {
+          routeId: host.id,
+          domain,
+          tls: host.sslEnabled ?? false,
+          path: host.healthCheckUrl || '/',
+          expectedStatus: host.healthCheckExpectedStatus,
+          expectedBody: host.healthCheckExpectedBody,
+          bodyMatchMode: host.healthCheckBodyMatchMode,
+          timeoutSeconds: Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000),
+        });
+        if (result.skipped) {
+          logger.debug('Pages Route health probe is unavailable', {
+            hostId: host.id,
+            nodeId: host.nodeId,
+            domain,
+            error: result.error,
+          });
+          return { status: 'unknown' };
+        }
+        if (!result.ok && result.error === DAEMON_BUSY_ERROR) {
+          logger.debug('Pages Route health probe deferred', {
+            hostId: host.id,
+            nodeId: host.nodeId,
+            domain,
+            error: result.error,
+          });
+          return { status: 'skipped' };
+        }
+        if (!result.ok) {
+          logger.warn('Pages Route health probe failed', {
+            hostId: host.id,
+            nodeId: host.nodeId,
+            domain,
+            httpStatus: result.httpStatus,
+            error: result.error,
+          });
+        }
+        return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
+      } catch (error) {
+        logger.warn('Pages Route health probe command failed', {
+          hostId: host.id,
+          nodeId: host.nodeId,
+          domain,
+          error,
+        });
+        return { status: 'offline' };
+      }
+    }
     if (
       (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
       host.secureLinkMigratedAt != null

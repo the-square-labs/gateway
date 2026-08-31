@@ -177,11 +177,12 @@ export class PasskeyService {
       return null;
     }
     if (!verification.verified) return null;
+    const claimed = await this.cacheService.take<PasskeyChallenge>(`passkey:authentication:${challenge}`);
+    if (!claimed || claimed.challenge !== pending.challenge || claimed.userId !== pending.userId) return null;
     await this.db
       .update(userPasskeys)
       .set({ counter: verification.authenticationInfo.newCounter, lastUsedAt: new Date() })
       .where(eq(userPasskeys.id, credential.id));
-    await this.cacheService.delete(`passkey:authentication:${challenge}`);
     return user;
   }
 

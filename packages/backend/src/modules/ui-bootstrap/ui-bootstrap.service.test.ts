@@ -37,9 +37,9 @@ const configData = {
   publicUrl: 'https://gateway.example.com',
   fileUploadMaxBytes: 1,
   fileOpenMaxBytes: 2,
-  gatewayGrpcPublicTarget: null,
-  gatewayGrpcLocalIp: null,
-  relayAutoRecovery: false,
+  gatewayGrpcPublicTarget: 'gateway.internal:50051',
+  gatewayGrpcLocalIp: '10.0.0.10',
+  relayAutoRecovery: true,
   features: { pkiEnabled: true, domainsEnabled: true, siemEnabled: true, inferenceEnabled: true },
 };
 
@@ -134,6 +134,9 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.nodes.data.map((node) => node.id)).toEqual(['node-nginx']);
     expect(shell.navigation.dockerNodes.map((node) => node.id)).toEqual(['node-docker']);
     expect(shell.systemConfig.publicUrl).toBe('https://gateway.example.com');
+    expect(shell.systemConfig.gatewayGrpcPublicTarget).toBeNull();
+    expect(shell.systemConfig.gatewayGrpcLocalIp).toBeNull();
+    expect(shell.systemConfig.relayAutoRecovery).toBe(false);
     expect(shell.systemConfig.features).toEqual({
       pkiEnabled: true,
       domainsEnabled: true,
@@ -159,6 +162,17 @@ describe('UIBootstrapService', () => {
     expect(shell.navigation.dockerNodes).toEqual([]);
     expect(updates.getCachedStatus).not.toHaveBeenCalled();
     expect(aiRuntime.statusForUser).not.toHaveBeenCalled();
+  });
+
+  it('includes operational Gateway targets only for Gateway settings viewers', async () => {
+    const { service } = makeService();
+    const scopes = ['settings:gateway:view'];
+
+    const shell = await service.getShell({ id: 'user-1', scopes } as never, scopes);
+
+    expect(shell.systemConfig.gatewayGrpcPublicTarget).toBe('gateway.internal:50051');
+    expect(shell.systemConfig.gatewayGrpcLocalIp).toBe('10.0.0.10');
+    expect(shell.systemConfig.relayAutoRecovery).toBe(true);
   });
 
   it('hides Pages navigation when the persisted profile is enabled without the entitlement', async () => {

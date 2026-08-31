@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { handleLicenseApiError } from "@/stores/license-paywall";
@@ -115,11 +116,15 @@ export function NodeEnrollmentDialog({
   const [displayName, setDisplayName] = useState("");
   const [relayAddress, setRelayAddress] = useState("");
   const [creating, setCreating] = useState(false);
-  const [result, setResult] = useState<EnrollmentResult | null>(null);
-  const [resultOpen, setResultOpen] = useState(false);
+  const {
+    open: resultOpen,
+    value: result,
+    setValue: setResult,
+    close: closeResult,
+    onOpenChange: onResultOpenChange,
+  } = useDeferredDialogState<EnrollmentResult>();
   const [targetId, setTargetId] = useState("public");
   const [transport, setTransport] = useState<"curl" | "wget">("curl");
-  const resultResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completedNodeRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -129,22 +134,9 @@ export function NodeEnrollmentDialog({
     setRelayAddress("");
   }, [initialType, open]);
 
-  useEffect(
-    () => () => {
-      if (resultResetTimerRef.current) clearTimeout(resultResetTimerRef.current);
-    },
-    []
-  );
-
-  const closeResult = useCallback(() => {
-    setResultOpen(false);
-    if (resultResetTimerRef.current) clearTimeout(resultResetTimerRef.current);
-    resultResetTimerRef.current = setTimeout(() => {
-      setResult(null);
-      completedNodeRef.current = null;
-      resultResetTimerRef.current = null;
-    }, 220);
-  }, []);
+  useEffect(() => {
+    if (!result) completedNodeRef.current = null;
+  }, [result]);
 
   const completeEnrollment = useCallback(
     (nodeId: string) => {
@@ -217,7 +209,6 @@ export function NodeEnrollmentDialog({
       setTransport("curl");
       onNodeCreated?.(response.node);
       onOpenChange(false);
-      setResultOpen(true);
     } catch (error) {
       if (!handleLicenseApiError(error, "Managed nodes")) {
         toast.error(error instanceof Error ? error.message : "Failed to create node");
@@ -363,7 +354,7 @@ export function NodeEnrollmentDialog({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={resultOpen} onOpenChange={(nextOpen) => !nextOpen && closeResult()}>
+      <Dialog open={resultOpen} onOpenChange={onResultOpenChange}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Node Created</DialogTitle>
@@ -428,7 +419,7 @@ export function NodeEnrollmentDialog({
             </div>
           )}
           <DialogFooter>
-            <Button onClick={closeResult}>Done</Button>
+            <Button onClick={() => closeResult()}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

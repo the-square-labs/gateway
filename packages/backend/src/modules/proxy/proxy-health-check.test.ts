@@ -65,7 +65,7 @@ describe('runImmediateProxyHealthCheck', () => {
     );
   });
 
-  it('checks a Pages Route through its published HTTPS URL', async () => {
+  it('checks a Pages Route through the node-local nginx probe', async () => {
     vi.useFakeTimers();
     const host = {
       id: 'pages-host',
@@ -94,19 +94,77 @@ describe('runImmediateProxyHealthCheck', () => {
         })),
       })),
     } as any;
-    const fetchMock = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') });
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
+    const probePagesRoute = vi.fn().mockResolvedValue({ ok: true, httpStatus: 200, responseMs: 12 });
 
     runImmediateProxyHealthCheck({
       db,
       hostId: host.id,
       logger: { debug: vi.fn() },
+      nodeDispatch: { probePagesRoute } as any,
     });
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://docs.example.com/health.html',
-      expect.objectContaining({ method: 'GET', redirect: 'follow' })
-    );
+    expect(probePagesRoute).toHaveBeenCalledWith('nginx-node', {
+      routeId: 'pages-host',
+      domain: 'docs.example.com',
+      tls: true,
+      path: '/health.html',
+      expectedStatus: 200,
+      expectedBody: null,
+      bodyMatchMode: null,
+      timeoutSeconds: 10,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledOnce();
+  });
+
+  it('writes an explicit unknown sample when the Pages probe capability is unavailable', async () => {
+    vi.useFakeTimers();
+    const host = {
+      id: 'pages-host',
+      domainNames: ['docs.example.com'],
+      enabled: true,
+      maintenanceEnabled: false,
+      healthCheckEnabled: true,
+      healthHistory: [],
+      healthCheckExpectedStatus: null,
+      healthCheckExpectedBody: null,
+      healthCheckBodyMatchMode: null,
+      healthCheckUrl: '/',
+      sslEnabled: false,
+      upstreamKind: 'pages',
+      nodeId: 'nginx-node',
+    };
+    const writes: Array<Record<string, unknown>> = [];
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          writes.push(values);
+          return {
+            where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: host.id }]) })),
+          };
+        }),
+      })),
+    } as any;
+
+    runImmediateProxyHealthCheck({
+      db,
+      hostId: host.id,
+      logger: { debug: vi.fn() },
+      nodeDispatch: {
+        probePagesRoute: vi.fn().mockResolvedValue({ ok: false, skipped: true, error: 'update required' }),
+      } as any,
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(writes).toEqual([
+      expect.objectContaining({
+        healthStatus: 'unknown',
+        healthHistory: [expect.objectContaining({ status: 'unknown' })],
+      }),
+    ]);
   });
 });

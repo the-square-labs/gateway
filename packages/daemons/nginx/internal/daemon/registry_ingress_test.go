@@ -31,7 +31,7 @@ func TestRegistryIngressCommandAcceptsOnlyBlindLoopbackBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(converted.Bindings) != 1 || converted.Bindings[0].GetRole() != "source" || converted.Bindings[0].GetListenerPort() != registryIngressPort {
+	if len(converted.Bindings) != 1 || converted.Bindings[0].GetRole() != "source" || converted.Bindings[0].GetListenerPort() != registryIngressPort || !converted.Bindings[0].GetSocketOnly() {
 		t.Fatalf("unexpected converted binding: %#v", converted.Bindings)
 	}
 }

@@ -40,6 +40,7 @@ interface BindingDetail {
 
 const PROXY_SECURE_LINK_PROBE_ATTEMPTS = 6;
 const PROXY_SECURE_LINK_PROBE_RETRY_MS = 500;
+const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_v1';
 const logger = createChildLogger('ProxySecureLinkService');
 const DOCKER_UPSTREAM_KINDS = ['docker_container', 'docker_deployment'] as const;
 
@@ -182,7 +183,7 @@ export class ProxySecureLinkService {
     }
 
     const target = await this.resolveAdditionalTarget(input, actorScopes);
-    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId]))) {
+    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId], host.nodeId))) {
       throw new AppError(
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
@@ -246,7 +247,7 @@ export class ProxySecureLinkService {
       throw new AppError(409, 'ADDITIONAL_ROUTE_UNAVAILABLE', 'Additional Routes require a managed proxy host');
     }
     const target = await this.resolveAdditionalTarget(input);
-    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId]))) {
+    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId], host.nodeId))) {
       throw new AppError(
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
@@ -415,7 +416,7 @@ export class ProxySecureLinkService {
           : await this.createAdditionalFromExisting({ ...host, nodeId: targetNodeId }, existing.id);
       return { previousBindingId: current.id, stagedBindingId: ready.id, generation: ready.generation };
     }
-    if (!(await this.nodesSupportSecureLinks([targetNodeId, current.dockerNodeId]))) {
+    if (!(await this.nodesSupportSecureLinks([targetNodeId, current.dockerNodeId], targetNodeId))) {
       throw new AppError(
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
@@ -831,7 +832,10 @@ export class ProxySecureLinkService {
   private async prepareLocked(host: ProxyHostRow, requireCapabilities: boolean, force: boolean): Promise<ProxyHostRow> {
     if (host.type !== 'proxy' || !isDockerUpstream(host.upstreamKind) || !host.nodeId) return host;
     const target = await this.resolveTarget(host);
-    const supported = await this.nodesSupportSecureLinks([host.nodeId, target.nodeId]);
+    const supported = await this.nodesSupportSecureLinks(
+      [host.nodeId, target.nodeId],
+      host.rawConfigEnabled ? undefined : host.nodeId
+    );
     if (!supported) {
       if (requireCapabilities) {
         throw new AppError(
@@ -928,9 +932,7 @@ export class ProxySecureLinkService {
         .set({ secureLinkStatus: 'cutover_ready', secureLinkLastError: null, updatedAt: new Date() })
         .where(and(eq(proxyHosts.id, host.id), eq(proxyHosts.secureLinkGeneration, generation)));
       const refreshed = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) });
-      if (!refreshed?.secureLinkListenerPort) {
-        throw new Error('Nginx daemon did not return a secure-link listener port');
-      }
+      if (!refreshed) throw new Error('Secure Link state disappeared after source synchronization');
       return refreshed;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -970,6 +972,23 @@ export class ProxySecureLinkService {
   }
 
   async activate(hostId: string): Promise<void> {
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
+    if (!host) throw new Error('Secure Link state disappeared before activation');
+
+    if (
+      host.nodeId &&
+      host.type === 'proxy' &&
+      isDockerUpstream(host.upstreamKind) &&
+      !host.rawConfigEnabled &&
+      host.secureLinkGeneration > 0
+    ) {
+      // The generated Nginx config now owns the Unix-socket cutover. Reconcile
+      // the source listener before making activation durable so the daemon can
+      // drop the temporary loopback TCP listener. Raw/user-owned configs keep
+      // TCP because their upstream may still reference the durable port.
+      await this.syncSourceNode(host.nodeId, undefined, host.id);
+    }
+
     await this.db
       .update(proxyHosts)
       .set({
@@ -1012,9 +1031,6 @@ export class ProxySecureLinkService {
     // pre-cutover row (whose durable Docker endpoint is the safety sentinel).
     const authoritative = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
     if (!authoritative?.secureLinkMigratedAt) throw new Error('Secure Link cutover state was not persisted');
-    if (!authoritative.secureLinkListenerPort) {
-      throw new Error('Secure Link listener port is unavailable after cutover');
-    }
     return authoritative;
   }
 
@@ -1146,7 +1162,7 @@ export class ProxySecureLinkService {
     return 'secure_link_failed';
   }
 
-  private async nodesSupportSecureLinks(nodeIds: string[]): Promise<boolean> {
+  private async nodesSupportSecureLinks(nodeIds: string[], socketOnlySourceNodeId?: string): Promise<boolean> {
     const unique = [...new Set(nodeIds)];
     const rows = await this.db
       .select({ id: nodes.id, capabilities: nodes.capabilities })
@@ -1155,7 +1171,11 @@ export class ProxySecureLinkService {
     if (rows.length !== unique.length) return false;
     return rows.every((row) => {
       const reported = (row.capabilities as Record<string, unknown> | null)?.capabilities;
-      return Array.isArray(reported) && reported.includes('proxy_secure_links_v1');
+      return (
+        Array.isArray(reported) &&
+        reported.includes('proxy_secure_links_v1') &&
+        (row.id !== socketOnlySourceNodeId || reported.includes(NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY))
+      );
     });
   }
 
@@ -1469,9 +1489,11 @@ export class ProxySecureLinkService {
     }
   }
 
-  private async syncSourceNode(nodeId: string, rotateLinkId?: string): Promise<void> {
+  private async syncSourceNode(nodeId: string, rotateLinkId?: string, forceSocketOnlyLinkId?: string): Promise<void> {
     const previous = this.sourceNodeSyncs.get(nodeId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => this.syncSourceNodeLocked(nodeId, rotateLinkId));
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.syncSourceNodeLocked(nodeId, rotateLinkId, forceSocketOnlyLinkId));
     this.sourceNodeSyncs.set(nodeId, current);
     try {
       await current;
@@ -1480,7 +1502,11 @@ export class ProxySecureLinkService {
     }
   }
 
-  private async syncSourceNodeLocked(nodeId: string, rotateLinkId?: string): Promise<void> {
+  private async syncSourceNodeLocked(
+    nodeId: string,
+    rotateLinkId?: string,
+    forceSocketOnlyLinkId?: string
+  ): Promise<void> {
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
         eq(proxyHosts.nodeId, nodeId),
@@ -1497,15 +1523,28 @@ export class ProxySecureLinkService {
           ),
         })
       : [];
+    if (forceSocketOnlyLinkId && !hosts.some((host) => host.id === forceSocketOnlyLinkId)) {
+      throw new Error('Secure Link state changed before socket-only activation');
+    }
     const result = await this.dispatch.sendProxySecureLinks(nodeId, [
-      ...hosts.map((host) => ({
-        linkId: host.id,
-        role: 'source' as const,
-        generation: host.secureLinkGeneration,
-        listenerPort: host.secureLinkListenerPort ?? 0,
-        sourceConfigManaged: host.secureLinkStatus === 'active' && host.type === 'proxy' && !host.rawConfigEnabled,
-        rotateListener: host.id === rotateLinkId,
-      })),
+      ...hosts.map((host) => {
+        const sourceConfigManaged =
+          (host.secureLinkStatus === 'active' || host.id === forceSocketOnlyLinkId) &&
+          host.type === 'proxy' &&
+          !host.rawConfigEnabled;
+        return {
+          linkId: host.id,
+          role: 'source' as const,
+          generation: host.secureLinkGeneration,
+          listenerPort: host.secureLinkListenerPort ?? 0,
+          sourceConfigManaged,
+          rotateListener: host.id === rotateLinkId,
+          // Raw/user-owned primary configs may still reference the durable
+          // loopback listener. Generated configs and additional links use the
+          // Unix socket and can safely drop TCP.
+          socketOnly: sourceConfigManaged,
+        };
+      }),
       ...additional.map((binding) => ({
         linkId: binding.id,
         role: 'source' as const,
@@ -1513,6 +1552,7 @@ export class ProxySecureLinkService {
         listenerPort: binding.listenerPort ?? 0,
         sourceConfigManaged: false,
         rotateListener: binding.id === rotateLinkId,
+        socketOnly: true,
       })),
     ]);
     if (!result.success) throw new Error(result.error || 'Nginx daemon rejected secure-link listeners');
@@ -1521,7 +1561,7 @@ export class ProxySecureLinkService {
       if (additionalIds.has(binding.linkId)) {
         await this.db
           .update(proxyAdditionalSecureLinks)
-          .set({ listenerPort: binding.port, updatedAt: new Date() })
+          .set({ listenerPort: binding.port || null, updatedAt: new Date() })
           .where(
             and(
               eq(proxyAdditionalSecureLinks.id, binding.linkId),
@@ -1531,7 +1571,7 @@ export class ProxySecureLinkService {
       } else {
         await this.db
           .update(proxyHosts)
-          .set({ secureLinkListenerPort: binding.port })
+          .set({ secureLinkListenerPort: binding.port || null })
           .where(and(eq(proxyHosts.id, binding.linkId), eq(proxyHosts.secureLinkGeneration, binding.generation)));
       }
     }

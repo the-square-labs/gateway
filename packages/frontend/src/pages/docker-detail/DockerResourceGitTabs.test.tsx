@@ -8,6 +8,11 @@ import type { DockerBuild, DockerSourceBinding } from "@/types";
 import { DockerResourceGitTabs } from "./DockerResourceGitTabs";
 
 const target = { kind: "container" as const, nodeId: "node-1", containerName: "api" };
+const pagesTarget = {
+  kind: "pages_project" as const,
+  nodeId: "node-1",
+  pageProjectId: "page-project-1",
+};
 const source: DockerSourceBinding = {
   id: "source-1",
   target,
@@ -91,6 +96,30 @@ describe("DockerResourceGitTabs source loading", () => {
 
     expect(await screen.findByText("Builds")).toBeInTheDocument();
     expect(listBuilds).toHaveBeenCalledWith({ sourceBindingId: "source-1", limit: 5 });
+  });
+
+  it("loads Pages build history inline without the recent-builds View all pattern", async () => {
+    vi.spyOn(api, "getDockerSource").mockResolvedValue({ ...source, target: pagesTarget });
+    const listRecent = vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
+    const listPage = vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({
+      data: [],
+      nextCursor: null,
+    });
+
+    renderWithRouter(<DockerResourceGitTabs target={pagesTarget} view="builds" />);
+
+    await waitFor(() =>
+      expect(listPage).toHaveBeenCalledWith({
+        sourceBindingId: "source-1",
+        cursor: undefined,
+        limit: 50,
+      })
+    );
+    expect(
+      await screen.findByText("Build history, security decisions, and deployment results.")
+    ).toBeInTheDocument();
+    expect(listRecent).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
   });
 
   it("keeps the Source layout mounted during a background build refresh", async () => {

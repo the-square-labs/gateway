@@ -52,14 +52,15 @@ systemRoutes.openapi(systemConfigRoute, async (c) => {
   const service = container.resolve(GeneralSettingsService);
   const loggingFeature = container.resolve(LoggingFeatureService);
   const config = await service.getConfig();
+  const canViewGatewaySettings = hasScope(c.get('effectiveScopes') || [], 'settings:gateway:view');
   return c.json({
     data: {
       fileUploadMaxBytes: config.fileUploadMaxBytes,
       fileOpenMaxBytes: config.fileOpenMaxBytes,
-      gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
-      gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
-      relayAutoRecovery: config.relayAutoRecovery,
-      relay: config.relay,
+      gatewayGrpcPublicTarget: canViewGatewaySettings ? config.gatewayGrpcPublicTarget : null,
+      gatewayGrpcLocalIp: canViewGatewaySettings ? config.gatewayGrpcLocalIp : null,
+      relayAutoRecovery: canViewGatewaySettings ? config.relayAutoRecovery : false,
+      ...(canViewGatewaySettings ? { relay: config.relay } : {}),
       features: {
         ...config.features,
         loggingEnabled: loggingFeature.isEnabled(),

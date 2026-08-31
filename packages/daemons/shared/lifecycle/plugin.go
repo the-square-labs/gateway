@@ -137,3 +137,9 @@ type ProxySecureLinkPlugin interface {
 type ProxySecureLinkProbePlugin interface {
 	ProbeProxySecureLink(command *pb.ProbeProxySecureLinkCommand) (detail string, err error)
 }
+
+// PagesRouteProbePlugin is implemented only by nginx-daemon. It probes the
+// managed Route through node-local nginx using the real HTTP Host and TLS SNI.
+type PagesRouteProbePlugin interface {
+	ProbePagesRoute(command *pb.ProbePagesRouteCommand) (detail string, err error)
+}

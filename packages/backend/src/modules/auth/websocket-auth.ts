@@ -101,7 +101,7 @@ export async function resolveWebSocketCredentialForScopeBase(
   return result;
 }
 
-async function resolveWebSocketCredentialContext(
+export async function resolveWebSocketCredentialContext(
   credential: WebSocketCredential | null
 ): Promise<WebSocketAuthResult | null> {
   if (!credential) return null;

@@ -64,9 +64,9 @@ function createApp() {
   return app;
 }
 
-function registerSession(scopes: string[]) {
+function registerSession(scopes: string[], user: User = USER) {
   container.registerInstance(SessionService, {
-    getSession: vi.fn().mockResolvedValue(SESSION),
+    getSession: vi.fn().mockResolvedValue({ ...SESSION, userId: user.id, user }),
     validateCsrfToken: vi.fn().mockResolvedValue(true),
     updateSession: vi.fn().mockResolvedValue(undefined),
     refreshSession: vi.fn().mockResolvedValue(false),
@@ -75,18 +75,18 @@ function registerSession(scopes: string[]) {
     query: {
       users: {
         findFirst: vi.fn().mockResolvedValue({
-          id: USER.id,
-          oidcSubject: USER.oidcSubject,
-          email: USER.email,
-          name: USER.name,
-          avatarUrl: USER.avatarUrl,
-          groupId: USER.groupId,
+          id: user.id,
+          oidcSubject: user.oidcSubject,
+          email: user.email,
+          name: user.name,
+          avatarUrl: user.avatarUrl,
+          groupId: user.groupId,
           additionalScopes: [],
-          isBlocked: USER.isBlocked,
+          isBlocked: user.isBlocked,
         }),
       },
       permissionGroups: {
-        findMany: vi.fn().mockResolvedValue([{ id: USER.groupId, parentId: null, name: USER.groupName, scopes }]),
+        findMany: vi.fn().mockResolvedValue([{ id: user.groupId, parentId: null, name: user.groupName, scopes }]),
       },
     },
   } as unknown as DrizzleClient);
@@ -141,6 +141,7 @@ function sessionHeaders() {
 
 afterEach(() => {
   container.reset();
+  delete process.env.GATEWAY_DEPLOYMENT_MODE;
 });
 
 describe('admin user identity validation', () => {
@@ -443,6 +444,115 @@ describe('admin Gateway settings route permissions', () => {
       },
       availableGroups: [],
     });
+  });
+
+  it('returns a shape-compatible non-secret Gateway settings projection to demo visitors', async () => {
+    process.env.GATEWAY_DEPLOYMENT_MODE = 'demo';
+    const demoUser = { ...USER, groupId: 'demo-group', groupName: 'demo-admin', authMethod: 'demo_email_otp' as const };
+    registerSession(['settings:gateway:view'], demoUser);
+    container.registerInstance(AuthSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({
+        oidcAutoCreateUsers: true,
+        oidcDefaultGroupId: 'secret-group',
+        oidcRequireVerifiedEmail: false,
+        oauthExtendedCallbackCompatibility: true,
+        mfaExistingSessionGracePeriodDays: 30,
+        methods: { oidc: true, password: true, emailOtp: false, passkeyLogin: true },
+        passwordPolicy: { minLength: 20, maxLength: 64 },
+      }),
+    } as unknown as AuthSettingsService);
+    container.registerInstance(AuthMailService, {
+      getPublicConfig: vi.fn().mockResolvedValue({
+        configured: true,
+        host: 'smtp.internal.example',
+        port: 587,
+        tlsMode: 'starttls',
+        username: 'mailer',
+        passwordLast4: '1234',
+        senderName: 'Gateway',
+        senderEmail: 'gateway@example.test',
+        verifiedAt: '2026-08-31T00:00:00.000Z',
+      }),
+    } as unknown as AuthMailService);
+    container.registerInstance(OidcSettingsService, {
+      getPublicConfig: vi.fn().mockResolvedValue({
+        configured: true,
+        issuer: 'https://id.internal.example',
+        clientId: 'internal-client',
+        clientSecretLast4: '5678',
+        redirectUri: 'https://gateway.example/auth/callback',
+        scopes: 'openid email profile groups',
+      }),
+    } as unknown as OidcSettingsService);
+    container.registerInstance(LoggingSettingsService, {
+      getPublicConfig: vi.fn().mockResolvedValue({
+        mode: 'external',
+        url: 'https://logs.internal.example',
+        username: 'logger',
+        passwordLast4: '9012',
+        database: 'private_logs',
+        table: 'gateway_events',
+        requestTimeoutMs: 9000,
+      }),
+    } as unknown as LoggingSettingsService);
+    container.registerInstance(McpSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: true }),
+    } as unknown as McpSettingsService);
+    container.registerInstance(GeneralSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({
+        publicUrl: 'https://demo.goodgateway.dev',
+        updateChannel: 'preview',
+        hideExternalBranding: false,
+        fileUploadMaxBytes: 100,
+        fileOpenMaxBytes: 10,
+        gatewayGrpcPublicTarget: 'gateway.internal:9443',
+        gatewayGrpcLocalIp: '10.0.0.2:9443',
+        relayAutoRecovery: true,
+        relay: { dataLanes: 8 },
+        relayGrantTtlHours: 24,
+        shutdown: { userRequestDrainSeconds: 99, structuredLogDrainSeconds: 88, finalizationTimeoutSeconds: 77 },
+        features: { pkiEnabled: true, domainsEnabled: true, siemEnabled: true, inferenceEnabled: false },
+      }),
+    } as unknown as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({
+        clientIpSource: 'reverse_proxy',
+        trustedProxyCidrs: ['10.0.0.0/8'],
+        trustCloudflareHeaders: true,
+      }),
+    } as unknown as NetworkSettingsService);
+    container.registerInstance(OutboundWebhookPolicyService, {
+      getConfig: vi.fn().mockResolvedValue({ allowPrivateNetworks: true, allowedPrivateCidrs: ['10.0.0.0/8'] }),
+    } as unknown as OutboundWebhookPolicyService);
+    container.registerInstance(GroupService, {
+      listGroups: vi.fn().mockResolvedValue([{ id: 'secret-group', name: 'Internal admins', scopes: [] }]),
+    } as unknown as GroupService);
+
+    const response = await createApp().request('/api/admin/auth-settings', { headers: sessionHeaders() });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { generalSettings: Record<string, unknown> };
+    expect(body).toMatchObject({
+      methods: { oidc: false, password: false, emailOtp: true, passkeyLogin: false },
+      smtp: { configured: false, host: null, username: null, passwordLast4: null },
+      oidc: { configured: false, issuer: null, clientId: null, clientSecretLast4: null },
+      logging: { mode: 'disabled', url: '', username: '', passwordLast4: null },
+      mcpServerEnabled: false,
+      generalSettings: {
+        publicUrl: 'https://demo.goodgateway.dev',
+        gatewayGrpcPublicTarget: null,
+        gatewayGrpcLocalIp: null,
+        relayAutoRecovery: false,
+      },
+      networkSecurity: { clientIpSource: 'auto', trustedProxyCidrs: [], trustCloudflareHeaders: false },
+      outboundWebhookPolicy: { allowPrivateNetworks: false, allowedPrivateCidrs: [] },
+      availableGroups: [],
+    });
+    expect(JSON.stringify(body)).not.toContain('internal.example');
+    expect(JSON.stringify(body)).not.toContain('1234');
+    expect(JSON.stringify(body)).not.toContain('5678');
+    expect(JSON.stringify(body)).not.toContain('9012');
+    expect(body.generalSettings).not.toHaveProperty('relay');
   });
 
   it('does not allow editing Gateway settings with only settings:gateway:view', async () => {

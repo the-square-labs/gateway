@@ -217,6 +217,22 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				return result
 			})
 			continue
+		case *pb.GatewayCommand_ProbePagesRoute:
+			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
+				result := &pb.CommandResult{CommandId: c.CommandId, Success: true}
+				pagesPlugin, ok := d.plugin.(PagesRouteProbePlugin)
+				if !ok {
+					result.Success = false
+					result.Error = "daemon does not support Pages Route probes"
+				} else if detail, err := pagesPlugin.ProbePagesRoute(c.GetProbePagesRoute()); err != nil {
+					result.Success = false
+					result.Error = err.Error()
+				} else {
+					result.Detail = detail
+				}
+				return result
+			})
+			continue
 		case *pb.GatewayCommand_ProbeRelayCandidate:
 			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
 				result := &pb.CommandResult{CommandId: c.CommandId, Success: true}

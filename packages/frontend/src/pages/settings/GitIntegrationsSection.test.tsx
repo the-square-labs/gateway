@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth";
 import type { GitConnector } from "@/types/integrations";
 import { GitIntegrationsSection } from "./GitIntegrationsSection";
@@ -89,6 +89,10 @@ describe("GitIntegrationsSection", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("chooses GitHub authentication before opening the shared connector form", async () => {
     const user = userEvent.setup();
     render(<GitIntegrationsSection />);
@@ -122,6 +126,26 @@ describe("GitIntegrationsSection", () => {
     expect(screen.getByRole("button", { name: "Test Connection" })).toBeDisabled();
     expect(screen.queryByText("Repository access")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Repository URL")).not.toBeInTheDocument();
+  });
+
+  it("opens the GitHub method dialog only after the connector form finishes closing", async () => {
+    const user = userEvent.setup();
+    render(<GitIntegrationsSection />);
+
+    await waitFor(() => expect(mocks.getGitHubOAuthAvailability).toHaveBeenCalled());
+    await user.click(screen.getAllByRole("button", { name: "Add Connector" })[0]);
+    await user.click(screen.getByRole("button", { name: /Personal access token/ }));
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(screen.queryByRole("heading", { name: "Add GitHub Connector" })).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(249));
+    expect(screen.queryByRole("heading", { name: "Add GitHub Connector" })).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+
+    expect(screen.getByRole("heading", { name: "Add GitHub Connector" })).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("uses the shared shell and preview test for generic Git", async () => {

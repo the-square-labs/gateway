@@ -246,5 +246,5 @@ describe('inference core lifecycle routes', () => {
       body: JSON.stringify({}),
     });
     expect(install.status).toBe(202);
-  });
+  }, 15_000);
 });

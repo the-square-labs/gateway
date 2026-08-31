@@ -703,7 +703,12 @@ describe('ProxySecureLinkService migration rollback', () => {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: vi.fn().mockResolvedValue([
-            { id: 'nginx-node', capabilities: { capabilities: ['proxy_secure_links_v1'] } },
+            {
+              id: 'nginx-node',
+              capabilities: {
+                capabilities: ['proxy_secure_links_v1', 'nginx_secure_link_socket_only_v1'],
+              },
+            },
             { id: 'docker-node', capabilities: { capabilities: ['proxy_secure_links_v1'] } },
           ]),
         })),
@@ -777,6 +782,37 @@ describe('ProxySecureLinkService migration rollback', () => {
     ]);
     expect(dispatch.sendProxySecureLinks.mock.calls[3]?.[1]).toEqual([]);
     expect(dispatch.sendProxySecureLinks.mock.calls[4]?.[1]).toEqual([]);
+  });
+
+  it('requires the socket-only capability from the Nginx source but not the Docker target', async () => {
+    let rows = [
+      { id: 'nginx-node', capabilities: { capabilities: ['proxy_secure_links_v1'] } },
+      { id: 'docker-node', capabilities: { capabilities: ['proxy_secure_links_v1'] } },
+    ];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(async () => rows) })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+
+    await expect((service as any).nodesSupportSecureLinks(['nginx-node', 'docker-node'])).resolves.toBe(true);
+    await expect((service as any).nodesSupportSecureLinks(['nginx-node', 'docker-node'], 'nginx-node')).resolves.toBe(
+      false
+    );
+
+    rows = [
+      {
+        id: 'nginx-node',
+        capabilities: {
+          capabilities: ['proxy_secure_links_v1', 'nginx_secure_link_socket_only_v1'],
+        },
+      },
+      rows[1]!,
+    ];
+    await expect((service as any).nodesSupportSecureLinks(['nginx-node', 'docker-node'], 'nginx-node')).resolves.toBe(
+      true
+    );
   });
 
   it('reloads the desired set instead of dispatching a stale network generation after a lost CAS', async () => {
@@ -910,11 +946,15 @@ describe('ProxySecureLinkService migration rollback', () => {
       upstreamKind: 'docker_container',
       secureLinkGeneration: 1,
       secureLinkListenerPort: 41001,
+      secureLinkStatus: 'active',
+      type: 'proxy',
+      rawConfigEnabled: false,
     } as any;
     const secondHost = {
       ...firstHost,
       id: '22222222-2222-4222-8222-222222222222',
       secureLinkListenerPort: 41002,
+      rawConfigEnabled: true,
     };
     const additionalBinding = {
       id: '33333333-3333-4333-8333-333333333333',
@@ -967,10 +1007,81 @@ describe('ProxySecureLinkService migration rollback', () => {
 
     expect(dispatch.sendProxySecureLinks).toHaveBeenCalledTimes(2);
     expect(dispatch.sendProxySecureLinks.mock.calls[1]?.[1]).toEqual([
-      expect.objectContaining({ linkId: firstHost.id }),
-      expect.objectContaining({ linkId: secondHost.id }),
-      expect.objectContaining({ linkId: additionalBinding.id, sourceConfigManaged: false }),
+      expect.objectContaining({ linkId: firstHost.id, socketOnly: true }),
+      expect.objectContaining({ linkId: secondHost.id, sourceConfigManaged: false, socketOnly: false }),
+      expect.objectContaining({ linkId: additionalBinding.id, sourceConfigManaged: false, socketOnly: true }),
     ]);
+  });
+
+  it('drops the managed source TCP listener before persisting activation', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      nodeId: 'nginx-node',
+      upstreamKind: 'docker_container',
+      secureLinkGeneration: 1,
+      secureLinkListenerPort: 41001,
+      secureLinkStatus: 'cutover_ready',
+      type: 'proxy',
+      rawConfigEnabled: false,
+    } as any;
+    const events: string[] = [];
+    const db = {
+      query: {
+        proxyHosts: {
+          findFirst: vi.fn().mockResolvedValue(host),
+          findMany: vi.fn().mockResolvedValue([host]),
+        },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => ({
+          where: vi.fn(async () => {
+            if (values.secureLinkStatus === 'active') events.push('active');
+          }),
+        })),
+      })),
+    } as any;
+    const dispatch = {
+      sendProxySecureLinks: vi.fn(async (_nodeId: string, bindings: Array<Record<string, unknown>>) => {
+        events.push('sync');
+        expect(bindings).toEqual([
+          expect.objectContaining({ linkId: host.id, sourceConfigManaged: true, socketOnly: true }),
+        ]);
+        return {
+          success: true,
+          detail: JSON.stringify({ bindings: [{ linkId: host.id, generation: 1, port: 0 }] }),
+        };
+      }),
+    } as any;
+    const service = new ProxySecureLinkService(db, dispatch, {} as any, 'connector@sha256:test');
+
+    await service.activate(host.id);
+
+    expect(events).toEqual(['sync', 'active']);
+  });
+
+  it('preserves raw primary TCP listeners when persisting activation', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      nodeId: 'nginx-node',
+      upstreamKind: 'docker_container',
+      secureLinkGeneration: 1,
+      secureLinkStatus: 'cutover_ready',
+      type: 'proxy',
+      rawConfigEnabled: true,
+    } as any;
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+      })),
+    } as any;
+    const dispatch = { sendProxySecureLinks: vi.fn() } as any;
+    const service = new ProxySecureLinkService(db, dispatch, {} as any, 'connector@sha256:test');
+
+    await service.activate(host.id);
+
+    expect(dispatch.sendProxySecureLinks).not.toHaveBeenCalled();
   });
 
   it('sends default and additional bindings in one target desired-state snapshot', async () => {

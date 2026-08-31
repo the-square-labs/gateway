@@ -477,6 +477,7 @@ describe('proxy routes programmatic raw config handling', () => {
       upstreamKind: 'pages',
       pageProjectId,
       pageTagId: '33333333-3333-4333-8333-333333333333',
+      healthCheckEnabled: true,
     };
     mocks.scopes = ['proxy:create'];
     const denied = await createApp().request('/', {
@@ -495,7 +496,7 @@ describe('proxy routes programmatic raw config handling', () => {
     });
     expect(allowed.status).toBe(201);
     expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
-      expect.objectContaining({ upstreamKind: 'pages', pageProjectId }),
+      expect.objectContaining({ upstreamKind: 'pages', pageProjectId, healthCheckEnabled: true }),
       'user-1',
       expect.any(Object)
     );
@@ -545,7 +546,7 @@ describe('proxy routes programmatic raw config handling', () => {
     const denied = await createApp().request('/host-1', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cacheEnabled: true }),
+      body: JSON.stringify({ cacheEnabled: true, healthCheckEnabled: true }),
     });
     expect(denied.status).toBe(403);
     expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
@@ -554,10 +555,15 @@ describe('proxy routes programmatic raw config handling', () => {
     const allowed = await createApp().request('/host-1', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cacheEnabled: true }),
+      body: JSON.stringify({ cacheEnabled: true, healthCheckEnabled: true }),
     });
     expect(allowed.status).toBe(200);
-    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledWith(
+      'host-1',
+      expect.objectContaining({ cacheEnabled: true, healthCheckEnabled: true }),
+      'user-1',
+      expect.any(Object)
+    );
   });
 
   it('allows switching an existing Pages Route to another target after entitlement loss', async () => {

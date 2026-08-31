@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -44,10 +45,13 @@ type nginxRelayTunnel struct {
 }
 
 type sourceLinkManager struct {
-	mu        sync.Mutex
-	bindings  map[string]*sourceLinkBinding
-	opener    func(string, net.Conn)
-	socketDir string
+	mu                sync.Mutex
+	bindings          map[string]*sourceLinkBinding
+	opener            func(string, net.Conn)
+	socketDir         string
+	authorizeUnixPeer func(net.Conn) bool
+	socketOwnerUID    func() (int, error)
+	renameSocket      func(string, string) error
 }
 
 type sourceLinkBinding struct {
@@ -57,7 +61,8 @@ type sourceLinkBinding struct {
 	socketPath string
 	done       chan struct{}
 	activeMu   sync.Mutex
-	active     map[net.Conn]struct{}
+	active     map[net.Conn]bool
+	socketOnly bool
 }
 
 type sourceLinkStatus struct {
@@ -73,12 +78,70 @@ func proxySecureLinkSetupContext(parent context.Context, timeout time.Duration) 
 	return ctx, cancel, timer.Stop
 }
 
-func newSourceLinkManager(opener func(string, net.Conn)) *sourceLinkManager {
-	return newSourceLinkManagerAt(opener, proxySecureLinkSocketDir)
+func newSourceLinkManager(opener func(string, net.Conn), nginxBinary string, masterPID func() (int, error)) *sourceLinkManager {
+	return newSourceLinkManagerAt(opener, proxySecureLinkSocketDir, nginxBinary, masterPID)
 }
 
-func newSourceLinkManagerAt(opener func(string, net.Conn), socketDir string) *sourceLinkManager {
-	return &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}, opener: opener, socketDir: socketDir}
+func newSourceLinkManagerAt(
+	opener func(string, net.Conn),
+	socketDir string,
+	nginxBinary string,
+	masterPID func() (int, error),
+) *sourceLinkManager {
+	canonicalNginxBinary := canonicalExecutablePath(nginxBinary)
+	socketOwnerUID := func() (int, error) {
+		if masterPID == nil {
+			return os.Getuid(), nil
+		}
+		pid, err := masterPID()
+		if err != nil {
+			return 0, err
+		}
+		return managedNginxWorkerUID(pid, canonicalNginxBinary)
+	}
+	return &sourceLinkManager{
+		bindings:  map[string]*sourceLinkBinding{},
+		opener:    opener,
+		socketDir: socketDir,
+		authorizeUnixPeer: func(connection net.Conn) bool {
+			return isAuthorizedUnixPeer(connection, canonicalNginxBinary, masterPID)
+		},
+		socketOwnerUID: socketOwnerUID,
+		renameSocket:   os.Rename,
+	}
+}
+
+func canonicalExecutablePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	resolvedPath, err := exec.LookPath(path)
+	if err != nil {
+		return ""
+	}
+	path = resolvedPath
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
+}
+
+func isAuthorizedUnixPeer(connection net.Conn, nginxBinary string, masterPID func() (int, error)) bool {
+	peer, err := unixPeerCredentials(connection)
+	if err != nil {
+		return false
+	}
+	if peer.pid == os.Getpid() {
+		return true
+	}
+	if nginxBinary == "" || masterPID == nil {
+		return false
+	}
+	managedPID, err := masterPID()
+	if err != nil {
+		return false
+	}
+	return isManagedNginxProcess(peer.pid, managedPID, nginxBinary)
 }
 
 func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sourceLinkStatus, error) {
@@ -95,6 +158,11 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 		}
 		desired[binding.LinkId] = binding
 	}
+	desiredIDs := make([]string, 0, len(desired))
+	for id := range desired {
+		desiredIDs = append(desiredIDs, id)
+	}
+	sort.Strings(desiredIDs)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -104,25 +172,170 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 		}
 	}
 	staged := make(map[string]*sourceLinkBinding)
-	for id, binding := range desired {
-		if m.bindings[id] != nil && !binding.RotateListener {
+	stagedTCP := make(map[string]net.Listener)
+	closeStaged := func() {
+		for _, listener := range staged {
+			listener.close()
+		}
+		for _, listener := range stagedTCP {
+			_ = listener.Close()
+		}
+	}
+	for _, id := range desiredIDs {
+		binding := desired[id]
+		current := m.bindings[id]
+		if current != nil && !binding.RotateListener {
+			if !binding.SocketOnly && current.listener == nil {
+				listener, err := listenSourceLinkTCP(id, binding.ListenerPort)
+				if err != nil && binding.ListenerPort != 0 {
+					listener, err = listenSourceLinkTCP(id, 0)
+				}
+				if err != nil {
+					closeStaged()
+					return nil, err
+				}
+				stagedTCP[id] = listener
+			}
 			continue
 		}
 		requestedPort := binding.ListenerPort
-		if binding.RotateListener {
+		stageSocketOnly := binding.SocketOnly
+		preserveTCP := current != nil && binding.RotateListener && !binding.SocketOnly && current.listener != nil
+		if binding.RotateListener && binding.SocketOnly {
+			requestedPort = 0
+		} else if preserveTCP {
+			stageSocketOnly = true
 			requestedPort = 0
 		}
-		created, err := m.create(id, binding.Generation, requestedPort)
-		if err != nil && requestedPort != 0 {
-			created, err = m.create(id, binding.Generation, 0)
+		socketPath := filepath.Join(m.socketDir, id+".sock")
+		if current != nil && binding.RotateListener {
+			socketPath += ".next"
+		}
+		created, err := m.createAtPath(id, binding.Generation, requestedPort, stageSocketOnly, socketPath)
+		allowPortFallback := !(current != nil && binding.RotateListener && !binding.SocketOnly)
+		if err != nil && requestedPort != 0 && allowPortFallback {
+			created, err = m.createAtPath(id, binding.Generation, 0, stageSocketOnly, socketPath)
 		}
 		if err != nil {
-			for _, listener := range staged {
-				listener.close()
-			}
+			closeStaged()
 			return nil, err
 		}
+		if preserveTCP {
+			listener, duplicateErr := duplicateTCPListener(current.listener)
+			if duplicateErr != nil {
+				created.close()
+				closeStaged()
+				return nil, fmt.Errorf("preserve proxy secure-link TCP listener %s: %w", id, duplicateErr)
+			}
+			created.listener = listener
+			created.socketOnly = false
+		}
 		staged[id] = created
+	}
+	type publishedRotation struct {
+		id          string
+		canonical   string
+		staging     string
+		backup      string
+		hadPrevious bool
+	}
+	published := make([]publishedRotation, 0)
+	rotationBackups := make(map[string]string)
+	rollbackPublished := func() error {
+		for index := len(published) - 1; index >= 0; index-- {
+			rotation := published[index]
+			moveErr := m.renameSocket(rotation.canonical, rotation.staging)
+			if moveErr == nil {
+				staged[rotation.id].socketPath = rotation.staging
+			}
+			if rotation.hadPrevious {
+				if restoreErr := m.renameSocket(rotation.backup, rotation.canonical); restoreErr != nil {
+					if moveErr == nil {
+						if republishErr := m.renameSocket(rotation.staging, rotation.canonical); republishErr == nil {
+							staged[rotation.id].socketPath = rotation.canonical
+						}
+					}
+					return errors.Join(moveErr, fmt.Errorf("restore previous proxy secure-link socket %s: %w", rotation.id, restoreErr))
+				}
+				if moveErr != nil {
+					// Restoring the backup atomically replaced the published socket.
+					// Its listener is now unlinked, so cleanup must target only the
+					// original staging pathname, never the restored canonical path.
+					staged[rotation.id].socketPath = rotation.staging
+				}
+			} else if moveErr != nil {
+				return fmt.Errorf("rollback proxy secure-link socket %s: %w", rotation.id, moveErr)
+			}
+		}
+		return nil
+	}
+	for _, id := range desiredIDs {
+		binding := desired[id]
+		current := m.bindings[id]
+		if current == nil || !binding.RotateListener {
+			continue
+		}
+		canonical := current.socketPath
+		staging := staged[id].socketPath
+		backup := canonical + ".previous"
+		if err := removeExistingSocket(backup); err != nil {
+			if rollbackErr := rollbackPublished(); rollbackErr != nil {
+				return nil, errors.Join(err, rollbackErr)
+			}
+			closeStaged()
+			return nil, err
+		}
+		hadPrevious := true
+		if err := m.renameSocket(canonical, backup); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				if rollbackErr := rollbackPublished(); rollbackErr != nil {
+					return nil, errors.Join(err, rollbackErr)
+				}
+				closeStaged()
+				return nil, fmt.Errorf("stage previous proxy secure-link socket %s: %w", id, err)
+			}
+			hadPrevious = false
+		}
+		if err := m.renameSocket(staging, canonical); err != nil {
+			var restoreErr error
+			if hadPrevious {
+				restoreErr = m.renameSocket(backup, canonical)
+			}
+			rollbackErr := rollbackPublished()
+			if restoreErr != nil || rollbackErr != nil {
+				return nil, errors.Join(err, restoreErr, rollbackErr)
+			}
+			closeStaged()
+			return nil, fmt.Errorf("publish proxy secure-link socket %s: %w", id, err)
+		}
+		staged[id].socketPath = canonical
+		if hadPrevious {
+			rotationBackups[id] = backup
+		}
+		published = append(published, publishedRotation{
+			id: id, canonical: canonical, staging: staging, backup: backup, hadPrevious: hadPrevious,
+		})
+	}
+	for id, binding := range desired {
+		current := m.bindings[id]
+		if current == nil || binding.RotateListener {
+			continue
+		}
+		if binding.SocketOnly && current.listener != nil {
+			current.disableTCP()
+		} else if listener := stagedTCP[id]; listener != nil {
+			current.activeMu.Lock()
+			current.socketOnly = false
+			current.activeMu.Unlock()
+			current.listener = listener
+			m.accept(id, current, listener, false)
+			delete(stagedTCP, id)
+		}
+		if binding.SocketOnly {
+			current.activeMu.Lock()
+			current.socketOnly = true
+			current.activeMu.Unlock()
+		}
 	}
 	for id, current := range m.bindings {
 		if _, keep := desired[id]; keep {
@@ -134,11 +347,15 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 	for id, binding := range desired {
 		current := m.bindings[id]
 		if current != nil && binding.RotateListener {
-			// create() has already replaced the filesystem entry with the
-			// staged Unix listener. Closing the retired binding must not unlink
-			// that replacement path.
+			// The staged listener now owns the canonical path. Closing the retired
+			// binding must not unlink it; the old path was retained as a rollback
+			// backup until every rotation was published.
 			current.closePreservingSocketPath()
+			if backup := rotationBackups[id]; backup != "" {
+				_ = os.Remove(backup)
+			}
 			m.bindings[id] = staged[id]
+			m.start(id, staged[id])
 			continue
 		}
 		if current != nil {
@@ -149,58 +366,145 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 			continue
 		}
 		m.bindings[id] = staged[id]
+		m.start(id, staged[id])
 	}
 	statuses := make([]sourceLinkStatus, 0, len(m.bindings))
 	for id, binding := range m.bindings {
-		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: binding.listener.Addr().(*net.TCPAddr).Port, SocketPath: binding.socketPath})
+		port := 0
+		if binding.listener != nil {
+			port = binding.listener.Addr().(*net.TCPAddr).Port
+		}
+		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: port, SocketPath: binding.socketPath})
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
 }
 
-func (m *sourceLinkManager) create(id string, generation uint64, port uint32) (*sourceLinkBinding, error) {
+func listenSourceLinkTCP(id string, port uint32) (net.Listener, error) {
 	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("listen for proxy secure-link %s: %w", id, err)
 	}
-	if err := os.MkdirAll(m.socketDir, 0o755); err != nil {
-		_ = listener.Close()
-		return nil, fmt.Errorf("create proxy secure-link socket directory: %w", err)
+	return listener, nil
+}
+
+func duplicateTCPListener(listener net.Listener) (net.Listener, error) {
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return nil, errors.New("source listener is not TCP")
 	}
-	socketPath := filepath.Join(m.socketDir, id+".sock")
+	file, err := tcpListener.File()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return net.FileListener(file)
+}
+
+func (m *sourceLinkManager) create(id string, generation uint64, port uint32, socketOnly bool) (*sourceLinkBinding, error) {
+	return m.createAtPath(id, generation, port, socketOnly, filepath.Join(m.socketDir, id+".sock"))
+}
+
+func removeExistingSocket(socketPath string) error {
 	if info, statErr := os.Lstat(socketPath); statErr == nil {
 		if info.Mode()&os.ModeSocket == 0 {
-			_ = listener.Close()
-			return nil, fmt.Errorf("refuse to replace non-socket secure-link path %s", socketPath)
+			return fmt.Errorf("refuse to replace non-socket secure-link path %s", socketPath)
 		}
-		if err := os.Remove(socketPath); err != nil {
-			_ = listener.Close()
+		return os.Remove(socketPath)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	return nil
+}
+
+func (m *sourceLinkManager) createAtPath(
+	id string,
+	generation uint64,
+	port uint32,
+	socketOnly bool,
+	socketPath string,
+) (*sourceLinkBinding, error) {
+	var listener net.Listener
+	var err error
+	if !socketOnly {
+		listener, err = listenSourceLinkTCP(id, port)
+		if err != nil {
 			return nil, err
 		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		_ = listener.Close()
-		return nil, statErr
+	}
+	if err := os.MkdirAll(m.socketDir, 0o755); err != nil {
+		if listener != nil {
+			_ = listener.Close()
+		}
+		return nil, fmt.Errorf("create proxy secure-link socket directory: %w", err)
+	}
+	if err := removeExistingSocket(socketPath); err != nil {
+		if listener != nil {
+			_ = listener.Close()
+		}
+		return nil, err
 	}
 	unixListener, err := net.Listen("unix", socketPath)
 	if err != nil {
-		_ = listener.Close()
+		if listener != nil {
+			_ = listener.Close()
+		}
 		return nil, fmt.Errorf("listen on proxy secure-link socket %s: %w", id, err)
 	}
-	if err := os.Chmod(socketPath, 0o666); err != nil {
+	ownerUID, err := m.socketOwnerUID()
+	if err != nil {
 		_ = unixListener.Close()
-		_ = listener.Close()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		_ = os.Remove(socketPath)
+		return nil, fmt.Errorf("resolve managed nginx worker uid: %w", err)
+	}
+	if err := os.Chown(socketPath, ownerUID, -1); err != nil {
+		_ = unixListener.Close()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		_ = os.Remove(socketPath)
+		return nil, fmt.Errorf("set proxy secure-link socket owner: %w", err)
+	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = unixListener.Close()
+		if listener != nil {
+			_ = listener.Close()
+		}
 		_ = os.Remove(socketPath)
 		return nil, err
 	}
-	binding := &sourceLinkBinding{generation: generation, listener: listener, unix: unixListener, socketPath: socketPath, done: make(chan struct{}), active: map[net.Conn]struct{}{}}
-	accept := func(current net.Listener) {
+	binding := &sourceLinkBinding{generation: generation, listener: listener, unix: unixListener, socketPath: socketPath, done: make(chan struct{}), active: map[net.Conn]bool{}, socketOnly: socketOnly}
+	return binding, nil
+}
+
+func (m *sourceLinkManager) start(id string, binding *sourceLinkBinding) {
+	if binding.listener != nil {
+		m.accept(id, binding, binding.listener, false)
+	}
+	m.accept(id, binding, binding.unix, true)
+}
+
+func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listener net.Listener, authorizePeer bool) {
+	go func() {
 		for {
-			connection, err := current.Accept()
+			connection, err := listener.Accept()
 			if err != nil {
 				return
 			}
+			if authorizePeer && (m.authorizeUnixPeer == nil || !m.authorizeUnixPeer(connection)) {
+				_ = connection.Close()
+				continue
+			}
 			binding.activeMu.Lock()
-			binding.active[connection] = struct{}{}
+			if !authorizePeer && binding.socketOnly {
+				binding.activeMu.Unlock()
+				_ = connection.Close()
+				continue
+			}
+			binding.active[connection] = authorizePeer
 			binding.activeMu.Unlock()
 			go func() {
 				defer func() {
@@ -211,10 +515,7 @@ func (m *sourceLinkManager) create(id string, generation uint64, port uint32) (*
 				m.opener(id, connection)
 			}()
 		}
-	}
-	go accept(listener)
-	go accept(unixListener)
-	return binding, nil
+	}()
 }
 
 func (b *sourceLinkBinding) close() {
@@ -234,7 +535,9 @@ func (b *sourceLinkBinding) closeBinding(removeSocketPath bool) {
 		return
 	default:
 		close(b.done)
-		_ = b.listener.Close()
+		if b.listener != nil {
+			_ = b.listener.Close()
+		}
 		_ = b.unix.Close()
 		if removeSocketPath {
 			_ = os.Remove(b.socketPath)
@@ -251,6 +554,21 @@ func (b *sourceLinkBinding) closeActive() {
 	}
 }
 
+func (b *sourceLinkBinding) disableTCP() {
+	if b.listener != nil {
+		_ = b.listener.Close()
+		b.listener = nil
+	}
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	b.socketOnly = true
+	for connection, isUnix := range b.active {
+		if !isUnix {
+			_ = connection.Close()
+		}
+	}
+}
+
 func (m *sourceLinkManager) closeActive(linkID string) {
 	m.mu.Lock()
 	binding := m.bindings[linkID]
@@ -264,7 +582,7 @@ func (m *sourceLinkManager) port(linkID string) (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	binding := m.bindings[linkID]
-	if binding == nil {
+	if binding == nil || binding.listener == nil {
 		return 0, false
 	}
 	return binding.listener.Addr().(*net.TCPAddr).Port, true

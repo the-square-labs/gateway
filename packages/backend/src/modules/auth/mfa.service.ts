@@ -11,6 +11,33 @@ import type { CacheService } from '@/services/cache.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 
 const TOTP_SETUP_TTL_SECONDS = 10 * 60;
+const MAX_MFA_LOGIN_ATTEMPTS = 5;
+
+const CONSUME_MFA_LOGIN_CHALLENGE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return '' end
+redis.call('DEL', KEYS[1])
+return raw
+`;
+
+const RECORD_MFA_LOGIN_FAILURE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then
+  redis.call('DEL', KEYS[1])
+  return 0
+end
+local challenge = cjson.decode(raw)
+local attempts = (tonumber(challenge.attempts) or 0) + 1
+if attempts >= tonumber(ARGV[1]) then
+  redis.call('DEL', KEYS[1])
+else
+  challenge.attempts = attempts
+  redis.call('SET', KEYS[1], cjson.encode(challenge), 'PX', ttl)
+end
+return attempts
+`;
 
 interface PendingTotpSetup {
   encryptedSecret: { encryptedKey: string; encryptedDek: string };
@@ -99,6 +126,10 @@ export class MfaService {
     if (!pending) throw new AppError(400, 'TOTP_SETUP_EXPIRED', 'TOTP setup has expired');
     const secret = this.cryptoService.decryptString(pending.encryptedSecret);
     if (!this.isValidTotp(secret, code)) throw new AppError(400, 'INVALID_TOTP_CODE', 'Invalid authentication code');
+    const claimed = await this.cacheService.take<PendingTotpSetup>(key);
+    if (!claimed || JSON.stringify(claimed.encryptedSecret) !== JSON.stringify(pending.encryptedSecret)) {
+      throw new AppError(400, 'TOTP_SETUP_EXPIRED', 'TOTP setup has expired');
+    }
     await this.db
       .insert(userTotpFactors)
       .values({
@@ -115,7 +146,6 @@ export class MfaService {
           updatedAt: new Date(),
         },
       });
-    await this.cacheService.delete(key);
     return this.regenerateRecoveryCodes(userId);
   }
 
@@ -168,18 +198,17 @@ export class MfaService {
   ): Promise<{ userId: string; authMethod: 'password' | 'email_otp' } | null> {
     const key = `mfa:login:${challengeId}`;
     const pending = await this.cacheService.get<PendingMfaLogin>(key);
-    if (!pending || pending.attempts >= 5) return null;
+    if (!pending || pending.attempts >= MAX_MFA_LOGIN_ATTEMPTS) return null;
     const valid = input.totpCode
       ? await this.verifyTotp(pending.userId, input.totpCode)
       : input.recoveryCode
         ? await this.useRecoveryCode(pending.userId, input.recoveryCode)
         : false;
     if (!valid) {
-      await this.cacheService.set(key, { ...pending, attempts: pending.attempts + 1 }, TOTP_SETUP_TTL_SECONDS);
+      await this.cacheService.getClient().eval(RECORD_MFA_LOGIN_FAILURE_SCRIPT, 1, key, MAX_MFA_LOGIN_ATTEMPTS);
       return null;
     }
-    await this.cacheService.delete(key);
-    return { userId: pending.userId, authMethod: pending.authMethod };
+    return this.consumeLoginChallenge(key);
   }
 
   async getLoginChallenge(challengeId: string): Promise<PendingMfaLogin | null> {
@@ -189,10 +218,15 @@ export class MfaService {
   async completeVerifiedLoginChallenge(
     challengeId: string
   ): Promise<{ userId: string; authMethod: 'password' | 'email_otp' } | null> {
-    const key = `mfa:login:${challengeId}`;
-    const pending = await this.cacheService.get<PendingMfaLogin>(key);
-    if (!pending) return null;
-    await this.cacheService.delete(key);
+    return this.consumeLoginChallenge(`mfa:login:${challengeId}`);
+  }
+
+  private async consumeLoginChallenge(
+    key: string
+  ): Promise<{ userId: string; authMethod: 'password' | 'email_otp' } | null> {
+    const raw = await this.cacheService.getClient().eval(CONSUME_MFA_LOGIN_CHALLENGE_SCRIPT, 1, key);
+    if (typeof raw !== 'string' || raw.length === 0) return null;
+    const pending = JSON.parse(raw) as PendingMfaLogin;
     return { userId: pending.userId, authMethod: pending.authMethod };
   }
 

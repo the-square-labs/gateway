@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -101,7 +102,11 @@ function GitConnectorPanel({
   );
   const [editingConnector, setEditingConnector] = useState<GitConnector | null>(null);
   const [methodOpen, setMethodOpen] = useState(false);
-  const [formOpen, setFormOpen] = useState(false);
+  const {
+    open: formOpen,
+    setValue: setFormDialog,
+    close: closeFormDialog,
+  } = useDeferredDialogState<true>();
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -112,15 +117,6 @@ function GitConnectorPanel({
   const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
   const [authMode, setAuthMode] = useState<"oauth" | "token">("token");
   const [githubOAuthActive, setGitHubOAuthActive] = useState(false);
-  const closeCleanupTimer = useRef<number | null>(null);
-
-  useEffect(
-    () => () => {
-      if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
-    },
-    []
-  );
-
   const refresh = useCallback(async () => {
     if (!canView) return;
     try {
@@ -160,45 +156,37 @@ function GitConnectorPanel({
   };
 
   const openCreateDialog = () => {
-    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
     resetForm();
     setEditingConnector(null);
     if (provider === "github") setMethodOpen(true);
     else {
       setAuthMode("token");
-      setFormOpen(true);
+      setFormDialog(true);
     }
   };
 
   const chooseGitHubMethod = (mode: "oauth" | "token") => {
     setAuthMode(mode);
     setMethodOpen(false);
-    setFormOpen(true);
+    setFormDialog(true);
   };
 
   const closeForm = () => {
-    setFormOpen(false);
-    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
-    closeCleanupTimer.current = window.setTimeout(() => {
+    closeFormDialog(() => {
       setEditingConnector(null);
       resetForm();
-      closeCleanupTimer.current = null;
-    }, 220);
+    });
   };
 
   const backToMethods = () => {
-    setFormOpen(false);
-    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
-    closeCleanupTimer.current = window.setTimeout(() => {
+    closeFormDialog(() => {
       setEditingConnector(null);
       resetForm();
       setMethodOpen(true);
-      closeCleanupTimer.current = null;
-    }, 220);
+    });
   };
 
   const openEditDialog = (connector: GitConnector) => {
-    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
     setEditingConnector(connector);
     setAuthMode(connector.authMode);
     setForm({
@@ -212,7 +200,7 @@ function GitConnectorPanel({
     const urls = (connector.allowlistEntries ?? []).map((entry) => entry.fullPath);
     setRepositoryUrls(urls.length > 0 ? urls : [""]);
     setTestedTokenSignature(null);
-    setFormOpen(true);
+    setFormDialog(true);
   };
 
   const saveConnector = async () => {
@@ -485,7 +473,7 @@ function GitConnectorPanel({
         </Dialog>
       ) : null}
 
-      <Dialog open={formOpen} onOpenChange={(open) => (open ? setFormOpen(true) : closeForm())}>
+      <Dialog open={formOpen} onOpenChange={(open) => (open ? setFormDialog(true) : closeForm())}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
@@ -725,7 +713,7 @@ function GitConnectorPanel({
                 Back
               </Button>
             ) : null}
-            <Button variant="outline" onClick={closeForm}>
+            <Button variant="outline" onClick={() => closeForm()}>
               Cancel
             </Button>
             {editingConnector || provider === "git" || authMode === "token" ? (

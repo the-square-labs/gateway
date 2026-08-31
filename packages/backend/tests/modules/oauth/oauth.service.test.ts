@@ -38,6 +38,12 @@ function createService(options?: {
 }) {
   const cacheSet = vi.fn().mockResolvedValue(undefined);
   const cacheGet = vi.fn().mockResolvedValue(options?.pendingConsent ?? null);
+  let pendingConsent = options?.pendingConsent ?? null;
+  const cacheTake = vi.fn(async () => {
+    const claimed = pendingConsent;
+    pendingConsent = null;
+    return claimed;
+  });
   const cacheDelete = vi.fn().mockResolvedValue(undefined);
   const client = options?.client ?? {
     clientId: 'goc_client',
@@ -149,11 +155,11 @@ function createService(options?: {
   } as unknown as AuthSettingsService;
   const service = new OAuthService(
     db as any,
-    { set: cacheSet, get: cacheGet, delete: cacheDelete } as any,
+    { set: cacheSet, get: cacheGet, take: cacheTake, delete: cacheDelete } as any,
     { log: auditLog } as any,
     authSettingsService
   );
-  return { service, cacheSet, cacheGet, cacheDelete, auditLog, db, updateCalls, insertCalls };
+  return { service, cacheSet, cacheGet, cacheTake, cacheDelete, auditLog, db, updateCalls, insertCalls };
 }
 
 function s256(verifier: string): string {
@@ -511,6 +517,22 @@ describe('OAuthService.approveConsent', () => {
     ).rejects.toThrow('At least one scope must be selected');
 
     expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('mints at most one authorization code from concurrent approvals', async () => {
+    const { service, db, cacheTake } = createService({
+      pendingConsent: pendingConsent(),
+    });
+    const user = { ...USER, scopes: [...USER.scopes, 'docker:containers:secrets'] };
+
+    const results = await Promise.allSettled([
+      service.approveConsent('request-1', user),
+      service.approveConsent('request-1', user),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(cacheTake).toHaveBeenCalledTimes(2);
   });
 });
 

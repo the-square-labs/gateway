@@ -107,7 +107,11 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     );
   }
   if (channel.startsWith('docker.build')) {
-    return hasScopeBase(scopes, 'docker:containers:view') || hasScopeBase(scopes, 'docker:compose:view');
+    return (
+      hasScopeBase(scopes, 'docker:containers:view') ||
+      hasScopeBase(scopes, 'docker:compose:view') ||
+      hasScopeBase(scopes, 'pages:view')
+    );
   }
   const required = requiredScopeFor(channel);
   if (!required) return false;

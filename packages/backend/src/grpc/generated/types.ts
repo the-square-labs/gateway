@@ -294,6 +294,7 @@ export interface GatewayCommand {
   syncRelayGrants?: SyncRelayGrantsCommand;
   syncProxySecureLinks?: SyncProxySecureLinksCommand;
   probeProxySecureLink?: ProbeProxySecureLinkCommand;
+  probePagesRoute?: ProbePagesRouteCommand;
   probeRelayCandidate?: ProbeRelayCandidateCommand;
   pagesUploadInit?: PagesUploadInitCommand;
   pagesUploadChunk?: PagesUploadChunkCommand;
@@ -749,11 +750,23 @@ export interface ProxySecureLinkBinding {
   allowNetworkReselection?: boolean;
   sourceConfigManaged?: boolean;
   rotateListener?: boolean;
+  socketOnly?: boolean;
 }
 
 export interface ProbeProxySecureLinkCommand {
   linkId: string;
   scheme: string;
+  path: string;
+  expectedStatus?: number;
+  expectedBody?: string;
+  bodyMatchMode?: string;
+  timeoutSeconds?: number;
+}
+
+export interface ProbePagesRouteCommand {
+  routeId: string;
+  domain: string;
+  tls: boolean;
   path: string;
   expectedStatus?: number;
   expectedBody?: string;

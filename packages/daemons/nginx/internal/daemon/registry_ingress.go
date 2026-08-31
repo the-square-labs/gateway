@@ -58,6 +58,7 @@ func registryIngressCommand(command *pb.SyncDockerRegistryBindingsCommand) (*pb.
 			Role:         "source",
 			Generation:   binding.GetGeneration(),
 			ListenerPort: binding.GetLocalPort(),
+			SocketOnly:   true,
 		})
 	}
 	return converted, nil

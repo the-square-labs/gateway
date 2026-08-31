@@ -301,6 +301,9 @@ message GatewayCommand {
     // First-class Docker Compose lifecycle. Accepted only by a general Docker
     // daemon advertising docker_compose_v1.
     DockerComposeCommand docker_compose = 65;
+    // Probe one managed Pages Route through node-local nginx while preserving
+    // its real Host header and TLS SNI. Accepted only by nginx-daemon.
+    ProbePagesRouteCommand probe_pages_route = 66;
   }
 }
 
@@ -569,6 +572,10 @@ message ProxySecureLinkBinding {
   // Source-only. Allocate a new listener before retiring the currently live
   // one so an active target update remains fail-closed until Nginx cutover.
   bool rotate_listener = 12;
+  // Source-only. Serve the managed Nginx upstream exclusively through its
+  // authenticated Unix socket. False preserves the legacy loopback listener
+  // for mixed-version recovery and user-owned legacy configs.
+  bool socket_only = 13;
 }
 
 message ProbeProxySecureLinkCommand {
@@ -579,6 +586,17 @@ message ProbeProxySecureLinkCommand {
   string expected_body = 5;
   string body_match_mode = 6;
   int32 timeout_seconds = 7;
+}
+
+message ProbePagesRouteCommand {
+  string route_id = 1;
+  string domain = 2;
+  bool tls = 3;
+  string path = 4;
+  int32 expected_status = 5;
+  string expected_body = 6;
+  string body_match_mode = 7;
+  int32 timeout_seconds = 8;
 }
 
 message NodeExecCommand {

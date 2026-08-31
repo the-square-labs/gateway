@@ -4,9 +4,10 @@ import type { DrizzleClient } from '@/db/client.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from '@/modules/ai/ai-tool-store-invalidation.js';
-import { resolveLiveSessionUser, resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { MFA_REQUIRED_CHANNEL_PREFIX } from '@/modules/auth/mfa-events.js';
 import { userResourceChannelUserId } from '@/modules/auth/user-resource-events.js';
+import { resolveWebSocketCredentialContext } from '@/modules/auth/websocket-auth.js';
 import {
   DockerAccessResourceService,
   dockerScopedNodeIds,
@@ -23,6 +24,9 @@ import type { User } from '@/types.js';
 import { DATABASE_CHANNEL_SCOPE_BASES, hasChannelAccess, requiredScopeFor } from './events-channel-access.js';
 
 const logger = createChildLogger('Events-WebSocket');
+const MAX_EVENT_MESSAGE_BYTES = 64 * 1024;
+const MAX_PENDING_MESSAGES = 32;
+const MAX_PENDING_MESSAGE_BYTES = 64 * 1024;
 
 interface ConnState {
   user: User | null;
@@ -35,6 +39,8 @@ interface ConnState {
   permsUnsub: (() => void) | null;
   /** Messages received before authentication completes — drained on auth. */
   pendingMessages: ClientMsg[];
+  preAuthMessageCount: number;
+  pendingMessageBytes: number;
 }
 
 interface ClientMsg {
@@ -164,10 +170,16 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasDockerEventAccess(scopes, 'docker:containers:webhooks', payload);
   }
   if (channel.startsWith('docker.build')) {
-    const targetKind = (payload as { targetKind?: string } | undefined)?.targetKind;
+    const event = payload as { targetKind?: string; scopeResourceId?: string } | undefined;
+    if (event?.targetKind === 'pages_project') {
+      return (
+        !!event.scopeResourceId &&
+        (hasScope(scopes, 'pages:view') || hasScope(scopes, `pages:view:${event.scopeResourceId}`))
+      );
+    }
     return hasDockerEventAccess(
       scopes,
-      targetKind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view',
+      event?.targetKind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view',
       payload
     );
   }
@@ -344,9 +356,8 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
 }
 
 async function authenticate(token: string): Promise<{ user: User; scopes: string[] } | null> {
-  const result = await resolveLiveSessionUser(token);
-  if (result?.user.isBlocked) return null;
-  return result ? { user: result.user, scopes: result.effectiveScopes } : null;
+  const result = await resolveWebSocketCredentialContext({ type: 'session', value: token });
+  return result ? { user: result.user, scopes: result.scopes } : null;
 }
 
 function closeUnauthenticated(ws: WSContext, state: ConnState, message = 'unauthenticated') {
@@ -354,6 +365,19 @@ function closeUnauthenticated(ws: WSContext, state: ConnState, message = 'unauth
   clearAll(state);
   try {
     ws.close(4001, message);
+  } catch {
+    /* ignore */
+  }
+}
+
+function closePolicyViolation(ws: WSContext, state: ConnState, message: string) {
+  send(ws, { type: 'error', message });
+  state.pendingMessages.length = 0;
+  state.preAuthMessageCount = 0;
+  state.pendingMessageBytes = 0;
+  clearAll(state);
+  try {
+    ws.close(4008, message);
   } catch {
     /* ignore */
   }
@@ -427,6 +451,8 @@ export function createEventsWSHandlers() {
         keepalive: null,
         permsUnsub: null,
         pendingMessages: [],
+        preAuthMessageCount: 0,
+        pendingMessageBytes: 0,
       };
       states.set(ws, state);
       state.keepalive = setInterval(() => {
@@ -443,8 +469,27 @@ export function createEventsWSHandlers() {
       if (!state) return;
 
       let msg: ClientMsg;
+      const rawText = typeof event.data === 'string' ? event.data : String(event.data);
+      const messageBytes = Buffer.byteLength(rawText, 'utf8');
+      if (messageBytes > MAX_EVENT_MESSAGE_BYTES) {
+        closePolicyViolation(ws, state, 'message too large');
+        return;
+      }
+
+      if (!state.authenticated) {
+        if (
+          state.preAuthMessageCount >= MAX_PENDING_MESSAGES ||
+          state.pendingMessageBytes + messageBytes > MAX_PENDING_MESSAGE_BYTES
+        ) {
+          closePolicyViolation(ws, state, 'pre-auth message limit exceeded');
+          return;
+        }
+        state.preAuthMessageCount += 1;
+        state.pendingMessageBytes += messageBytes;
+      }
+
       try {
-        const raw = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data));
+        const raw = JSON.parse(rawText);
         if (!raw || typeof raw !== 'object' || typeof raw.type !== 'string') {
           send(ws, { type: 'error', message: 'invalid message' });
           return;
@@ -577,6 +622,8 @@ export async function authenticateEventsConnection(ws: WSContext, token: string)
   logger.debug('client authenticated', { userId: state.user.id });
   // Drain anything the client sent before auth completed
   const pending = state.pendingMessages.splice(0);
+  state.preAuthMessageCount = 0;
+  state.pendingMessageBytes = 0;
   for (const msg of pending) {
     processMessage(ws, state, msg);
   }

@@ -33,10 +33,8 @@ describe('nginx node installer baseline', () => {
     expect(source).toContain('remove_legacy_gateway_sites_include');
     expect(source).toContain('[[ "$effective_content" == "$expected_line" ]] || return 0');
     expect(source).toContain('backup_if_exists "$legacy_file"');
-    expect(source).toContain(
-      'if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then'
-    );
-    expect(source).toContain('child_args=$(tr \'\\0\' \' \' < "/proc/${child_pid}/cmdline")');
+    expect(source).toContain('if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then');
+    expect(source).toContain(`child_args=$(tr '\\0' ' ' < "/proc/\${child_pid}/cmdline")`);
     expect(source).toContain('Running nginx worker process still has a nofile limit below');
     expect(source).not.toContain('Running nginx master process still has a nofile limit below');
     const configTest = source.indexOf('if nginx -t >> "$LOG_FILE" 2>&1; then');

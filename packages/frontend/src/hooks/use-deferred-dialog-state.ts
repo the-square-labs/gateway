@@ -14,27 +14,31 @@ export function useDeferredDialogState<T>(closeDelayMs = DEFAULT_CLOSE_DELAY_MS)
     }
   }, []);
 
-  const setValue = useCallback(
-    (nextValue: T | null) => {
+  const close = useCallback(
+    (afterClose?: () => void) => {
       clearCloseTimer();
-      if (nextValue !== null) {
-        setStoredValue(nextValue);
-        setOpen(true);
-        return;
-      }
-
       setOpen(false);
       closeTimerRef.current = setTimeout(() => {
         setStoredValue(null);
         closeTimerRef.current = null;
+        afterClose?.();
       }, closeDelayMs);
     },
     [clearCloseTimer, closeDelayMs]
   );
 
-  const close = useCallback(() => {
-    setValue(null);
-  }, [setValue]);
+  const setValue = useCallback(
+    (nextValue: T | null) => {
+      if (nextValue === null) {
+        close();
+        return;
+      }
+      clearCloseTimer();
+      setStoredValue(nextValue);
+      setOpen(true);
+    },
+    [clearCloseTimer, close]
+  );
 
   const onOpenChange = useCallback(
     (nextOpen: boolean) => {

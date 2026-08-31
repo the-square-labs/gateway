@@ -241,4 +241,158 @@ describe('NodeDispatchService', () => {
     ).resolves.toEqual({});
     expect(withConfig.registry.sendCommand).toHaveBeenCalledOnce();
   });
+
+  it('skips Pages Route probes when the nginx daemon has not reported probe capability', async () => {
+    const { registry, service } = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_pages_v1'] },
+    });
+
+    await expect(
+      service.probePagesRoute('node-1', {
+        routeId: '11111111-1111-4111-8111-111111111111',
+        domain: 'docs.example.com',
+        tls: true,
+        path: '/',
+      })
+    ).resolves.toMatchObject({ ok: false, skipped: true });
+    expect(registry.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('dispatches and parses a capability-gated Pages Route probe', async () => {
+    const { registry, service } = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_pages_v1', 'nginx_pages_route_probe_v1'] },
+    });
+    registry.sendCommand.mockResolvedValue({
+      success: true,
+      detail: JSON.stringify({ ok: true, httpStatus: 204, responseMs: 9 }),
+    });
+
+    await expect(
+      service.probePagesRoute('node-1', {
+        routeId: '11111111-1111-4111-8111-111111111111',
+        domain: 'docs.example.com',
+        tls: true,
+        path: '/health',
+        expectedStatus: 204,
+        expectedBody: 'ready',
+        bodyMatchMode: 'exact',
+        timeoutSeconds: 5,
+      })
+    ).resolves.toEqual({ ok: true, httpStatus: 204, responseMs: 9 });
+    expect(registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      {
+        probePagesRoute: {
+          routeId: '11111111-1111-4111-8111-111111111111',
+          domain: 'docs.example.com',
+          tls: true,
+          path: '/health',
+          expectedStatus: 204,
+          expectedBody: 'ready',
+          bodyMatchMode: 'exact',
+          timeoutSeconds: 5,
+        },
+      },
+      10_000
+    );
+  });
+
+  it('requires the socket-only capability only for hardened Secure Link source snapshots', async () => {
+    const legacy = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['proxy_secure_links_v1'] },
+    });
+
+    await expect(
+      legacy.service.sendProxySecureLinks('node-1', [
+        {
+          linkId: '11111111-1111-4111-8111-111111111111',
+          role: 'source',
+          generation: 1,
+          socketOnly: true,
+        },
+      ])
+    ).rejects.toMatchObject({ code: 'PROXY_SECURE_LINK_UPDATE_REQUIRED' });
+    expect(legacy.registry.sendCommand).not.toHaveBeenCalled();
+
+    await expect(
+      legacy.service.sendProxySecureLinks('node-1', [
+        {
+          linkId: '11111111-1111-4111-8111-111111111111',
+          role: 'source',
+          generation: 1,
+          socketOnly: false,
+        },
+      ])
+    ).resolves.toEqual({ success: true });
+
+    const hardened = createService('nginx', {
+      status: 'online',
+      capabilities: {
+        capabilities: ['proxy_secure_links_v1', 'nginx_secure_link_socket_only_v1'],
+      },
+    });
+    await expect(
+      hardened.service.sendProxySecureLinks('node-1', [
+        {
+          linkId: '11111111-1111-4111-8111-111111111111',
+          role: 'source',
+          generation: 1,
+          socketOnly: true,
+        },
+      ])
+    ).resolves.toEqual({ success: true });
+  });
+
+  it('keeps registry cleanup compatible but gates non-empty socket-only ingress', async () => {
+    const legacy = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_registry_ingress_v1'] },
+    });
+
+    await expect(legacy.service.sendNginxRegistryBindings('node-1', [])).resolves.toEqual({ success: true });
+    await expect(
+      legacy.service.sendNginxRegistryBindings('node-1', [
+        {
+          bindingId: '11111111-1111-4111-8111-111111111111',
+          role: 'ingress',
+          generation: 1,
+          repository: '*',
+          actions: ['pull', 'push'],
+          localAddress: '127.0.0.1',
+          localPort: 5443,
+          relayOwnerKind: 'registry_ingress',
+          relayOwnerId: '11111111-1111-4111-8111-111111111111',
+          authorization: '',
+          authorizationExpiresAtUnix: 0,
+        },
+      ])
+    ).rejects.toMatchObject({ code: 'NGINX_REGISTRY_INGRESS_UPDATE_REQUIRED' });
+
+    const hardened = createService('nginx', {
+      status: 'online',
+      capabilities: {
+        capabilities: ['nginx_registry_ingress_v1', 'nginx_secure_link_socket_only_v1'],
+      },
+    });
+    await expect(
+      hardened.service.sendNginxRegistryBindings('node-1', [
+        {
+          bindingId: '11111111-1111-4111-8111-111111111111',
+          role: 'ingress',
+          generation: 1,
+          repository: '*',
+          actions: ['pull', 'push'],
+          localAddress: '127.0.0.1',
+          localPort: 5443,
+          relayOwnerKind: 'registry_ingress',
+          relayOwnerId: '11111111-1111-4111-8111-111111111111',
+          authorization: '',
+          authorizationExpiresAtUnix: 0,
+        },
+      ])
+    ).resolves.toEqual({ success: true });
+  });
 });

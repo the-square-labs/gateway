@@ -51,6 +51,7 @@ export function DockerResourceGitTabs({
         : target.kind === "compose_project"
           ? target.composeProjectId
           : target.pageProjectId;
+  const inlineBuildHistory = view === "builds" && targetKind === "pages_project";
   const stableTarget = useMemo<DockerSourceTarget>(
     () =>
       targetKind === "container"
@@ -70,7 +71,7 @@ export function DockerResourceGitTabs({
     try {
       const nextSource = await api.getDockerSource(stableTarget);
       const nextBuilds =
-        (view === "builds" || includeBuilds) && nextSource
+        (view === "builds" || includeBuilds) && nextSource && !inlineBuildHistory
           ? await api.listDockerBuilds({ sourceBindingId: nextSource.id, limit: 5 })
           : [];
       if (currentRequest !== sourceRequestId.current) return;
@@ -84,10 +85,10 @@ export function DockerResourceGitTabs({
     } finally {
       if (currentRequest === sourceRequestId.current) setLoading(false);
     }
-  }, [includeBuilds, stableTarget, view]);
+  }, [includeBuilds, inlineBuildHistory, stableTarget, view]);
 
   const refreshBuilds = useCallback(async () => {
-    if (!source || (view !== "builds" && !includeBuilds)) return;
+    if (!source || inlineBuildHistory || (view !== "builds" && !includeBuilds)) return;
     const currentRequest = ++buildRequestId.current;
     try {
       const nextBuilds = await api.listDockerBuilds({ sourceBindingId: source.id, limit: 5 });
@@ -95,7 +96,7 @@ export function DockerResourceGitTabs({
     } catch {
       // Background polling remains silent; the existing rows stay visible.
     }
-  }, [includeBuilds, source, view]);
+  }, [includeBuilds, inlineBuildHistory, source, view]);
 
   useEffect(() => {
     void load();
@@ -107,20 +108,20 @@ export function DockerResourceGitTabs({
 
   const hasActiveBuilds = builds.some((build) => ACTIVE_BUILD_STATUSES.has(build.status));
   useRealtime(
-    source ? "docker.build.changed" : null,
+    source && !inlineBuildHistory ? "docker.build.changed" : null,
     (payload) => {
       const event = payload as { sourceBindingId?: string } | undefined;
       if (event?.sourceBindingId === source?.id) void refreshBuilds();
     },
     { onReconnect: () => void refreshBuilds() }
   );
-  useRealtime(source ? "docker.build.artifact.changed" : null, (payload) => {
+  useRealtime(source && !inlineBuildHistory ? "docker.build.artifact.changed" : null, (payload) => {
     const event = payload as { sourceBindingId?: string } | undefined;
     if (!event?.sourceBindingId || event.sourceBindingId === source?.id) void refreshBuilds();
   });
 
   useEffect(() => {
-    if (!source || (view !== "builds" && !includeBuilds)) return;
+    if (!source || inlineBuildHistory || (view !== "builds" && !includeBuilds)) return;
     const interval = window.setInterval(
       () => {
         if (!document.hidden) void refreshBuilds();
@@ -128,7 +129,7 @@ export function DockerResourceGitTabs({
       hasActiveBuilds ? 5_000 : 15_000
     );
     return () => window.clearInterval(interval);
-  }, [hasActiveBuilds, includeBuilds, refreshBuilds, source, view]);
+  }, [hasActiveBuilds, includeBuilds, inlineBuildHistory, refreshBuilds, source, view]);
 
   return view === "source" ? (
     <div className="space-y-4">
@@ -146,10 +147,21 @@ export function DockerResourceGitTabs({
         canBuild={canBuild}
       />
       {includeBuilds && source ? (
-        <DockerBuildHistoryPanel builds={builds} sourceBindingId={source.id} loading={loading} />
+        <DockerBuildHistoryPanel
+          key={source.id}
+          builds={builds}
+          sourceBindingId={source.id}
+          loading={loading}
+        />
       ) : null}
     </div>
   ) : (
-    <DockerBuildHistoryPanel builds={builds} sourceBindingId={source?.id} loading={loading} />
+    <DockerBuildHistoryPanel
+      key={source?.id ?? "loading"}
+      builds={builds}
+      sourceBindingId={source?.id}
+      loading={loading}
+      inlineHistory={inlineBuildHistory}
+    />
   );
 }

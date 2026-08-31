@@ -128,7 +128,7 @@ describe('HealthCheckJob maintenance race', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('checks a Pages Route through its published URL on the regular schedule', async () => {
+  it('checks a Pages Route through its node-local nginx probe on the regular schedule', async () => {
     const host = {
       id: 'pages-host',
       domainNames: ['docs.example.com'],
@@ -157,14 +157,65 @@ describe('HealthCheckJob maintenance race', () => {
         })),
       })),
     } as any;
-    const fetchMock = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') });
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
+    const probePagesRoute = vi.fn().mockResolvedValue({ ok: true, httpStatus: 200, responseMs: 8 });
 
-    await new HealthCheckJob(db).run();
+    await new HealthCheckJob(db, { probePagesRoute } as any).run();
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://docs.example.com/health.html',
-      expect.objectContaining({ method: 'GET', redirect: 'follow' })
+    expect(probePagesRoute).toHaveBeenCalledWith('nginx-node', {
+      routeId: 'pages-host',
+      domain: 'docs.example.com',
+      tls: true,
+      path: '/health.html',
+      expectedStatus: 200,
+      expectedBody: null,
+      bodyMatchMode: undefined,
+      timeoutSeconds: 10,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('marks a previously healthy Pages Route unknown when the node lacks probe capability', async () => {
+    const host = {
+      id: 'pages-host',
+      domainNames: ['docs.example.com'],
+      enabled: true,
+      maintenanceEnabled: false,
+      healthCheckEnabled: true,
+      healthStatus: 'online',
+      healthHistory: [],
+      healthCheckInterval: 30,
+      lastHealthCheckAt: null,
+      healthCheckUrl: '/',
+      sslEnabled: false,
+      upstreamKind: 'pages',
+      nodeId: 'nginx-node',
+    };
+    const writes: Array<Record<string, unknown>> = [];
+    const db = {
+      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          writes.push(values);
+          return {
+            where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: host.id }]) })),
+          };
+        }),
+      })),
+    } as any;
+
+    await new HealthCheckJob(db, {
+      probePagesRoute: vi.fn().mockResolvedValue({ ok: false, skipped: true, error: 'update required' }),
+    } as any).run();
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toEqual(
+      expect.objectContaining({
+        healthStatus: 'unknown',
+        lastHealthCheckAt: expect.any(Date),
+        healthHistory: [expect.objectContaining({ status: 'unknown' })],
+      })
     );
   });
 });
