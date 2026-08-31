@@ -21,9 +21,9 @@ env:
 
 jobs:
   verify:
-    name: Reuse or run verification
+    name: Require successful main CI
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 5
     outputs:
       release_kind: ${{ steps.release-tag.outputs.kind }}
       prerelease: ${{ steps.release-tag.outputs.prerelease }}
@@ -38,7 +38,6 @@ jobs:
         run: scripts/release-tag.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Find successful main CI for tagged commit
-        id: main-ci
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -46,60 +45,14 @@ jobs:
           successful_run=$(
             gh api \
               "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
-              --jq '.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success") | .id' \
-              | head -n 1
+              --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success")][0].id // empty'
           )
           if [[ -n "$successful_run" ]]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
             echo "Reusing successful main CI run ${successful_run} for ${commit_sha}"
           else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No successful main CI run found for ${commit_sha}; running full verification"
+            echo "::error::No successful main CI run exists for ${commit_sha}; refusing to run duplicate release verification" >&2
+            exit 1
           fi
-
-      - name: Install pnpm
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
-        with:
-          version: 9.15.0
-          run_install: false
-
-      - name: Set up Node.js
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Set up Go
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: '1.24.4'
-          cache-dependency-path: |
-            packages/daemons/go.work.sum
-            packages/relay/go.sum
-
-      - name: Install dependencies
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        run: pnpm lint
-
-      - name: Typecheck
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        run: pnpm typecheck
-
-      - name: Test
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        run: pnpm test
-
-      - name: Build
-        if: ${{ steps.main-ci.outputs.found != 'true' }}
-        run: pnpm build:all
 
   build:
     name: Build

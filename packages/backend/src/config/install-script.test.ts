@@ -406,6 +406,22 @@ describe('daemon installer release integrity', () => {
     expect(workflow).toContain('scripts/setup-daemon.sh');
     expect(workflow).toContain('scripts/setup-database-node.sh');
   });
+
+  it('fails the release gate when the tagged commit has no successful main CI instead of verifying twice', () => {
+    const workflow = readFileSync(releaseWorkflow, 'utf8');
+    const verifyJob = workflow.slice(workflow.indexOf('  verify:'), workflow.indexOf('\n  build:'));
+
+    expect(verifyJob).toContain('name: Require successful main CI');
+    expect(verifyJob).toContain('timeout-minutes: 5');
+    expect(verifyJob).toContain('head_branch == "main" and .conclusion == "success"');
+    expect(verifyJob).toContain('refusing to run duplicate release verification');
+    expect(verifyJob).toContain('exit 1');
+    expect(verifyJob).not.toContain('- name: Install pnpm');
+    expect(verifyJob).not.toContain('run: pnpm lint');
+    expect(verifyJob).not.toContain('run: pnpm typecheck');
+    expect(verifyJob).not.toContain('run: pnpm test');
+    expect(verifyJob).not.toContain('run: pnpm build:all');
+  });
 });
 
 describe('nginx node path migration', () => {
