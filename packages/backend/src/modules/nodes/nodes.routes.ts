@@ -33,7 +33,7 @@ import {
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import { NodeFolderService } from './node-folders.service.js';
-import { NodeMonitoringService } from './node-monitoring.service.js';
+import { compactMonitoringHistorySnapshot, NodeMonitoringService } from './node-monitoring.service.js';
 import {
   abortNodeFileUploadRoute,
   completeNodeFileUploadRoute,
@@ -76,6 +76,8 @@ import {
   UpdateNodeServiceCreationLockSchema,
 } from './nodes.schemas.js';
 import { NodesService } from './nodes.service.js';
+
+export { compactMonitoringHistorySnapshot };
 
 export const nodesRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -205,60 +207,6 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
   };
 }
 
-export function compactMonitoringHistorySnapshot(snapshot: any) {
-  const health = snapshot?.health ?? {};
-  const stats = snapshot?.stats ?? {};
-  const traffic = snapshot?.traffic ?? null;
-  return {
-    timestamp: snapshot?.timestamp,
-    health: {
-      nginxRunning: health.nginxRunning,
-      configValid: health.configValid,
-      nginxUptimeSeconds: health.nginxUptimeSeconds,
-      workerCount: health.workerCount,
-      nginxVersion: health.nginxVersion,
-      nginxRssBytes: health.nginxRssBytes,
-      cpuPercent: health.cpuPercent,
-      loadAverage1m: health.loadAverage1m,
-      loadAverage5m: health.loadAverage5m,
-      loadAverage15m: health.loadAverage15m,
-      systemMemoryUsedBytes: health.systemMemoryUsedBytes,
-      systemMemoryTotalBytes: health.systemMemoryTotalBytes,
-      systemMemoryAvailableBytes: health.systemMemoryAvailableBytes,
-      swapUsedBytes: health.swapUsedBytes,
-      swapTotalBytes: health.swapTotalBytes,
-      diskReadBytes: health.diskReadBytes,
-      diskWriteBytes: health.diskWriteBytes,
-      diskMounts: Array.isArray(health.diskMounts)
-        ? health.diskMounts.map((mount: any) => ({
-            mountPoint: mount.mountPoint,
-            filesystem: mount.filesystem,
-            device: mount.device,
-            totalBytes: mount.totalBytes,
-            usedBytes: mount.usedBytes,
-            freeBytes: mount.freeBytes,
-            usagePercent: mount.usagePercent,
-          }))
-        : undefined,
-      diskUsagePercent: health.diskUsagePercent,
-      networkRxBytes: health.networkRxBytes,
-      networkTxBytes: health.networkTxBytes,
-      networkInterfaces: health.networkInterfaces,
-      gpuDevices: Array.isArray(health.gpuDevices) ? health.gpuDevices : undefined,
-    },
-    stats: {
-      activeConnections: stats.activeConnections,
-      accepts: stats.accepts,
-      handled: stats.handled,
-      requests: stats.requests,
-      reading: stats.reading,
-      writing: stats.writing,
-      waiting: stats.waiting,
-    },
-    traffic,
-  };
-}
-
 nodesRoutes.openapi(listNodesRoute, async (c) => {
   const service = container.resolve(NodesService);
   const query = NodeListQuerySchema.parse(c.req.query());
@@ -385,9 +333,10 @@ nodesRoutes.openapi(getNodeBySlugRoute, async (c) => {
 
 nodesRoutes.openapi({ ...getNodeRoute, middleware: requireScopeForResource('nodes:details', 'id') }, async (c) => {
   const service = container.resolve(NodesService);
+  const monitoringService = container.resolve(NodeMonitoringService);
   const id = c.req.param('id')!;
-  const node = await service.get(id);
-  return c.json({ data: node });
+  const [node, monitoringHistory] = await Promise.all([service.get(id), monitoringService.getHistory(id)]);
+  return c.json({ data: { ...node, monitoringHistory } });
 });
 
 nodesRoutes.openapi(
@@ -696,10 +645,12 @@ nodesRoutes.openapi(
     const monitoringService = container.resolve(NodeMonitoringService);
     const focused = c.req.query('focused') === 'true';
 
+    c.header('Cache-Control', 'no-cache, no-transform');
+    c.header('X-Accel-Buffering', 'no');
     return streamSSE(c, async (stream) => {
       monitoringService.registerClient(nodeId, { focused });
 
-      const history = monitoringService.getHistory(nodeId);
+      const history = await monitoringService.getHistory(nodeId);
       await stream.writeSSE({
         data: JSON.stringify({ connected: true, nodeId, history: history.map(compactMonitoringHistorySnapshot) }),
         event: 'connected',

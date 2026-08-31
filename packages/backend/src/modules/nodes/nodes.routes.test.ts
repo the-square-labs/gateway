@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   nodesService: {
     list: vi.fn(),
     get: vi.fn(),
+    getHistory: vi.fn(),
     update: vi.fn(),
   },
 }));
@@ -236,6 +237,28 @@ describe('nodesRoutes list access', () => {
 
     expect(response.status).toBe(403);
     expect(mocks.nodesService.list).not.toHaveBeenCalled();
+  });
+});
+
+describe('nodesRoutes monitoring bootstrap', () => {
+  const nodeId = '11111111-1111-4111-8111-111111111111';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, status: 'online' });
+    mocks.nodesService.getHistory.mockResolvedValue([
+      { timestamp: '2026-08-31T08:00:00.000Z', health: { cpuPercent: 12 }, stats: {}, traffic: null },
+    ]);
+  });
+
+  it('includes persisted monitoring history in the initial node detail response', async () => {
+    const response = await createApp().request(`/${nodeId}`);
+    const body = (await response.json()) as { data: Record<string, any> };
+
+    expect(response.status).toBe(200);
+    expect(body.data.monitoringHistory).toEqual([
+      { timestamp: '2026-08-31T08:00:00.000Z', health: { cpuPercent: 12 }, stats: {}, traffic: null },
+    ]);
   });
 });
 

@@ -61,6 +61,99 @@ it("renders the current snapshot immediately and ignores older stream history", 
   expect(screen.queryByText("Config invalid")).not.toBeInTheDocument();
 });
 
+it("renders monitoring sparklines from bootstrap history before SSE connects", () => {
+  vi.spyOn(api, "createNodeMonitoringStream").mockReturnValue({
+    addEventListener: vi.fn((name: string, listener: EventListener) => {
+      listeners.set(name, listener as (event: MessageEvent) => void);
+    }),
+    close: vi.fn(),
+  } as unknown as EventSource);
+  const initialHealth = healthReport();
+
+  render(
+    <NodeMonitoringTab
+      nodeId="11111111-1111-4111-8111-111111111111"
+      nodeStatus="online"
+      nodeType="nginx"
+      initialHealthReport={initialHealth}
+      initialMonitoringHistory={[
+        {
+          timestamp: "2026-08-31T07:59:50.000Z",
+          health: { ...initialHealth, cpuPercent: 7 },
+          stats: null,
+          traffic: null,
+        },
+        {
+          timestamp: "2026-08-31T08:00:00.000Z",
+          health: initialHealth,
+          stats: null,
+          traffic: null,
+        },
+      ]}
+    />
+  );
+
+  const cpuCard = screen.getByText("CPU").closest(".border");
+  expect(cpuCard?.querySelectorAll("svg")).toHaveLength(2);
+});
+
+it("discards the previous node history and closes its stream when nodeId changes", () => {
+  const close = vi.fn();
+  vi.spyOn(api, "createNodeMonitoringStream").mockImplementation(
+    () =>
+      ({
+        addEventListener: vi.fn((name: string, listener: EventListener) => {
+          listeners.set(name, listener as (event: MessageEvent) => void);
+        }),
+        close,
+      }) as unknown as EventSource
+  );
+  const firstHealth = { ...healthReport(), cpuPercent: 7 };
+  const secondHealth = {
+    ...healthReport(),
+    cpuPercent: 80,
+    timestamp: Date.parse("2026-08-31T08:01:00.000Z") / 1000,
+  };
+  const { rerender } = render(
+    <NodeMonitoringTab
+      nodeId="11111111-1111-4111-8111-111111111111"
+      nodeStatus="online"
+      nodeType="nginx"
+      initialHealthReport={firstHealth}
+      initialMonitoringHistory={[
+        {
+          timestamp: "2026-08-31T08:00:00.000Z",
+          health: firstHealth,
+          stats: null,
+          traffic: null,
+        },
+      ]}
+    />
+  );
+
+  rerender(
+    <NodeMonitoringTab
+      nodeId="22222222-2222-4222-8222-222222222222"
+      nodeStatus="online"
+      nodeType="nginx"
+      initialHealthReport={secondHealth}
+      initialMonitoringHistory={[
+        {
+          timestamp: "2026-08-31T08:01:00.000Z",
+          health: secondHealth,
+          stats: null,
+          traffic: null,
+        },
+      ]}
+    />
+  );
+
+  expect(close).toHaveBeenCalledOnce();
+  const cpuCard = screen.getByText("CPU").closest(".border");
+  const sparkline = cpuCard?.querySelector("polyline[fill='none']");
+  expect(sparkline?.getAttribute("points")?.trim().split(/\s+/)).toHaveLength(2);
+});
+
 it("shows Build Worker activity from recent assigned jobs", async () => {
   vi.spyOn(api, "createNodeMonitoringStream").mockReturnValue({
     addEventListener: vi.fn((name: string, listener: EventListener) => {

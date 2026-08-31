@@ -4,14 +4,45 @@ import { api } from "@/services/api";
 import type { DockerBuild } from "@/types";
 import { DockerBuildDetailsDialog } from "./DockerBuildDetailsDialog";
 
-vi.mock("@/hooks/use-realtime", () => ({ useRealtime: vi.fn() }));
+const realtime = vi.hoisted(() => ({ onReconnect: undefined as (() => void) | undefined }));
+
+vi.mock("@/hooks/use-realtime", () => ({
+  useRealtime: vi.fn(
+    (
+      _topic: string | null,
+      _handler: (payload: unknown) => void,
+      options?: { onReconnect?: () => void }
+    ) => {
+      realtime.onReconnect = options?.onReconnect;
+    }
+  ),
+}));
 
 afterEach(() => {
+  realtime.onReconnect = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-it("loads logs once and relies on realtime updates while an active dialog is open", async () => {
+it("refreshes build logs after the realtime connection reconnects", async () => {
+  const request = vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
+
+  render(
+    <DockerBuildDetailsDialog
+      open
+      build={build("building")}
+      onOpenChange={() => undefined}
+      onExited={() => undefined}
+    />
+  );
+
+  await act(async () => undefined);
+  expect(request).toHaveBeenCalledTimes(1);
+  await act(async () => realtime.onReconnect?.());
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("polls logs while an active build is open so a missed realtime event cannot leave them empty", async () => {
   vi.useFakeTimers();
   const request = vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
 
@@ -27,7 +58,7 @@ it("loads logs once and relies on realtime updates while an active dialog is ope
   await act(async () => undefined);
   expect(request).toHaveBeenCalledTimes(1);
   await act(async () => vi.advanceTimersByTimeAsync(6_000));
-  expect(request).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenCalledTimes(4);
 });
 
 function build(status: DockerBuild["status"]): DockerBuild {

@@ -27,23 +27,11 @@ import {
   hasGpuMonitoringMetrics,
   type NodeGpuDevice,
   type NodeHealthReport,
-  type NodeStatsReport,
+  type NodeMonitoringSnapshot,
 } from "@/types";
 import { ACTIVE_DOCKER_BUILD_STATUSES } from "../docker-detail/docker-build-status";
 
-interface TrafficStats {
-  statusCodes: { s2xx: number; s3xx: number; s4xx: number; s5xx: number };
-  avgResponseTime: number;
-  p95ResponseTime: number;
-  totalRequests: number;
-}
-
-interface Snapshot {
-  timestamp: string;
-  health: NodeHealthReport | null;
-  stats: NodeStatsReport | null;
-  traffic: TrafficStats | null;
-}
+type Snapshot = NodeMonitoringSnapshot;
 
 function toRollingDelta(values: number[]): number[] {
   if (values.length < 2) return values;
@@ -51,6 +39,15 @@ function toRollingDelta(values: number[]): number[] {
 }
 
 const MAX_HISTORY = 60;
+const EMPTY_MONITORING_HISTORY: NodeMonitoringSnapshot[] = [];
+
+function mergeSnapshotHistory(current: Snapshot[], incoming: Snapshot[]): Snapshot[] {
+  const byTimestamp = new Map(current.map((snapshot) => [snapshot.timestamp, snapshot]));
+  for (const snapshot of incoming) byTimestamp.set(snapshot.timestamp, snapshot);
+  return [...byTimestamp.values()]
+    .sort((left, right) => snapshotTime(left) - snapshotTime(right))
+    .slice(-MAX_HISTORY);
+}
 
 function finiteNumber(value: unknown, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -141,6 +138,7 @@ interface NodeMonitoringTabProps {
   nodeStatus: string;
   nodeType?: string;
   initialHealthReport?: NodeHealthReport | null;
+  initialMonitoringHistory?: NodeMonitoringSnapshot[];
 }
 
 function buildDiskMountSeed(health: NodeHealthReport | null | undefined): Snapshot | null {
@@ -180,13 +178,22 @@ export function NodeMonitoringTab({
   nodeStatus,
   nodeType,
   initialHealthReport,
+  initialMonitoringHistory = EMPTY_MONITORING_HISTORY,
 }: NodeMonitoringTabProps) {
   const initialHealthRef = useRef(initialHealthReport);
   initialHealthRef.current = initialHealthReport;
-  const [history, setHistory] = useState<Snapshot[]>([]);
-  const [latest, setLatest] = useState<Snapshot | null>(() =>
-    buildDiskMountSeed(initialHealthReport)
-  );
+  const monitoringBootstrapRef = useRef({ nodeId, history: initialMonitoringHistory });
+  if (monitoringBootstrapRef.current.nodeId !== nodeId) {
+    monitoringBootstrapRef.current = { nodeId, history: initialMonitoringHistory };
+  }
+  const [history, setHistory] = useState<Snapshot[]>(() => initialMonitoringHistory);
+  const [latest, setLatest] = useState<Snapshot | null>(() => {
+    const seededSnapshot = buildDiskMountSeed(initialHealthReport);
+    const historyLatest = initialMonitoringHistory.at(-1) ?? null;
+    return snapshotTime(historyLatest) >= snapshotTime(seededSnapshot)
+      ? historyLatest
+      : seededSnapshot;
+  });
   const [recentBuilds, setRecentBuilds] = useState<DockerBuild[] | null>(null);
   const buildRequestId = useRef(0);
 
@@ -233,8 +240,12 @@ export function NodeMonitoringTab({
 
   useEffect(() => {
     const seededSnapshot = buildDiskMountSeed(initialHealthRef.current);
-    setHistory([]);
-    setLatest(seededSnapshot);
+    const bootstrapHistory = monitoringBootstrapRef.current.history;
+    setHistory(bootstrapHistory);
+    const initialLatest = bootstrapHistory.at(-1) ?? null;
+    setLatest(
+      snapshotTime(initialLatest) >= snapshotTime(seededSnapshot) ? initialLatest : seededSnapshot
+    );
 
     if (nodeStatus !== "online") return;
     const es = api.createNodeMonitoringStream(nodeId, { focused: true });
@@ -244,7 +255,7 @@ export function NodeMonitoringTab({
       const streamHistory = ((data.history ?? []) as Snapshot[]).map((snapshot) =>
         mergeSeededDiskMounts(snapshot, seededSnapshot)
       );
-      setHistory(streamHistory);
+      setHistory((current) => mergeSnapshotHistory(current, streamHistory));
       const streamLatest = streamHistory.at(-1) ?? null;
       setLatest((current) =>
         snapshotTime(streamLatest) >= snapshotTime(current) ? streamLatest : current
@@ -254,8 +265,7 @@ export function NodeMonitoringTab({
     es.addEventListener("snapshot", (e: MessageEvent) => {
       const snapshot = mergeSeededDiskMounts(JSON.parse(e.data) as Snapshot, seededSnapshot);
       setHistory((prev) => {
-        const next = [...prev, snapshot];
-        return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+        return mergeSnapshotHistory(prev, [snapshot]);
       });
       setLatest(snapshot);
     });

@@ -7,6 +7,9 @@ const logger = createChildLogger('NodeMonitoring');
 const CONTAINER_STATS_KEY_PREFIX = 'container-stats:';
 const CONTAINER_STATS_MAX = 30;
 const CONTAINER_STATS_TTL = 600; // 10 minutes
+const NODE_MONITORING_HISTORY_KEY_PREFIX = 'node-monitoring-history:v1:';
+const NODE_MONITORING_HISTORY_TTL = 3_600; // 1 hour
+const NODE_MONITORING_HISTORY_MAX = 60;
 
 export const NODE_MONITORING_CADENCE_MS = {
   background: 10_000,
@@ -14,11 +17,65 @@ export const NODE_MONITORING_CADENCE_MS = {
   focused: 2_000,
 } as const;
 
-interface MonitoringSnapshot {
+export interface MonitoringSnapshot {
   timestamp: string;
   health: any;
   stats: any;
   traffic: any;
+}
+
+export function compactMonitoringHistorySnapshot(snapshot: any): MonitoringSnapshot {
+  const health = snapshot?.health ?? {};
+  const stats = snapshot?.stats ?? {};
+  const traffic = snapshot?.traffic ?? null;
+  return {
+    timestamp: snapshot?.timestamp,
+    health: {
+      nginxRunning: health.nginxRunning,
+      configValid: health.configValid,
+      nginxUptimeSeconds: health.nginxUptimeSeconds,
+      workerCount: health.workerCount,
+      nginxVersion: health.nginxVersion,
+      nginxRssBytes: health.nginxRssBytes,
+      cpuPercent: health.cpuPercent,
+      loadAverage1m: health.loadAverage1m,
+      loadAverage5m: health.loadAverage5m,
+      loadAverage15m: health.loadAverage15m,
+      systemMemoryUsedBytes: health.systemMemoryUsedBytes,
+      systemMemoryTotalBytes: health.systemMemoryTotalBytes,
+      systemMemoryAvailableBytes: health.systemMemoryAvailableBytes,
+      swapUsedBytes: health.swapUsedBytes,
+      swapTotalBytes: health.swapTotalBytes,
+      diskReadBytes: health.diskReadBytes,
+      diskWriteBytes: health.diskWriteBytes,
+      diskMounts: Array.isArray(health.diskMounts)
+        ? health.diskMounts.map((mount: any) => ({
+            mountPoint: mount.mountPoint,
+            filesystem: mount.filesystem,
+            device: mount.device,
+            totalBytes: mount.totalBytes,
+            usedBytes: mount.usedBytes,
+            freeBytes: mount.freeBytes,
+            usagePercent: mount.usagePercent,
+          }))
+        : undefined,
+      diskUsagePercent: health.diskUsagePercent,
+      networkRxBytes: health.networkRxBytes,
+      networkTxBytes: health.networkTxBytes,
+      networkInterfaces: health.networkInterfaces,
+      gpuDevices: Array.isArray(health.gpuDevices) ? health.gpuDevices : undefined,
+    },
+    stats: {
+      activeConnections: stats.activeConnections,
+      accepts: stats.accepts,
+      handled: stats.handled,
+      requests: stats.requests,
+      reading: stats.reading,
+      writing: stats.writing,
+      waiting: stats.waiting,
+    },
+    traffic,
+  };
 }
 
 export class NodeMonitoringService extends EventEmitter {
@@ -28,7 +85,7 @@ export class NodeMonitoringService extends EventEmitter {
   private pollIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private pollCadences = new Map<string, number>();
   private backgroundInterval: ReturnType<typeof setInterval> | null = null;
-  private readonly MAX_HISTORY = 60;
+  private readonly MAX_HISTORY = NODE_MONITORING_HISTORY_MAX;
   private readonly BACKGROUND_POLL_INTERVAL = NODE_MONITORING_CADENCE_MS.background;
   private readonly STREAM_POLL_INTERVAL = NODE_MONITORING_CADENCE_MS.stream;
   private readonly ACTIVE_POLL_INTERVAL = NODE_MONITORING_CADENCE_MS.focused;
@@ -62,8 +119,28 @@ export class NodeMonitoringService extends EventEmitter {
     }, 5000);
   }
 
-  getHistory(nodeId: string): MonitoringSnapshot[] {
-    return [...(this.history.get(nodeId) ?? [])];
+  async getHistory(nodeId: string): Promise<MonitoringSnapshot[]> {
+    let persisted: MonitoringSnapshot[] = [];
+    if (this.cache) {
+      try {
+        const values = await this.cache.getClient().lrange(`${NODE_MONITORING_HISTORY_KEY_PREFIX}${nodeId}`, 0, -1);
+        persisted = values.flatMap((value) => {
+          try {
+            return [JSON.parse(value) as MonitoringSnapshot];
+          } catch {
+            return [];
+          }
+        });
+      } catch {
+        // Redis is a read-model accelerator; retain the process-local fallback.
+      }
+    }
+    const local = (this.history.get(nodeId) ?? []).map(compactMonitoringHistorySnapshot);
+    const byTimestamp = new Map(persisted.map((snapshot) => [snapshot.timestamp, snapshot]));
+    for (const snapshot of local) byTimestamp.set(snapshot.timestamp, snapshot);
+    return [...byTimestamp.values()]
+      .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))
+      .slice(-this.MAX_HISTORY);
   }
 
   pushSnapshot(nodeId: string, health: any, stats: any, traffic?: any): void {
@@ -81,6 +158,21 @@ export class NodeMonitoringService extends EventEmitter {
     buf.push(snapshot);
     if (buf.length > this.MAX_HISTORY) buf.splice(0, buf.length - this.MAX_HISTORY);
     this.emit('snapshot', { nodeId, snapshot });
+
+    if (this.cache) {
+      const key = `${NODE_MONITORING_HISTORY_KEY_PREFIX}${nodeId}`;
+      const entry = JSON.stringify(compactMonitoringHistorySnapshot(snapshot));
+      this.cache
+        .getClient()
+        .multi()
+        .rpush(key, entry)
+        .ltrim(key, -this.MAX_HISTORY, -1)
+        .expire(key, NODE_MONITORING_HISTORY_TTL)
+        .exec()
+        .catch(() => {
+          /* retain the process-local fallback when Redis is unavailable */
+        });
+    }
 
     // Store per-container stats in Redis for sparkline history
     if (this.cache && health?.containerStats) {

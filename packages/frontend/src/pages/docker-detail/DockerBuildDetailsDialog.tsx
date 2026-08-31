@@ -39,6 +39,16 @@ const VULNERABILITY_VARIANT: Record<string, "secondary" | "destructive" | "warni
   unknown: "secondary",
 };
 
+const ACTIVE_LOG_STATUSES = new Set<DockerBuildStatus>([
+  "queued",
+  "claimed",
+  "checking_out",
+  "building",
+  "scanning",
+  "pushing",
+  "deploying",
+]);
+
 function MetaRow({
   label,
   children,
@@ -80,6 +90,7 @@ export function DockerBuildDetailsDialog({
   onExited,
 }: DockerBuildDetailsDialogProps) {
   const [logs, setLogs] = useState<DockerBuildLogChunk[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
   const logRequestId = useRef(0);
   const buildId = build?.id ?? null;
   const refreshLogs = useCallback(async () => {
@@ -96,16 +107,29 @@ export function DockerBuildDetailsDialog({
   useEffect(() => {
     if (!open || !buildId) return;
     setLogs([]);
-    void refreshLogs();
+    setLoadingLogs(true);
+    void refreshLogs().finally(() => setLoadingLogs(false));
     return () => {
       logRequestId.current += 1;
     };
   }, [buildId, open, refreshLogs]);
 
-  useRealtime(open && buildId ? "docker.build.log" : null, (payload) => {
-    const event = payload as { buildId?: string } | undefined;
-    if (event?.buildId === buildId) void refreshLogs();
-  });
+  useEffect(() => {
+    if (!open || !buildId || !build || !ACTIVE_LOG_STATUSES.has(build.status)) return;
+    const interval = window.setInterval(() => {
+      if (!document.hidden) void refreshLogs();
+    }, 2_000);
+    return () => window.clearInterval(interval);
+  }, [build, buildId, open, refreshLogs]);
+
+  useRealtime(
+    open && buildId ? "docker.build.log" : null,
+    (payload) => {
+      const event = payload as { buildId?: string } | undefined;
+      if (event?.buildId === buildId) void refreshLogs();
+    },
+    { onReconnect: refreshLogs }
+  );
 
   const scanSummary = build?.artifact?.scanSummary ?? null;
   const vulnerabilities = scanSummary?.vulnerabilities ?? [];
@@ -229,7 +253,9 @@ export function DockerBuildDetailsDialog({
             keyFn={(line) => line.sequence}
             renderContent={(line) => line.content}
             emptyState={
-              <div className="px-4 text-xs text-muted-foreground">No build log output yet.</div>
+              <div className="px-4 text-xs text-muted-foreground">
+                {loadingLogs ? "Loading build log output…" : "No build log output yet."}
+              </div>
             }
             bordered
             className="h-72"

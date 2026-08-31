@@ -129,6 +129,18 @@ export interface NodeStatsReport {
   timestamp: number;
 }
 
+export interface NodeMonitoringSnapshot {
+  timestamp: string;
+  health: NodeHealthReport | null;
+  stats: NodeStatsReport | null;
+  traffic: {
+    statusCodes: { s2xx: number; s3xx: number; s4xx: number; s5xx: number };
+    avgResponseTime: number;
+    p95ResponseTime: number;
+    totalRequests: number;
+  } | null;
+}
+
 export interface Node {
   id: string;
   slug: string;
@@ -164,6 +176,7 @@ export interface NodeDetail extends Node {
   lastStatsReport: NodeStatsReport | null;
   liveHealthReport: NodeHealthReport | null;
   liveStatsReport: NodeStatsReport | null;
+  monitoringHistory?: NodeMonitoringSnapshot[];
 }
 
 export interface CreateNodeResponse {

@@ -232,6 +232,10 @@ describe("GitIntegrationsSection", () => {
     render(<GitIntegrationsSection />);
 
     await user.click(await screen.findByText("Production GitHub"));
+    expect(screen.queryByText("Authorization code")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reauthorize" }));
+    expect(screen.getByRole("heading", { name: "Authorize GitHub" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("GitHub authentication method")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Start GitHub authorization" }));
 
     await waitFor(() =>
@@ -263,6 +267,30 @@ describe("GitIntegrationsSection", () => {
         "github-1",
         expect.objectContaining({ authMode: "token", token: "replacement-token" })
       )
+    );
+  });
+
+  it("switches an existing token connector to OAuth through the separate authorization step", async () => {
+    const user = userEvent.setup();
+    const tokenConnector = { ...githubConnector, authMode: "token" as const };
+    mocks.listGitConnectors.mockImplementation((provider: string) =>
+      Promise.resolve(provider === "github" ? [tokenConnector] : [])
+    );
+    render(<GitIntegrationsSection />);
+
+    await user.click(await screen.findByText("Production GitHub"));
+    await user.click(screen.getByLabelText("GitHub authentication method"));
+    await user.click(screen.getByRole("option", { name: "OAuth" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(screen.getByRole("heading", { name: "Authorize GitHub" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start GitHub authorization" }));
+    await waitFor(() =>
+      expect(mocks.startGitHubOAuth).toHaveBeenCalledWith({
+        connectorId: "github-1",
+        name: "Production GitHub",
+        enabled: true,
+      })
     );
   });
 

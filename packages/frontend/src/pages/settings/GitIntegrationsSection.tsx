@@ -124,6 +124,7 @@ function GitConnectorPanel({
   const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
   const [authMode, setAuthMode] = useState<"oauth" | "token">("token");
   const [githubOAuthActive, setGitHubOAuthActive] = useState(false);
+  const [oauthStep, setOAuthStep] = useState(false);
   const refresh = useCallback(async () => {
     if (!canView) return;
     try {
@@ -160,6 +161,7 @@ function GitConnectorPanel({
     setSaving(false);
     setTesting(false);
     setGitHubOAuthActive(false);
+    setOAuthStep(false);
   };
 
   const openCreateDialog = () => {
@@ -207,6 +209,7 @@ function GitConnectorPanel({
     const urls = (connector.allowlistEntries ?? []).map((entry) => entry.fullPath);
     setRepositoryUrls(urls.length > 0 ? urls : [""]);
     setTestedTokenSignature(null);
+    setOAuthStep(false);
     setFormDialog(true);
   };
 
@@ -488,22 +491,41 @@ function GitConnectorPanel({
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              {editingConnector
-                ? `${provider === "github" ? "GitHub" : "Git"} Connector`
-                : provider === "github"
-                  ? authMode === "oauth"
-                    ? "Connect GitHub with OAuth"
-                    : "Connect GitHub with a token"
-                  : "Add Git Connector"}
+              {oauthStep
+                ? "Authorize GitHub"
+                : editingConnector
+                  ? `${provider === "github" ? "GitHub" : "Git"} Connector`
+                  : provider === "github"
+                    ? authMode === "oauth"
+                      ? "Connect GitHub with OAuth"
+                      : "Connect GitHub with a token"
+                    : "Add Git Connector"}
             </DialogTitle>
             <DialogDescription>
-              {provider === "github"
-                ? "The connector can use repositories visible to the authorized GitHub account."
-                : "Gateway encrypts the credential and uses it only for the configured repositories."}
+              {oauthStep
+                ? "Authorize the selected GitHub account to update this connector without changing its project bindings."
+                : provider === "github"
+                  ? "The connector can use repositories visible to the authorized GitHub account."
+                  : "Gateway encrypts the credential and uses it only for the configured repositories."}
             </DialogDescription>
           </DialogHeader>
 
-          {provider === "github" && authMode === "oauth" && !editingConnector ? (
+          {provider === "github" && authMode === "oauth" && editingConnector && oauthStep ? (
+            <GitHubDeviceFlow
+              request={{
+                connectorId: editingConnector.id,
+                name: form.name.trim(),
+                enabled: form.enabled,
+              }}
+              disabled={!form.name.trim()}
+              onActiveChange={setGitHubOAuthActive}
+              onCompleted={async () => {
+                toast.success("GitHub connector reauthorized");
+                closeForm();
+                await refresh();
+              }}
+            />
+          ) : provider === "github" && authMode === "oauth" && !editingConnector ? (
             <div className={githubOAuthActive ? "" : "border border-border"}>
               {!githubOAuthActive ? (
                 <SettingsControlRow
@@ -603,6 +625,7 @@ function GitConnectorPanel({
                       value={authMode}
                       onValueChange={(value) => {
                         setAuthMode(value as "oauth" | "token");
+                        setOAuthStep(false);
                         setTestedTokenSignature(null);
                         setForm((current) => ({ ...current, token: "" }));
                       }}
@@ -617,29 +640,6 @@ function GitConnectorPanel({
                         <SelectItem value="token">Personal access token</SelectItem>
                       </SelectContent>
                     </Select>
-                  </SettingsControlRow>
-                ) : null}
-
-                {provider === "github" && authMode === "oauth" && editingConnector ? (
-                  <SettingsControlRow
-                    title="Authorization"
-                    description="Authorize again to replace an expired or revoked GitHub credential."
-                    controlsClassName="sm:min-w-[22rem] sm:max-w-none"
-                  >
-                    <GitHubDeviceFlow
-                      request={{
-                        connectorId: editingConnector.id,
-                        name: form.name.trim(),
-                        enabled: form.enabled,
-                      }}
-                      disabled={!form.name.trim()}
-                      onActiveChange={setGitHubOAuthActive}
-                      onCompleted={async () => {
-                        toast.success("GitHub connector reauthorized");
-                        closeForm();
-                        await refresh();
-                      }}
-                    />
                   </SettingsControlRow>
                 ) : null}
 
@@ -758,6 +758,12 @@ function GitConnectorPanel({
           )}
 
           <DialogFooter>
+            {oauthStep ? (
+              <Button variant="outline" onClick={() => setOAuthStep(false)}>
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+            ) : null}
             {provider === "github" && !editingConnector ? (
               <Button variant="outline" onClick={backToMethods}>
                 <ArrowLeft className="h-4 w-4" />
@@ -767,7 +773,13 @@ function GitConnectorPanel({
             <Button variant="outline" onClick={() => closeForm()}>
               Cancel
             </Button>
+            {editingConnector && provider === "github" && authMode === "oauth" && !oauthStep ? (
+              <Button disabled={!form.name.trim()} onClick={() => setOAuthStep(true)}>
+                {switchingToOAuth ? "Continue" : "Reauthorize"}
+              </Button>
+            ) : null}
             {(editingConnector || provider === "git" || authMode === "token") &&
+            !oauthStep &&
             !switchingToOAuth ? (
               <Button
                 disabled={saving || !(genericGitReady || githubFormReady)}
