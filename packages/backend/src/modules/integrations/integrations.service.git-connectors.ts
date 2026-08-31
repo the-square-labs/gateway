@@ -1,6 +1,7 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import {
+  dockerSourceBindings,
   type IntegrationConnectorCapabilities,
   integrationConnectors,
   integrationGitHubOAuthSessions,
@@ -16,6 +17,7 @@ import type {
   GitUserCredentialAuthorizeInput,
 } from './integrations.schemas.js';
 import {
+  type GitHubOAuthCredential,
   type GitHubOAuthSession,
   type GitUserCredentialStatus,
   genericGitCapabilities,
@@ -24,12 +26,22 @@ import {
 } from './integrations.service.core.js';
 import { IntegrationsGitRepositoryService } from './integrations.service.git-repositories.js';
 
+function isForeignKeyViolation(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
+    if ('code' in current && current.code === '23503') return true;
+    current = 'cause' in current ? current.cause : null;
+  }
+  return false;
+}
+
 export abstract class IntegrationsGitConnectorService extends IntegrationsGitRepositoryService {
   async createGitConnector(
     provider: 'github' | 'git',
     input: GitConnectorCreateInput | GitHubConnectorCreateInput,
     userId: string,
-    authMode: 'token' | 'oauth' = 'token'
+    authMode: 'token' | 'oauth' = 'token',
+    oauthCredential?: GitHubOAuthCredential
   ) {
     const baseUrl = this.normalizeBaseUrl(input.baseUrl);
     const gitInput = provider === 'git' ? (input as GitConnectorCreateInput) : null;
@@ -49,7 +61,10 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
         authMode,
         username: githubIdentity?.username ?? gitInput?.username?.trim() ?? null,
         encryptedToken: this.encryptToken(input.token),
+        encryptedRefreshToken: oauthCredential?.refreshToken ? this.encryptToken(oauthCredential.refreshToken) : null,
         tokenLast4: this.tokenLast4(input.token),
+        tokenExpiresAt: oauthCredential?.tokenExpiresAt ?? null,
+        refreshTokenExpiresAt: oauthCredential?.refreshTokenExpiresAt ?? null,
         allowlistMode: provider === 'github' ? 'all_visible' : 'selected',
         settings: {
           repositoryMode: 'multi_repository',
@@ -80,6 +95,19 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
     if (input.baseUrl !== undefined) updates.baseUrl = this.normalizeBaseUrl(input.baseUrl);
     if (input.enabled !== undefined) updates.enabled = input.enabled;
     if (input.username !== undefined) updates.username = input.username?.trim() || null;
+    if (input.authMode === 'token') {
+      if (provider === 'github' && existing.authMode === 'oauth' && input.token === undefined) {
+        throw new AppError(
+          400,
+          'GITHUB_TOKEN_REQUIRED',
+          'A personal access token is required to switch this connector from OAuth'
+        );
+      }
+      updates.authMode = 'token';
+      updates.encryptedRefreshToken = null;
+      updates.tokenExpiresAt = null;
+      updates.refreshTokenExpiresAt = null;
+    }
     if (input.token !== undefined) {
       if (provider === 'github') {
         const identity = await this.validateGitHubToken(
@@ -92,6 +120,8 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
       updates.encryptedToken = this.encryptToken(input.token);
       updates.tokenLast4 = this.tokenLast4(input.token);
       updates.testedAt = new Date();
+      updates.syncStatus = 'success';
+      updates.syncLastError = null;
     }
     if (provider === 'git' && input.allowlistEntries !== undefined) {
       updates.allowlistMode = 'selected';
@@ -114,7 +144,7 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
       userId,
       resourceType: 'integration-connector',
       resourceId: existing.id,
-      details: { name: row.name },
+      details: { name: row.name, authMode: row.authMode },
     });
     this.emitConnector(existing.id, 'updated', provider);
     return { ...this.toSafeConnector(row), allowlistEntries: await this.listAllowlistRows(existing.id) };
@@ -126,7 +156,8 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
       if (!row.encryptedToken) {
         throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${row.name} has no credential`);
       }
-      const token = this.decryptToken(row.encryptedToken);
+      const token =
+        provider === 'github' ? await this.resolveGitHubConnectorToken(row) : this.decryptToken(row.encryptedToken);
       let capabilities = row.capabilities;
       let username = row.username;
       if (provider === 'github') {
@@ -185,9 +216,33 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
 
   async deleteGitConnector(provider: 'github' | 'git', id: string, userId: string) {
     const row = await this.getConnectorRow(id, provider);
-    await this.db
-      .delete(integrationConnectors)
-      .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)));
+    const linkedBindings = await this.db
+      .select({ id: dockerSourceBindings.id, targetKind: dockerSourceBindings.targetKind })
+      .from(dockerSourceBindings)
+      .where(eq(dockerSourceBindings.connectorId, id))
+      .limit(5);
+    if (linkedBindings.length > 0) {
+      throw new AppError(
+        409,
+        'GIT_CONNECTOR_IN_USE',
+        `${provider === 'github' ? 'GitHub' : 'Git'} connector is used by source projects or workloads and cannot be deleted`,
+        { bindings: linkedBindings }
+      );
+    }
+    try {
+      await this.db
+        .delete(integrationConnectors)
+        .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)));
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        throw new AppError(
+          409,
+          'GIT_CONNECTOR_IN_USE',
+          `${provider === 'github' ? 'GitHub' : 'Git'} connector is used by source projects or workloads and cannot be deleted`
+        );
+      }
+      throw error;
+    }
     await this.auditService.log({
       action: `integrations.${provider}.connector.delete`,
       userId,
@@ -262,7 +317,10 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
       response = await fetch('https://github.com/login/device/code', {
         method: 'POST',
         headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ client_id: clientId, scope: 'repo workflow read:org read:packages' }),
+        body: new URLSearchParams({
+          client_id: clientId,
+          scope: 'repo workflow read:org read:packages offline_access',
+        }),
       });
     } catch {
       throw new AppError(502, 'GITHUB_OAUTH_START_FAILED', 'GitHub authorization could not be started');
@@ -276,6 +334,7 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
     if (!response.ok || !deviceCode || !userCode || !verificationUri) {
       throw new AppError(502, 'GITHUB_OAUTH_START_FAILED', 'GitHub returned an incomplete authorization response');
     }
+    const targetConnector = input.connectorId ? await this.getConnectorRow(input.connectorId, 'github') : null;
     const [row] = await this.db
       .insert(integrationGitHubOAuthSessions)
       .values({
@@ -284,7 +343,9 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
         userCode,
         verificationUri,
         connectorDraft: {
-          ...input,
+          targetConnectorId: targetConnector?.id,
+          name: input.name,
+          enabled: input.enabled,
           baseUrl,
           repositoryMode: 'multi_repository',
           allowlistEntries: [],
@@ -294,6 +355,46 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
       })
       .returning();
     return this.toSafeGitHubOAuthSession(row);
+  }
+
+  async replaceGitHubConnectorAuthentication(
+    id: string,
+    input: { name: string; enabled: boolean },
+    credential: GitHubOAuthCredential,
+    userId: string
+  ) {
+    const existing = await this.getConnectorRow(id, 'github');
+    const identity = await this.validateGitHubToken('https://github.com', credential.accessToken);
+    const [row] = await this.db
+      .update(integrationConnectors)
+      .set({
+        name: input.name,
+        baseUrl: 'https://github.com',
+        enabled: input.enabled,
+        authMode: 'oauth',
+        username: identity.username,
+        encryptedToken: this.encryptToken(credential.accessToken),
+        encryptedRefreshToken: credential.refreshToken ? this.encryptToken(credential.refreshToken) : null,
+        tokenLast4: this.tokenLast4(credential.accessToken),
+        tokenExpiresAt: credential.tokenExpiresAt,
+        refreshTokenExpiresAt: credential.refreshTokenExpiresAt,
+        capabilities: identity.capabilities,
+        syncStatus: 'success',
+        syncLastError: null,
+        testedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, 'github')))
+      .returning();
+    await this.auditService.log({
+      action: 'integrations.github.connector.reauthorize',
+      userId,
+      resourceType: 'integration-connector',
+      resourceId: id,
+      details: { name: row.name, previousAuthMode: existing.authMode, authMode: 'oauth' },
+    });
+    this.emitConnector(id, 'updated', 'github');
+    return this.toSafeConnector(row);
   }
 
   async getGitHubOAuthStatus(id: string, userId: string): Promise<GitHubOAuthSession> {
@@ -333,7 +434,7 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
         and(
           eq(integrationGitHubOAuthSessions.id, id),
           eq(integrationGitHubOAuthSessions.userId, userId),
-          inArray(integrationGitHubOAuthSessions.status, ['pending', 'processing'])
+          eq(integrationGitHubOAuthSessions.status, 'pending')
         )
       )
       .returning();

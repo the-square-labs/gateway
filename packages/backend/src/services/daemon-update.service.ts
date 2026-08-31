@@ -3,7 +3,7 @@ import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { settings } from '@/db/schema/settings.js';
-import type { CommandResult } from '@/grpc/generated/types.js';
+import type { CommandResult, DaemonUpdateOutcome } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import {
   type ReleaseArtifactSource,
@@ -77,7 +77,15 @@ export interface DaemonNodeUpdateStatus {
   hostname: string;
   currentVersion: string;
   updateAvailable: boolean;
+  retryAvailable?: boolean;
+  failedVersion?: string;
+  failureReason?: string;
   arch?: string;
+}
+
+export interface DaemonUpdateRegistrationReconciliation {
+  commitTarget?: string;
+  acknowledgeRollbackTarget?: string;
 }
 
 export interface DaemonUpdateStatus {
@@ -195,9 +203,18 @@ export class DaemonUpdateService {
         .filter((n) => NODE_TYPE_MAP[n.type] === type)
         .map((n) => {
           const currentVersion = n.daemonVersion ?? 'unknown';
+          const metadata = (n.metadata ?? {}) as Record<string, unknown>;
+          const failedVersion =
+            typeof metadata.daemonUpdateFailedVersion === 'string' ? metadata.daemonUpdateFailedVersion : undefined;
+          const lastFailure =
+            metadata.lastDaemonUpdateFailure && typeof metadata.lastDaemonUpdateFailure === 'object'
+              ? (metadata.lastDaemonUpdateFailure as Record<string, unknown>)
+              : undefined;
+          const retryAvailable =
+            latestVersion != null && failedVersion === latestVersion && isNewerVersion(latestVersion, currentVersion);
           const updateAvailable =
             latestVersion != null && currentVersion !== 'unknown' && currentVersion !== 'dev'
-              ? isNewerVersion(latestVersion, currentVersion)
+              ? isNewerVersion(latestVersion, currentVersion) && !retryAvailable
               : false;
           const caps = (n.capabilities ?? {}) as Record<string, unknown>;
           return {
@@ -205,6 +222,9 @@ export class DaemonUpdateService {
             hostname: n.displayName ?? n.hostname,
             currentVersion,
             updateAvailable,
+            retryAvailable,
+            failedVersion,
+            failureReason: typeof lastFailure?.reason === 'string' ? lastFailure.reason : undefined,
             arch: (caps.architecture as string) ?? undefined,
           };
         });
@@ -329,6 +349,80 @@ export class DaemonUpdateService {
     this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
     this.emitNodeUpdated(nodeId);
     return true;
+  }
+
+  async reconcileNodeUpdateRegistration(
+    nodeId: string,
+    reportedVersion: string,
+    supportsRollback: boolean,
+    outcome?: DaemonUpdateOutcome
+  ): Promise<DaemonUpdateRegistrationReconciliation> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return {};
+
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (outcome?.status === 'rolled_back' && outcome.targetVersion && outcome.restoredVersion === reportedVersion) {
+      const activeTarget = metadata.updateTargetVersion;
+      if (
+        metadata.updateInProgress === true &&
+        typeof activeTarget === 'string' &&
+        activeTarget !== outcome.targetVersion
+      ) {
+        logger.warn('Ignored daemon rollback outcome for a different update target', {
+          nodeId,
+          activeTarget,
+          outcomeTarget: outcome.targetVersion,
+        });
+        return {};
+      }
+      delete metadata.updateInProgress;
+      delete metadata.updateTargetVersion;
+      delete metadata.updateStartedAt;
+      metadata.daemonUpdateFailedVersion = outcome.targetVersion;
+      metadata.lastDaemonUpdateFailure = {
+        status: 'rolled_back',
+        fromVersion: outcome.fromVersion,
+        targetVersion: outcome.targetVersion,
+        restoredVersion: outcome.restoredVersion,
+        reason: outcome.reason || 'Candidate daemon failed during update verification',
+        occurredAt:
+          Number(outcome.occurredAtUnix) > 0
+            ? new Date(Number(outcome.occurredAtUnix) * 1000).toISOString()
+            : new Date().toISOString(),
+      };
+      await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
+      this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
+      this.emitNodeUpdated(nodeId);
+      return { acknowledgeRollbackTarget: outcome.targetVersion };
+    }
+
+    if (metadata.updateInProgress !== true) return {};
+    const targetVersion = metadata.updateTargetVersion;
+    if (typeof targetVersion !== 'string' || targetVersion.length === 0) return {};
+    const reported = parseSemver(reportedVersion);
+    const target = parseSemver(targetVersion);
+    if (!reported || !target || compareSemver(reportedVersion, targetVersion) < 0) return {};
+    if (supportsRollback) return { commitTarget: targetVersion };
+
+    await this.clearNodeUpdateInProgressOnReconnect(nodeId, reportedVersion);
+    return {};
+  }
+
+  async completeNodeUpdateAfterCommit(nodeId: string, targetVersion: string): Promise<void> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return;
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (metadata.updateInProgress !== true || metadata.updateTargetVersion !== targetVersion) return;
+    delete metadata.updateInProgress;
+    delete metadata.updateTargetVersion;
+    delete metadata.updateStartedAt;
+    if (metadata.daemonUpdateFailedVersion === targetVersion) {
+      delete metadata.daemonUpdateFailedVersion;
+      delete metadata.lastDaemonUpdateFailure;
+    }
+    await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
+    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
+    this.emitNodeUpdated(nodeId);
   }
 
   getDownloadUrl(daemonType: DaemonType, tag: string, arch: string): string {

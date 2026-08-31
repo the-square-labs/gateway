@@ -289,6 +289,9 @@ systemRoutes.openapi({ ...updateDaemonRoute, middleware: sessionOnly }, async (c
   const arch = (((node.capabilities ?? {}) as Record<string, unknown>).architecture as string) ?? 'amd64';
   const artifact = await service.prepareTrustedDaemonUpdate(daemonType, release.tagName, release.version, arch);
 
+  if (daemonType === 'relay') {
+    await dispatch.prepareRelaySupervisorRollbackBootstrap(nodeId);
+  }
   await service.markNodeUpdateInProgress(nodeId, release.version);
   try {
     const command = await dispatch.sendUpdateDaemonCommand(

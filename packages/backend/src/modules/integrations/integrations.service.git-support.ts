@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { chmod, lstat, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import {
   type CloudflareConnectorSettings,
@@ -23,6 +23,7 @@ import {
   DEFAULT_GITLAB_CONNECTOR_SETTINGS,
   type GenericGitExecutionContext,
   GIT_CHECKOUT_TIMEOUT_MS,
+  type GitHubOAuthCredential,
   type GitHubOAuthSession,
   type GitHubOAuthSessionRow,
   githubApiUrl,
@@ -38,7 +39,15 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     provider: 'github' | 'git',
     input: GitConnectorCreateInput | GitHubConnectorCreateInput,
     userId: string,
-    authMode?: 'token' | 'oauth'
+    authMode?: 'token' | 'oauth',
+    oauthCredential?: GitHubOAuthCredential
+  ): Promise<{ id: string }>;
+
+  abstract replaceGitHubConnectorAuthentication(
+    id: string,
+    input: { name: string; enabled: boolean },
+    credential: GitHubOAuthCredential,
+    userId: string
   ): Promise<{ id: string }>;
 
   protected async resolveGitHubAccount(
@@ -59,11 +68,93 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       if (!connector.encryptedToken) {
         throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
       }
-      return { connector, token: this.decryptToken(connector.encryptedToken) };
+      return { connector, token: await this.resolveGitHubConnectorToken(connector) };
     }
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
     if (!personal) throw this.gitUserCredentialRequired('github', connector);
     return { connector, token: personal.auth.token };
+  }
+
+  protected async resolveGitHubConnectorToken(connector: ConnectorRow): Promise<string> {
+    if (!connector.encryptedToken) {
+      throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
+    }
+    if (connector.authMode !== 'oauth' || !connector.tokenExpiresAt) {
+      return this.decryptToken(connector.encryptedToken);
+    }
+    const refreshBefore = Date.now() + 5 * 60 * 1000;
+    if (connector.tokenExpiresAt.getTime() > refreshBefore) {
+      return this.decryptToken(connector.encryptedToken);
+    }
+
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`github-oauth-refresh:${connector.id}`}))`);
+      const [current] = await tx
+        .select()
+        .from(integrationConnectors)
+        .where(and(eq(integrationConnectors.id, connector.id), eq(integrationConnectors.provider, 'github')))
+        .limit(1);
+      if (!current?.encryptedToken) {
+        throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
+      }
+      if (current.authMode !== 'oauth' || !current.tokenExpiresAt || current.tokenExpiresAt.getTime() > refreshBefore) {
+        return this.decryptToken(current.encryptedToken);
+      }
+      if (
+        !current.encryptedRefreshToken ||
+        (current.refreshTokenExpiresAt && current.refreshTokenExpiresAt.getTime() <= Date.now())
+      ) {
+        throw new AppError(
+          401,
+          'GITHUB_OAUTH_REAUTHORIZATION_REQUIRED',
+          'GitHub authorization expired and this connector must be reauthorized'
+        );
+      }
+
+      const existingToken = this.decryptToken(current.encryptedToken);
+      let response: Response;
+      try {
+        response = await fetch('https://github.com/login/oauth/access_token', {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: getEnv().GITHUB_OAUTH_CLIENT_ID,
+            grant_type: 'refresh_token',
+            refresh_token: this.decryptToken(current.encryptedRefreshToken),
+          }),
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch {
+        if (current.tokenExpiresAt.getTime() > Date.now()) return existingToken;
+        throw new AppError(502, 'GITHUB_OAUTH_REFRESH_FAILED', 'GitHub authorization could not be refreshed');
+      }
+      const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      const accessToken = typeof body?.access_token === 'string' ? body.access_token : '';
+      const refreshToken = typeof body?.refresh_token === 'string' ? body.refresh_token : '';
+      const expiresIn = typeof body?.expires_in === 'number' ? body.expires_in : 0;
+      const refreshExpiresIn = typeof body?.refresh_token_expires_in === 'number' ? body.refresh_token_expires_in : 0;
+      if (!response.ok || !accessToken || !refreshToken || expiresIn <= 0 || refreshExpiresIn <= 0) {
+        throw new AppError(
+          401,
+          'GITHUB_OAUTH_REAUTHORIZATION_REQUIRED',
+          'GitHub authorization could not be refreshed; reauthorize this connector'
+        );
+      }
+      const now = Date.now();
+      await tx
+        .update(integrationConnectors)
+        .set({
+          encryptedToken: this.encryptToken(accessToken),
+          encryptedRefreshToken: this.encryptToken(refreshToken),
+          tokenLast4: this.tokenLast4(accessToken),
+          tokenExpiresAt: new Date(now + expiresIn * 1000),
+          refreshTokenExpiresAt: new Date(now + refreshExpiresIn * 1000),
+          syncLastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(integrationConnectors.id, current.id));
+      return accessToken;
+    });
   }
 
   protected githubActionsName(value: string): string {
@@ -285,7 +376,7 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
         connector,
         repositoryUrl,
         username: connector.username ?? (provider === 'github' ? 'x-access-token' : ''),
-        token: this.decryptToken(connector.encryptedToken),
+        token: await this.resolveGitHubConnectorToken(connector),
       };
     }
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
@@ -429,17 +520,35 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     if (!response.ok || !accessToken) {
       return this.failGitHubOAuthSession(row.id, userId, 'GitHub authorization failed');
     }
+    const refreshToken = typeof body?.refresh_token === 'string' ? body.refresh_token : null;
+    const expiresIn = typeof body?.expires_in === 'number' ? body.expires_in : 0;
+    const refreshExpiresIn = typeof body?.refresh_token_expires_in === 'number' ? body.refresh_token_expires_in : 0;
+    const now = Date.now();
+    const credential: GitHubOAuthCredential = {
+      accessToken,
+      refreshToken,
+      tokenExpiresAt: expiresIn > 0 ? new Date(now + expiresIn * 1000) : null,
+      refreshTokenExpiresAt: refreshExpiresIn > 0 ? new Date(now + refreshExpiresIn * 1000) : null,
+    };
     try {
       const current = await this.getGitHubOAuthSession(row.id, userId);
       if (current.status !== 'processing') return this.toSafeGitHubOAuthSession(current);
-      const connector = await this.createGitConnector(
-        'github',
-        { ...row.connectorDraft, authMode: 'token', token: accessToken },
-        userId,
-        'oauth'
-      );
+      const connector = row.connectorDraft.targetConnectorId
+        ? await this.replaceGitHubConnectorAuthentication(
+            row.connectorDraft.targetConnectorId,
+            { name: row.connectorDraft.name, enabled: row.connectorDraft.enabled },
+            credential,
+            userId
+          )
+        : await this.createGitConnector(
+            'github',
+            { ...row.connectorDraft, authMode: 'token', token: accessToken },
+            userId,
+            'oauth',
+            credential
+          );
       const completed = await this.finishGitHubOAuthSession(row.id, userId, 'complete', connector.id, null);
-      if (completed.status !== 'complete') {
+      if (completed.status !== 'complete' && !row.connectorDraft.targetConnectorId) {
         await this.db.delete(integrationConnectors).where(eq(integrationConnectors.id, connector.id));
         this.emitConnector(connector.id, 'deleted');
       }

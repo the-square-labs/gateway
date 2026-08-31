@@ -19,8 +19,15 @@ import (
 )
 
 // SelfUpdate downloads a new binary from downloadURL, verifies its checksum,
-// replaces the current binary, and triggers a restart via systemd.
+// preserves the current executable, stages rollback state, and replaces the
+// current binary before the caller triggers a restart via systemd.
 func SelfUpdate(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType string, logger *slog.Logger) error {
+	if strings.TrimSpace(expectedChecksum) == "" {
+		return fmt.Errorf("missing update checksum")
+	}
+	if strings.TrimSpace(signedManifest) == "" {
+		return fmt.Errorf("missing signed update manifest")
+	}
 	execPath, err := os.Executable()
 	if err != nil {
 		logger.Error("self-update failed to resolve executable path", "error", err)
@@ -31,22 +38,22 @@ func SelfUpdate(downloadURL, targetVersion, expectedChecksum, signedManifest, da
 		logger.Error("self-update failed to resolve executable symlink", "error", err)
 		return fmt.Errorf("resolve symlinks: %w", err)
 	}
-	if daemonType != "relay" {
-		return ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, execPath, logger)
+	if err := EnsureSystemdUpdateGuard(daemonType, execPath); err != nil {
+		logger.Error("self-update rollback guard is unavailable", "error", err)
+		return fmt.Errorf("prepare automatic update rollback: %w", err)
 	}
 	backupPath := execPath + ".previous"
 	if err := BackupBinary(execPath, backupPath); err != nil {
-		return fmt.Errorf("backup current relay supervisor: %w", err)
+		return fmt.Errorf("backup current daemon: %w", err)
+	}
+	if err := StagePendingUpdate(execPath, Version, targetVersion, time.Now()); err != nil {
+		_ = os.Remove(backupPath)
+		return fmt.Errorf("stage daemon rollback state: %w", err)
 	}
 	if err := ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, execPath, logger); err != nil {
 		_ = os.Remove(backupPath)
+		_ = os.Remove(pendingUpdatePath(execPath))
 		return err
-	}
-	if err := os.WriteFile(execPath+".update-pending", []byte(targetVersion+"\n"), 0600); err != nil {
-		if restoreErr := os.Rename(backupPath, execPath); restoreErr != nil {
-			return fmt.Errorf("write relay supervisor update marker: %v; rollback failed: %w", err, restoreErr)
-		}
-		return fmt.Errorf("write relay supervisor update marker: %w", err)
 	}
 	return nil
 }
@@ -84,7 +91,10 @@ func BackupBinary(source, destination string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, destination)
+	if err := os.Rename(tmpPath, destination); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(destination))
 }
 
 // ReplaceBinaryAtPath downloads and verifies a signed daemon artifact before

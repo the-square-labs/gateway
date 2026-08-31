@@ -41,6 +41,18 @@ function compareBuildsNewestFirst(left: DockerBuild, right: DockerBuild): number
   return createdAtOrder || right.id.localeCompare(left.id);
 }
 
+function formatBuildTime(build: DockerBuild): string {
+  if (!build.startedAt) return "—";
+  const startedAt = Date.parse(build.startedAt);
+  const endedAt = build.completedAt ? Date.parse(build.completedAt) : Date.now();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return "—";
+  const seconds = Math.round((endedAt - startedAt) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
 export function DockerBuildHistoryPanel({
   builds,
   sourceBindingId,
@@ -397,20 +409,27 @@ export function DockerBuildHistoryPanel({
           } satisfies DataTableColumn<DockerBuild>,
         ]
       : []),
-    { key: "status", header: "Status", align: "right", width: "0.8fr", render: renderStatus },
+    { key: "status", header: "Status", align: "center", width: "0.8fr", render: renderStatus },
     {
       key: "worker",
       header: "Build Worker",
-      align: "right",
+      align: "center",
       width: "1.2fr",
       render: renderWorker,
     },
     {
       key: "artifact",
       header: "Result",
-      align: "right",
+      align: "center",
       width: "1.35fr",
       render: renderResult,
+    },
+    {
+      key: "time",
+      header: "Time",
+      align: "center",
+      width: "0.7fr",
+      render: formatBuildTime,
     },
     {
       key: "artifactSha",

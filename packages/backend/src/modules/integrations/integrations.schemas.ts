@@ -112,6 +112,7 @@ export const GitConnectorPreviewTestSchema = z.object({
 });
 
 export const GitHubOAuthStartSchema = z.object({
+  connectorId: z.string().uuid().optional(),
   name: z.string().trim().min(1).max(255),
   enabled: z.boolean().default(true),
 });
@@ -122,6 +123,7 @@ export const GitConnectorUpdateSchema = z.object({
   enabled: z.boolean().optional(),
   username: z.string().trim().min(1).max(255).nullable().optional(),
   token: z.string().min(1).max(4096).optional(),
+  authMode: z.literal('token').optional(),
   allowlistEntries: z.array(GitLabAllowlistEntrySchema).min(1).max(1000).optional(),
 });
 

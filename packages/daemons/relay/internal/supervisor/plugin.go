@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +15,10 @@ import (
 	"github.com/wiolett-industries/gateway/relay-supervisor/internal/config"
 )
 
-const relayPoolCapability = "relay_pool_v1"
+const (
+	relayPoolCapability               = "relay_pool_v1"
+	relaySupervisorRunnerV2Capability = "relay_supervisor_runner_v2"
+)
 
 type Plugin struct {
 	cfg     *config.Config
@@ -52,7 +53,8 @@ func (p *Plugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 	register := &pb.RegisterMessage{
 		NodeId: nodeID, Hostname: hostname, DaemonVersion: lifecycle.Version,
 		CpuModel: cpuModel, CpuCores: int32(cpuCores), Architecture: sysmetrics.GetArchitecture(),
-		KernelVersion: sysmetrics.GetKernelVersion(), DaemonType: "relay", Capabilities: []string{relayPoolCapability},
+		KernelVersion: sysmetrics.GetKernelVersion(), DaemonType: "relay",
+		Capabilities: []string{relayPoolCapability, relaySupervisorRunnerV2Capability},
 	}
 	if state != nil {
 		register.HostIdentityId = state.HostIdentityID
@@ -108,28 +110,8 @@ func (p *Plugin) HandleCommand(command *pb.GatewayCommand) *pb.CommandResult {
 		}
 	case *pb.GatewayCommand_CommitRelaySupervisorUpdate:
 		targetVersion := payload.CommitRelaySupervisorUpdate.GetTargetVersion()
-		if targetVersion != lifecycle.Version {
-			err = fmt.Errorf("supervisor version %s does not match commit target %s", lifecycle.Version, targetVersion)
-			break
-		}
-		executable, executableErr := os.Executable()
-		if executableErr != nil {
-			err = executableErr
-			break
-		}
-		executable, executableErr = filepath.EvalSymlinks(executable)
-		if executableErr != nil {
-			err = executableErr
-			break
-		}
-		if marker, readErr := os.ReadFile(executable + ".update-pending"); readErr != nil {
-			err = fmt.Errorf("read supervisor update marker: %w", readErr)
-		} else if strings.TrimSpace(string(marker)) != targetVersion {
-			err = fmt.Errorf("supervisor update marker does not match target version")
-		} else if removeErr := os.Remove(executable + ".update-pending"); removeErr != nil {
-			err = removeErr
-		} else {
-			_ = os.Remove(executable + ".previous")
+		err = lifecycle.FinalizeCurrentUpdate(targetVersion, false)
+		if err == nil {
 			result.Detail = fmt.Sprintf("relay supervisor update %s committed", targetVersion)
 		}
 	case *pb.GatewayCommand_SetDaemonLogStream:

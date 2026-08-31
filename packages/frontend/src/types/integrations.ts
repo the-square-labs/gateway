@@ -74,6 +74,7 @@ export interface GitConnectorPreviewTestResult {
 }
 
 export interface GitHubOAuthStartRequest {
+  connectorId?: string;
   name: string;
   enabled: boolean;
 }

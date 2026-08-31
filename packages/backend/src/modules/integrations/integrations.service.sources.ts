@@ -89,7 +89,10 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     }
     return {
       username: connector.username || (connector.provider === 'gitlab' ? 'oauth2' : 'x-access-token'),
-      password: this.decryptToken(connector.encryptedToken),
+      password:
+        connector.provider === 'github'
+          ? await this.resolveGitHubConnectorToken(connector)
+          : this.decryptToken(connector.encryptedToken),
     };
   }
 
@@ -463,7 +466,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       return { provider: 'gitlab', id: String(hook.id) };
     }
     if (joined.connector.provider !== 'github' || !joined.connector.encryptedToken) return null;
-    const token = this.decryptToken(joined.connector.encryptedToken);
+    const token = await this.resolveGitHubConnectorToken(joined.connector);
     const repositoryUrl = this.normalizeRepositoryUrl(
       joined.project.webUrl || `${joined.connector.baseUrl}/${joined.project.fullPath}`
     );
@@ -534,7 +537,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     }
 
     if (!joined.connector.encryptedToken) return false;
-    const token = this.decryptToken(joined.connector.encryptedToken);
+    const token = await this.resolveGitHubConnectorToken(joined.connector);
     const repositoryUrl = this.normalizeRepositoryUrl(
       joined.project.webUrl || `${joined.connector.baseUrl}/${joined.project.fullPath}`
     );

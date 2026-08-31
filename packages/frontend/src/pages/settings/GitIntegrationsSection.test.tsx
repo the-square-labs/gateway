@@ -8,6 +8,8 @@ import { GitIntegrationsSection } from "./GitIntegrationsSection";
 const mocks = vi.hoisted(() => ({
   listGitConnectors: vi.fn(),
   getGitHubOAuthAvailability: vi.fn(),
+  startGitHubOAuth: vi.fn(),
+  cancelGitHubOAuth: vi.fn(),
   previewGitConnectorTest: vi.fn(),
   previewGitHubConnectorTest: vi.fn(),
   createGitConnector: vi.fn(),
@@ -26,9 +28,9 @@ vi.mock("@/services/api", () => ({
     getGitHubOAuthAvailability: mocks.getGitHubOAuthAvailability,
     previewGitConnectorTest: mocks.previewGitConnectorTest,
     previewGitHubConnectorTest: mocks.previewGitHubConnectorTest,
-    startGitHubOAuth: vi.fn(),
+    startGitHubOAuth: mocks.startGitHubOAuth,
     getGitHubOAuthStatus: vi.fn(),
-    cancelGitHubOAuth: vi.fn(),
+    cancelGitHubOAuth: mocks.cancelGitHubOAuth,
     createGitConnector: mocks.createGitConnector,
     updateGitConnector: mocks.updateGitConnector,
     testGitConnector: mocks.testGitConnector,
@@ -67,6 +69,17 @@ describe("GitIntegrationsSection", () => {
       Promise.resolve(provider === "github" ? [] : [])
     );
     mocks.getGitHubOAuthAvailability.mockResolvedValue({ available: true });
+    mocks.startGitHubOAuth.mockResolvedValue({
+      id: "oauth-1",
+      status: "pending",
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://github.com/login/device",
+      pollIntervalSeconds: 60,
+      expiresAt: "2026-08-31T12:00:00.000Z",
+      connectorId: null,
+      errorMessage: null,
+    });
+    mocks.cancelGitHubOAuth.mockResolvedValue({ status: "cancelled" });
     mocks.previewGitConnectorTest.mockResolvedValue({
       success: true,
       baseUrl: "https://git.example.com",
@@ -209,6 +222,48 @@ describe("GitIntegrationsSection", () => {
     await user.click(await screen.findByTitle("Sync connector"));
 
     await waitFor(() => expect(mocks.syncGitConnector).toHaveBeenCalledWith("github", "github-1"));
+  });
+
+  it("reauthorizes an existing OAuth connector in place", async () => {
+    const user = userEvent.setup();
+    mocks.listGitConnectors.mockImplementation((provider: string) =>
+      Promise.resolve(provider === "github" ? [githubConnector] : [])
+    );
+    render(<GitIntegrationsSection />);
+
+    await user.click(await screen.findByText("Production GitHub"));
+    await user.click(screen.getByRole("button", { name: "Start GitHub authorization" }));
+
+    await waitFor(() =>
+      expect(mocks.startGitHubOAuth).toHaveBeenCalledWith({
+        connectorId: "github-1",
+        name: "Production GitHub",
+        enabled: true,
+      })
+    );
+  });
+
+  it("switches an existing OAuth connector to a personal access token", async () => {
+    const user = userEvent.setup();
+    mocks.listGitConnectors.mockImplementation((provider: string) =>
+      Promise.resolve(provider === "github" ? [githubConnector] : [])
+    );
+    mocks.updateGitConnector.mockResolvedValue({ ...githubConnector, authMode: "token" });
+    render(<GitIntegrationsSection />);
+
+    await user.click(await screen.findByText("Production GitHub"));
+    await user.click(screen.getByLabelText("GitHub authentication method"));
+    await user.click(screen.getByRole("option", { name: "Personal access token" }));
+    await user.type(screen.getByPlaceholderText("****1234"), "replacement-token");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(mocks.updateGitConnector).toHaveBeenCalledWith(
+        "github",
+        "github-1",
+        expect.objectContaining({ authMode: "token", token: "replacement-token" })
+      )
+    );
   });
 
   it("does not load connector families the user cannot view", async () => {

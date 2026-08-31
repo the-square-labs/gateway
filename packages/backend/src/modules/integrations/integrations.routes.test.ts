@@ -200,6 +200,31 @@ describe('integrations routes', () => {
     expect(await response.json()).toMatchObject({ data: { userCode: 'ABCD-EFGH' } });
   });
 
+  it('starts GitHub Device Flow for an existing connector without changing its identity', async () => {
+    const startGitHubOAuth = vi.fn().mockResolvedValue({ id: 'oauth-1', status: 'pending' });
+    registerServices(['integrations:github:manage'], { startGitHubOAuth });
+
+    const response = await createApp().request('/api/integrations/github/oauth/sessions', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        connectorId: '11111111-1111-4111-8111-111111111111',
+        name: 'GitHub',
+        enabled: true,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(startGitHubOAuth).toHaveBeenCalledWith(
+      {
+        connectorId: '11111111-1111-4111-8111-111111111111',
+        name: 'GitHub',
+        enabled: true,
+      },
+      USER.id
+    );
+  });
+
   it('authorizes a user-owned generic Git credential through the session-only flow', async () => {
     const authorizeGitUserCredential = vi.fn().mockResolvedValue({ authorized: true, tokenMasked: '****oken' });
     registerBrowserSession({ authorizeGitUserCredential });

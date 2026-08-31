@@ -125,10 +125,12 @@ describe('getEnv gRPC TLS config', () => {
     expect(production.SECURE_LINK_CONNECTOR_IMAGE).toBe('');
   });
 
-  it('rejects mutable secure-link connector images in production', async () => {
+  it('rejects untrusted mutable secure-link connector images in production', async () => {
     await expect(
       loadEnv({ NODE_ENV: 'production', SECURE_LINK_CONNECTOR_IMAGE: 'gateway-secure-link-connector:dev' })
-    ).rejects.toThrow('SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest in production');
+    ).rejects.toThrow(
+      'SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest or an official Gateway Relay release tag in production'
+    );
   });
 
   it('accepts an immutable secure-link connector image in production', async () => {
@@ -136,5 +138,25 @@ describe('getEnv gRPC TLS config', () => {
     const production = await loadEnv({ NODE_ENV: 'production', SECURE_LINK_CONNECTOR_IMAGE: image });
 
     expect(production.SECURE_LINK_CONNECTOR_IMAGE).toBe(image);
+  });
+
+  it.each([
+    'v2.9.16-relay',
+    'v2.10.0-rc.1-relay',
+  ])('accepts the official secure-link connector release tag %s in production', async (tag) => {
+    const image = `ghcr.io/the-square-labs/gateway/secure-link-connector:${tag}`;
+    const production = await loadEnv({ NODE_ENV: 'production', SECURE_LINK_CONNECTOR_IMAGE: image });
+
+    expect(production.SECURE_LINK_CONNECTOR_IMAGE).toBe(image);
+  });
+
+  it.each([
+    'ghcr.io/the-square-labs/gateway/secure-link-connector:latest',
+    'ghcr.io/the-square-labs/gateway/secure-link-connector:v2.9.16',
+    'registry.example/gateway/secure-link-connector:v2.9.16-relay',
+  ])('rejects non-release secure-link connector tag %s in production', async (image) => {
+    await expect(loadEnv({ NODE_ENV: 'production', SECURE_LINK_CONNECTOR_IMAGE: image })).rejects.toThrow(
+      'SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest or an official Gateway Relay release tag in production'
+    );
   });
 });

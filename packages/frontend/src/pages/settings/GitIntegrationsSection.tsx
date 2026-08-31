@@ -29,6 +29,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
@@ -225,6 +232,7 @@ function GitConnectorPanel({
                 })),
               }
             : {}),
+          ...(provider === "github" && authMode === "token" ? { authMode: "token" as const } : {}),
           ...(form.token.trim() ? { token: form.token.trim() } : {}),
         });
       } else if (provider === "github") {
@@ -325,8 +333,11 @@ function GitConnectorPanel({
     provider === "github" &&
     Boolean(
       form.name.trim() &&
-        (authMode === "oauth" || (form.baseUrl.trim() && (editingConnector || form.token.trim())))
+        (authMode === "oauth" ||
+          (form.baseUrl.trim() && (editingConnector?.authMode === "token" || form.token.trim())))
     );
+  const switchingToOAuth =
+    provider === "github" && editingConnector?.authMode !== "oauth" && authMode === "oauth";
 
   const testConnector = async (connector: GitConnector) => {
     setTestingId(connector.id);
@@ -583,12 +594,52 @@ function GitConnectorPanel({
                   </SettingsControlRow>
                 ) : null}
 
-                {provider === "github" && authMode === "oauth" && editingConnector ? (
+                {provider === "github" && editingConnector ? (
                   <SettingsControlRow
                     title="Authentication"
-                    description="This connector uses the GitHub account authorized through OAuth."
+                    description="Change the credential without recreating the connector or its project bindings."
                   >
-                    <Badge variant="secondary">OAuth</Badge>
+                    <Select
+                      value={authMode}
+                      onValueChange={(value) => {
+                        setAuthMode(value as "oauth" | "token");
+                        setTestedTokenSignature(null);
+                        setForm((current) => ({ ...current, token: "" }));
+                      }}
+                    >
+                      <SelectTrigger aria-label="GitHub authentication method" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="oauth" disabled={!githubOAuthAvailable}>
+                          OAuth
+                        </SelectItem>
+                        <SelectItem value="token">Personal access token</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </SettingsControlRow>
+                ) : null}
+
+                {provider === "github" && authMode === "oauth" && editingConnector ? (
+                  <SettingsControlRow
+                    title="Authorization"
+                    description="Authorize again to replace an expired or revoked GitHub credential."
+                    controlsClassName="sm:min-w-[22rem] sm:max-w-none"
+                  >
+                    <GitHubDeviceFlow
+                      request={{
+                        connectorId: editingConnector.id,
+                        name: form.name.trim(),
+                        enabled: form.enabled,
+                      }}
+                      disabled={!form.name.trim()}
+                      onActiveChange={setGitHubOAuthActive}
+                      onCompleted={async () => {
+                        toast.success("GitHub connector reauthorized");
+                        closeForm();
+                        await refresh();
+                      }}
+                    />
                   </SettingsControlRow>
                 ) : null}
 
@@ -716,7 +767,8 @@ function GitConnectorPanel({
             <Button variant="outline" onClick={() => closeForm()}>
               Cancel
             </Button>
-            {editingConnector || provider === "git" || authMode === "token" ? (
+            {(editingConnector || provider === "git" || authMode === "token") &&
+            !switchingToOAuth ? (
               <Button
                 disabled={saving || !(genericGitReady || githubFormReady)}
                 onClick={() => void saveConnector()}

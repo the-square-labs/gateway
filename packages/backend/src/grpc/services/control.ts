@@ -270,6 +270,8 @@ export function createControlHandlers(deps: GrpcServerDeps) {
       let nodeId: string | null = null;
       let closed = false;
       let registering = false;
+      let pendingDaemonUpdateCommitTarget: string | null = null;
+      let daemonUpdateCommitInFlight = false;
       const pendingDaemonLogs: Array<NonNullable<DaemonMessage['daemonLog']>> = [];
       const isCurrentCommandStream = () =>
         !!nodeId && !closed && deps.registry.getNode(nodeId)?.commandStream === stream;
@@ -593,7 +595,34 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             try {
               const { DaemonUpdateService } = await import('@/services/daemon-update.service.js');
               const daemonUpdateService = container.resolve(DaemonUpdateService);
-              await daemonUpdateService.clearNodeUpdateInProgressOnReconnect(claimedNodeId, msg.register.daemonVersion);
+              const reconciliation = await daemonUpdateService.reconcileNodeUpdateRegistration(
+                claimedNodeId,
+                msg.register.daemonVersion,
+                msg.register.capabilities?.includes('daemon_update_rollback_v1') ?? false,
+                msg.register.daemonUpdateOutcome
+              );
+              pendingDaemonUpdateCommitTarget = reconciliation.commitTarget ?? null;
+              if (reconciliation.acknowledgeRollbackTarget) {
+                const rollbackTarget = reconciliation.acknowledgeRollbackTarget;
+                setImmediate(async () => {
+                  try {
+                    const result = await deps.registry.sendCommand(
+                      claimedNodeId,
+                      { finalizeDaemonUpdate: { targetVersion: rollbackTarget, acknowledgeRollback: true } },
+                      30_000
+                    );
+                    if (!result.success) {
+                      throw new Error(result.error || result.detail || 'Daemon rejected rollback acknowledgement');
+                    }
+                  } catch (error) {
+                    logger.warn('Failed to acknowledge daemon rollback outcome', {
+                      nodeId: claimedNodeId,
+                      targetVersion: rollbackTarget,
+                      error: error instanceof Error ? error.message : String(error),
+                    });
+                  }
+                });
+              }
             } catch (err) {
               logger.warn('Failed to reconcile node update lock on register', {
                 nodeId: claimedNodeId,
@@ -967,6 +996,36 @@ export function createControlHandlers(deps: GrpcServerDeps) {
 
               await deps.db.update(nodes).set(updatePayload).where(eq(nodes.id, activeNodeId));
               if (!isCurrentCommandStream()) return;
+
+              if (pendingDaemonUpdateCommitTarget && !daemonUpdateCommitInFlight) {
+                const commitTarget = pendingDaemonUpdateCommitTarget;
+                daemonUpdateCommitInFlight = true;
+                setImmediate(async () => {
+                  try {
+                    const result = await deps.registry.sendCommand(
+                      activeNodeId,
+                      { finalizeDaemonUpdate: { targetVersion: commitTarget, acknowledgeRollback: false } },
+                      30_000
+                    );
+                    if (!result.success) {
+                      throw new Error(result.error || result.detail || 'Daemon rejected update commit');
+                    }
+                    const { DaemonUpdateService } = await import('@/services/daemon-update.service.js');
+                    await container
+                      .resolve(DaemonUpdateService)
+                      .completeNodeUpdateAfterCommit(activeNodeId, commitTarget);
+                    pendingDaemonUpdateCommitTarget = null;
+                  } catch (error) {
+                    logger.warn('Failed to commit verified daemon update', {
+                      nodeId: activeNodeId,
+                      targetVersion: commitTarget,
+                      error: error instanceof Error ? error.message : String(error),
+                    });
+                  } finally {
+                    daemonUpdateCommitInFlight = false;
+                  }
+                });
+              }
 
               // Publish status restoration event after DB write
               if (currentRow?.status === 'offline') {

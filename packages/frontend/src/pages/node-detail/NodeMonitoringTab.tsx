@@ -68,6 +68,9 @@ function formatDurationSeconds(seconds: number): string {
 
 function summarizeBuildActivity(rows: DockerBuild[]) {
   const recent = rows.slice(0, 50);
+  const chronological = [...recent].sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)
+  );
   const completedDurations = recent.flatMap((build) => {
     if (!build.startedAt || !build.completedAt) return [];
     const elapsed = Date.parse(build.completedAt) - Date.parse(build.startedAt);
@@ -82,6 +85,20 @@ function summarizeBuildActivity(rows: DockerBuild[]) {
     if (!summary) return total;
     return total + summary.critical + summary.high + summary.medium + summary.low + summary.unknown;
   }, 0);
+  const durationHistory = chronological.flatMap((build) => {
+    if (!build.startedAt || !build.completedAt) return [];
+    const elapsed = Date.parse(build.completedAt) - Date.parse(build.startedAt);
+    return Number.isFinite(elapsed) && elapsed >= 0 ? [elapsed / 1000] : [];
+  });
+  const outcomeHistory: number[] = [];
+  let historicalSucceeded = 0;
+  let historicalOutcomes = 0;
+  for (const build of chronological) {
+    if (build.status !== "succeeded" && build.status !== "failed") continue;
+    historicalOutcomes += 1;
+    if (build.status === "succeeded") historicalSucceeded += 1;
+    outcomeHistory.push((historicalSucceeded / historicalOutcomes) * 100);
+  }
 
   return {
     recentCount: recent.length,
@@ -92,6 +109,17 @@ function summarizeBuildActivity(rows: DockerBuild[]) {
         : null,
     successRate: outcomes.length > 0 ? (succeeded / outcomes.length) * 100 : null,
     vulnerabilities,
+    runningHistory: chronological.map((build) =>
+      ACTIVE_DOCKER_BUILD_STATUSES.has(build.status) ? 1 : 0
+    ),
+    durationHistory,
+    successRateHistory: outcomeHistory,
+    vulnerabilityHistory: chronological.map((build) => {
+      const summary = build.artifact?.scanSummary;
+      return summary
+        ? summary.critical + summary.high + summary.medium + summary.low + summary.unknown
+        : 0;
+    }),
   };
 }
 
@@ -118,11 +146,20 @@ interface NodeMonitoringTabProps {
 function buildDiskMountSeed(health: NodeHealthReport | null | undefined): Snapshot | null {
   if (!health) return null;
   return {
-    timestamp: "",
+    timestamp:
+      typeof health.timestamp === "number" && Number.isFinite(health.timestamp)
+        ? new Date(health.timestamp * 1000).toISOString()
+        : "",
     health,
     stats: null,
     traffic: null,
   };
+}
+
+function snapshotTime(snapshot: Snapshot | null): number {
+  if (!snapshot) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(snapshot.timestamp);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
 function mergeSeededDiskMounts(snapshot: Snapshot, seededSnapshot: Snapshot | null): Snapshot {
@@ -147,7 +184,9 @@ export function NodeMonitoringTab({
   const initialHealthRef = useRef(initialHealthReport);
   initialHealthRef.current = initialHealthReport;
   const [history, setHistory] = useState<Snapshot[]>([]);
-  const [latest, setLatest] = useState<Snapshot | null>(null);
+  const [latest, setLatest] = useState<Snapshot | null>(() =>
+    buildDiskMountSeed(initialHealthReport)
+  );
   const [recentBuilds, setRecentBuilds] = useState<DockerBuild[] | null>(null);
   const buildRequestId = useRef(0);
 
@@ -195,7 +234,7 @@ export function NodeMonitoringTab({
   useEffect(() => {
     const seededSnapshot = buildDiskMountSeed(initialHealthRef.current);
     setHistory([]);
-    setLatest(null);
+    setLatest(seededSnapshot);
 
     if (nodeStatus !== "online") return;
     const es = api.createNodeMonitoringStream(nodeId, { focused: true });
@@ -206,7 +245,10 @@ export function NodeMonitoringTab({
         mergeSeededDiskMounts(snapshot, seededSnapshot)
       );
       setHistory(streamHistory);
-      setLatest(streamHistory.at(-1) ?? null);
+      const streamLatest = streamHistory.at(-1) ?? null;
+      setLatest((current) =>
+        snapshotTime(streamLatest) >= snapshotTime(current) ? streamLatest : current
+      );
     });
 
     es.addEventListener("snapshot", (e: MessageEvent) => {
@@ -380,6 +422,7 @@ export function NodeMonitoringTab({
                 label="Running jobs"
                 value={String(buildActivity.running)}
                 icon={Activity}
+                history={buildActivity.runningHistory}
                 color="#3b82f6"
                 subtitle={`Across ${buildActivity.recentCount} recent jobs`}
               />
@@ -391,6 +434,7 @@ export function NodeMonitoringTab({
                     : formatDurationSeconds(buildActivity.averageDuration)
                 }
                 icon={Clock3}
+                history={buildActivity.durationHistory}
                 color="#8b5cf6"
                 subtitle="Recent completed jobs"
               />
@@ -402,6 +446,8 @@ export function NodeMonitoringTab({
                     : `${buildActivity.successRate.toFixed(0)}%`
                 }
                 icon={CircleCheckBig}
+                history={buildActivity.successRateHistory}
+                sparklineMax={100}
                 color="#22c55e"
                 progress={{ percent: buildActivity.successRate ?? 0 }}
                 subtitle="Succeeded vs failed"
@@ -410,6 +456,7 @@ export function NodeMonitoringTab({
                 label="Vulnerabilities"
                 value={buildActivity.vulnerabilities.toLocaleString()}
                 icon={ShieldAlert}
+                history={buildActivity.vulnerabilityHistory}
                 color="#f59e0b"
                 subtitle="Recent scan results"
               />

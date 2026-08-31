@@ -52,7 +52,10 @@ export const integrationConnectors = pgTable(
     authMode: varchar('auth_mode', { length: 32 }).$type<IntegrationConnectorAuthMode>().notNull().default('token'),
     username: varchar('username', { length: 255 }),
     encryptedToken: text('encrypted_token'),
+    encryptedRefreshToken: text('encrypted_refresh_token'),
     tokenLast4: varchar('token_last4', { length: 16 }),
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
     allowlistMode: varchar('allowlist_mode', { length: 32 })
       .$type<IntegrationAllowlistMode>()
       .notNull()
@@ -90,6 +93,7 @@ export const integrationConnectors = pgTable(
 export type GitHubOAuthSessionStatus = 'pending' | 'processing' | 'complete' | 'expired' | 'cancelled' | 'error';
 
 export interface GitHubOAuthConnectorDraft {
+  targetConnectorId?: string;
   name: string;
   baseUrl: string;
   enabled: boolean;

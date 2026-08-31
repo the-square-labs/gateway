@@ -47,7 +47,7 @@ describe('nginx node installer baseline', () => {
 });
 
 describe('setup-relay-node.sh', () => {
-  it('verifies separately scoped supervisor and worker artifacts and installs rollback supervision', () => {
+  it('verifies separately scoped artifacts and leaves rollback supervision to the shared daemon guard', () => {
     const syntax = spawnSync('bash', ['-n', relayNodeInstaller], { encoding: 'utf8' });
     expect(syntax.status, syntax.stderr).toBe(0);
 
@@ -56,8 +56,9 @@ describe('setup-relay-node.sh', () => {
     expect(source).toContain('fetch_verified "$WORKER" relay-worker');
     expect(source).toContain('openssl pkeyutl -verify');
     expect(source).toContain('run-supervisor');
-    expect(source).toContain('.update-pending');
-    expect(source).toContain('mv -f "$previous" "$binary"');
+    expect(source).toContain('exec /usr/local/bin/relay-supervisor "$@"');
+    expect(source).not.toContain('.update-pending');
+    expect(source).not.toContain('mv -f "$previous" "$binary"');
     expect(source).toContain('ExecStart=/usr/local/lib/gateway-relay/run-supervisor');
     expect(source).toContain(`local name="$1" daemon_type="$2"\n  local manifest="\${TEMP_DIR}/\${name}.update.json"`);
     expect(source).not.toContain(`local name="$1" daemon_type="$2" manifest="\${TEMP_DIR}/\${name}.update.json"`);

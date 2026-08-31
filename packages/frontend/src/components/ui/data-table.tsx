@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 export interface DataTableColumn<T> {
   key: string;
   header: string;
-  align?: "left" | "right";
+  align?: "left" | "center" | "right";
   /** If true, cell content will truncate with ellipsis */
   truncate?: boolean;
   /** Fixed width (e.g. "100px", "8rem"). Without this, columns share remaining space equally. */
@@ -163,7 +163,14 @@ export function DataTable<T>({
             {columns.map((col) => (
               <div
                 key={col.key}
-                className={`${col.align === "right" ? "text-right" : "text-left"} px-4 py-3 font-medium`}
+                className={cn(
+                  "px-4 py-3 font-medium",
+                  col.align === "right"
+                    ? "text-right"
+                    : col.align === "center"
+                      ? "text-center"
+                      : "text-left"
+                )}
               >
                 {col.header}
               </div>
@@ -222,9 +229,13 @@ export function DataTable<T>({
                     {columns.map((col) => (
                       <div
                         key={col.key}
-                        className={`min-w-0 overflow-hidden px-4 py-3 text-sm ${col.align === "right" ? "text-right" : ""} ${
-                          col.truncate ? "text-ellipsis whitespace-nowrap" : ""
-                        } ${col.className ?? ""}`}
+                        className={cn(
+                          "min-w-0 overflow-hidden px-4 py-3 text-sm",
+                          col.align === "right" && "text-right",
+                          col.align === "center" && "text-center",
+                          col.truncate && "text-ellipsis whitespace-nowrap",
+                          col.className
+                        )}
                       >
                         {col.render(item.row)}
                       </div>

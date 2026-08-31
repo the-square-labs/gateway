@@ -13,7 +13,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("waits for authoritative stream history and keeps nginx status stable", () => {
+it("renders the current snapshot immediately and ignores older stream history", () => {
   vi.spyOn(api, "createNodeMonitoringStream").mockReturnValue({
     addEventListener: vi.fn((name: string, listener: EventListener) => {
       listeners.set(name, listener as (event: MessageEvent) => void);
@@ -30,8 +30,10 @@ it("waits for authoritative stream history and keeps nginx status stable", () =>
     />
   );
 
-  expect(screen.getByLabelText("Loading node monitoring")).toBeInTheDocument();
-  expect(screen.queryByText("nginx/1.28.3")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Loading node monitoring")).not.toBeInTheDocument();
+  expect(screen.getByText("nginx/1.28.3")).toBeInTheDocument();
+  expect(screen.getByText("Running")).toBeInTheDocument();
+  expect(screen.getByText("Config valid")).toBeInTheDocument();
 
   act(() => {
     listeners.get("connected")?.(
@@ -39,8 +41,8 @@ it("waits for authoritative stream history and keeps nginx status stable", () =>
         data: JSON.stringify({
           history: [
             {
-              timestamp: "2026-08-31T08:00:00.000Z",
-              health: healthReport(),
+              timestamp: "2026-08-31T07:59:00.000Z",
+              health: { ...healthReport(), nginxRunning: false, configValid: false },
               stats: null,
               traffic: null,
             },
@@ -107,6 +109,10 @@ it("shows Build Worker activity from recent assigned jobs", async () => {
   expect(within(durationCard as HTMLElement).getByText("9s")).toBeInTheDocument();
   expect(within(successCard as HTMLElement).getByText("100%")).toBeInTheDocument();
   expect(within(vulnerabilitiesCard as HTMLElement).getByText("15")).toBeInTheDocument();
+  expect(runningCard?.querySelector("svg")).not.toBeNull();
+  expect(durationCard?.querySelector("svg")).not.toBeNull();
+  expect(successCard?.querySelector("svg")).not.toBeNull();
+  expect(vulnerabilitiesCard?.querySelector("svg")).not.toBeNull();
 });
 
 function healthReport(): NodeHealthReport {

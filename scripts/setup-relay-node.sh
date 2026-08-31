@@ -94,37 +94,7 @@ install -m 0755 "${TEMP_DIR}/${WORKER}" /usr/local/lib/gateway-relay/gateway-rel
 cat >/usr/local/lib/gateway-relay/run-supervisor <<'RUNNER'
 #!/bin/sh
 set -eu
-binary=/usr/local/bin/relay-supervisor
-pending="${binary}.update-pending"
-previous="${binary}.previous"
-while :; do
-  "$binary" "$@" &
-  child=$!
-  watchdog=""
-  if [ -f "$pending" ]; then
-    (
-      sleep 240
-      if [ -f "$pending" ]; then kill -TERM "$child" 2>/dev/null || true; fi
-    ) &
-    watchdog=$!
-  fi
-  trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT
-  set +e
-  wait "$child"
-  status=$?
-  set -e
-  trap - TERM INT
-  if [ -n "$watchdog" ]; then
-    kill "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
-  fi
-  if [ -f "$pending" ] && [ -f "$previous" ]; then
-    mv -f "$previous" "$binary"
-    rm -f "$pending"
-    continue
-  fi
-  exit "$status"
-done
+exec /usr/local/bin/relay-supervisor "$@"
 RUNNER
 chmod 0755 /usr/local/lib/gateway-relay/run-supervisor
 cat >/etc/gateway-relay-supervisor/config.yaml <<CONFIG

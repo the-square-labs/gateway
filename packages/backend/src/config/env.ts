@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE = 'gateway-secure-link-connector:dev';
 export const BUILT_IN_GITHUB_OAUTH_CLIENT_ID = 'Ov23likbDL1gM8asWzfC';
 const IMMUTABLE_CONNECTOR_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/i;
+const OFFICIAL_CONNECTOR_RELEASE_TAG_PATTERN =
+  /^ghcr\.io\/the-square-labs\/gateway\/secure-link-connector:v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-relay$/;
 const deploymentModeSchema = z.enum(['standard', 'demo']).default('standard');
 
 const optionalNonEmptyString = z.preprocess(
@@ -40,8 +42,8 @@ const envSchema = z.object({
   WEB_TLS_AUTO_DIR: nonEmptyStringWithDefault('/var/lib/gateway/tls'),
   PAGES_STORAGE_DIR: nonEmptyStringWithDefault('/var/lib/gateway/pages'),
 
-  // Node-level transport for Docker Route Secure Links. Production must use
-  // the digest-pinned image bundled with the Relay release.
+  // Node-level transport for Docker Route Secure Links. Production accepts
+  // either the digest-pinned release image or the official GHCR Relay release tag.
   SECURE_LINK_CONNECTOR_IMAGE: z.string().trim().default(''),
 
   // Compose project dir (for self-update sidecar)
@@ -126,9 +128,12 @@ export function getEnv(): Env {
   if (
     parsedEnv.NODE_ENV === 'production' &&
     parsedEnv.SECURE_LINK_CONNECTOR_IMAGE &&
-    !IMMUTABLE_CONNECTOR_IMAGE_PATTERN.test(parsedEnv.SECURE_LINK_CONNECTOR_IMAGE)
+    !IMMUTABLE_CONNECTOR_IMAGE_PATTERN.test(parsedEnv.SECURE_LINK_CONNECTOR_IMAGE) &&
+    !OFFICIAL_CONNECTOR_RELEASE_TAG_PATTERN.test(parsedEnv.SECURE_LINK_CONNECTOR_IMAGE)
   ) {
-    throw new Error('SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest in production');
+    throw new Error(
+      'SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest or an official Gateway Relay release tag in production'
+    );
   }
   cachedEnv = parsedEnv;
   if (cachedEnv.NODE_ENV === 'development' && !cachedEnv.SECURE_LINK_CONNECTOR_IMAGE) {

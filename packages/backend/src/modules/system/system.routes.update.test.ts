@@ -5,6 +5,7 @@ import { errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
+  drizzleToken: Symbol('DrizzleClient'),
   updateService: {
     getCachedStatus: vi.fn(),
     prepareGatewayUpdate: vi.fn(),
@@ -16,14 +17,32 @@ const mocks = vi.hoisted(() => ({
     failRelayUpdate: vi.fn(),
     checkForUpdates: vi.fn(),
   },
+  daemonUpdateService: {
+    getLatestRelease: vi.fn(),
+    prepareTrustedDaemonUpdate: vi.fn(),
+    markNodeUpdateInProgress: vi.fn(),
+    trackNodeUpdateCompletion: vi.fn(),
+    clearNodeUpdateInProgress: vi.fn(),
+  },
+  dispatch: {
+    prepareRelaySupervisorRollbackBootstrap: vi.fn(),
+    sendUpdateDaemonCommand: vi.fn(),
+  },
+  db: { select: vi.fn() },
   eventBus: { publish: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
-  TOKENS: {},
+  TOKENS: { DrizzleClient: mocks.drizzleToken },
   container: {
     isRegistered: vi.fn().mockReturnValue(false),
-    resolve: vi.fn((token) => (token?.name === 'EventBusService' ? mocks.eventBus : mocks.updateService)),
+    resolve: vi.fn((token) => {
+      if (token === mocks.drizzleToken) return mocks.db;
+      if (token?.name === 'EventBusService') return mocks.eventBus;
+      if (token?.name === 'DaemonUpdateService') return mocks.daemonUpdateService;
+      if (token?.name === 'NodeDispatchService') return mocks.dispatch;
+      return mocks.updateService;
+    }),
   },
 }));
 
@@ -102,5 +121,36 @@ describe('System RC update routes', () => {
 
     expect(response.status).toBe(400);
     expect(mocks.updateService.getCachedStatus).not.toHaveBeenCalled();
+  });
+
+  it('prepares the legacy Relay runner before marking a generic node update in progress', async () => {
+    mocks.db.select.mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: vi.fn().mockResolvedValue([{ id: 'node-1', type: 'relay', capabilities: { architecture: 'amd64' } }]),
+        }),
+      }),
+    });
+    mocks.daemonUpdateService.getLatestRelease.mockResolvedValue({
+      tagName: 'v2.10.0-rc.21-relay',
+      version: 'v2.10.0-rc.21',
+    });
+    mocks.daemonUpdateService.prepareTrustedDaemonUpdate.mockResolvedValue({
+      downloadUrl: 'https://updates.example/relay-supervisor',
+      checksum: 'abc',
+      signedManifest: 'manifest',
+    });
+    mocks.dispatch.sendUpdateDaemonCommand.mockResolvedValue({
+      accepted: Promise.resolve(),
+      result: Promise.resolve({ success: true }),
+    });
+
+    const response = await app().request('/daemon-updates/node-1', { method: 'POST' });
+
+    expect(response.status).toBe(200);
+    expect(mocks.dispatch.prepareRelaySupervisorRollbackBootstrap).toHaveBeenCalledWith('node-1');
+    expect(mocks.dispatch.prepareRelaySupervisorRollbackBootstrap.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.daemonUpdateService.markNodeUpdateInProgress.mock.invocationCallOrder[0]!
+    );
   });
 });

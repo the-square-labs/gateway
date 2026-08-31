@@ -381,7 +381,7 @@ export abstract class IntegrationsPersistenceService extends IntegrationsCoreSer
   }
 
   protected toSafeConnector(row: ConnectorRow): SafeIntegrationConnector {
-    const { encryptedToken: _encryptedToken, ...safe } = row;
+    const { encryptedToken: _encryptedToken, encryptedRefreshToken: _encryptedRefreshToken, ...safe } = row;
     return {
       ...safe,
       hasToken: Boolean(row.encryptedToken),

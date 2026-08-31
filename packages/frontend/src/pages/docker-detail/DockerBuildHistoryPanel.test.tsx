@@ -19,13 +19,25 @@ vi.mock("@/components/ui/data-table", () => ({
     scrollRef,
   }: {
     className?: string;
-    columns: Array<{ key: string; render?: (row: unknown) => ReactNode }>;
+    columns: Array<{
+      key: string;
+      header: string;
+      align?: "left" | "center" | "right";
+      render?: (row: unknown) => ReactNode;
+    }>;
     data: unknown[];
     footer?: ReactNode;
     keyFn: (row: unknown) => string;
     scrollRef?: Ref<HTMLDivElement>;
   }) => (
     <div className={className}>
+      <div>
+        {columns.map((column) => (
+          <span key={column.key} data-column={column.key} data-align={column.align ?? "left"}>
+            {column.header}
+          </span>
+        ))}
+      </div>
       <div ref={scrollRef} data-route-scroll-container="" className="overflow-y-auto">
         {data.map((row) => (
           <div key={keyFn(row)} role="row">
@@ -141,6 +153,11 @@ describe("DockerBuildHistoryPanel", () => {
     const scrollContainer = document.querySelector('[data-route-scroll-container=""]');
     expect(scrollContainer).toHaveClass("overflow-y-auto");
     expect(scrollContainer?.parentElement).toHaveClass("[&_[data-route-scroll-container]]:flex-1");
+    expect(screen.getByText("Status")).toHaveAttribute("data-align", "center");
+    expect(screen.getByText("Build Worker")).toHaveAttribute("data-align", "center");
+    expect(screen.getByText("Result")).toHaveAttribute("data-align", "center");
+    expect(screen.getByText("Time")).toHaveAttribute("data-align", "center");
+    expect(screen.getAllByText("10s").length).toBeGreaterThan(0);
 
     await waitFor(() => expect(intersectionCallback).toBeDefined());
     act(() => {

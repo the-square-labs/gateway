@@ -100,9 +100,16 @@ export function genericGitCapabilities(): IntegrationConnectorCapabilities {
   return { projectsView: true, repoRead: true, repoWrite: true };
 }
 
-export interface SafeIntegrationConnector extends Omit<ConnectorRow, 'encryptedToken'> {
+export interface SafeIntegrationConnector extends Omit<ConnectorRow, 'encryptedToken' | 'encryptedRefreshToken'> {
   hasToken: boolean;
   tokenMasked: string | null;
+}
+
+export interface GitHubOAuthCredential {
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: Date | null;
+  refreshTokenExpiresAt: Date | null;
 }
 
 export interface GitHubOAuthSession {

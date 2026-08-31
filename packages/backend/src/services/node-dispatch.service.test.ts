@@ -8,6 +8,7 @@ function createService(
   const registry = {
     sendCommand: vi.fn().mockResolvedValue({ success: true }),
     hasCapability: vi.fn().mockReturnValue(true),
+    getNode: vi.fn().mockReturnValue({ connectionId: 'connection-1' }),
   };
   const db = {
     select: () => ({
@@ -74,6 +75,102 @@ describe('NodeDispatchService', () => {
         content: Buffer.from('Hello'),
       },
     });
+  });
+
+  it('atomically migrates the known legacy Relay runner and waits for a replacement connection', async () => {
+    const { registry, service } = createService('relay', {
+      capabilities: { capabilities: ['relay_pool_v1'] },
+    });
+    const legacyRunner = `#!/bin/sh
+set -eu
+binary=/usr/local/bin/relay-supervisor
+pending="\${binary}.update-pending"
+previous="\${binary}.previous"
+while :; do
+  "$binary" "$@" &
+  child=$!
+  watchdog=""
+  if [ -f "$pending" ]; then
+    (
+      sleep 240
+      if [ -f "$pending" ]; then kill -TERM "$child" 2>/dev/null || true; fi
+    ) &
+    watchdog=$!
+  fi
+  trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT
+  set +e
+  wait "$child"
+  status=$?
+  set -e
+  trap - TERM INT
+  if [ -n "$watchdog" ]; then
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+  fi
+  if [ -f "$pending" ] && [ -f "$previous" ]; then
+    mv -f "$previous" "$binary"
+    rm -f "$pending"
+    continue
+  fi
+  exit "$status"
+done
+`;
+    const currentRunner = '#!/bin/sh\nset -eu\nexec /usr/local/bin/relay-supervisor "$@"\n';
+    let reads = 0;
+    registry.sendCommand.mockImplementation(async (_nodeId, command) => {
+      if ('nodeFile' in command) {
+        reads += 1;
+        return { success: true, data: Buffer.from(reads === 1 ? legacyRunner : currentRunner) };
+      }
+      return { success: true };
+    });
+    registry.getNode
+      .mockReturnValueOnce({ connectionId: 'connection-1' })
+      .mockReturnValue({ connectionId: 'connection-2' });
+
+    await service.prepareRelaySupervisorRollbackBootstrap('node-1');
+
+    expect(registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      expect.objectContaining({
+        nodeExec: expect.objectContaining({
+          action: 'run',
+          command: ['/bin/sh', '-c', expect.stringContaining('systemctl restart --no-block')],
+        }),
+      }),
+      30_000
+    );
+    expect(reads).toBe(2);
+  });
+
+  it('refuses to overwrite an unknown Relay runner', async () => {
+    const { registry, service } = createService('relay', {
+      capabilities: { capabilities: ['relay_pool_v1'] },
+    });
+    registry.sendCommand.mockResolvedValue({ success: true, data: Buffer.from('#!/bin/sh\ncustom-wrapper\n') });
+
+    await expect(service.prepareRelaySupervisorRollbackBootstrap('node-1')).rejects.toMatchObject({
+      code: 'RELAY_SUPERVISOR_RUNNER_UNSUPPORTED',
+    });
+    expect(registry.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a verified v2 Relay runner without an extra restart', async () => {
+    const { registry, service } = createService('relay', {
+      capabilities: { capabilities: ['relay_pool_v1'] },
+    });
+    registry.getNode.mockReturnValue({
+      connectionId: 'connection-1',
+      capabilities: new Set(['relay_supervisor_runner_v2']),
+    });
+    registry.sendCommand.mockResolvedValue({
+      success: true,
+      data: Buffer.from('#!/bin/sh\nset -eu\nexec /usr/local/bin/relay-supervisor "$@"\n'),
+    });
+
+    await service.prepareRelaySupervisorRollbackBootstrap('node-1');
+
+    expect(registry.sendCommand).toHaveBeenCalledTimes(1);
   });
 
   it('passes docker file buffer content through unchanged', async () => {
