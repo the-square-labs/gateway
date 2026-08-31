@@ -8,15 +8,22 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 type Manager struct {
-	binary    string
-	configDir string
-	certsDir  string
-	globalCfg string
+	binary             string
+	configDir          string
+	certsDir           string
+	globalCfg          string
+	testMu             sync.Mutex
+	configMu           sync.RWMutex
+	configOK           bool
+	checkedAt          time.Time
+	observerMu         sync.RWMutex
+	configTestObserver func() func()
 }
 
 var effectivePIDDirectivePattern = regexp.MustCompile(`(?m)^\s*pid\s+(?:"([^"]+)"|'([^']+)'|([^;\s]+))\s*;`)
@@ -31,16 +38,64 @@ func NewManager(binary, configDir, certsDir, globalConfig string) *Manager {
 }
 
 func (m *Manager) TestConfig() (bool, string) {
+	_, valid, output := m.testConfigIf(nil)
+	return valid, output
+}
+
+// TestConfigIf serializes with every other nginx -t and evaluates shouldRun
+// only after acquiring that serialization lock. This lets callers suppress a
+// check that became redundant while waiting for another validation.
+func (m *Manager) TestConfigIf(shouldRun func() bool) (ran bool, valid bool, output string) {
+	return m.testConfigIf(shouldRun)
+}
+
+func (m *Manager) testConfigIf(shouldRun func() bool) (ran bool, valid bool, output string) {
+	m.testMu.Lock()
+	defer m.testMu.Unlock()
+	if shouldRun != nil && !shouldRun() {
+		return false, false, ""
+	}
+	m.observerMu.RLock()
+	observer := m.configTestObserver
+	m.observerMu.RUnlock()
+	if observer != nil {
+		if complete := observer(); complete != nil {
+			defer complete()
+		}
+	}
+
 	args := []string{"-t"}
 	if m.globalCfg != "" {
 		args = append(args, "-c", m.globalCfg)
 	}
 	cmd := exec.Command(m.binary, args...)
-	output, err := cmd.CombinedOutput()
+	cmdOutput, err := cmd.CombinedOutput()
+	valid = err == nil
+	m.configMu.Lock()
+	m.configOK = valid
+	m.checkedAt = time.Now()
+	m.configMu.Unlock()
 	if err != nil {
-		return false, string(output)
+		return true, false, string(cmdOutput)
 	}
-	return true, string(output)
+	return true, true, string(cmdOutput)
+}
+
+// SetConfigTestObserver registers a lightweight before/after hook used by the
+// daemon's filesystem watcher to associate every explicit nginx -t with the
+// exact configuration fingerprint it covered.
+func (m *Manager) SetConfigTestObserver(observer func() func()) {
+	m.observerMu.Lock()
+	m.configTestObserver = observer
+	m.observerMu.Unlock()
+}
+
+// CachedConfigValidity returns the result of the latest explicit or scheduled
+// nginx configuration test without spawning another nginx process.
+func (m *Manager) CachedConfigValidity() (valid bool, checkedAt time.Time, checked bool) {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	return m.configOK, m.checkedAt, !m.checkedAt.IsZero()
 }
 
 func (m *Manager) Reload() error {

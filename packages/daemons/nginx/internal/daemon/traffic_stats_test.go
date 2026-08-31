@@ -67,3 +67,27 @@ func TestRequestTrafficStatsRejectsInvalidHostID(t *testing.T) {
 		t.Fatalf("invalid host id was accepted: %#v", result)
 	}
 }
+
+func TestRequestTrafficStatsUpdatesReporterRatesOnlyForGlobalSamples(t *testing.T) {
+	logsDir := t.TempDir()
+	timestamp := time.Now().Format("02/Jan/2006:15:04:05 -0700")
+	content := fmt.Sprintf("192.0.2.1 - - [%s] \"GET / HTTP/1.1\" 200 10 \"-\" \"agent\" 0.010 0.010\n", timestamp) +
+		fmt.Sprintf("192.0.2.1 - - [%s] \"GET / HTTP/1.1\" 404 10 \"-\" \"agent\" 0.010 0.010\n", timestamp) +
+		fmt.Sprintf("192.0.2.1 - - [%s] \"GET / HTTP/1.1\" 503 10 \"-\" \"agent\" 0.010 0.010\n", timestamp)
+	if err := os.WriteFile(filepath.Join(logsDir, "proxy-11111111-1111-4111-8111-111111111111.access.log"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &Reporter{}
+	handler := &Handler{cfg: &config.Config{Nginx: config.NginxConfig{LogsDir: logsDir}}, reporter: reporter}
+	result := &pb.CommandResult{Success: true}
+	handler.handleRequestTrafficStats(&pb.RequestTrafficStatsCommand{TailLines: 100}, result)
+	if !result.Success {
+		t.Fatalf("traffic stats failed: %s", result.Error)
+	}
+	reporter.mu.RLock()
+	rate4xx, rate5xx := reporter.rate4xx, reporter.rate5xx
+	reporter.mu.RUnlock()
+	if rate4xx < 33.3 || rate4xx > 33.4 || rate5xx < 33.3 || rate5xx > 33.4 {
+		t.Fatalf("unexpected reporter rates: 4xx=%f 5xx=%f", rate4xx, rate5xx)
+	}
+}

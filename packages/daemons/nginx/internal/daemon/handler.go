@@ -41,6 +41,7 @@ type Handler struct {
 	secureLinkState             *securelink.StateStore
 	pagesRuntime                *pages.Runtime
 	pagesRuntimeConfigAvailable bool
+	reporter                    *Reporter
 }
 
 func NewHandler(cfg *config.Config, mgr *nginx.Manager, st *sharedstate.State, logger *slog.Logger, secureLinkState *securelink.StateStore, pagesRuntime *pages.Runtime, pagesRuntimeConfigAvailable bool) *Handler {
@@ -179,6 +180,7 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 	if !valid {
 		_ = rollbackConfig()
 		restoreOwnership()
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed: %s", output)
 		return
@@ -188,12 +190,14 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		// Test passed, don't reload. Restore old config.
 		_ = rollbackConfig()
 		restoreOwnership()
+		_, _ = h.mgr.TestConfig()
 		return
 	}
 
 	if err := h.mgr.Reload(); err != nil {
 		rollbackErr := rollbackConfig()
 		restoreOwnership()
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		if rollbackErr != nil {
 			result.Error = fmt.Sprintf("nginx reload failed: %v; rollback config: %v", err, rollbackErr)
@@ -224,6 +228,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 		if oldConfig != nil {
 			_ = nginx.WriteAtomic(path, oldConfig)
 		}
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed after removal: %s", output)
 		return
@@ -233,6 +238,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 		if oldConfig != nil {
 			_ = nginx.WriteAtomic(path, oldConfig)
 		}
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return

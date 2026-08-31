@@ -12,6 +12,8 @@ import type { NotificationEvaluatorService } from '@/modules/notifications/notif
 import type { EventBusService } from '@/services/event-bus.service.js';
 
 const logger = createChildLogger('NodeRegistry');
+const TRAFFIC_STATS_CACHE_TTL_MS = 60_000;
+const TRAFFIC_STATS_CACHE_MAX_ENTRIES = 4_096;
 
 function hasUpdateInProgress(metadata: unknown): boolean {
   return !!metadata && typeof metadata === 'object' && (metadata as Record<string, unknown>).updateInProgress === true;
@@ -62,6 +64,12 @@ export interface DispatchedCommand {
   result: Promise<CommandResult>;
 }
 
+export interface TrafficStatsRequest {
+  tailLines: number;
+  hostId: string;
+  windowSeconds: number;
+}
+
 export class NodeRegistryService {
   private nodes = new Map<string, ConnectedNode>();
   private updatingNodeIds = new Set<string>();
@@ -70,6 +78,9 @@ export class NodeRegistryService {
     Set<(data: { execId: string; data: Buffer; exited: boolean; exitCode: number }) => void>
   >();
   private logStreamHandlers = new Map<string, (lines: string[], ended?: boolean) => void>();
+  private trafficStatsInFlight = new Map<string, Promise<CommandResult>>();
+  private trafficStatsNodeTails = new Map<string, Promise<void>>();
+  private trafficStatsCache = new Map<string, { sampledAt: number; result: CommandResult }>();
 
   constructor(private db: DrizzleClient) {}
 
@@ -261,6 +272,8 @@ export class NodeRegistryService {
       closeStream(existing.commandStream as any);
     }
 
+    this.clearTrafficStatsState(nodeId);
+
     this.nodes.set(nodeId, {
       connectionId,
       nodeId,
@@ -292,6 +305,7 @@ export class NodeRegistryService {
 
     this.cleanupPendingCommands(node);
     this.nodes.delete(nodeId);
+    this.clearTrafficStatsState(nodeId);
 
     const [dbNode] = await this.db
       .select({ metadata: nodes.metadata })
@@ -349,6 +363,88 @@ export class NodeRegistryService {
     const dispatched = this.dispatchCommand(nodeId, command, timeoutMs);
     void dispatched.accepted.catch(() => {});
     return dispatched.result;
+  }
+
+  /**
+   * Coalesces equivalent traffic samples and serializes access-log scans per
+   * nginx node. The cache is last-good only: failed samples never replace it.
+   */
+  requestTrafficStats(nodeId: string, request: TrafficStatsRequest, minFreshMs = 0): Promise<CommandResult> {
+    const connectionId = this.nodes.get(nodeId)?.connectionId;
+    if (!connectionId) return Promise.reject(new Error(`Node ${nodeId} is not connected`));
+    const key = `${nodeId}\u0000${request.hostId}\u0000${request.tailLines}\u0000${request.windowSeconds}`;
+    this.pruneTrafficStatsCache(Date.now());
+    const cached = this.trafficStatsCache.get(key);
+    if (cached && minFreshMs > 0 && Date.now() - cached.sampledAt < minFreshMs) {
+      return Promise.resolve(cached.result);
+    }
+
+    const active = this.trafficStatsInFlight.get(key);
+    if (active) return active;
+
+    const previous = this.trafficStatsNodeTails.get(nodeId) ?? Promise.resolve();
+    const task = previous
+      .catch(() => undefined)
+      .then(() => {
+        if (this.nodes.get(nodeId)?.connectionId !== connectionId) {
+          throw new Error(`Node ${nodeId} connection changed before traffic stats request`);
+        }
+        return this.sendCommand(nodeId, { requestTrafficStats: request }, 10_000);
+      })
+      .then((result) => {
+        if (result.success) {
+          const sampledAt = Date.now();
+          this.trafficStatsCache.set(key, { sampledAt, result });
+          this.pruneTrafficStatsCache(sampledAt);
+          if (!request.hostId && result.detail) {
+            try {
+              const node = this.nodes.get(nodeId);
+              if (node) node.lastTrafficStats = JSON.parse(result.detail);
+            } catch {
+              // Keep the previous last-good node snapshot on malformed output.
+            }
+          }
+        }
+        return result;
+      })
+      .finally(() => {
+        if (this.trafficStatsInFlight.get(key) === task) this.trafficStatsInFlight.delete(key);
+      });
+    this.trafficStatsInFlight.set(key, task);
+
+    const tail = task.then(
+      () => undefined,
+      () => undefined
+    );
+    this.trafficStatsNodeTails.set(nodeId, tail);
+    void tail.then(() => {
+      if (this.trafficStatsNodeTails.get(nodeId) === tail) this.trafficStatsNodeTails.delete(nodeId);
+    });
+    return task;
+  }
+
+  private pruneTrafficStatsCache(now: number): void {
+    for (const [key, cached] of this.trafficStatsCache) {
+      if (now - cached.sampledAt >= TRAFFIC_STATS_CACHE_TTL_MS) this.trafficStatsCache.delete(key);
+    }
+    if (this.trafficStatsCache.size <= TRAFFIC_STATS_CACHE_MAX_ENTRIES) return;
+    const overflow = this.trafficStatsCache.size - TRAFFIC_STATS_CACHE_MAX_ENTRIES;
+    const oldestKeys = [...this.trafficStatsCache.entries()]
+      .sort((left, right) => left[1].sampledAt - right[1].sampledAt)
+      .slice(0, overflow)
+      .map(([key]) => key);
+    for (const key of oldestKeys) this.trafficStatsCache.delete(key);
+  }
+
+  private clearTrafficStatsState(nodeId: string): void {
+    const prefix = `${nodeId}\u0000`;
+    for (const key of this.trafficStatsCache.keys()) {
+      if (key.startsWith(prefix)) this.trafficStatsCache.delete(key);
+    }
+    for (const key of this.trafficStatsInFlight.keys()) {
+      if (key.startsWith(prefix)) this.trafficStatsInFlight.delete(key);
+    }
+    this.trafficStatsNodeTails.delete(nodeId);
   }
 
   dispatchCommand(nodeId: string, command: Partial<GatewayCommand>, timeoutMs = 30000): DispatchedCommand {

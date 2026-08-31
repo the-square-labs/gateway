@@ -59,6 +59,9 @@ func (h *Handler) handleRequestTrafficStats(cmd *pb.RequestTrafficStatsCommand, 
 	}
 	stats := trafficStats{HostID: hostID, WindowSeconds: float64(windowSeconds)}
 	writeStats := func() {
+		if hostID == "" && h.reporter != nil {
+			h.reporter.SetErrorRates(stats.TotalRequests, stats.StatusCodes.S4xx, stats.StatusCodes.S5xx)
+		}
 		encoded, err := json.Marshal(stats)
 		if err != nil {
 			result.Success = false

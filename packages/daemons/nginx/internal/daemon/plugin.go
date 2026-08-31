@@ -45,6 +45,10 @@ type NginxPlugin struct {
 	relayTunnelMu               sync.Mutex
 	relayTunnels                []*nginxRelayTunnel
 	relaySelection              uint64
+	configWatchMu               sync.Mutex
+	validatedConfigFingerprint  string
+	pendingConfigFingerprint    string
+	configFingerprintReady      bool
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
@@ -121,6 +125,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	}
 	logger.Info("nginx detected", "version", version)
 	p.mgr = mgr
+	mgr.SetConfigTestObserver(p.observeConfigTest)
 	p.maintenanceAccessSupported, err = mgr.HasSecureLinkModule()
 	if err != nil {
 		return err
@@ -201,6 +206,9 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if globalConfigModified {
 		mgr.Reload()
 	}
+	if valid, output := mgr.TestConfig(); !valid {
+		logger.Warn("nginx configuration is invalid", "output", output)
+	}
 
 	return nil
 }
@@ -272,8 +280,9 @@ func (p *NginxPlugin) reconcileRestoredSecureLinkPorts(
 // SetState is called by the daemon wrapper to provide the shared state.
 func (p *NginxPlugin) SetState(st *sharedstate.State) {
 	p.state = st
-	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState, p.pagesRuntime, p.pagesRuntimeConfigAvailable)
 	p.reporter = NewReporter(p.cfg, p.mgr, p.logger)
+	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState, p.pagesRuntime, p.pagesRuntimeConfigAvailable)
+	p.handler.reporter = p.reporter
 }
 
 func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
@@ -355,6 +364,8 @@ func nginxBuildOutputHasSubFilter(output []byte) bool {
 func (p *NginxPlugin) OnSessionStart(ctx context.Context, _ *stream.Writer) error {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	p.sessionCancel = cancel
+	p.validateConfigIfStale(time.Now())
+	go p.runConfigValidation(sessionCtx)
 	if !p.maintenanceAccessSupported {
 		go p.runLogCleanup(sessionCtx)
 		return nil

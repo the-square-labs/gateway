@@ -262,7 +262,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
     };
     const cachedHistory = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic: null }];
     const refreshedSnapshot = {
-      timestamp: '2026-08-12T00:00:01.000Z',
+      timestamp: new Date().toISOString(),
       runtime,
       traffic,
     };
@@ -303,6 +303,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
     expect(status.runtime).toEqual(runtime);
     expect(status.traffic).toEqual(traffic);
     expect(status.history).toEqual(refreshedHistory);
+    expect(status.telemetrySampledAt).toBe(refreshedSnapshot.timestamp);
+    expect(status.telemetryStale).toBe(false);
     expect(sample).toHaveBeenCalledWith(host, 10_000);
   });
 
@@ -374,6 +376,30 @@ describe('ProxyService legacy Docker link compatibility', () => {
 
     expect(findMany).not.toHaveBeenCalled();
     expect((service as any).secureLinkRuntimeCollectionPending).toBe(true);
+  });
+
+  it('keeps the last-good runtime snapshot when a refresh is partial', async () => {
+    const previous = {
+      timestamp: '2026-08-31T12:00:00.000Z',
+      runtime: { routeId: 'route-1', metricsSince: '2026-08-31T11:00:00.000Z', openedTotal: '1' },
+      traffic: { hostId: 'host-1', totalRequests: 12 },
+    };
+    const service = new ProxyService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { requestTrafficStats: vi.fn().mockResolvedValue({ success: false }) } as any,
+      {} as any,
+      {} as any,
+      { getRuntime: vi.fn().mockResolvedValue({ ...previous.runtime, openedTotal: '2' }) } as any
+    );
+    (service as any).secureLinkRuntimeHistory.set('host-1', [previous]);
+
+    const sample = await (service as any).sampleSecureLinkRuntime({ id: 'host-1', nodeId: 'node-1' }, 200);
+
+    expect(sample.snapshot).toEqual(previous);
+    expect(sample.history).toEqual([previous]);
   });
 
   it('keeps a bounded backend runtime history and resets it on a Relay epoch change', () => {

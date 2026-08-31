@@ -142,6 +142,128 @@ describe('NodeRegistryService', () => {
     expect(acceptedCatch).toHaveBeenCalledOnce();
   });
 
+  it('coalesces equivalent traffic requests and serves the fresh last-good result', async () => {
+    const registry = new NodeRegistryService(makeDb() as never);
+    const commandStream = {
+      write: vi.fn((_command, callback: (error?: Error) => void) => callback()),
+    };
+    await registry.register('node-1', 'nginx', 'worker-1', 'hash-1', commandStream as never);
+    const request = { tailLines: 200, hostId: '', windowSeconds: 0 };
+
+    const first = registry.requestTrafficStats('node-1', request, 10_000);
+    const overlapping = registry.requestTrafficStats('node-1', request, 10_000);
+    expect(overlapping).toBe(first);
+    await vi.waitFor(() => expect(commandStream.write).toHaveBeenCalledOnce());
+
+    const command = commandStream.write.mock.calls[0]?.[0];
+    registry.handleCommandResult('node-1', {
+      commandId: command.commandId,
+      success: true,
+      error: '',
+      detail: '{"totalRequests":12}',
+      data: Buffer.alloc(0),
+    });
+    await expect(first).resolves.toMatchObject({ success: true });
+
+    await expect(registry.requestTrafficStats('node-1', request, 10_000)).resolves.toMatchObject({ success: true });
+    expect(commandStream.write).toHaveBeenCalledOnce();
+    expect(registry.getNode('node-1')?.lastTrafficStats).toEqual({ totalRequests: 12 });
+  });
+
+  it('serializes different traffic scans on the same nginx node', async () => {
+    const registry = new NodeRegistryService(makeDb() as never);
+    const commandStream = {
+      write: vi.fn((_command, callback: (error?: Error) => void) => callback()),
+    };
+    await registry.register('node-1', 'nginx', 'worker-1', 'hash-1', commandStream as never);
+
+    const first = registry.requestTrafficStats(
+      'node-1',
+      { tailLines: 200, hostId: '11111111-1111-4111-8111-111111111111', windowSeconds: 120 },
+      0
+    );
+    const second = registry.requestTrafficStats(
+      'node-1',
+      { tailLines: 200, hostId: '22222222-2222-4222-8222-222222222222', windowSeconds: 120 },
+      0
+    );
+    await vi.waitFor(() => expect(commandStream.write).toHaveBeenCalledOnce());
+
+    const firstCommand = commandStream.write.mock.calls[0]?.[0];
+    registry.handleCommandResult('node-1', {
+      commandId: firstCommand.commandId,
+      success: true,
+      error: '',
+      detail: '{}',
+      data: Buffer.alloc(0),
+    });
+    await first;
+    await vi.waitFor(() => expect(commandStream.write).toHaveBeenCalledTimes(2));
+
+    const secondCommand = commandStream.write.mock.calls[1]?.[0];
+    registry.handleCommandResult('node-1', {
+      commandId: secondCommand.commandId,
+      success: true,
+      error: '',
+      detail: '{}',
+      data: Buffer.alloc(0),
+    });
+    await expect(second).resolves.toMatchObject({ success: true });
+  });
+
+  it('does not replay a queued traffic scan onto a replacement connection', async () => {
+    const registry = new NodeRegistryService(makeDb() as never);
+    const firstStream = {
+      write: vi.fn((_command, callback: (error?: Error) => void) => callback()),
+      end: vi.fn(),
+      destroy: vi.fn(),
+    };
+    await registry.register('node-1', 'nginx', 'worker-1', 'hash-1', firstStream as never);
+
+    const first = registry.requestTrafficStats(
+      'node-1',
+      { tailLines: 200, hostId: '11111111-1111-4111-8111-111111111111', windowSeconds: 120 },
+      0
+    );
+    const queued = registry.requestTrafficStats(
+      'node-1',
+      { tailLines: 200, hostId: '22222222-2222-4222-8222-222222222222', windowSeconds: 120 },
+      0
+    );
+    await vi.waitFor(() => expect(firstStream.write).toHaveBeenCalledOnce());
+
+    const secondStream = {
+      write: vi.fn((_command, callback: (error?: Error) => void) => callback()),
+      end: vi.fn(),
+      destroy: vi.fn(),
+    };
+    await registry.register('node-1', 'nginx', 'worker-1', 'hash-2', secondStream as never);
+
+    await expect(first).rejects.toThrow('Node disconnected');
+    await expect(queued).rejects.toThrow('connection changed');
+    expect(secondStream.write).not.toHaveBeenCalled();
+  });
+
+  it('expires old traffic cache entries and enforces the hard cap', () => {
+    const registry = new NodeRegistryService(makeDb() as never);
+    const cache = (registry as any).trafficStatsCache as Map<
+      string,
+      { sampledAt: number; result: { success: boolean } }
+    >;
+    cache.set('expired', { sampledAt: 1_000, result: { success: true } });
+    (registry as any).pruneTrafficStatsCache(61_000);
+    expect(cache.has('expired')).toBe(false);
+
+    for (let index = 0; index < 4_100; index++) {
+      cache.set(`entry-${index}`, { sampledAt: 100_000 + index, result: { success: true } });
+    }
+    (registry as any).pruneTrafficStatsCache(104_100);
+
+    expect(cache.size).toBe(4_096);
+    expect(cache.has('entry-0')).toBe(false);
+    expect(cache.has('entry-4099')).toBe(true);
+  });
+
   it('rejects both command acceptance and completion when the node disconnects first', async () => {
     const registry = new NodeRegistryService(makeDb() as never);
     const commandStream = { write: vi.fn() };

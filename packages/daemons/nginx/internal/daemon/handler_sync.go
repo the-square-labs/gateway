@@ -22,6 +22,13 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 			preExistingConfigs[name] = data
 		}
 	}
+	preExistingGlobalConfig, err := nginx.ReadFile(h.cfg.Nginx.GlobalConfig)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("read global config for rollback: %v", err)
+		return
+	}
+	globalConfigTouched := false
 
 	// Track deployed items for rollback
 	var deployedCerts []string
@@ -37,6 +44,13 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		// Restore configs that were deleted as stale in Phase 5
 		for name, data := range deletedStaleConfigs {
 			nginx.WriteAtomic(filepath.Join(h.cfg.Nginx.ConfigDir, name), data)
+		}
+		if globalConfigTouched {
+			if preExistingGlobalConfig != nil {
+				_ = nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, preExistingGlobalConfig)
+			} else {
+				_ = nginx.RemoveFile(h.cfg.Nginx.GlobalConfig)
+			}
 		}
 		// Remove newly deployed certs
 		for _, certId := range deployedCerts {
@@ -114,6 +128,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 			result.Error = fmt.Sprintf("write global config: %v", err)
 			return
 		}
+		globalConfigTouched = true
 	}
 
 	// Phase 5: Remove stale configs (save content for potential rollback)
@@ -132,6 +147,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	result.Detail = output
 	if !valid {
 		rollback()
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed: %s", output)
 		return
@@ -139,6 +155,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 
 	if err := h.mgr.Reload(); err != nil {
 		rollback()
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
@@ -157,7 +174,18 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 
 func (h *Handler) handleUpdateGlobalConfig(cmd *pb.UpdateGlobalConfigCommand, result *pb.CommandResult) {
 	// Backup current config
-	backup, _ := nginx.ReadFile(h.cfg.Nginx.GlobalConfig)
+	backup, err := nginx.ReadFile(h.cfg.Nginx.GlobalConfig)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("read global config for rollback: %v", err)
+		return
+	}
+	rollback := func() error {
+		if backup != nil {
+			return nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, backup)
+		}
+		return nginx.RemoveFile(h.cfg.Nginx.GlobalConfig)
+	}
 
 	if err := nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, []byte(cmd.Content)); err != nil {
 		result.Success = false
@@ -168,21 +196,24 @@ func (h *Handler) handleUpdateGlobalConfig(cmd *pb.UpdateGlobalConfigCommand, re
 	valid, output := h.mgr.TestConfig()
 	result.Detail = output
 	if !valid {
-		// Rollback
-		if backup != nil {
-			nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, backup)
-		}
+		rollbackErr := rollback()
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed: %s", output)
+		if rollbackErr != nil {
+			result.Error += fmt.Sprintf("; rollback global config: %v", rollbackErr)
+		}
 		return
 	}
 
 	if err := h.mgr.Reload(); err != nil {
-		if backup != nil {
-			nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, backup)
-		}
+		rollbackErr := rollback()
+		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
+		if rollbackErr != nil {
+			result.Error += fmt.Sprintf("; rollback global config: %v", rollbackErr)
+		}
 		return
 	}
 

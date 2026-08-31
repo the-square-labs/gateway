@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"log/slog"
-	"path/filepath"
+	"sync"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
@@ -12,13 +12,18 @@ import (
 // Reporter collects nginx-specific metrics.
 // System-level metrics are delegated to sysmetrics.SystemReporter in the shared module.
 type Reporter struct {
-	cfg    *config.Config
-	mgr    *nginx.Manager
-	logger *slog.Logger
+	cfg     *config.Config
+	mgr     *nginx.Manager
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	rate4xx float64
+	rate5xx float64
+	version string
 }
 
 func NewReporter(cfg *config.Config, mgr *nginx.Manager, logger *slog.Logger) *Reporter {
-	return &Reporter{cfg: cfg, mgr: mgr, logger: logger}
+	version, _ := mgr.GetVersion()
+	return &Reporter{cfg: cfg, mgr: mgr, logger: logger, version: version}
 }
 
 // CollectHealth enriches a base health report with nginx-specific metrics.
@@ -30,8 +35,9 @@ func (r *Reporter) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 
 	base.NginxRunning = r.mgr.IsRunning()
 
-	valid, _ := r.mgr.TestConfig()
-	base.ConfigValid = valid
+	if valid, _, checked := r.mgr.CachedConfigValidity(); checked {
+		base.ConfigValid = valid
+	}
 
 	if uptime, err := r.mgr.GetUptime(); err == nil {
 		base.NginxUptimeSeconds = int64(uptime.Seconds())
@@ -41,15 +47,15 @@ func (r *Reporter) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 		base.WorkerCount = int32(workers)
 	}
 
-	if version, err := r.mgr.GetVersion(); err == nil {
-		base.NginxVersion = version
-	}
+	base.NginxVersion = r.version
 
 	// Nginx RSS
 	base.NginxRssBytes = r.mgr.GetProcessRSS()
 
-	// Error rates
-	base.ErrorRate_4Xx, base.ErrorRate_5Xx = r.getErrorRates()
+	r.mu.RLock()
+	base.ErrorRate_4Xx = r.rate4xx
+	base.ErrorRate_5Xx = r.rate5xx
+	r.mu.RUnlock()
 
 	return base
 }
@@ -75,45 +81,16 @@ func (r *Reporter) CollectStats() *pb.StatsReport {
 	return report
 }
 
-// getErrorRates scans access log files and calculates 4xx/5xx error rates.
-func (r *Reporter) getErrorRates() (float64, float64) {
-	logsDir := r.cfg.Nginx.LogsDir
-	if logsDir == "" {
-		return 0, 0
+// SetErrorRates updates health-compatible error rates from the canonical
+// traffic snapshot. Health polling itself never rereads access logs.
+func (r *Reporter) SetErrorRates(total, count4xx, count5xx int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if total <= 0 {
+		r.rate4xx = 0
+		r.rate5xx = 0
+		return
 	}
-
-	matches, err := filepath.Glob(filepath.Join(logsDir, "*.access.log"))
-	if err != nil || len(matches) == 0 {
-		return 0, 0
-	}
-
-	var total, count4xx, count5xx int
-
-	for _, logFile := range matches {
-		lines, err := nginx.TailLastN(logFile, 100)
-		if err != nil || len(lines) == 0 {
-			continue
-		}
-		for _, line := range lines {
-			entry := nginx.ParseLogLine("", line)
-			if entry.Status == 0 {
-				continue
-			}
-			total++
-			if entry.Status >= 400 && entry.Status < 500 {
-				count4xx++
-			} else if entry.Status >= 500 && entry.Status < 600 {
-				count5xx++
-			}
-		}
-	}
-
-	if total == 0 {
-		return 0, 0
-	}
-
-	rate4xx := float64(count4xx) / float64(total) * 100.0
-	rate5xx := float64(count5xx) / float64(total) * 100.0
-
-	return rate4xx, rate5xx
+	r.rate4xx = float64(count4xx) / float64(total) * 100.0
+	r.rate5xx = float64(count5xx) / float64(total) * 100.0
 }

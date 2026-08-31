@@ -264,16 +264,9 @@ export class NodeMonitoringService extends EventEmitter {
       if (health) {
         // Traffic stats: nginx nodes only
         if (node.type === 'nginx') {
-          try {
-            node.commandStream.write(
-              { commandId: `traffic-${Date.now()}`, requestTrafficStats: { tailLines: 200 } },
-              (err: any) => {
-                if (err) logger.debug('Traffic stats write failed', { nodeId, error: err.message });
-              }
-            );
-          } catch {
-            // Stream may be closed
-          }
+          void this.registry
+            .requestTrafficStats(nodeId, { tailLines: 200, hostId: '', windowSeconds: 0 }, 10_000)
+            .catch((error) => logger.debug('Traffic stats request failed', { nodeId, error: error.message }));
         }
         const traffic = node.type === 'nginx' ? (node.lastTrafficStats ?? null) : null;
         this.pushSnapshot(nodeId, health, stats, traffic);

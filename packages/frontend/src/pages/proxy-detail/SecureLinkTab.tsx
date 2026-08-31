@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowDownToLine,
   ArrowUpFromLine,
   Ban,
@@ -325,6 +326,22 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
         <Badge variant="secondary">{link.transport ?? "unknown transport"}</Badge>
         <Badge variant="secondary">generation {link.generation ?? "-"}</Badge>
       </div>
+
+      {link.telemetryStale === true && (
+        <div
+          className="flex items-start gap-2 border border-warning/30 bg-warning/5 p-3"
+          role="status"
+        >
+          <AlertTriangle
+            aria-hidden="true"
+            className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground"
+          />
+          <p className="text-sm text-warning-foreground">
+            Telemetry is stale. Showing the last complete sample
+            {link.telemetrySampledAt ? ` from ${formatDateTime(link.telemetrySampledAt)}` : ""}.
+          </p>
+        </div>
+      )}
 
       <section>
         <div className="mb-2 flex flex-wrap items-center gap-2">

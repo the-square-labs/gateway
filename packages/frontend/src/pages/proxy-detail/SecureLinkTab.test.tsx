@@ -1,7 +1,12 @@
-import { render, screen } from "@testing-library/react";
-import { vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, vi } from "vitest";
 import { api } from "@/services/api";
 import { SecureLinkTab } from "./SecureLinkTab";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("SecureLinkTab", () => {
   it("renders route and host telemetry without global relay metrics", async () => {
@@ -105,6 +110,52 @@ describe("SecureLinkTab", () => {
     expect(screen.queryByText(/Last relay probe/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/route telemetry/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/rate limit inherit/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/Telemetry is stale/i)).not.toBeInTheDocument());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 2000);
+  });
+
+  it("shows the standard warning while rendering the last complete stale sample", async () => {
+    const staleStatus = {
+      state: "active",
+      generation: 1,
+      sourceNodeId: "source",
+      targetNodeId: "target",
+      transport: "grpc-http2-mtls",
+      migratedAt: null,
+      lastError: null,
+      telemetrySampledAt: "2026-08-31T12:00:00.000Z",
+      telemetryStale: true,
+      healthCheck: { enabled: false, intervalSeconds: 30 },
+      sourceNode: { id: "source", name: "edge", status: "online" },
+      targetNode: { id: "target", name: "worker", status: "online" },
+      rateLimit: {
+        mode: "inherit",
+        enabled: true,
+        requestsPerSecond: 1000,
+        burst: 3000,
+        connectionsPerIp: 1000,
+      },
+      runtime: null,
+      traffic: null,
+      history: [],
+      additionalLinks: [],
+    } satisfies Awaited<ReturnType<typeof api.getProxySecureLinkStatus>>;
+    vi.spyOn(api, "getProxySecureLinkStatus")
+      .mockResolvedValueOnce(staleStatus)
+      .mockResolvedValue({
+        ...staleStatus,
+        telemetrySampledAt: "2026-08-31T12:00:02.000Z",
+        telemetryStale: false,
+      });
+
+    render(<SecureLinkTab hostId="host-1" />);
+
+    expect(await screen.findByText(/Telemetry is stale/i)).toHaveTextContent(
+      /Showing the last complete sample from/i
+    );
+    expect(screen.getByRole("status")).toHaveClass("border-warning/30", "bg-warning/5");
+    await waitFor(() => expect(screen.queryByText(/Telemetry is stale/i)).not.toBeInTheDocument(), {
+      timeout: 3000,
+    });
   });
 });

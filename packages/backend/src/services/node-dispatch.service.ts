@@ -10,6 +10,10 @@ import type { RelayGrantBundle } from './relay-policy.service.js';
 
 const logger = createChildLogger('NodeDispatch');
 const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_v1';
+// The background collector runs every 10s. Leave scheduler/queue headroom so a
+// sample just under ten seconds old is refreshed in the current round instead
+// of being deferred to the next one.
+const TRAFFIC_STATS_MIN_FRESH_MS = 8_000;
 
 // The database daemon caps its operation and rollback at 14 minutes. Keep this
 // controller deadline slightly longer so it always receives the final result
@@ -328,16 +332,14 @@ export class NodeDispatchService {
     tailLines = 200,
     options: { hostId?: string; windowSeconds?: number } = {}
   ): Promise<CommandResult> {
-    return this.registry.sendCommand(
+    return this.registry.requestTrafficStats(
       nodeId,
       {
-        requestTrafficStats: {
-          tailLines,
-          hostId: options.hostId ?? '',
-          windowSeconds: options.windowSeconds ?? 0,
-        },
+        tailLines,
+        hostId: options.hostId ?? '',
+        windowSeconds: options.windowSeconds ?? 0,
       },
-      10000
+      TRAFFIC_STATS_MIN_FRESH_MS
     );
   }
 

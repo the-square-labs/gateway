@@ -23,14 +23,23 @@ const (
 )
 
 type fakeNginx struct {
-	valid       bool
-	testOutput  string
-	reloadErr   error
-	reloadCalls int
+	valid        bool
+	validResults []bool
+	testOutput   string
+	testCalls    int
+	reloadErr    error
+	reloadCalls  int
 }
 
-func (f *fakeNginx) TestConfig() (bool, string) { return f.valid, f.testOutput }
-func (f *fakeNginx) Reload() error              { f.reloadCalls++; return f.reloadErr }
+func (f *fakeNginx) TestConfig() (bool, string) {
+	result := f.valid
+	if f.testCalls < len(f.validResults) {
+		result = f.validResults[f.testCalls]
+	}
+	f.testCalls++
+	return result, f.testOutput
+}
+func (f *fakeNginx) Reload() error { f.reloadCalls++; return f.reloadErr }
 
 func TestFinalizeUploadConfinementAndImmutableOwnership(t *testing.T) {
 	runtime, nginx := newRuntime(t)
@@ -168,6 +177,32 @@ func TestConfigSwitchRollsBackAndCleanupHonorsReferences(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("reload failure did not restore previous preview config")
+	}
+}
+
+func TestConfigSwitchValidatesRestoredConfigBeforeRollbackReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "preview.conf")
+	if err := os.WriteFile(path, []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeNginx{
+		validResults: []bool{true, false},
+		testOutput:   "restored config invalid",
+		reloadErr:    errors.New("reload unavailable"),
+	}
+	runtime := &Runtime{nginx: fake}
+
+	err := runtime.applyConfig(path, []byte("new"))
+	if err == nil || !strings.Contains(err.Error(), "restored config test failed") {
+		t.Fatalf("unexpected rollback error: %v", err)
+	}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil || string(content) != "old" {
+		t.Fatalf("rollback content = %q, %v", content, readErr)
+	}
+	if fake.testCalls != 2 || fake.reloadCalls != 1 {
+		t.Fatalf("unexpected validation/reload calls: tests=%d reloads=%d", fake.testCalls, fake.reloadCalls)
 	}
 }
 

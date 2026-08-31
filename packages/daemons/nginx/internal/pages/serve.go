@@ -52,11 +52,15 @@ func (r *Runtime) applyConfig(configPath string, next []byte) error {
 	valid, output := r.nginx.TestConfig()
 	if !valid {
 		_ = restore()
+		_, _ = r.nginx.TestConfig()
 		return fmt.Errorf("nginx config test failed: %s", output)
 	}
 	if err := r.nginx.Reload(); err != nil {
 		if restoreErr := restore(); restoreErr != nil {
 			return fmt.Errorf("nginx reload failed: %v; restore failed: %w", err, restoreErr)
+		}
+		if valid, output := r.nginx.TestConfig(); !valid {
+			return fmt.Errorf("nginx reload failed: %v; restored config test failed: %s", err, output)
 		}
 		if restoreErr := r.nginx.Reload(); restoreErr != nil {
 			return fmt.Errorf("nginx reload failed: %v; restore reload failed: %w", err, restoreErr)

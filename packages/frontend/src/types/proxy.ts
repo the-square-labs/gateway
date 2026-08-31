@@ -124,6 +124,8 @@ export interface ProxySecureLinkStatus {
   transport: string;
   migratedAt: string | null;
   lastError: string | null;
+  telemetrySampledAt?: string | null;
+  telemetryStale?: boolean;
   healthCheck: {
     enabled: boolean;
     intervalSeconds: number;

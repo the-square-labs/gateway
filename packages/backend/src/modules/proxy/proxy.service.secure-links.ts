@@ -21,6 +21,8 @@ import {
 } from './proxy.service.core.js';
 import { ProxyServiceLifecycle } from './proxy.service.lifecycle.js';
 
+const SECURE_LINK_TELEMETRY_STALE_AFTER_MS = 30_000;
+
 export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
   protected async requireManagedProxyHost(id: string): Promise<ProxyHostRow> {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
@@ -157,6 +159,12 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
         };
       })
     );
+    const telemetrySampledAt = latestSnapshot?.timestamp ?? null;
+    const telemetrySampledAtMs = telemetrySampledAt ? Date.parse(telemetrySampledAt) : Number.NaN;
+    const telemetryStale =
+      telemetrySampledAt != null &&
+      (!Number.isFinite(telemetrySampledAtMs) ||
+        Date.now() - telemetrySampledAtMs > SECURE_LINK_TELEMETRY_STALE_AFTER_MS);
     return {
       state: host.secureLinkStatus,
       generation: host.secureLinkGeneration,
@@ -165,6 +173,8 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
       transport: 'grpc-http2-mtls',
       migratedAt: host.secureLinkMigratedAt?.toISOString() ?? null,
       lastError: host.secureLinkLastError,
+      telemetrySampledAt,
+      telemetryStale,
       healthCheck: {
         enabled: host.healthCheckEnabled,
         intervalSeconds: host.healthCheckInterval ?? 30,
@@ -276,7 +286,11 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
 
     const task = this.collectSecureLinkRuntimeSnapshot(host, trafficTailLines)
       .then(async (snapshot) => {
-        await this.getSecureLinkRuntimeHistory(host.id);
+        const current = await this.getSecureLinkRuntimeHistory(host.id);
+        const previous = current.at(-1);
+        if (previous && (snapshot.runtime == null || snapshot.traffic == null)) {
+          return { snapshot: previous, history: current };
+        }
         const history = this.recordSecureLinkRuntimeSnapshot(host.id, snapshot);
         await this.persistSecureLinkRuntimeHistory(host.id, history);
         return { snapshot, history };
