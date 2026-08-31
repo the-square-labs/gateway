@@ -43,7 +43,7 @@ func TestTrustedPIDFileRejectsWritableParent(t *testing.T) {
 	if err := os.WriteFile(pidPath, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := readTrustedPIDFile(pidPath); err == nil {
+	if _, err := readTrustedPIDFile(pidPath); err == nil {
 		t.Fatal("pid file below writable parent was accepted")
 	}
 }

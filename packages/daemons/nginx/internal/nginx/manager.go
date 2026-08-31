@@ -109,7 +109,7 @@ func (m *Manager) GetPID() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	data, pidFileModifiedAt, err := readTrustedPIDFile(pidFile)
+	data, err := readTrustedPIDFile(pidFile)
 	if err != nil {
 		return 0, err
 	}
@@ -123,13 +123,6 @@ func (m *Manager) GetPID() (int, error) {
 	}
 	if err := validateNginxMasterPID(pid, expectedBinary); err != nil {
 		return 0, err
-	}
-	startedAt, err := processStartTime(pid)
-	if err != nil {
-		return 0, err
-	}
-	if pidFileModifiedAt.Before(startedAt.Add(-2 * time.Second)) {
-		return 0, fmt.Errorf("authoritative pid file predates the nginx master process")
 	}
 	return pid, nil
 }
