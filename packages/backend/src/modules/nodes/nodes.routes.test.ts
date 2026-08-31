@@ -67,6 +67,34 @@ describe('compactMonitoringHistorySnapshot', () => {
 
     expect(compacted.health.gpuDevices).toEqual(gpuDevices);
   });
+
+  it('retains every field used by the initial nginx monitoring view', () => {
+    const health = {
+      nginxRunning: true,
+      configValid: true,
+      nginxUptimeSeconds: 123,
+      workerCount: 4,
+      nginxVersion: '1.28.3',
+      nginxRssBytes: 76_120_064,
+      cpuPercent: 7.5,
+      loadAverage1m: 0.1,
+      loadAverage5m: 0.2,
+      loadAverage15m: 0.3,
+      systemMemoryUsedBytes: 1024,
+      systemMemoryTotalBytes: 4096,
+      systemMemoryAvailableBytes: 3072,
+      swapUsedBytes: 128,
+      swapTotalBytes: 512,
+    };
+
+    const compacted = compactMonitoringHistorySnapshot({
+      timestamp: '2026-08-31T08:00:00.000Z',
+      health,
+      stats: {},
+    });
+
+    expect(compacted.health).toEqual(expect.objectContaining(health));
+  });
 });
 
 describe('nodesRoutes list access', () => {

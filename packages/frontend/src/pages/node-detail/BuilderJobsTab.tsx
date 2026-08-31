@@ -7,10 +7,8 @@ import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { DockerBuild, DockerBuildStatus } from "@/types";
-import {
-  ACTIVE_DOCKER_BUILD_STATUSES,
-  DockerBuildDetailsDialog,
-} from "../docker-detail/DockerBuildDetailsDialog";
+import { DockerBuildDetailsDialog } from "../docker-detail/DockerBuildDetailsDialog";
+import { ACTIVE_DOCKER_BUILD_STATUSES } from "../docker-detail/docker-build-status";
 
 const STATUS_VARIANT: Record<
   DockerBuildStatus,
@@ -238,17 +236,14 @@ export function BuilderJobsTab({ nodeId }: { nodeId: string }) {
           horizontalScroll
           minWidth="58rem"
           embedded
-          fixedRowHeight={49}
           className="h-fit w-full max-h-full [&_[data-route-scroll-container]]:flex-1"
           scrollRef={tableScrollRef}
           emptyMessage="No jobs have been assigned to this Build Worker."
           footer={
-            nextCursor ? (
-              <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">
-                {loading ? "Loading more…" : "Scroll to load older jobs"}
-              </div>
-            ) : null
+            nextCursor ? <div ref={sentinelRef} className="-mt-px h-px" aria-hidden="true" /> : null
           }
+          footerRowSeparator={false}
+          embeddedLastRowSeparator={false}
         />
       </PanelShell>
 

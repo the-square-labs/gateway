@@ -815,7 +815,6 @@ export function AdminNodeDetail({
                     nodeStatus={node.status}
                     nodeType={node.type}
                     initialHealthReport={node.liveHealthReport ?? node.lastHealthReport}
-                    initialStatsReport={node.liveStatsReport ?? node.lastStatsReport}
                   />
                 )}
               </TabsContent>

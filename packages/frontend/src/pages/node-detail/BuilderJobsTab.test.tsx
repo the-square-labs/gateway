@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -46,7 +48,8 @@ it("loads and lazily paginates virtualized jobs for one Build Worker", async () 
     })
   );
   expect(await screen.findByText("Build jobs")).toBeInTheDocument();
-  expect(screen.getByText("Scroll to load older jobs")).toBeInTheDocument();
+  expect(screen.queryByText("Scroll to load older jobs")).not.toBeInTheDocument();
+  expect(container.querySelector(".-mt-px.h-px[aria-hidden='true']")).not.toBeNull();
   expect(container.querySelector(".h-fit.w-full.max-h-full")).not.toBeNull();
 
   await waitFor(() => expect(intersectionCallback).toBeDefined());
@@ -63,6 +66,24 @@ it("loads and lazily paginates virtualized jobs for one Build Worker", async () 
       limit: 50,
     })
   );
+});
+
+it("uses measured shared-table rows and a zero-height pagination sentinel", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "src/pages/node-detail/BuilderJobsTab.tsx"),
+    "utf8"
+  );
+  const dataTableSource = readFileSync(
+    resolve(process.cwd(), "src/components/ui/data-table.tsx"),
+    "utf8"
+  );
+
+  expect(source).not.toContain("fixedRowHeight=");
+  expect(source).toContain('className="-mt-px h-px"');
+  expect(source).toContain("footerRowSeparator={false}");
+  expect(source).toContain("embeddedLastRowSeparator={false}");
+  expect(dataTableSource).toContain("Boolean(footer) && footerRowSeparator");
+  expect(dataTableSource).toContain("embedded && embeddedLastRowSeparator");
 });
 
 function build(id: string): DockerBuild {

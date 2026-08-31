@@ -3,27 +3,33 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Check,
+  CircleCheckBig,
+  Clock3,
   Cpu,
   HardDrive,
   MemoryStick,
   Server,
+  ShieldAlert,
   Wifi,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
+import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
 import {
+  type DockerBuild,
   hasGpuMetric,
   hasGpuMonitoringMetrics,
   type NodeGpuDevice,
   type NodeHealthReport,
   type NodeStatsReport,
 } from "@/types";
+import { ACTIVE_DOCKER_BUILD_STATUSES } from "../docker-detail/docker-build-status";
 
 interface TrafficStats {
   statusCodes: { s2xx: number; s3xx: number; s4xx: number; s5xx: number };
@@ -54,6 +60,41 @@ function fixed(value: unknown, digits: number, fallback = "0") {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : fallback;
 }
 
+function formatDurationSeconds(seconds: number): string {
+  const rounded = Math.max(0, Math.round(seconds));
+  if (rounded < 60) return `${rounded}s`;
+  return `${Math.floor(rounded / 60)}m ${rounded % 60}s`;
+}
+
+function summarizeBuildActivity(rows: DockerBuild[]) {
+  const recent = rows.slice(0, 50);
+  const completedDurations = recent.flatMap((build) => {
+    if (!build.startedAt || !build.completedAt) return [];
+    const elapsed = Date.parse(build.completedAt) - Date.parse(build.startedAt);
+    return Number.isFinite(elapsed) && elapsed >= 0 ? [elapsed / 1000] : [];
+  });
+  const outcomes = recent.filter(
+    (build) => build.status === "succeeded" || build.status === "failed"
+  );
+  const succeeded = outcomes.filter((build) => build.status === "succeeded").length;
+  const vulnerabilities = recent.reduce((total, build) => {
+    const summary = build.artifact?.scanSummary;
+    if (!summary) return total;
+    return total + summary.critical + summary.high + summary.medium + summary.low + summary.unknown;
+  }, 0);
+
+  return {
+    recentCount: recent.length,
+    running: recent.filter((build) => ACTIVE_DOCKER_BUILD_STATUSES.has(build.status)).length,
+    averageDuration:
+      completedDurations.length > 0
+        ? completedDurations.reduce((total, value) => total + value, 0) / completedDurations.length
+        : null,
+    successRate: outcomes.length > 0 ? (succeeded / outcomes.length) * 100 : null,
+    vulnerabilities,
+  };
+}
+
 function gpuMetricHistory(
   snapshots: Snapshot[],
   deviceId: string,
@@ -72,21 +113,14 @@ interface NodeMonitoringTabProps {
   nodeStatus: string;
   nodeType?: string;
   initialHealthReport?: NodeHealthReport | null;
-  initialStatsReport?: NodeStatsReport | null;
 }
 
-function buildInitialSnapshot(
-  health: NodeHealthReport | null | undefined,
-  stats: NodeStatsReport | null | undefined
-): Snapshot | null {
-  if (!health && !stats) return null;
-  const timestamp = new Date(
-    Math.max(health?.timestamp ?? 0, stats?.timestamp ?? 0, Date.now())
-  ).toISOString();
+function buildDiskMountSeed(health: NodeHealthReport | null | undefined): Snapshot | null {
+  if (!health) return null;
   return {
-    timestamp,
-    health: health ?? null,
-    stats: stats ?? null,
+    timestamp: "",
+    health,
+    stats: null,
     traffic: null,
   };
 }
@@ -109,22 +143,59 @@ export function NodeMonitoringTab({
   nodeStatus,
   nodeType,
   initialHealthReport,
-  initialStatsReport,
 }: NodeMonitoringTabProps) {
-  const initialSnapshot = buildInitialSnapshot(initialHealthReport, initialStatsReport);
   const initialHealthRef = useRef(initialHealthReport);
-  const initialStatsRef = useRef(initialStatsReport);
   initialHealthRef.current = initialHealthReport;
-  initialStatsRef.current = initialStatsReport;
-  const [history, setHistory] = useState<Snapshot[]>(() =>
-    initialSnapshot ? [initialSnapshot] : []
-  );
-  const [latest, setLatest] = useState<Snapshot | null>(() => initialSnapshot);
+  const [history, setHistory] = useState<Snapshot[]>([]);
+  const [latest, setLatest] = useState<Snapshot | null>(null);
+  const [recentBuilds, setRecentBuilds] = useState<DockerBuild[] | null>(null);
+  const buildRequestId = useRef(0);
+
+  const refreshBuildActivity = useCallback(async () => {
+    if (nodeType !== "builder") return;
+    const currentRequest = ++buildRequestId.current;
+    try {
+      const page = await api.listDockerBuildPage({ builderNodeId: nodeId, limit: 50 });
+      if (currentRequest === buildRequestId.current) setRecentBuilds(page.data);
+    } catch {
+      if (currentRequest === buildRequestId.current) {
+        setRecentBuilds((current) => current ?? []);
+      }
+    }
+  }, [nodeId, nodeType]);
 
   useEffect(() => {
-    const seededSnapshot = buildInitialSnapshot(initialHealthRef.current, initialStatsRef.current);
-    setHistory(seededSnapshot ? [seededSnapshot] : []);
-    setLatest(seededSnapshot);
+    if (nodeType !== "builder") {
+      setRecentBuilds(null);
+      return;
+    }
+    void refreshBuildActivity();
+    const interval = window.setInterval(() => void refreshBuildActivity(), 15_000);
+    return () => {
+      window.clearInterval(interval);
+      buildRequestId.current += 1;
+    };
+  }, [nodeType, refreshBuildActivity]);
+
+  useRealtime("docker.build.changed", (payload) => {
+    const event = payload as { builderNodeId?: string } | undefined;
+    if (nodeType === "builder" && (!event?.builderNodeId || event.builderNodeId === nodeId)) {
+      void refreshBuildActivity();
+    }
+  });
+  useRealtime("docker.build.artifact.changed", (payload) => {
+    const event = payload as { builderNodeId?: string } | undefined;
+    if (nodeType === "builder" && (!event?.builderNodeId || event.builderNodeId === nodeId)) {
+      void refreshBuildActivity();
+    }
+  });
+
+  const buildActivity = useMemo(() => summarizeBuildActivity(recentBuilds ?? []), [recentBuilds]);
+
+  useEffect(() => {
+    const seededSnapshot = buildDiskMountSeed(initialHealthRef.current);
+    setHistory([]);
+    setLatest(null);
 
     if (nodeStatus !== "online") return;
     const es = api.createNodeMonitoringStream(nodeId, { focused: true });
@@ -134,12 +205,12 @@ export function NodeMonitoringTab({
       const streamHistory = ((data.history ?? []) as Snapshot[]).map((snapshot) =>
         mergeSeededDiskMounts(snapshot, seededSnapshot)
       );
-      setHistory(streamHistory.length > 0 ? streamHistory : seededSnapshot ? [seededSnapshot] : []);
-      if (streamHistory.length > 0) setLatest(streamHistory[streamHistory.length - 1]);
+      setHistory(streamHistory);
+      setLatest(streamHistory.at(-1) ?? null);
     });
 
     es.addEventListener("snapshot", (e: MessageEvent) => {
-      const snapshot = JSON.parse(e.data) as Snapshot;
+      const snapshot = mergeSeededDiskMounts(JSON.parse(e.data) as Snapshot, seededSnapshot);
       setHistory((prev) => {
         const next = [...prev, snapshot];
         return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
@@ -249,24 +320,28 @@ export function NodeMonitoringTab({
             }}
             subtitle={`${memPercent} of ${formatBytes(health?.systemMemoryTotalBytes ?? 0)}`}
           />
-          {health && health.swapTotalBytes > 0 && (
-            <StatCard
-              label="Swap"
-              value={formatBytes(health.swapUsedBytes)}
-              icon={MemoryStick}
-              history={history.map((h) => h.health?.swapUsedBytes ?? 0)}
-              sparklineMax={health.swapTotalBytes}
-              color="#d946ef"
-              progress={{
-                percent:
-                  health.swapTotalBytes > 0
-                    ? (health.swapUsedBytes / health.swapTotalBytes) * 100
-                    : 0,
-                color: "#d946ef",
-              }}
-              subtitle={`of ${formatBytes(health.swapTotalBytes)}`}
-            />
-          )}
+          <StatCard
+            label="Swap"
+            value={
+              health && health.swapTotalBytes > 0 ? formatBytes(health.swapUsedBytes) : "Disabled"
+            }
+            icon={MemoryStick}
+            history={history.map((h) => h.health?.swapUsedBytes ?? 0)}
+            sparklineMax={health?.swapTotalBytes}
+            color="#d946ef"
+            progress={{
+              percent:
+                health && health.swapTotalBytes > 0
+                  ? (health.swapUsedBytes / health.swapTotalBytes) * 100
+                  : 0,
+              color: "#d946ef",
+            }}
+            subtitle={
+              health && health.swapTotalBytes > 0
+                ? `of ${formatBytes(health.swapTotalBytes)}`
+                : "No swap configured"
+            }
+          />
           {rootMount && (
             <StatCard
               label="Root Disk"
@@ -284,6 +359,64 @@ export function NodeMonitoringTab({
           )}
         </div>
       </div>
+
+      {nodeType === "builder" && (
+        <section aria-labelledby="build-activity-heading">
+          <h3
+            id="build-activity-heading"
+            className="mb-2 text-sm font-semibold text-muted-foreground"
+          >
+            Build activity
+          </h3>
+          {recentBuilds === null ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }, (_, index) => (
+                <Skeleton key={index} className="h-28" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                label="Running jobs"
+                value={String(buildActivity.running)}
+                icon={Activity}
+                color="#3b82f6"
+                subtitle={`Across ${buildActivity.recentCount} recent jobs`}
+              />
+              <StatCard
+                label="Average duration"
+                value={
+                  buildActivity.averageDuration === null
+                    ? "—"
+                    : formatDurationSeconds(buildActivity.averageDuration)
+                }
+                icon={Clock3}
+                color="#8b5cf6"
+                subtitle="Recent completed jobs"
+              />
+              <StatCard
+                label="Success rate"
+                value={
+                  buildActivity.successRate === null
+                    ? "—"
+                    : `${buildActivity.successRate.toFixed(0)}%`
+                }
+                icon={CircleCheckBig}
+                color="#22c55e"
+                progress={{ percent: buildActivity.successRate ?? 0 }}
+                subtitle="Succeeded vs failed"
+              />
+              <StatCard
+                label="Vulnerabilities"
+                value={buildActivity.vulnerabilities.toLocaleString()}
+                icon={ShieldAlert}
+                color="#f59e0b"
+                subtitle="Recent scan results"
+              />
+            </div>
+          )}
+        </section>
+      )}
 
       {gpuDevices.map((gpu, index) => (
         <GpuMonitoringSection

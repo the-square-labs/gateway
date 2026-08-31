@@ -34,6 +34,10 @@ interface DataTableProps<T> {
   scrollRef?: React.RefObject<HTMLDivElement | null>;
   /** Extra content at the bottom of the scroll area (e.g. sentinel) */
   footer?: ReactNode;
+  /** Whether the last data row needs a separator before a visible footer. */
+  footerRowSeparator?: boolean;
+  /** Preserve the embedded table's last-row divider when its outer shell expects one. */
+  embeddedLastRowSeparator?: boolean;
   /** Group rows by a key. Returns group info or null for ungrouped rows. */
   groupBy?: (row: T) => DataTableGroup | null;
   /** Called when a group header is clicked */
@@ -70,6 +74,8 @@ export function DataTable<T>({
   emptyMessage = "No data.",
   scrollRef,
   footer,
+  footerRowSeparator = true,
+  embeddedLastRowSeparator = true,
   groupBy,
   onGroupClick,
   horizontalScroll = false,
@@ -192,7 +198,8 @@ export function DataTable<T>({
               }
 
               const canClick = isRowClickable?.(item.row) ?? !!onRowClick;
-              const hasFollowingContent = vi.index < items.length - 1 || Boolean(footer);
+              const hasFollowingContent =
+                vi.index < items.length - 1 || (Boolean(footer) && footerRowSeparator);
 
               return (
                 <Fragment key={item.key}>
@@ -201,7 +208,8 @@ export function DataTable<T>({
                     data-index={vi.index}
                     className={cn(
                       "absolute inset-x-0 grid items-center transition-colors",
-                      (embedded || hasFollowingContent) && "border-b border-border",
+                      ((embedded && embeddedLastRowSeparator) || hasFollowingContent) &&
+                        "border-b border-border",
                       canClick && "cursor-pointer hover:bg-accent"
                     )}
                     style={{

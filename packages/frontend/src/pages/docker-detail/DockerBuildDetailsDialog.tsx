@@ -39,16 +39,6 @@ const VULNERABILITY_VARIANT: Record<string, "secondary" | "destructive" | "warni
   unknown: "secondary",
 };
 
-export const ACTIVE_DOCKER_BUILD_STATUSES = new Set<DockerBuildStatus>([
-  "queued",
-  "claimed",
-  "checking_out",
-  "building",
-  "scanning",
-  "pushing",
-  "deploying",
-]);
-
 function MetaRow({
   label,
   children,
