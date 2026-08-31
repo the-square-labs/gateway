@@ -46,7 +46,9 @@ const TabsContent = React.forwardRef<
     className={cn("mt-4 focus-visible:outline-none", className)}
     {...props}
   >
-    <PageTransition className="flex min-h-0 flex-1 flex-col">{children}</PageTransition>
+    <PageTransition className="flex min-h-0 flex-1 flex-col" offsetY={0}>
+      {children}
+    </PageTransition>
   </TabsPrimitive.Content>
 ));
 TabsContent.displayName = TabsPrimitive.Content.displayName;

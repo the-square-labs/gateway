@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { api } from "@/services/api";
 import { hasGpuMetric, hasGpuMonitoringMetrics, type NodeGpuDevice } from "@/types";
@@ -109,6 +110,7 @@ export function StatsTab({
     limit?: number;
   } | null>(null);
   const [processStatus, setProcessStatus] = useState<ProcessLoadStatus>("loading");
+  const [statsBootstrapLoading, setStatsBootstrapLoading] = useState(true);
 
   const [cpuHist, setCpuHist] = useState<number[]>([]);
   const [memHist, setMemHist] = useState<number[]>([]);
@@ -170,6 +172,7 @@ export function StatsTab({
     setGpuHistory([]);
     setProcesses(null);
     setProcessStatus("loading");
+    setStatsBootstrapLoading(true);
     setCpuHist([]);
     setMemHist([]);
     setNetRxHist([]);
@@ -232,6 +235,9 @@ export function StatsTab({
       })
       .catch(() => {
         /* ignore */
+      })
+      .finally(() => {
+        if (monitoringIdentityRef.current === identity) setStatsBootstrapLoading(false);
       });
 
     // 2. Connect to node monitoring SSE (reuse existing stream)
@@ -364,6 +370,7 @@ export function StatsTab({
 
   return (
     <div className="space-y-6 pb-6">
+      {(statsBootstrapLoading || (showProcesses && processStatus === "loading")) && <Skeleton />}
       {!isRunning && (
         <div className="py-8 text-center text-muted-foreground">
           Container is not running. Start it to see monitoring data.

@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
 import { api } from "@/services/api";
 import { isMonitoringSampleForRuntime, StatsTab } from "./StatsTab";
 
@@ -39,6 +40,53 @@ afterEach(() => {
 });
 
 describe("StatsTab runtime identity", () => {
+  it("reveals a stable first frame after HTTP bootstrap without waiting for SSE", async () => {
+    const history = deferred<Record<string, unknown>[]>();
+    const processes = deferred<any>();
+    vi.spyOn(api, "createNodeMonitoringStream").mockImplementation(
+      () => new FakeMonitoringStream() as unknown as EventSource
+    );
+    vi.spyOn(api, "getContainerStatsHistory").mockReturnValue(history.promise);
+    vi.spyOn(api, "getContainerTop").mockReturnValue(processes.promise);
+
+    render(
+      <PageTransition>
+        <StatsTab
+          nodeId="node-1"
+          containerId="container-1"
+          data={runningInspect("container-1", "2026-08-24T12:00:00.000Z")}
+        />
+      </PageTransition>
+    );
+
+    const transition = document.querySelector<HTMLElement>("[data-page-transition]");
+    expect(transition).toHaveStyle({ visibility: "hidden" });
+    expect(api.createNodeMonitoringStream).toHaveBeenCalledWith("node-1");
+
+    await act(async () => {
+      history.resolve([
+        {
+          timestamp: Date.parse("2026-08-24T12:00:01.000Z"),
+          cpuPercent: 20,
+          memoryUsageBytes: 1024,
+          memoryLimitBytes: 4096,
+          pids: 2,
+        },
+      ]);
+    });
+    expect(screen.getByText("CPU: 20.0%")).toBeInTheDocument();
+    expect(transition).toHaveStyle({ visibility: "hidden" });
+
+    await act(async () => {
+      processes.resolve({ Titles: ["PID", "CMD"], Processes: [["2", "ready-process"]] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("ready-process")).toBeVisible();
+      expect(transition).toHaveStyle({ visibility: "visible" });
+    });
+  });
+
   it("filters saved monitoring history to the current runtime start", () => {
     const startedAt = Date.parse("2026-08-24T12:00:00.000Z");
 

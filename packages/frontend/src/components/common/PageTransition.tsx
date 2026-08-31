@@ -17,9 +17,11 @@ export const InitialPageReadyContext = createContext(true);
 export function PageTransition({
   children,
   className,
+  offsetY = 8,
 }: {
   children: ReactNode;
   className?: string;
+  offsetY?: number;
 }) {
   const prefersReducedMotion = useReducedMotion();
   const [pendingInitialLoads, setPendingInitialLoads] = useState(0);
@@ -54,10 +56,10 @@ export function PageTransition({
     <InitialPageLoadContext.Provider value={registerInitialLoad}>
       <InitialPageReadyContext.Provider value={!waitingForInitialData}>
         <motion.div
-          initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
+          initial={{ opacity: 0, y: prefersReducedMotion ? 0 : offsetY }}
           animate={
             waitingForInitialData
-              ? { opacity: 0, y: prefersReducedMotion ? 0 : 8 }
+              ? { opacity: 0, y: prefersReducedMotion ? 0 : offsetY }
               : { opacity: 1, y: 0 }
           }
           transition={
