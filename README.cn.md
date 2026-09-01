@@ -30,6 +30,15 @@ AI Workspace 是推荐的 intent-driven 界面：从完整 Scenario 开始或描
 - 通过 API tokens、OAuth、CI/CD webhooks 和 MCP clients 提供受控自动化。
 - 从 AI Workspace Scenario 开始，或使用 Plan Mode 在明确确认执行之前研究并验证多步骤变更。
 
+## 首批集成伙伴
+
+Gateway 已被集成到产品、企业、交易和金融科技基础设施中：
+
+- [Wiolett Industries](https://docs.goodgateway.dev/en/success-stories/wiolett-industries/) — 产品工程与基础设施交付。
+- [Remedy Trade](https://docs.goodgateway.dev/en/success-stories/remedy-trade/) — 系统化交易运营。
+- [Just Working](https://docs.goodgateway.dev/en/success-stories/just-working/) — 企业平台与云集成。
+- [DFK Algotrade](https://docs.goodgateway.dev/en/success-stories/dfk-algotrade/) — 金融科技工程与投资组合基础设施。
+
 ## 最快安装
 
 在带 Docker 的 Linux 服务器上安装 Gateway：

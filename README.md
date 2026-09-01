@@ -37,6 +37,15 @@ It is also not a replacement for Kubernetes, infrastructure-as-code, a professio
 
 Gateway is the operational control plane between them: one governed place for everyday ingress, workload, certificate, database, node, access, audit, and automation workflows across production fleets—without requiring every operator to assemble those workflows from root shells and disconnected tools.
 
+## Early Integrators
+
+Gateway is already being integrated into product, enterprise, trading, and fintech environments by:
+
+- [Wiolett Industries](https://docs.goodgateway.dev/en/success-stories/wiolett-industries/) — product engineering and infrastructure delivery.
+- [Remedy Trade](https://docs.goodgateway.dev/en/success-stories/remedy-trade/) — systematic trading operations.
+- [Just Working](https://docs.goodgateway.dev/en/success-stories/just-working/) — enterprise platforms and cloud integration.
+- [DFK Algotrade](https://docs.goodgateway.dev/en/success-stories/dfk-algotrade/) — fintech engineering and portfolio infrastructure.
+
 ## Fastest Install
 
 Install Gateway on a Linux server with Docker:

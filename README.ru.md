@@ -30,6 +30,15 @@ AI Workspace — рекомендуемый intent-driven интерфейс: н
 - Предоставить контролируемую автоматизацию через API tokens, OAuth, CI/CD webhooks и MCP clients.
 - Начать с готового Scenario в AI Workspace или использовать Plan Mode, чтобы исследовать и проверить многошаговое изменение до явного подтверждения выполнения.
 
+## Первые интеграторы
+
+Gateway уже интегрируют в продуктовую, enterprise-, trading- и fintech-инфраструктуру:
+
+- [Wiolett Industries](https://docs.goodgateway.dev/ru/success-stories/wiolett-industries/) — продуктовая разработка и инфраструктурная доставка.
+- [Remedy Trade](https://docs.goodgateway.dev/ru/success-stories/remedy-trade/) — эксплуатация системной торговли.
+- [Just Working](https://docs.goodgateway.dev/ru/success-stories/just-working/) — enterprise-платформы и cloud-интеграции.
+- [DFK Algotrade](https://docs.goodgateway.dev/ru/success-stories/dfk-algotrade/) — fintech-разработка и портфельная инфраструктура.
+
 ## Самая быстрая установка
 
 Установите Gateway на Linux-сервер с Docker:
