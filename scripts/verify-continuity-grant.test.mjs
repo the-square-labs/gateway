@@ -42,9 +42,24 @@ test('rejects any change to the canonical trigger', async () => {
   assert.match(result.stderr, /does not match the canonical continuity grant digest/);
 });
 
-test('rejects removal of the pre-incorporation boundary', async () => {
+test('rejects removal of the pre-company-assignment boundary', async () => {
   const result = await verifyGrant(
-    canonicalGrant.replace('The automatic transition described below is unavailable before that date. ', '')
+    canonicalGrant.replace(
+      'The automatic transition described below is unavailable unless and until the relevant rights are owned by a Company Rights Holder.\n',
+      ''
+    )
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not match the canonical continuity grant digest/);
+});
+
+test('rejects removal of key continuity during succession', async () => {
+  const result = await verifyGrant(
+    canonicalGrant.replace(
+      'That succession does not reduce rights already granted to users, change the conditions of this grant, terminate applicable paid-key terms, or revoke, invalidate, or deactivate any valid commercial key solely because of the assignment.\n',
+      ''
+    )
   );
 
   assert.notEqual(result.status, 0);

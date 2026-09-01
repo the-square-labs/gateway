@@ -25,6 +25,6 @@ Do not disclose a suspected vulnerability publicly before Square Labs has had a 
 
 ## Rights holder and license
 
-Alexandr Slavinschii is the current individual rights holder and Licensor, operating the project under the Square Labs name. The Square Labs OÜ becomes the rights holder and Licensor only after registration and an effective written assignment of the relevant economic rights. A pull request or other contribution does not itself transfer rights to either of them.
+Square Labs publishes Gateway under [LICENSE.md](LICENSE.md). A pull request or other contribution does not itself transfer ownership of the contribution or other rights except as stated in applicable contribution terms.
 
 Use of Gateway remains subject to [LICENSE.md](LICENSE.md). Personal, Business, and Enterprise keys are additionally subject to the [Paid Key Terms](COMMERCIAL-LICENSE.md). Contributions accepted under separate written contribution terms may be licensed by Square Labs as part of Gateway.

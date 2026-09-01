@@ -4,18 +4,15 @@ This grant applies only to Good Gateway source code included in the release dist
 
 This is a present, non-revocable grant of a conditional future license. It is not a release countdown. No passage of time after a release, publication of a newer release, product pause, or service outage starts the MIT License.
 
-## Licensor And Ownership Transition
+## Licensor And Succession
 
-The initial **Licensor** is **Alexandr Slavinschii**, who currently owns the Covered Source and operates the project under the Square Labs name.
+Until a legal entity formed to operate Square Labs receives the relevant rights through a legally effective written assignment, the **Licensor** is [**Alexandr Slavinskii**](https://github.com/knownout). After that assignment, the legal entity becomes the Licensor and a **Company Rights Holder**. References to the Licensor include any later valid successor or assignee.
 
-**The Square Labs OÜ** is a proposed Estonian private limited company and is not treated as the Licensor before both of the following have occurred:
+That succession does not reduce rights already granted to users, change the conditions of this grant, terminate applicable paid-key terms, or revoke, invalidate, or deactivate any valid commercial key solely because of the assignment.
 
-1. The Square Labs OÜ has been entered in the Estonian commercial register; and
-2. Alexandr Slavinschii has executed a written assignment transferring the relevant economic rights in the Covered Source to The Square Labs OÜ.
+A **Company Rights Holder** is a legal entity that owns the relevant rights in the Covered Source through a legally effective written assignment or succession. The automatic transition described below is unavailable unless and until the relevant rights are owned by a Company Rights Holder.
 
-The date on which both conditions are satisfied is the **Company Ownership Effective Date**. The automatic transition described below is unavailable before that date. Updating a copyright notice, repository setting, product name, or website without the written assignment does not create the Company Ownership Effective Date.
-
-After a valid assignment of the Covered Source, the **Company Rights Holder** is The Square Labs OÜ or any later legal entity that acquires the relevant rights as its successor or assignee. References to the Licensor include the current Company Rights Holder. A transfer, merger, division, transformation, reorganisation, or change of control does not start the MIT License.
+A transfer, merger, division, transformation, reorganisation, or change of control does not start the MIT License.
 
 ## Conditional MIT License
 
@@ -29,7 +26,7 @@ If any of those events occurs before the MIT License starts, the automatic trans
 
 ## Final Dissolution Event
 
-A **Final Dissolution Event** occurs only after the Company Ownership Effective Date and only when the current Company Rights Holder:
+A **Final Dissolution Event** occurs only when the current Company Rights Holder:
 
 1. has completed liquidation or another final dissolution process under applicable law;
 2. has been finally deleted from the Estonian commercial register or another applicable official register in a manner that terminates its legal existence; and
@@ -47,10 +44,9 @@ None of the following, alone or in combination, starts the MIT License or a tran
 - unavailability of a company website, documentation website, source repository, update service, licensing service, or any other online service, for any duration;
 - failure to respond to customers, users, contributors, or the public;
 - insolvency, bankruptcy, restructuring, administration, or liquidation before final legal dissolution;
-- transfer of the product, Covered Source, business, assets, shares, or control; or
-- the death, incapacity, retirement, or cessation of activity of the initial individual Licensor.
+- transfer of the product, Covered Source, business, assets, shares, or control.
 
-While the relevant rights remain owned by Alexandr Slavinschii, The Square Labs OÜ, or any successor or assignee, the Covered Source remains governed by [LICENSE.md](LICENSE.md), applicable paid-key terms, and any separate written agreement unless the current rights holder expressly elects MIT terms as described below.
+While the relevant rights remain owned by the Licensor or a successor or assignee, the Covered Source remains governed by [LICENSE.md](LICENSE.md), applicable paid-key terms, and any separate written agreement unless the current rights holder expressly elects MIT terms as described below.
 
 ## Voluntary MIT Election
 
@@ -66,7 +62,7 @@ A general announcement about pausing or discontinuing the product is not a Volun
 
 MIT License
 
-Copyright (c) 2021-2026 Alexandr Slavinschii and, after an effective written assignment, The Square Labs OÜ
+Copyright (c) 2021-2026 Alexandr Slavinskii
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

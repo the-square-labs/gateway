@@ -2,7 +2,9 @@
 
 These terms govern Personal, Business, and Enterprise Good Gateway license keys issued by the **Licensor**. They supplement, and do not modify, the [PolyForm Perimeter License 1.0.1](LICENSE.md).
 
-The initial Licensor is **Alexandr Slavinschii**, operating the project under the Square Labs name. **The Square Labs OÜ** becomes the Licensor only after it has been entered in the Estonian commercial register and has received the relevant economic rights through an effective written assignment. References to the Licensor include a later legal successor or assignee that acquires those rights.
+Until a legal entity formed to operate Square Labs receives the relevant rights through a legally effective written assignment, the Licensor is [**Alexandr Slavinskii**](https://github.com/knownout). After that assignment, the legal entity becomes the Licensor. References to the Licensor include any later valid successor or assignee that acquires the relevant rights and assumes the associated obligations.
+
+That succession does not revoke, invalidate, deactivate, or change the plan, installation, term, continuity, or restrictions of any valid key solely because of the assignment.
 
 PolyForm Perimeter permits use, modification, and redistribution for permitted purposes, including internal business use. It does not permit providing to others a product marketed as a substitute for Good Gateway. An ordinary paid key unlocks plan features and limits; it does not waive that competition restriction or grant OEM, white-label, resale, or competing hosted-service rights. Those uses require a separate written agreement signed by the Licensor.
 
@@ -49,7 +51,7 @@ These terms apply only to the paid key and Licensor-provided paid-plan access. T
 
 ## Assignment and succession
 
-The Licensor may assign these terms, the related paid-license records, and the Licensor's rights and obligations to The Square Labs OÜ or another person or entity that acquires the relevant rights in Good Gateway. The assignment becomes effective only when that successor has legally acquired the relevant rights and assumed the associated obligations. Existing valid keys continue under the same plan, installation, term, continuity, and restriction rules after that assignment unless the key holder and successor agree otherwise in writing.
+The Licensor may assign these terms, the related paid-license records, and the Licensor's rights and obligations to a person or entity that acquires the relevant rights in Good Gateway. The assignment becomes effective only when that successor has legally acquired those rights and assumed the associated obligations. Existing valid keys continue under the same plan, installation, term, continuity, and restriction rules after that assignment unless the key holder and successor agree otherwise in writing.
 
 The key holder may not assign or transfer a key or these paid-plan rights except as expressly permitted by these terms or agreed by the Licensor in writing.
 

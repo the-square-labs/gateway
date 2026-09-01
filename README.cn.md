@@ -251,9 +251,9 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 
 Gateway 提供四个产品计划。付费计划适用于一个 Gateway 实例，不按 managed node、用户或 custom permission group 额外收费。
 
-Gateway 源代码目前由 Alexandr Slavinschii 所有，并以 Square Labs 项目名称运营，依据 [PolyForm Perimeter License 1.0.1](LICENSE.md) 提供。只有在 The Square Labs OÜ 于爱沙尼亚完成注册并通过有效书面协议取得相关经济权利后，该公司才成为权利人。该许可证允许为非竞争性目的使用、修改和再分发代码，包括企业内部使用；但不允许向他人提供被宣传为 Gateway 替代品的产品。Personal、Business 或 Enterprise 密钥依据 [Paid Key Terms](COMMERCIAL-LICENSE.md) 解锁相应计划的功能与限制；普通付费密钥不会自动授予 OEM、白标、转售或竞争性托管服务的权利。
+Gateway 源代码由 Square Labs 依据 [PolyForm Perimeter License 1.0.1](LICENSE.md) 发布。该许可证允许为非竞争性目的使用、修改和再分发代码，包括企业内部使用；但不允许向他人提供被宣传为 Gateway 替代品的产品。Personal、Business 或 Enterprise 密钥依据 [Paid Key Terms](COMMERCIAL-LICENSE.md) 解锁相应计划的功能与限制；普通付费密钥不会自动授予 OEM、白标、转售或竞争性托管服务的权利。
 
-每个官方版本还附带[产品连续性 MIT 授权](CONTINUITY-MIT-GRANT.md)。该授权不包含按版本发布日期计算的倒计时；停止开发、支持或销售，发布停止产品的公告，以及网站或许可服务器不可用，都不会触发 MIT。公司注册并通过书面协议取得相关权利之前，不存在自动转换。权利转让给 The Square Labs OÜ 后，只有公司最终解散且连续 90 天没有继承人或受让人，或者当前权利人明确自愿选择 MIT 时，MIT 条款才可能生效。
+每个官方版本还附带[产品连续性 MIT 授权](CONTINUITY-MIT-GRANT.md)。停止开发、支持或销售，发布停止产品的公告，以及网站或许可服务器不可用，都不会触发 MIT。只有在相关权利由公司持有、该公司最终解散并连续 90 天没有继承人或受让人时，自动条款才可能生效；当前权利人也可以明确自愿选择 MIT。
 
 > [!NOTE]
 > 以下价格为初步价格，不构成要约，并可能发生变化。购买前请确认最新价格和条款。
@@ -269,4 +269,4 @@ Gateway 源代码目前由 Alexandr Slavinschii 所有，并以 Square Labs 项�
 
 付费密钥到期后，Personal、Business 和 Enterprise 的技术 entitlements 分别继续有效 24 小时、3 天和 7 天。此后 Gateway 会阻止创建新的付费资源和其他新的付费操作，但不会停止或删除已经配置的基础设施。已撤销、已替换、无效或明确停用的密钥会单独处理。
 
-Copyright (c) 2021-2026 Alexandr Slavinschii，以 [Square Labs](https://thesquarelabs.com) 项目名称运营
+Copyright (c) 2021-2026 [Square Labs](https://thesquarelabs.com)

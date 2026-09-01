@@ -1,14 +1,16 @@
 Good Gateway
-Copyright (c) 2021-2026 Alexandr Slavinschii
+Copyright (c) 2021-2026 Alexandr Slavinskii (https://github.com/knownout)
 Operated under the Square Labs project name (https://thesquarelabs.com)
 All rights reserved except as expressly licensed.
 
-RIGHTS HOLDER
--------------
-Alexandr Slavinschii is the current individual rights holder and
-Licensor. The Square Labs OÜ becomes the rights holder and Licensor
-only after registration in Estonia and an effective written assignment
-of the relevant economic rights.
+LICENSOR
+--------
+Until a legal entity formed to operate Square Labs receives the relevant
+rights through a legally effective written assignment, Alexandr
+Slavinskii is the Licensor. After that assignment, the legal entity
+becomes the Licensor. The succession does not reduce rights already
+granted to users or revoke, invalidate, or deactivate any valid
+commercial key solely because of the assignment.
 
 SOURCE LICENSE
 --------------
@@ -27,13 +29,12 @@ license's competition restriction. See COMMERCIAL-LICENSE.md.
 
 PRODUCT CONTINUITY
 ------------------
-The Product Continuity MIT Grant has no release-age, inactivity,
-support, sales, website, or licensing-service trigger. Before company
-formation and assignment, no automatic transition applies. After an
-effective assignment to The Square Labs OÜ, the conditional MIT terms
-can start only after final dissolution and 90 days without a successor
-or assignee, or through an express voluntary MIT election. See
-CONTINUITY-MIT-GRANT.md for the complete terms.
+The Product Continuity MIT Grant is not triggered by release age,
+inactivity, support, sales, website, or licensing-service availability.
+Its automatic terms apply only after final dissolution of a company
+rights holder and 90 days without a successor or assignee, or through
+an express voluntary MIT election. See CONTINUITY-MIT-GRANT.md for the
+complete terms.
 
 THIRD-PARTY SOFTWARE
 --------------------
