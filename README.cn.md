@@ -253,7 +253,7 @@ Gateway 提供四个产品计划。付费计划适用于一个 Gateway 实例，
 
 Gateway 源代码由 Square Labs 依据 [PolyForm Perimeter License 1.0.1](LICENSE.md) 发布。该许可证允许为非竞争性目的使用、修改和再分发代码，包括企业内部使用；但不允许向他人提供被宣传为 Gateway 替代品的产品。Personal、Business 或 Enterprise 密钥依据 [Paid Key Terms](COMMERCIAL-LICENSE.md) 解锁相应计划的功能与限制；普通付费密钥不会自动授予 OEM、白标、转售或竞争性托管服务的权利。
 
-每个官方版本还附带[产品连续性 MIT 授权](CONTINUITY-MIT-GRANT.md)。停止开发、支持或销售，发布停止产品的公告，以及网站或许可服务器不可用，都不会触发 MIT。只有在相关权利由公司持有、该公司最终解散并连续 90 天没有继承人或受让人时，自动条款才可能生效；当前权利人也可以明确自愿选择 MIT。
+每个官方版本还附带[产品连续性 MIT 授权](CONTINUITY-MIT-GRANT.md)，为 Square Labs 所涵盖的源代码提供长期连续性保障。其适用范围、条件、排除项以及任何 MIT 转换规则均以授权文件本身为准。
 
 > [!NOTE]
 > 以下价格为初步价格，不构成要约，并可能发生变化。购买前请确认最新价格和条款。

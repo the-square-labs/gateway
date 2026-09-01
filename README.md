@@ -260,7 +260,7 @@ Gateway has four product plans. Paid plans apply to one Gateway installation and
 
 Gateway source published by Square Labs is available under the [PolyForm Perimeter License 1.0.1](LICENSE.md). It permits use, modification, and redistribution for noncompeting purposes, including ordinary internal business use. A Personal, Business, or Enterprise key unlocks the corresponding paid-plan features and limits under the [Paid Key Terms](COMMERCIAL-LICENSE.md); it does not waive Perimeter's restriction on providing a product marketed as a substitute for Gateway. Competing hosted/SaaS, OEM, white-label, and resale offerings require a separate written agreement with the Licensor.
 
-Every official release also carries the [Product Continuity MIT Grant](CONTINUITY-MIT-GRANT.md). It is not triggered by product inactivity, a support or sales pause, an announcement of discontinuation, or the unavailability of any website or licensing service. Its automatic terms apply only if the relevant rights are held by a company that is finally dissolved and remains without a successor or assignee for 90 consecutive days, or through an express voluntary MIT election by the current rights holder. Trademarks, commercial keys, separately licensed documentation and assets, and third-party code are excluded.
+Every official release also carries the [Product Continuity MIT Grant](CONTINUITY-MIT-GRANT.md), a source-continuity backstop for covered Square Labs code. The grant itself is the authoritative source for its scope, conditions, exclusions, and any MIT transition.
 
 > [!NOTE]
 > Pricing is preliminary, does not constitute an offer, and is subject to change. Confirm current pricing and terms before purchase.
