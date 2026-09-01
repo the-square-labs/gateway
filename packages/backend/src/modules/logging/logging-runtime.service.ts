@@ -1,5 +1,5 @@
 import {
-  hasConfiguredLicenseFeature,
+  hasConfiguredLicenseFeatureForExistingRuntime,
   type LicensePolicyService,
   requireConfiguredLicensePolicy,
 } from '@/modules/license/license-policy.service.js';
@@ -23,8 +23,11 @@ export class LoggingRuntimeService {
 
   async initialize(): Promise<void> {
     let runtime = await this.settings.getRuntimeConfig();
-    if (runtime.mode !== 'disabled' && !(await hasConfiguredLicenseFeature(this.licensePolicy, 'structured-logging'))) {
-      // LICENSE ENFORCEMENT: Do not start a persisted paid logging backend after entitlement loss.
+    if (
+      runtime.mode !== 'disabled' &&
+      !(await hasConfiguredLicenseFeatureForExistingRuntime(this.licensePolicy, 'structured-logging'))
+    ) {
+      // LICENSE ENFORCEMENT: Persisted runtime continues only for entitled or continuity states.
       runtime = await this.settings.saveConfig({ mode: 'disabled' });
     }
     await this.applyRuntime(runtime);

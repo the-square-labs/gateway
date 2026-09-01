@@ -2,7 +2,10 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { type SiemAuditEvent, siemDeliveries, siemDestinations } from '@/db/schema/index.js';
 import type { LicenseService } from '@/modules/license/license.service.js';
-import { hasConfiguredLicenseFeature, type LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import {
+  hasConfiguredLicenseFeatureForExistingRuntime,
+  type LicensePolicyService,
+} from '@/modules/license/license-policy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 
 type DatabaseWriter = Pick<DrizzleClient, 'select' | 'insert'>;
@@ -39,7 +42,7 @@ export class SiemAuditOutboxService {
   async isEnabled(): Promise<boolean> {
     try {
       return (
-        (await hasConfiguredLicenseFeature(this.licensePolicy, 'siem-export')) &&
+        (await hasConfiguredLicenseFeatureForExistingRuntime(this.licensePolicy, 'siem-export')) &&
         (await this.generalSettingsService.isFeatureEnabled('siemEnabled'))
       );
     } catch {

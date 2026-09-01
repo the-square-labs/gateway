@@ -126,16 +126,7 @@ message RegisterMessage {
   DockerRuntimeStatus docker_runtime_status = 14;
   string host_identity_id = 15;
   string relay_instance_id = 16;
-  DaemonUpdateOutcome daemon_update_outcome = 17;
-}
-
-message DaemonUpdateOutcome {
-  string status = 1;
-  string from_version = 2;
-  string target_version = 3;
-  string restored_version = 4;
-  string reason = 5;
-  int64 occurred_at_unix = 6;
+  reserved 17;
 }
 
 message CommandResult {
@@ -225,6 +216,7 @@ message NetworkInterface {
 
 // Messages FROM Gateway TO daemon
 message GatewayCommand {
+  reserved 61, 67;
   string command_id = 1;
   oneof payload {
     ApplyConfigCommand apply_config = 2;
@@ -303,8 +295,6 @@ message GatewayCommand {
     SyncRelayPolicyCommand sync_relay_policy = 58;
     SetRelayDrainCommand set_relay_drain = 59;
     UpdateRelayWorkerCommand update_relay_worker = 60;
-    CommitRelaySupervisorUpdateCommand commit_relay_supervisor_update = 61;
-    FinalizeDaemonUpdateCommand finalize_daemon_update = 67;
     // Accepted only by docker-daemon running with docker.mode = "builder".
     DockerBuildCommand docker_build = 62;
     DockerBuildCancelCommand docker_build_cancel = 63;
@@ -337,15 +327,6 @@ message UpdateRelayWorkerCommand {
   string target_version = 2;
   string checksum = 3;
   string signed_manifest = 4;
-}
-
-message CommitRelaySupervisorUpdateCommand {
-  string target_version = 1;
-}
-
-message FinalizeDaemonUpdateCommand {
-  string target_version = 1;
-  bool acknowledge_rollback = 2;
 }
 
 message RelayRuntimeStatus {
@@ -875,6 +856,7 @@ message DockerBuildCommand {
   string node_version = 24;
   string build_script = 25;
   string artifact_directory = 26;
+  int32 worker_parallelism = 27;
 }
 
 message DockerBuildCancelCommand {

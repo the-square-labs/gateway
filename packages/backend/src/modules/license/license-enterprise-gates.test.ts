@@ -9,6 +9,7 @@ function deniedPolicy() {
   return {
     error,
     hasFeature: vi.fn().mockResolvedValue(false),
+    hasFeatureForExistingRuntime: vi.fn().mockResolvedValue(false),
     requireFeature: vi.fn(async () => Promise.reject(error)),
   };
 }
@@ -42,7 +43,7 @@ describe('Enterprise entitlement service boundaries', () => {
     service.setLicensePolicyService(policy as never);
 
     await expect(service.isEnabled()).resolves.toBe(false);
-    expect(policy.hasFeature).toHaveBeenCalledWith('siem-export');
+    expect(policy.hasFeatureForExistingRuntime).toHaveBeenCalledWith('siem-export');
     expect(settings.isFeatureEnabled).not.toHaveBeenCalled();
   });
 
@@ -53,7 +54,7 @@ describe('Enterprise entitlement service boundaries', () => {
     service.setLicensePolicyService(policy as never);
 
     await service.runDueDeliveries();
-    expect(policy.hasFeature).toHaveBeenCalledWith('siem-export');
+    expect(policy.hasFeatureForExistingRuntime).toHaveBeenCalledWith('siem-export');
     expect(settings.isFeatureEnabled).not.toHaveBeenCalled();
   });
 });

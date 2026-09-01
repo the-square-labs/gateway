@@ -91,6 +91,7 @@ push_image_with_digest() {
 publish_gateway() {
   local digest
   local assets=(
+    CONTINUITY-MIT-GRANT.md
     gateway-image.update.json
     gateway-daemon-installers.sha256
     scripts/setup-daemon.sh
@@ -105,6 +106,7 @@ publish_gateway() {
     return
   fi
   require_signing_key
+  node scripts/verify-continuity-grant.mjs
   docker_login
   ./scripts/sync-update-trust-anchor.sh
   docker build \

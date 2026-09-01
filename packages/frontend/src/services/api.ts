@@ -810,6 +810,10 @@ class ApiClient extends withPagesDomainsApi(
       serviceAddress?: string | null;
       secondaryServiceAddress?: string | null;
       confirmDomainDnsUpdate?: boolean;
+      builderSettings?: {
+        parallelism: number;
+        timeoutMinutes: number;
+      };
     }
   ): Promise<import("@/types").Node> {
     return this.unwrapData(

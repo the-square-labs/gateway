@@ -15,8 +15,11 @@ import {
   isCanonicalEntitlements,
   LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS,
   LICENSE_ENTITLEMENTS_VERSION,
+  LICENSE_LEGACY_ENTITLEMENTS_VERSION,
   LICENSE_OFFLINE_GRACE_DAYS,
   LICENSE_PAID_HEARTBEAT_INTERVAL_MS,
+  LICENSE_PLAN_ENTITLEMENTS,
+  LICENSE_PLAN_ENTITLEMENTS_V3,
   LICENSE_SERVER_URL,
   type LicensePlan,
   type LicenseServerEnvelope,
@@ -86,6 +89,18 @@ export class LicenseService {
     this.scheduleLifecycleRefresh(status, effectiveCached);
     this.publishStatusIfChanged(status);
     return status;
+  }
+
+  async getRuntimeContinuityEntitlements(): Promise<LicenseStatusView['entitlements'] | null> {
+    const cached = await this.getCachedState();
+    if (!cached?.paidPlan || !cached.lastValidAt) return null;
+    const contracts =
+      cached.entitlementsVersion === LICENSE_LEGACY_ENTITLEMENTS_VERSION
+        ? LICENSE_PLAN_ENTITLEMENTS_V3
+        : cached.entitlementsVersion === LICENSE_ENTITLEMENTS_VERSION
+          ? LICENSE_PLAN_ENTITLEMENTS
+          : null;
+    return contracts?.[cached.paidPlan] ?? null;
   }
 
   async getOnboardingState(): Promise<{ completed: boolean; status: LicenseStatusView }> {

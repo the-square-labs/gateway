@@ -368,3 +368,53 @@ describe('nodesRoutes service address access', () => {
     expect(mocks.nodesService.update).not.toHaveBeenCalled();
   });
 });
+
+describe('nodesRoutes Build Worker settings access', () => {
+  const nodeId = '11111111-1111-4111-8111-111111111111';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'builder' });
+    mocks.nodesService.update.mockResolvedValue({ id: nodeId, type: 'builder' });
+  });
+
+  it('allows config-edit-only access to update Build Worker settings', async () => {
+    mocks.scopes = [`nodes:config:edit:${nodeId}`];
+    const builderSettings = { parallelism: 2, timeoutMinutes: 45 };
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ builderSettings }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { builderSettings }, 'user-1');
+  });
+
+  it('rejects Build Worker settings with rename-only access', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`];
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ builderSettings: { parallelism: 2, timeoutMinutes: 45 } }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
+  });
+
+  it('does not let config-edit access modify the node identity', async () => {
+    mocks.scopes = [`nodes:config:edit:${nodeId}`];
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Renamed builder' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
+  });
+});

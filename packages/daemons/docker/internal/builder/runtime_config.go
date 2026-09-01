@@ -18,7 +18,7 @@ const (
 	DefaultCNIBinaryDir        = "/opt/gateway-builder/cni/bin"
 	DefaultRegistryCAPath      = "/var/lib/docker-daemon/registry-proxy/ca.pem"
 	DefaultContainerdNamespace = "gateway-builds"
-	DefaultBuildParallelism    = 1
+	DefaultBuildParallelism    = 16
 	DefaultCPULimitMillis      = int64(2000)
 	DefaultMemoryLimitBytes    = int64(4 * 1024 * 1024 * 1024)
 	DefaultDiskLimitBytes      = int64(20 * 1024 * 1024 * 1024)
@@ -95,8 +95,8 @@ func (c RuntimeConfig) Validate() error {
 	if c.SocketGID < 0 {
 		return errors.New("socket GID cannot be negative")
 	}
-	if c.MaxParallelism != 1 {
-		return errors.New("isolated builder runtime requires exactly one concurrent build")
+	if c.MaxParallelism < 1 || c.MaxParallelism > 16 {
+		return errors.New("isolated builder runtime parallelism must be between 1 and 16")
 	}
 	if c.CPULimitMillis < 100 || c.CPULimitMillis > 64_000 {
 		return errors.New("builder CPU limit must be between 100 and 64000 millicores")

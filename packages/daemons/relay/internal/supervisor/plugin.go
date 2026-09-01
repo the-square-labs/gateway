@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	relayPoolCapability               = "relay_pool_v1"
-	relaySupervisorRunnerV2Capability = "relay_supervisor_runner_v2"
+	relayPoolCapability = "relay_pool_v1"
 )
 
 type Plugin struct {
@@ -54,7 +53,7 @@ func (p *Plugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		NodeId: nodeID, Hostname: hostname, DaemonVersion: lifecycle.Version,
 		CpuModel: cpuModel, CpuCores: int32(cpuCores), Architecture: sysmetrics.GetArchitecture(),
 		KernelVersion: sysmetrics.GetKernelVersion(), DaemonType: "relay",
-		Capabilities: []string{relayPoolCapability, relaySupervisorRunnerV2Capability},
+		Capabilities: []string{relayPoolCapability},
 	}
 	if state != nil {
 		register.HostIdentityId = state.HostIdentityID
@@ -107,12 +106,6 @@ func (p *Plugin) HandleCommand(command *pb.GatewayCommand) *pb.CommandResult {
 		)
 		if err == nil {
 			result.Detail = fmt.Sprintf("relay worker updated to %s", update.GetTargetVersion())
-		}
-	case *pb.GatewayCommand_CommitRelaySupervisorUpdate:
-		targetVersion := payload.CommitRelaySupervisorUpdate.GetTargetVersion()
-		err = lifecycle.FinalizeCurrentUpdate(targetVersion, false)
-		if err == nil {
-			result.Detail = fmt.Sprintf("relay supervisor update %s committed", targetVersion)
 		}
 	case *pb.GatewayCommand_SetDaemonLogStream:
 		stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)

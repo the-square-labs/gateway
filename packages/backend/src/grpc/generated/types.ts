@@ -117,16 +117,6 @@ export interface RegisterMessage {
   dockerRuntimeStatus?: DockerRuntimeStatus;
   hostIdentityId: string;
   relayInstanceId: string;
-  daemonUpdateOutcome?: DaemonUpdateOutcome;
-}
-
-export interface DaemonUpdateOutcome {
-  status: string;
-  fromVersion: string;
-  targetVersion: string;
-  restoredVersion: string;
-  reason: string;
-  occurredAtUnix: string;
 }
 
 export interface RelayRuntimeStatus {
@@ -291,8 +281,6 @@ export interface GatewayCommand {
   syncRelayPolicy?: SyncRelayPolicyCommand;
   setRelayDrain?: SetRelayDrainCommand;
   updateRelayWorker?: UpdateRelayWorkerCommand;
-  commitRelaySupervisorUpdate?: CommitRelaySupervisorUpdateCommand;
-  finalizeDaemonUpdate?: FinalizeDaemonUpdateCommand;
   syncDockerRegistryBindings?: SyncDockerRegistryBindingsCommand;
   dockerBuild?: DockerBuildCommand;
   dockerBuildCancel?: DockerBuildCancelCommand;
@@ -351,6 +339,7 @@ export interface DockerBuildCommand {
   nodeVersion: string;
   buildScript: string;
   artifactDirectory: string;
+  workerParallelism?: number;
 }
 
 export interface DockerBuildCancelCommand {
@@ -374,15 +363,6 @@ export interface UpdateRelayWorkerCommand {
   targetVersion: string;
   checksum: string;
   signedManifest: string;
-}
-
-export interface CommitRelaySupervisorUpdateCommand {
-  targetVersion: string;
-}
-
-export interface FinalizeDaemonUpdateCommand {
-  targetVersion: string;
-  acknowledgeRollback: boolean;
 }
 
 export interface SyncDockerRegistryBindingsCommand {

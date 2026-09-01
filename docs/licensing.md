@@ -6,9 +6,11 @@ Gateway is offered in four product plans: Community, Personal, Business, and Ent
 
 The plan limits and feature availability below define the product access granted by each plan.
 
-Community is available only for noncommercial purposes permitted by the [PolyForm Strict License 1.0.0](../LICENSE.md). A Personal, Business, or Enterprise key issued by Square Labs automatically grants the person or organization named in the license record limited commercial-use rights for one official, unmodified Gateway installation under the [Good Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md).
+Gateway source owned by Alexandr Slavinschii, operating the project under the Square Labs name, is available under the [PolyForm Perimeter License 1.0.1](../LICENSE.md). It permits use, modification, and redistribution for noncompeting purposes, including ordinary internal business use. The Square Labs OÜ becomes the rights holder only after registration in Estonia and an effective written assignment of the relevant economic rights. A Personal, Business, or Enterprise key unlocks the corresponding paid-plan features and limits for one official Gateway installation under the [Good Gateway Paid Key Terms 1.2](../COMMERCIAL-LICENSE.md).
 
-The commercial grant begins when the key is issued, continues through its expiration date, and remains in effect for 30 calendar days afterwards. A key without an expiration date grants commercial use while it remains active. Revocation for breach, fraud, chargeback, or refund ends the grant immediately without grace. Neither license permits modification, derivative works, or redistribution.
+An ordinary paid key does not waive Perimeter's restriction on providing a product marketed as a substitute for Gateway. Competing hosted/SaaS, OEM, white-label, and resale offerings require a separate written agreement with Square Labs. Key expiration follows the plan-specific technical grace period, after which the same installation may keep operating paid-plan resources configured before expiration; renewal is required to create new paid-plan resources or expand into additional paid-only features. Revocation for breach, fraud, chargeback, or refund ends paid-plan access and continuity immediately.
+
+Every official release includes the [Product Continuity MIT Grant](../CONTINUITY-MIT-GRANT.md) for covered Licensor-owned source. The grant has no release-age countdown and is not triggered by a lack of releases, development, support, sales, renewals, announcements, or the unavailability of any website, repository, update service, or licensing service. Before registration of The Square Labs OÜ and an effective written assignment, no automatic transition applies. After assignment, the conditional MIT terms can start only after final legal dissolution of The Square Labs OÜ and 90 consecutive calendar days without a successor or assignee, or through an express voluntary MIT election by the current rights holder. Trademarks, commercial keys, separately licensed documentation and assets, and third-party components are outside the grant.
 
 Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterprise, adds `compose-applications` to every paid plan, and adds `git-push-to-deploy` to Business and Enterprise. Gateway still accepts legacy version 3 grants, but those grants do not unlock managed Compose lifecycle or Git source builds until the license server reissues version 4 entitlements. Community grants include read-only external Compose discovery through the shared Docker feature but do not include Pages or managed Compose mutations.
 
@@ -16,8 +18,8 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 
 | Plan | Best fit | Scale | Support |
 |---|---|---|---|
-| **Community** | Noncommercial personal, hobby, educational, research, and qualifying noncommercial use | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
-| **Personal** | Commercially operated installations that need unlimited node/user/group quotas, Compose deployment and lifecycle management, and current workload lifecycle features, without the in-development application-cluster capabilities | Unlimited nodes, users, and custom permission groups | Standard |
+| **Community** | Internal and other noncompeting use of the core platform, including evaluation, modification, and redistribution under PolyForm Perimeter | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
+| **Personal** | Installations that need unlimited node/user/group quotas, Compose deployment and lifecycle management, and current workload lifecycle features, without the in-development application-cluster capabilities | Unlimited nodes, users, and custom permission groups | Standard |
 | **Business** | Teams that need Git push-to-deploy for containers, deployments, Compose, and Pages; isolated Build Workers; external access to the internal registry; Secure Runtime isolation; structured logging; audit export; guided onboarding; and planned application scaling/security scanning | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
@@ -80,7 +82,9 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 
 Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 
-On downgrade, Gateway preserves existing premium resources and their data. New premium resources and one-shot operations such as archive import/export, migration, audit export, and Git build admission are blocked. Existing Git-delivered workloads, source settings, build history, and internal-registry artifacts remain readable; source bindings and Build Secrets can still be removed, but source mutation, manual builds, polling, and webhook-triggered builds stop until Business is restored. Image-based Docker deployment and private internal registry operation remain available. Gateway automatically disables external registry ingress when Business entitlement is lost, clears its persisted external binding, and checks Business again whenever the public token endpoint issues a registry JWT. Existing Secure Runtime workloads and blue/green deployments remain manageable, but selecting Secure Runtime for a new or previously default-runtime workload requires Business. Internal PKI, SIEM export, and structured logging are switchable modules: Gateway disables them when their entitlement is lost while preserving their configuration and stored data, and never automatically re-enables them after an upgrade.
+After an ordinary key expiration—or when the license service remains unreachable beyond cached-validation grace—Gateway preserves existing premium resources, running services, data, and enabled runtime modules. It does not stop workloads, remove routes, unpublish Pages deployments, turn off Internal PKI, SIEM, or structured logging, or close an already configured registry entry point merely because the subscription lapsed. New premium resources and paid-only operations such as archive import/export, migration, audit export, source builds, and paid-feature expansion remain blocked until entitlement is restored. Operations that would create or materially expand paid state can return `LICENSE_ENTITLEMENT_REQUIRED`; this does not affect the data plane already applied to managed hosts.
+
+Authoritative entitlement loss is different. Explicit deactivation, activation replacement, revocation, an invalid key, or a policy violation may disable protected entry points and switchable modules while preserving stored configuration and resource data. Gateway never deletes managed resources solely because a plan changed. Renewing an ordinarily expired key restores full paid operations without rebuilding the existing infrastructure.
 
 The Operations Console shows plan badges on whole premium modules and uses one shared upgrade dialog for blocked actions. This UI is explanatory only; the backend independently enforces the same entitlements across REST, OAuth/MCP, AI tools, background workers, public PKI routes, and domain services. Missing features return `LICENSE_ENTITLEMENT_REQUIRED` (HTTP 403), reached plan limits return `LICENSE_QUOTA_EXCEEDED` (HTTP 409), and an internally inconsistent protected policy fails closed with a generic `SERVICE_UNAVAILABLE` response.
 
@@ -122,19 +126,18 @@ Registration and activation flow:
 4. The server returns the effective plan, license metadata, expiration, activation details, and
    versioned entitlements. Gateway stores credentials encrypted and caches the latest state.
 
-Issuance of a paid key also activates the legal commercial-use grant described in [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md). Activation binds that grant to one installation at a time. The legal grant and technical entitlements are related but distinct: paid product features can end when the server reports an authoritative non-valid state even when a 30-day post-expiration commercial-use grace period is still running.
+Issuance of a paid key activates the paid-plan access described in [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md). Activation binds that entitlement to one installation at a time. Rights independently granted by PolyForm Perimeter do not depend on key activation, while paid product features can end when the server reports an authoritative non-valid state.
 
 Gateway sends paid heartbeats every 15 minutes and Community heartbeats every 30 minutes. If the
 license server is unreachable, a previously valid paid installation uses its cached state for a
-30-day technical offline-validation grace period. This is separate from the commercial license's
-30-day post-expiration legal-use grace period and cannot extend paid product access beyond a known
-expiration deadline.
+100-day technical offline-validation grace period. This connectivity grace does not extend paid
+product access beyond a known expiration deadline.
 
 After `expiresAt`, paid product entitlements remain active for 24 hours on Personal, 3 days on
 Business, and 7 days on Enterprise. During this period the server and Gateway report
 `expired_grace`, retain the original paid plan, expose `graceUntil`, and show an authenticated
 critical Dashboard warning. Gateway evaluates the deadline locally for every protected operation;
-at or after `graceUntil` it uses Community entitlements without waiting for another heartbeat.
+at or after `graceUntil` it uses Community entitlements for new protected actions without waiting for another heartbeat. Existing paid resources and runtime modules remain in place and continue operating; Gateway does not reconcile ordinary expiration into service shutdown.
 `revoked`, `replaced`, and `deactivated` remain immediate and receive no entitlement grace.
 
 Data sent to the license server:
@@ -156,9 +159,9 @@ The installation name is derived from Gateway's persisted canonical public URL w
 | `valid` | The installed key is valid. |
 | `expired_grace` | The key expired, but its original paid entitlements remain active until the plan-specific `graceUntil` deadline. |
 | `valid_with_warning` | The key was previously valid, but the license server is unreachable and Gateway remains within grace. |
-| `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired. |
+| `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired. New paid-only actions are blocked, but existing configured services remain running. |
 | `invalid` | The license key is not valid. |
-| `expired` | The plan-specific expiration grace ended and Gateway is using Community entitlements. |
+| `expired` | The plan-specific expiration grace ended. Gateway uses Community entitlements for new protected actions while preserving existing configured services. |
 | `revoked` | The license key was revoked. |
 | `replaced` | The license activation moved to another installation. |
 | `deactivated` | The paid license was explicitly detached from this installation. |
@@ -172,8 +175,10 @@ License**; the server binding is released before the local key is removed.
 
 ## Legal-use boundary
 
-Square Labs-owned Gateway source is publicly available under the [PolyForm Strict License 1.0.0](../LICENSE.md). It permits noncommercial use, including the personal and qualifying noncommercial-organization purposes stated in that license. It does not permit modification, derivative works, or distribution.
+Licensor-owned Gateway source is publicly available under the [PolyForm Perimeter License 1.0.1](../LICENSE.md). It permits use, modification, derivative works, and distribution for permitted purposes. The excluded purpose is providing to others a product marketed as a substitute for Gateway, regardless of whether that substitute is software, a hosted service, a port, or a free offering.
 
-The [Good Gateway Commercial Key License 1.0](../COMMERCIAL-LICENSE.md) is a narrow additional grant attached automatically to a Square Labs-issued Personal, Business, or Enterprise key. It permits commercial use of one official, unmodified installation during the key term and for 30 calendar days after expiration, subject to its revocation rules. It does not permit modifying, redistributing, sublicensing, transferring, or reselling Gateway.
+The [Good Gateway Paid Key Terms 1.2](../COMMERCIAL-LICENSE.md) govern plan features, limits, grace, and continuity for Personal, Business, and Enterprise keys. A key does not limit rights independently available under Perimeter, and it does not automatically authorize an OEM, white-label, resale, competing hosted, or other substitute product. Those uses require a separate written agreement with the Licensor.
+
+The [Product Continuity MIT Grant](../CONTINUITY-MIT-GRANT.md) is a present conditional grant for the covered source in a release, but it has no release date or inactivity countdown. Its automatic transition is dormant before company registration and written assignment. After assignment, it can start only after final dissolution of The Square Labs OÜ and 90 days without a successor or assignee. Operational inactivity and service availability never start it.
 
 Third-party components remain governed by their own licenses. Already published Gateway releases remain governed by the terms distributed with those releases.

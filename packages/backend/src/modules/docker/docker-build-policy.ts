@@ -47,6 +47,31 @@ const BUILD_TRANSITIONS: Record<DockerBuildStatus, readonly DockerBuildStatus[]>
   superseded: [],
 };
 
+export const DEFAULT_BUILDER_PARALLELISM = 1;
+export const DEFAULT_BUILDER_TIMEOUT_MINUTES = 30;
+export const MAX_BUILDER_PARALLELISM = 16;
+export const MAX_BUILDER_TIMEOUT_MINUTES = 360;
+
+export function readBuilderNodeSettings(metadata: unknown): { parallelism: number; timeoutMinutes: number } {
+  const record = metadata && typeof metadata === 'object' ? (metadata as Record<string, unknown>) : {};
+  const settings =
+    record.builderSettings && typeof record.builderSettings === 'object'
+      ? (record.builderSettings as Record<string, unknown>)
+      : {};
+  const parallelism = Number(settings.parallelism);
+  const timeoutMinutes = Number(settings.timeoutMinutes);
+  return {
+    parallelism:
+      Number.isSafeInteger(parallelism) && parallelism >= 1 && parallelism <= MAX_BUILDER_PARALLELISM
+        ? parallelism
+        : DEFAULT_BUILDER_PARALLELISM,
+    timeoutMinutes:
+      Number.isSafeInteger(timeoutMinutes) && timeoutMinutes >= 1 && timeoutMinutes <= MAX_BUILDER_TIMEOUT_MINUTES
+        ? timeoutMinutes
+        : DEFAULT_BUILDER_TIMEOUT_MINUTES,
+  };
+}
+
 export function assertSupportedDockerBuildResourcePolicy(policy: Record<string, unknown>): void {
   for (const [key, expected] of [
     ['cpuLimitMillis', ENFORCED_BUILD_CPU_LIMIT_MILLIS],

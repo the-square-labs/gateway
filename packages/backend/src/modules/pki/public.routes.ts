@@ -2,7 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { sanitizeFilename } from '@/lib/utils.js';
-import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
+import { requireLicenseFeatureForExistingRuntime } from '@/modules/license/license-policy.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { CAService } from './ca.service.js';
 import { CRLService } from './crl.service.js';
@@ -10,7 +10,7 @@ import { publicCaCertificateRoute, publicCrlRoute, publicOcspGetRoute, publicOcs
 
 export const publicPkiRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
-publicPkiRoutes.use('*', requireLicenseFeature('internal-pki'));
+publicPkiRoutes.use('*', requireLicenseFeatureForExistingRuntime('internal-pki'));
 
 // Download CRL (DER format, no auth required)
 publicPkiRoutes.openapi(publicCrlRoute, async (c) => {

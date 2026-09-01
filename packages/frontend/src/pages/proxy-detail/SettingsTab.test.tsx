@@ -5,6 +5,7 @@ import type { NginxTemplate, ProxyHost, SSLCertificate } from "@/types";
 import { SettingsTab, type SettingsTabProps } from "./SettingsTab";
 
 const host = {
+  domainNames: ["example.com"],
   type: "404",
   websocketSupport: false,
   sslEnabled: false,
@@ -175,6 +176,7 @@ describe("proxy detail SettingsTab", () => {
     render(
       <SettingsTab
         {...makeProps({
+          canResyncTls: true,
           host: {
             ...host,
             sslEnabled: true,
@@ -195,6 +197,11 @@ describe("proxy detail SettingsTab", () => {
     expect(panel).not.toHaveClass("bg-success/10", "border-success/40");
     expect(panel?.querySelector(".border-t")).toBeNull();
     expect(screen.getByText("failed").parentElement).toHaveClass("bg-red-500/15");
+    expect(screen.getByRole("button", { name: /retry tls sync/i })).toHaveClass("h-9", "px-4");
+    expect(screen.getByRole("button", { name: /retry tls sync/i })).not.toHaveClass(
+      "h-8",
+      "text-xs"
+    );
   });
 
   it("allows selecting an SSL certificate before SSL is enabled", () => {

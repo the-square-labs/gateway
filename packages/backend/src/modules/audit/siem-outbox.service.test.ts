@@ -76,7 +76,7 @@ describe('SiemAuditOutboxService', () => {
       { getInstallationId: vi.fn().mockResolvedValue('installation-1') } as never,
       settings as never
     );
-    service.setLicensePolicyService({ hasFeature: vi.fn().mockResolvedValue(true) } as never);
+    service.setLicensePolicyService({ hasFeatureForExistingRuntime: vi.fn().mockResolvedValue(true) } as never);
     const tx = { select: vi.fn(), insert: vi.fn() };
 
     await service.enqueue(tx as never, 'audit-1', {} as never, new Date('2026-08-08T00:00:00.000Z'));

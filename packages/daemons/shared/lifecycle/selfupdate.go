@@ -18,9 +18,11 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/updateauth"
 )
 
+type daemonManifestVerifier func(string, updateauth.DaemonExpectation) (*updateauth.DaemonManifestPayload, error)
+
 // SelfUpdate downloads a new binary from downloadURL, verifies its checksum,
-// preserves the current executable, stages rollback state, and replaces the
-// current binary before the caller triggers a restart via systemd.
+// and atomically replaces the current binary. Restart is delegated to the
+// process supervisor and is not coupled to a particular init system.
 func SelfUpdate(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType string, logger *slog.Logger) error {
 	if strings.TrimSpace(expectedChecksum) == "" {
 		return fmt.Errorf("missing update checksum")
@@ -38,69 +40,26 @@ func SelfUpdate(downloadURL, targetVersion, expectedChecksum, signedManifest, da
 		logger.Error("self-update failed to resolve executable symlink", "error", err)
 		return fmt.Errorf("resolve symlinks: %w", err)
 	}
-	if err := EnsureSystemdUpdateGuard(daemonType, execPath); err != nil {
-		logger.Error("self-update rollback guard is unavailable", "error", err)
-		return fmt.Errorf("prepare automatic update rollback: %w", err)
-	}
-	backupPath := execPath + ".previous"
-	if err := BackupBinary(execPath, backupPath); err != nil {
-		return fmt.Errorf("backup current daemon: %w", err)
-	}
-	if err := StagePendingUpdate(execPath, Version, targetVersion, time.Now()); err != nil {
-		_ = os.Remove(backupPath)
-		return fmt.Errorf("stage daemon rollback state: %w", err)
-	}
-	if err := ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, execPath, logger); err != nil {
-		_ = os.Remove(backupPath)
-		_ = os.Remove(pendingUpdatePath(execPath))
-		return err
-	}
-	return nil
-}
-
-// BackupBinary creates an fsync'd same-filesystem copy and publishes it with
-// an atomic rename so an external supervisor can safely roll back an update.
-func BackupBinary(source, destination string) error {
-	src, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	info, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(destination), ".daemon-backup-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := io.Copy(tmp, src); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, destination); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(destination))
+	return ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, execPath, logger)
 }
 
 // ReplaceBinaryAtPath downloads and verifies a signed daemon artifact before
 // atomically replacing destination. Process restart and health verification are
 // deliberately left to the caller.
 func ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, destination string, logger *slog.Logger) error {
+	return replaceBinaryAtPath(
+		downloadURL,
+		targetVersion,
+		expectedChecksum,
+		signedManifest,
+		daemonType,
+		destination,
+		logger,
+		updateauth.VerifyDaemonManifest,
+	)
+}
+
+func replaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, destination string, logger *slog.Logger, verifyManifest daemonManifestVerifier) error {
 	logger.Info("starting self-update",
 		"target_version", targetVersion,
 		"download_url", downloadURL,
@@ -123,7 +82,7 @@ func ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedMan
 	}
 	artifactName := path.Base(updateURL.Path)
 	tag := path.Base(path.Dir(updateURL.Path))
-	if _, err := updateauth.VerifyDaemonManifest(signedManifest, updateauth.DaemonExpectation{
+	if _, err := verifyManifest(signedManifest, updateauth.DaemonExpectation{
 		DaemonType:   daemonType,
 		Version:      targetVersion,
 		Tag:          tag,

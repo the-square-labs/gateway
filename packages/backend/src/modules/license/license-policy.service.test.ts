@@ -54,6 +54,91 @@ describe('LicensePolicyService', () => {
     await expect(policy.requireFeature('secure-runtime')).resolves.toBeUndefined();
   });
 
+  it.each([
+    'expired',
+    'unreachable_grace_expired',
+  ] as const)('preserves existing configured runtime features after %s', async (licenseStatus) => {
+    const status = baseStatus();
+    status.status = licenseStatus;
+    status.licensed = false;
+    status.paidLicenseStatus = licenseStatus === 'expired' ? 'expired' : 'valid';
+    const policy = new LicensePolicyService({
+      getStatus: vi.fn(async () => status),
+      getRuntimeContinuityEntitlements: vi.fn(async () => LICENSE_PLAN_ENTITLEMENTS.business),
+    } as never);
+
+    for (const feature of ['structured-logging', 'git-push-to-deploy', 'pages'] as const) {
+      await expect(policy.hasFeatureForExistingRuntime(feature)).resolves.toBe(true);
+      await expect(policy.requireFeatureForExistingRuntime(feature)).resolves.toBeUndefined();
+      await expect(policy.hasFeature(feature)).resolves.toBe(false);
+      await expect(policy.requireFeature(feature)).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      });
+    }
+
+    for (const feature of ['siem-export', 'internal-pki'] as const) {
+      await expect(policy.hasFeatureForExistingRuntime(feature)).resolves.toBe(false);
+      await expect(policy.requireFeatureForExistingRuntime(feature)).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      });
+    }
+  });
+
+  it('does not invent retained paid entitlements for a Community-shaped expired status', async () => {
+    const status = baseStatus();
+    status.status = 'expired';
+    status.paidLicenseStatus = 'expired';
+    status.licensed = false;
+    const policy = new LicensePolicyService({
+      getStatus: vi.fn(async () => status),
+      getRuntimeContinuityEntitlements: vi.fn(async () => null),
+    } as never);
+
+    await expect(policy.hasFeatureForExistingRuntime('pages')).resolves.toBe(false);
+    await expect(policy.requireFeatureForExistingRuntime('pages')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+  });
+
+  it('uses current Community quotas after paid runtime continuity begins', async () => {
+    const status = baseStatus();
+    status.status = 'expired';
+    status.paidLicenseStatus = 'expired';
+    status.licensed = false;
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+
+    await expect(policy.requireQuota('users', 10)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'LICENSE_QUOTA_EXCEEDED',
+      details: { resource: 'users', limit: 10, currentPlan: 'community' },
+    });
+    await expect(policy.getSummary()).resolves.toMatchObject({
+      plan: 'community',
+      entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
+    });
+  });
+
+  it.each([
+    'revoked',
+    'replaced',
+    'deactivated',
+    'invalid',
+  ] as const)('keeps existing configured runtime features fail-closed after %s', async (licenseStatus) => {
+    const status = baseStatus();
+    status.status = licenseStatus;
+    status.licensed = false;
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+
+    await expect(policy.hasFeatureForExistingRuntime('structured-logging')).resolves.toBe(false);
+    await expect(policy.requireFeatureForExistingRuntime('structured-logging')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+  });
+
   it('includes Pages in the canonical Personal entitlement set', async () => {
     const personal = baseStatus();
     personal.plan = 'personal';

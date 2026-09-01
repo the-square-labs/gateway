@@ -317,4 +317,36 @@ describe('NodeRegistryService', () => {
 
     expect(update).not.toHaveBeenCalled();
   });
+
+  it('marks a disconnected node offline when its persisted update deadline expired', async () => {
+    const where = vi.fn().mockResolvedValue(undefined);
+    const set = vi.fn().mockReturnValue({ where });
+    const update = vi.fn().mockReturnValue({ set });
+    const db = {
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () =>
+            Promise.resolve([
+              {
+                id: 'node-1',
+                hostname: 'worker-1',
+                lastSeenAt: new Date(0),
+                metadata: {
+                  updateInProgress: true,
+                  updateDeadlineAt: new Date(Date.now() - 60_000).toISOString(),
+                },
+              },
+            ]),
+        }),
+      })),
+      update,
+    };
+    const registry = new NodeRegistryService(db as never);
+    registry.setNodeUpdateInProgress('node-1', true);
+
+    await registry.markStaleNodesOffline(0);
+
+    expect(set).toHaveBeenCalledWith({ status: 'offline', updatedAt: expect.any(Date) });
+    expect(registry.isNodeUpdateInProgress('node-1')).toBe(false);
+  });
 });

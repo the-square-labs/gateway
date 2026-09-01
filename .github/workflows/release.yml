@@ -37,6 +37,10 @@ jobs:
         id: release-tag
         run: scripts/release-tag.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
+      - name: Verify product continuity grant
+        if: ${{ steps.release-tag.outputs.kind == 'gateway' }}
+        run: node scripts/verify-continuity-grant.mjs
+
       - name: Find successful main CI for tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -212,6 +216,7 @@ jobs:
             sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
           )
           gh release upload "$GITHUB_REF_NAME" \
+            CONTINUITY-MIT-GRANT.md \
             gateway-image.update.json \
             gateway-daemon-installers.sha256 \
             scripts/setup-daemon.sh \
@@ -237,6 +242,7 @@ jobs:
             --json assets \
             --jq '.assets[].name')
           grep -Fxq gateway-image.update.json <<<"$assets"
+          grep -Fxq CONTINUITY-MIT-GRANT.md <<<"$assets"
           grep -Fxq gateway-daemon-installers.sha256 <<<"$assets"
           grep -Fxq setup-daemon.sh <<<"$assets"
           grep -Fxq setup-node.sh <<<"$assets"

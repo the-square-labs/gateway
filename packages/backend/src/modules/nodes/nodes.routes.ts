@@ -499,17 +499,36 @@ nodesRoutes.openapi({ ...createNodeRoute, middleware: requireScope('nodes:create
   return c.json({ data: result }, 201);
 });
 
-nodesRoutes.openapi({ ...updateNodeRoute, middleware: requireScopeForResource('nodes:rename', 'id') }, async (c) => {
+nodesRoutes.openapi({ ...updateNodeRoute, middleware: sessionOnly }, async (c) => {
   const service = container.resolve(NodesService);
   const user = c.get('user')!;
   const id = c.req.param('id')!;
   const input = UpdateNodeSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
-  if (
+  const serviceAddressesUpdateRequested =
     input.serviceAddresses !== undefined ||
     input.serviceAddress !== undefined ||
-    input.secondaryServiceAddress !== undefined
+    input.secondaryServiceAddress !== undefined;
+  if (
+    (input.displayName !== undefined || input.appearanceColor !== undefined || serviceAddressesUpdateRequested) &&
+    !hasScope(scopes, `nodes:rename:${id}`)
   ) {
+    throw new AppError(403, 'FORBIDDEN', 'Editing node identity or service addresses requires node rename access');
+  }
+  if (input.builderSettings !== undefined) {
+    const current = await service.get(id);
+    if (current.type !== 'builder') {
+      throw new AppError(
+        400,
+        'INVALID_BUILDER_SETTINGS_NODE',
+        'Build settings are only supported for Build Worker nodes'
+      );
+    }
+    if (!hasScope(scopes, `nodes:config:edit:${id}`)) {
+      throw new AppError(403, 'FORBIDDEN', 'Editing Build Worker settings requires node config edit access');
+    }
+  }
+  if (serviceAddressesUpdateRequested) {
     const current = await service.get(id);
     if (current.type === 'docker' && !hasScope(scopes, `docker:containers:config:${id}`)) {
       throw new AppError(403, 'FORBIDDEN', 'Editing the Docker service address requires Docker config access');

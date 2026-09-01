@@ -34,6 +34,8 @@ export type LicenseFeature = keyof typeof LICENSE_FEATURE_PLANS;
 export type LicenseQuotaResource = 'managedNodes' | 'users' | 'customPermissionGroups';
 export type PaidLicensePlan = Exclude<LicensePlan, 'community'>;
 
+const LICENSE_RUNTIME_CONTINUITY_STATUSES = new Set<LicenseStatus>(['expired', 'unreachable_grace_expired']);
+
 const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
   community: 0,
   personal: 1,
@@ -71,6 +73,17 @@ export async function hasConfiguredLicenseFeature(
   return service.hasFeature(feature);
 }
 
+export async function hasConfiguredLicenseFeatureForExistingRuntime(
+  service: LicensePolicyService | undefined,
+  feature: LicenseFeature
+): Promise<boolean> {
+  if (!service) {
+    logger.error('License policy service is not configured', { feature, boundary: 'existing-runtime' });
+    return false;
+  }
+  return service.hasFeatureForExistingRuntime(feature);
+}
+
 export class LicensePolicyService {
   constructor(private readonly licenses: LicenseService) {}
 
@@ -100,14 +113,45 @@ export class LicensePolicyService {
 
   async hasFeature(feature: LicenseFeature): Promise<boolean> {
     const status = await this.licenses.getStatus();
-    return this.isPolicyStateValid(status) && status.entitlements.features.includes(feature);
+    return (
+      this.isPolicyStateValid(status) &&
+      !LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) &&
+      status.entitlements.features.includes(feature)
+    );
   }
 
   async requireFeature(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
-    if (status.entitlements.features.includes(feature)) return;
+    if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) && status.entitlements.features.includes(feature)) {
+      return;
+    }
 
     // LICENSE ENFORCEMENT: Removing or bypassing this authoritative check violates the project license/TOS.
+    throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
+      feature,
+      requiredPlan: LICENSE_FEATURE_PLANS[feature],
+      currentPlan: status.plan,
+      licenseStatus: status.status,
+    });
+  }
+
+  async hasFeatureForExistingRuntime(feature: LicenseFeature): Promise<boolean> {
+    const status = await this.licenses.getStatus();
+    if (!this.isPolicyStateValid(status)) return false;
+    if (status.entitlements.features.includes(feature)) return true;
+    if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) return false;
+    const retained = await this.licenses.getRuntimeContinuityEntitlements();
+    return retained?.features.includes(feature) ?? false;
+  }
+
+  async requireFeatureForExistingRuntime(feature: LicenseFeature): Promise<void> {
+    const status = await this.requireValidPolicyState();
+    if (status.entitlements.features.includes(feature)) return;
+    if (LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) {
+      const retained = await this.licenses.getRuntimeContinuityEntitlements();
+      if (retained?.features.includes(feature)) return;
+    }
+
     throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
       feature,
       requiredPlan: LICENSE_FEATURE_PLANS[feature],

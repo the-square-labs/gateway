@@ -1,22 +1,39 @@
 Good Gateway
-Copyright (c) 2021-2026 Square Labs (https://thesquarelabs.com)
+Copyright (c) 2021-2026 Alexandr Slavinschii
+Operated under the Square Labs project name (https://thesquarelabs.com)
 All rights reserved except as expressly licensed.
+
+RIGHTS HOLDER
+-------------
+Alexandr Slavinschii is the current individual rights holder and
+Licensor. The Square Labs OÜ becomes the rights holder and Licensor
+only after registration in Estonia and an effective written assignment
+of the relevant economic rights.
 
 SOURCE LICENSE
 --------------
-Square Labs-owned Gateway source code is licensed under the
-PolyForm Strict License 1.0.0. It permits noncommercial use
-but does not permit modification or distribution. See
-LICENSE.md for the complete terms.
+Licensor-owned Gateway source code is licensed under the
+PolyForm Perimeter License 1.0.1. It permits use, modification,
+and distribution for permitted purposes, including internal
+business use. It does not permit providing to others a product
+marketed as a substitute for Gateway. See LICENSE.md.
 
-COMMERCIAL KEY LICENSE
-----------------------
-A Personal, Business, or Enterprise key issued by Square Labs
-Industries grants the named licensee limited commercial-use
-rights for one official, unmodified Gateway installation.
-The grant lasts for the key term and 30 calendar days after
-expiration, subject to the exceptions and restrictions in
-COMMERCIAL-LICENSE.md.
+PAID KEY TERMS
+--------------
+A Personal, Business, or Enterprise key issued by the Licensor
+unlocks the corresponding plan features and limits for one
+installation. An ordinary key does not waive the source
+license's competition restriction. See COMMERCIAL-LICENSE.md.
+
+PRODUCT CONTINUITY
+------------------
+The Product Continuity MIT Grant has no release-age, inactivity,
+support, sales, website, or licensing-service trigger. Before company
+formation and assignment, no automatic transition applies. After an
+effective assignment to The Square Labs OÜ, the conditional MIT terms
+can start only after final dissolution and 90 days without a successor
+or assignee, or through an express voluntary MIT election. See
+CONTINUITY-MIT-GRANT.md for the complete terms.
 
 THIRD-PARTY SOFTWARE
 --------------------

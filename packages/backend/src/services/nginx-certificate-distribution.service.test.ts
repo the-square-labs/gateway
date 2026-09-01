@@ -63,6 +63,50 @@ describe('NginxCertificateDistributionService helpers', () => {
     expect(__testOnly.deployedReplicasOnly([active, cleanup, failedCleanup])).toEqual([active]);
   });
 
+  it('keeps certificate preparation side-effect free until an apply is dispatched', async () => {
+    const service = new NginxCertificateDistributionService(
+      {} as never,
+      {} as never,
+      {
+        getVersionedCertPaths: vi.fn().mockReturnValue({
+          certPath: '/etc/nginx/certs/versioned/cert.pem',
+          keyPath: '/etc/nginx/certs/versioned/key.pem',
+          chainPath: '/etc/nginx/certs/versioned/chain.pem',
+        }),
+      } as never,
+      { resolveNodeId: vi.fn().mockResolvedValue('node-1') } as never
+    );
+    vi.spyOn(service as any, 'findAsset').mockResolvedValue({
+      id: 'asset-1',
+      referenceType: 'ssl',
+      referenceId: '11111111-1111-4111-8111-111111111111',
+      format: 'v2',
+      state: 'ready',
+      encryptedMaterial: 'encrypted',
+      version: 'a'.repeat(64),
+    });
+    vi.spyOn(service as any, 'assertNodeSupportsDistribution').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'decryptAsset').mockReturnValue({
+      version: 'a'.repeat(64),
+      fingerprint: 'b'.repeat(64),
+      certificatePem: 'cert',
+      keyPem: 'key',
+      chainPem: null,
+    });
+    const markReplica = vi.spyOn(service as any, 'markReplicaById');
+
+    await expect(
+      service.prepareForHost({
+        sslEnabled: true,
+        sslCertificateId: '11111111-1111-4111-8111-111111111111',
+        internalCertificateId: null,
+        nodeId: 'node-1',
+      })
+    ).resolves.toMatchObject({ assetId: 'asset-1', nodeId: 'node-1' });
+
+    expect(markReplica).not.toHaveBeenCalled();
+  });
+
   it('deploys a Pages-only certificate as an immutable versioned replica', async () => {
     const sendPagesCommand = vi.fn().mockResolvedValue({});
     const service = new NginxCertificateDistributionService(
@@ -76,7 +120,6 @@ describe('NginxCertificateDistributionService helpers', () => {
       nodeId: 'node-1',
       daemonCertId: '11111111-1111-4111-8111-111111111111',
       version: 'a'.repeat(64),
-      replicaGeneration: '7',
       fingerprint: 'b'.repeat(64),
       certificatePem: Buffer.from('cert'),
       keyPem: Buffer.from('key'),
@@ -85,7 +128,7 @@ describe('NginxCertificateDistributionService helpers', () => {
       sslKeyPath: null,
       sslChainPath: null,
     });
-    const markReplica = vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(undefined);
+    const markReplica = vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(7);
 
     await expect(service.deployForPages('node-1', '11111111-1111-4111-8111-111111111111')).resolves.toEqual({
       certificateId: '11111111-1111-4111-8111-111111111111',

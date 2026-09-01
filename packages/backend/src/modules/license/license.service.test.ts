@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LicenseServerRequestError, LicenseService } from './license.service.js';
-import { LICENSE_PLAN_ENTITLEMENTS, LICENSE_PLAN_ENTITLEMENTS_V3, type LicenseServerState } from './license.types.js';
+import {
+  COMMUNITY_ENTITLEMENTS,
+  LICENSE_OFFLINE_GRACE_DAYS,
+  LICENSE_PLAN_ENTITLEMENTS,
+  LICENSE_PLAN_ENTITLEMENTS_V3,
+  type LicenseServerState,
+} from './license.types.js';
+import { LicensePolicyService } from './license-policy.service.js';
 
 function createDb() {
   const rows = new Map<string, unknown>();
@@ -315,6 +322,49 @@ describe('LicenseService', () => {
     expect(status.graceUntil).toBeNull();
   });
 
+  it('keeps paid entitlements for exactly 100 days after the last valid server check', async () => {
+    vi.useFakeTimers();
+    const lastValidAt = new Date('2026-09-01T12:00:00.000Z');
+    const offlineGraceUntil = new Date(lastValidAt.getTime() + LICENSE_OFFLINE_GRACE_DAYS * 24 * 60 * 60 * 1000);
+    const db = createDb();
+    db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
+    db.rows.set('license:cached_state', {
+      registrationStatus: 'registered',
+      status: 'valid',
+      plan: 'enterprise',
+      paidPlan: 'enterprise',
+      paidLicenseStatus: 'valid',
+      licenseName: 'Enterprise',
+      licenseMetadata: {},
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      graceUntil: null,
+      entitlementsVersion: 4,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS.enterprise,
+      lastCheckedAt: lastValidAt.toISOString(),
+      lastValidAt: lastValidAt.toISOString(),
+      activeInstallationId: null,
+      activeInstallationName: null,
+      errorMessage: 'License server is unavailable',
+    });
+    const service = new LicenseService(db as never, createCrypto() as never, env, vi.fn() as never);
+
+    vi.setSystemTime(new Date(offlineGraceUntil.getTime() - 1));
+    await expect(service.getStatus()).resolves.toMatchObject({
+      status: 'valid_with_warning',
+      plan: 'enterprise',
+      licensed: true,
+      offlineGraceUntil: offlineGraceUntil.toISOString(),
+    });
+
+    vi.setSystemTime(offlineGraceUntil);
+    await expect(service.getStatus()).resolves.toMatchObject({
+      status: 'unreachable_grace_expired',
+      plan: 'community',
+      licensed: false,
+      offlineGraceUntil: offlineGraceUntil.toISOString(),
+    });
+  });
+
   it('preserves a paid v3 cache and credentials during an offline upgrade', async () => {
     const db = createDb();
     const activateFetcher = vi
@@ -446,6 +496,47 @@ describe('LicenseService', () => {
       licensed: false,
       graceUntil: null,
       entitlements: expect.objectContaining({ managedNodes: 100, users: 10, customPermissionGroups: 5 }),
+    });
+
+    const policy = new LicensePolicyService(service);
+    await expect(policy.hasFeatureForExistingRuntime('structured-logging')).resolves.toBe(true);
+    await expect(policy.hasFeatureForExistingRuntime('internal-pki')).resolves.toBe(false);
+    await expect(policy.requireFeature('structured-logging')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+    await expect(policy.requireQuota('users', 10)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'LICENSE_QUOTA_EXCEEDED',
+    });
+  });
+
+  it('retains only the former plan runtime features after server-reported expiration', async () => {
+    const valid = paidState('business');
+    const expired = paidState('business');
+    const expiresAt = new Date('2026-08-17T12:00:00.000Z');
+    expired.effectivePlan = 'community';
+    expired.paidLicenseStatus = 'expired';
+    expired.paidLicense!.status = 'expired';
+    expired.paidLicense!.expiresAt = expiresAt.toISOString();
+    expired.graceUntil = new Date(expiresAt.getTime() + 72 * 60 * 60 * 1000).toISOString();
+    expired.entitlements = COMMUNITY_ENTITLEMENTS;
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(valid))
+      .mockImplementationOnce(() => dataResponse(expired));
+    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+    await service.checkNow();
+
+    const policy = new LicensePolicyService(service);
+    await expect(policy.hasFeatureForExistingRuntime('structured-logging')).resolves.toBe(true);
+    await expect(policy.hasFeatureForExistingRuntime('internal-pki')).resolves.toBe(false);
+    await expect(policy.hasFeature('structured-logging')).resolves.toBe(false);
+    await expect(policy.requireFeature('structured-logging')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
     });
   });
 

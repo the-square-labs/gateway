@@ -1,57 +1,9 @@
-# Good Gateway Commercial Key License 1.0
+# Good Gateway Inference Paid Access Notice
 
-These terms provide a limited commercial-use license for official Good Gateway releases. They supplement, and do not modify, the [PolyForm Strict License 1.0.0](LICENSE.md).
+Source in this package owned by Alexandr Slavinschii, operating the project under the Square Labs name, is licensed under the [PolyForm Perimeter License 1.0.1](LICENSE.md). The Square Labs OÜ becomes the rights holder only after registration and an effective written assignment. PolyForm Perimeter permits use, modification, and redistribution for permitted purposes, including internal business use. It does not permit providing to others a product marketed as a substitute for Good Gateway or this package.
 
-## Acceptance
+Using or modifying this package for a permitted purpose does not itself require a paid Gateway key. A Personal, Business, or Enterprise key may unlock server-side Gateway Inference features and limits according to the [Good Gateway Paid Key Terms 1.2](https://github.com/the-square-labs/gateway/blob/main/COMMERCIAL-LICENSE.md). An ordinary key does not waive PolyForm Perimeter's competition restriction or grant OEM, white-label, resale, or competing hosted-service rights.
 
-These terms are automatically offered with every Personal, Business, or Enterprise Gateway license key issued by Square Labs. By activating or using the key, or by using Gateway commercially under the key, you accept these terms. If you act on behalf of an organization, you represent that you have authority to accept these terms for that organization.
+This package also includes the [Product Continuity MIT Grant](CONTINUITY-MIT-GRANT.md). It has no release-age or inactivity countdown and can transition automatically only under its final-dissolution conditions after ownership has been assigned to The Square Labs OÜ.
 
-## Commercial-use grant
-
-Subject to these terms, Square Labs grants the person or organization identified in the paid license record a non-exclusive, non-transferable license to use an official, unmodified release of Good Gateway for commercial purposes on one Gateway installation at a time.
-
-The grant includes using Gateway in the licensee's own business operations and in delivering the licensee's own services. It does not permit offering Gateway itself, or access to Gateway as a substantially similar hosted or managed product, for resale to third parties.
-
-The paid key's plan determines the product features and limits available to the installation. The key grants no rights beyond the commercial use expressly stated here.
-
-## Term and 30-day grace period
-
-The commercial-use grant begins when Square Labs issues the paid key.
-
-For a key with an expiration date, the grant continues through that expiration date and for 30 calendar days immediately afterwards. This post-expiration period permits continued commercial use of the most recently authorized installation while the licensee renews or stops commercial use. Paid product entitlements may end earlier according to the product's technical license state.
-
-For a key without an expiration date, the grant continues while the key remains active.
-
-Revocation for a violation of these terms or other applicable Square Labs terms, fraud, chargeback, or refund ends this grant immediately. No post-expiration or other grace period applies after such a revocation.
-
-## One installation
-
-The grant covers one active Gateway installation at a time. When a key is detached or transferred, the old installation is no longer authorized for commercial use under that key once another installation becomes active. During the 30-day post-expiration period, the grant covers only the installation most recently authorized before expiration.
-
-## Restrictions
-
-This license does not permit you to:
-
-- modify the software or create derivative works based on it;
-- distribute, publish, sublicense, sell, lease, or transfer the software or any modified copy;
-- share, resell, transfer, or make the paid key available to another person or organization;
-- bypass, remove, disable, or interfere with license validation, plan limits, feature entitlements, or other technical protection measures; or
-- use trademarks, names, or logos of Square Labs except as necessary to identify the software.
-
-Any rights not expressly granted are reserved by Square Labs. A broader right requires a separate written agreement signed by Square Labs.
-
-## Third-party software
-
-These terms apply only to software for which Square Labs is the licensor. Third-party components remain governed by their own license terms.
-
-## Termination
-
-This license ends automatically if you violate these terms. Ending this license does not limit claims or remedies arising from earlier use or violation. When the license ends, you must stop commercial use of Gateway unless another written agreement authorizes it.
-
-## No warranty and limitation of liability
-
-As far as the law allows, the software is provided as is, without warranty or condition. Square Labs will not be liable for damages arising from these terms or the use or nature of the software under any kind of legal claim.
-
-## Contact
-
-Questions about commercial licensing may be sent to [contact@thesqlabs.com](mailto:contact@thesqlabs.com).
+Third-party components remain governed by their own license terms.

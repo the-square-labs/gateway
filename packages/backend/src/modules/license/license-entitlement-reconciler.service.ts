@@ -58,6 +58,18 @@ export class LicenseEntitlementReconcilerService {
 
   private async reconcileNow(): Promise<void> {
     const license = await this.policy.getSummary();
+
+    // An ordinary expiration or an unavailable license service must never tear down
+    // infrastructure that the customer already configured. Policy checks still use
+    // Community entitlements and block new paid-only resources and operations.
+    if (license.status === 'expired' || license.status === 'unreachable_grace_expired') {
+      logger.warn('Preserved existing paid features after non-authoritative entitlement loss', {
+        plan: license.plan,
+        status: license.status,
+      });
+      return;
+    }
+
     const features = new Set(license.entitlements.features);
     const current = await this.settings.getConfig();
     const featureUpdates: { pkiEnabled?: false; siemEnabled?: false } = {};

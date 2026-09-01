@@ -396,6 +396,31 @@ export class DockerBuildService {
     return row;
   }
 
+  async returnClaimToQueue(buildId: string, leaseOwner: string, reason: string, now = new Date()) {
+    const [row] = await this.db
+      .update(dockerBuilds)
+      .set({
+        status: 'queued',
+        builderNodeId: null,
+        leaseOwner: null,
+        leaseHeartbeatAt: null,
+        leaseExpiresAt: null,
+        queuedAt: now,
+        startedAt: null,
+        attempt: sql`greatest(${dockerBuilds.attempt} - 1, 0)`,
+        errorCode: 'BUILD_WORKER_CAPACITY_RETRY',
+        errorMessage: reason.slice(0, 4096),
+        updatedAt: now,
+      })
+      .where(
+        and(eq(dockerBuilds.id, buildId), eq(dockerBuilds.status, 'claimed'), eq(dockerBuilds.leaseOwner, leaseOwner))
+      )
+      .returning();
+    if (!row) throw new AppError(409, 'BUILD_LEASE_LOST', 'Build lease is no longer owned by this worker');
+    this.emit(row);
+    return row;
+  }
+
   async transition(
     buildId: string,
     leaseOwner: string,

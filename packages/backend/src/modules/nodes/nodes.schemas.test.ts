@@ -28,4 +28,14 @@ describe('UpdateNodeSchema service addresses', () => {
       }).success
     ).toBe(false);
   });
+
+  it('accepts bounded Build Worker parallelism and timeout settings', () => {
+    expect(UpdateNodeSchema.parse({ builderSettings: { parallelism: 4, timeoutMinutes: 45 } })).toEqual({
+      builderSettings: { parallelism: 4, timeoutMinutes: 45 },
+    });
+    expect(UpdateNodeSchema.safeParse({ builderSettings: { parallelism: 0, timeoutMinutes: 30 } }).success).toBe(false);
+    expect(UpdateNodeSchema.safeParse({ builderSettings: { parallelism: 1, timeoutMinutes: 361 } }).success).toBe(
+      false
+    );
+  });
 });

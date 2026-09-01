@@ -34,7 +34,7 @@ func TestRuntimeConfigsPinContainerdRuncBoundary(t *testing.T) {
 		`enabled = false`,
 		`namespace = "gateway-builds"`,
 		`networkMode = "cni"`,
-		`max-parallelism = 1`,
+		`max-parallelism = 16`,
 		`gc = true`,
 		`maxUsedSpace = "21474836480B"`,
 		`defaultCgroupParent = "gateway-builds"`,
@@ -67,11 +67,11 @@ func TestRuntimeConfigRejectsSharedOrArbitrarySockets(t *testing.T) {
 	}
 }
 
-func TestRuntimeConfigRejectsParallelUntrustedBuilds(t *testing.T) {
+func TestRuntimeConfigRejectsExcessiveBuilderParallelism(t *testing.T) {
 	config := DefaultRuntimeConfig(0)
-	config.MaxParallelism = 2
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "exactly one concurrent build") {
-		t.Fatalf("parallel builder profile was accepted: %v", err)
+	config.MaxParallelism = 17
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "between 1 and 16") {
+		t.Fatalf("excessive builder parallelism was accepted: %v", err)
 	}
 }
 

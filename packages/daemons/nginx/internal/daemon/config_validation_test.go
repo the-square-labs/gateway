@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -226,51 +225,34 @@ func TestDebouncedValidationSkipsAfterOverlappingImmediateTest(t *testing.T) {
 	}
 }
 
-func TestConfigValidationLoopDebouncesFilesystemChanges(t *testing.T) {
+func TestPendingConfigValidationDebouncesFilesystemChanges(t *testing.T) {
 	plugin, argsPath, globalConfig := newConfigValidationTestPlugin(t)
 	plugin.acceptConfigSnapshot(currentNginxConfigSnapshot(plugin.cfg.Nginx))
 	if err := os.WriteFile(argsPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		plugin.runConfigValidationWithIntervals(ctx, 10*time.Millisecond, 30*time.Millisecond)
-	}()
 
 	if err := os.WriteFile(globalConfig, []byte("candidate-1"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(15 * time.Millisecond)
+	if !plugin.observeConfigChanges() {
+		t.Fatal("first filesystem change was not queued")
+	}
 	if err := os.WriteFile(globalConfig, []byte("candidate-2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		args, err := os.ReadFile(argsPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Count(string(args), "-t") == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	if !plugin.validatePendingConfigChange() {
+		t.Fatal("new fingerprint should restart the debounce without running nginx -t")
 	}
-	time.Sleep(80 * time.Millisecond)
+	if plugin.validatePendingConfigChange() {
+		t.Fatal("stable fingerprint should complete validation without another debounce")
+	}
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(string(args), "-t") != 1 {
 		t.Fatalf("debounced change expected one config test: %q", args)
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("config validation loop did not stop after cancellation")
 	}
 }
 

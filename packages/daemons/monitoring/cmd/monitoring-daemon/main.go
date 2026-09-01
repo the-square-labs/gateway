@@ -28,20 +28,13 @@ func main() {
 		case "install":
 			runInstall()
 			return
-		case "update-guard":
-			runUpdateGuard(os.Args[2:])
-			return
 		case "run":
 			// explicit run, continue below
 		default:
-			fmt.Fprintf(os.Stderr, "Usage: monitoring-daemon [run|install|update-guard|version]\n")
+			fmt.Fprintf(os.Stderr, "Usage: monitoring-daemon [run|install|version]\n")
 			os.Exit(1)
 		}
 	}
-	if err := lifecycle.EnsureCurrentSystemdUpdateGuard("monitoring"); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: automatic update rollback guard unavailable: %v\n", err)
-	}
-
 	// Default: run the daemon
 	configPath := os.Getenv("MONITORING_DAEMON_CONFIG")
 	if configPath == "" {
@@ -85,17 +78,6 @@ func main() {
 	if err := d.Run(ctx); err != nil {
 		logger.Error("daemon exited with error", "error", err)
 		os.Exit(1)
-	}
-}
-
-func runUpdateGuard(args []string) {
-	rolledBack, err := lifecycle.RunUpdateGuardCommand(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "update guard failed: %v\n", err)
-		os.Exit(1)
-	}
-	if rolledBack {
-		fmt.Fprintln(os.Stderr, "daemon update rolled back to the previous version")
 	}
 }
 

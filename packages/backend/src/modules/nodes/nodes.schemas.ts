@@ -60,6 +60,12 @@ export const UpdateNodeSchema = z
     serviceAddress: NodeServiceAddressSchema.nullable().optional(),
     secondaryServiceAddress: NodeServiceAddressSchema.nullable().optional(),
     confirmDomainDnsUpdate: z.boolean().optional(),
+    builderSettings: z
+      .object({
+        parallelism: z.number().int().min(1).max(16),
+        timeoutMinutes: z.number().int().min(1).max(360),
+      })
+      .optional(),
   })
   .superRefine((input, context) => {
     if (

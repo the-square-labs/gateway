@@ -32,25 +32,6 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 
 	// Send registration message
 	regMsg := d.plugin.BuildRegisterMessage(d.state.NodeID)
-	rollbackProtected, rollbackErr := CurrentUpdateSupportsRollback()
-	if rollbackErr != nil {
-		d.logger.Warn("failed to inspect daemon update rollback state", "error", rollbackErr)
-	}
-	if rollbackProtected && !containsCapability(regMsg.Capabilities, "daemon_update_rollback_v1") {
-		regMsg.Capabilities = append(regMsg.Capabilities, "daemon_update_rollback_v1")
-	}
-	if outcome, outcomeErr := ReadCurrentUpdateOutcome(); outcomeErr != nil {
-		d.logger.Warn("failed to read daemon update outcome", "error", outcomeErr)
-	} else if outcome != nil {
-		regMsg.DaemonUpdateOutcome = &pb.DaemonUpdateOutcome{
-			Status:          outcome.Status,
-			FromVersion:     outcome.FromVersion,
-			TargetVersion:   outcome.TargetVersion,
-			RestoredVersion: outcome.RestoredVersion,
-			Reason:          outcome.Reason,
-			OccurredAtUnix:  outcome.OccurredAt.Unix(),
-		}
-	}
 	if err := writer.Send(&pb.DaemonMessage{
 		Payload: &pb.DaemonMessage_Register{Register: regMsg},
 	}); err != nil {
@@ -295,23 +276,6 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			}
 			d.logger.Error("self-update failed", "target_version", updateCmd.TargetVersion, "error", result.Error)
 			continue
-		case *pb.GatewayCommand_FinalizeDaemonUpdate:
-			finalize := cmd.GetFinalizeDaemonUpdate()
-			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
-			if err := FinalizeCurrentUpdate(finalize.GetTargetVersion(), finalize.GetAcknowledgeRollback()); err != nil {
-				result.Success = false
-				result.Error = err.Error()
-			} else if finalize.GetAcknowledgeRollback() {
-				result.Detail = "daemon update rollback acknowledged"
-			} else {
-				result.Detail = "daemon update committed"
-			}
-			if err := writer.Send(&pb.DaemonMessage{
-				Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
-			}); err != nil {
-				return err
-			}
-			continue
 		}
 
 		// Process command and send result
@@ -322,15 +286,6 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			return err
 		}
 	}
-}
-
-func containsCapability(capabilities []string, expected string) bool {
-	for _, capability := range capabilities {
-		if capability == expected {
-			return true
-		}
-	}
-	return false
 }
 
 // runHealthReporter periodically sends health reports to the gateway.

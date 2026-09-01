@@ -595,7 +595,7 @@ export class PageProfileService {
   }
 
   private async hasEntitlement(): Promise<boolean> {
-    return this.licensePolicy ? this.licensePolicy.hasFeature('pages') : true;
+    return this.licensePolicy ? this.licensePolicy.hasFeatureForExistingRuntime('pages') : true;
   }
 
   private async assertDomainReplacementAllowed(nextDomainId: string): Promise<void> {

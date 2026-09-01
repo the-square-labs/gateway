@@ -38,7 +38,6 @@ export type PreparedTlsCertificate = CertificatePaths & {
   nodeId: string;
   daemonCertId: string;
   version: string;
-  replicaGeneration: string;
   fingerprint: string;
   certificatePem: Buffer;
   keyPem: Buffer;
@@ -213,21 +212,12 @@ export class NginxCertificateDistributionService {
     }
 
     const material = this.decryptAsset(asset);
-    const replicaGeneration = await this.markReplica(asset, targetNodeId, {
-      status: 'pending',
-      desiredVersion: material.version,
-      cleanupAfter: null,
-      lastError: null,
-      incrementGeneration: true,
-    });
-
     return {
       ...this.versionedPaths(daemonCertId(reference), !!material.chainPem),
       assetId: asset.id,
       nodeId: targetNodeId,
       daemonCertId: daemonCertId(reference),
       version: material.version,
-      replicaGeneration: String(replicaGeneration),
       fingerprint: material.fingerprint,
       certificatePem: Buffer.from(material.certificatePem),
       keyPem: Buffer.from(material.keyPem),
@@ -248,6 +238,13 @@ export class NginxCertificateDistributionService {
     });
     if (!prepared) throw new AppError(409, 'PAGES_CERTIFICATE_INVALID', 'Pages certificate is unavailable');
     try {
+      const replicaGeneration = await this.markReplicaById(prepared.assetId, prepared.nodeId, {
+        status: 'pending',
+        desiredVersion: prepared.version,
+        cleanupAfter: null,
+        lastError: null,
+        incrementGeneration: true,
+      });
       await this.nodeDispatch.sendPagesCommand(prepared.nodeId, {
         pagesDeployCertificate: {
           certId: prepared.daemonCertId,
@@ -255,7 +252,7 @@ export class NginxCertificateDistributionService {
           keyPem: prepared.keyPem,
           chainPem: prepared.chainPem,
           version: prepared.version,
-          replicaGeneration: prepared.replicaGeneration,
+          replicaGeneration: String(replicaGeneration),
         },
       });
       await this.markReplicaById(prepared.assetId, prepared.nodeId, {
@@ -319,6 +316,13 @@ export class NginxCertificateDistributionService {
       .returning();
 
     try {
+      const replicaGeneration = await this.markReplicaById(prepared.assetId, targetNodeId, {
+        status: 'pending',
+        desiredVersion: prepared.version,
+        cleanupAfter: null,
+        lastError: null,
+        incrementGeneration: true,
+      });
       const result = await this.nodeDispatch.applyTlsBundle(targetNodeId, {
         hostId: host.id,
         configContent,
@@ -331,7 +335,7 @@ export class NginxCertificateDistributionService {
             keyPem: prepared.keyPem,
             chainPem: prepared.chainPem,
             version: prepared.version,
-            replicaGeneration: prepared.replicaGeneration,
+            replicaGeneration: String(replicaGeneration),
           },
         ],
       });

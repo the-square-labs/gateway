@@ -136,13 +136,14 @@ function createService(
   store: FakeStore,
   executor: DockerRegistryMaintenanceExecutor,
   tokenService: { issueToken: ReturnType<typeof vi.fn> } = { issueToken: vi.fn().mockReturnValue({ token: 'token' }) },
-  requireFeature = vi.fn().mockResolvedValue(undefined)
+  requireFeature = vi.fn().mockResolvedValue(undefined),
+  requireFeatureForExistingRuntime = requireFeature
 ) {
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const service = new DockerInternalRegistryService({} as never, tokenService as never, audit as never, store);
   service.setExecutor(executor);
-  service.setLicensePolicyService({ requireFeature } as never);
-  return { service, audit, requireFeature };
+  service.setLicensePolicyService({ requireFeature, requireFeatureForExistingRuntime } as never);
+  return { service, audit, requireFeature, requireFeatureForExistingRuntime };
 }
 
 describe('DockerInternalRegistryService', () => {

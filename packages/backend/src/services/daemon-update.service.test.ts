@@ -122,8 +122,13 @@ describe('DaemonUpdateService update artifact URLs', () => {
       updateInProgress: true,
       updateTargetVersion: 'v2.6.0',
       updateStartedAt: '2026-08-12T00:00:00.000Z',
+      updateOperationId: 'operation-1',
+      updatePhase: 'reconnecting',
+      updateDeadlineAt: new Date(Date.now() + 60_000).toISOString(),
+      updateReconnectStartedAt: new Date(Date.now() - 60_000).toISOString(),
     };
-    const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    const returning = vi.fn().mockResolvedValue([{ id: 'node-1' }]);
+    const set = vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ returning }) });
     const db = {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
@@ -144,19 +149,84 @@ describe('DaemonUpdateService update artifact URLs', () => {
     expect(set).toHaveBeenCalledWith({ metadata: {}, updatedAt: expect.any(Date) });
   });
 
-  it('keeps a rollback-capable update locked until the candidate is explicitly committed', async () => {
+  it('expires an accepted update that never reconnects and marks a disconnected node offline', async () => {
     const metadata = {
       updateInProgress: true,
       updateTargetVersion: 'v2.10.0',
-      updateStartedAt: '2026-08-31T00:00:00.000Z',
+      updateStartedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+      updateOperationId: 'operation-1',
+      updatePhase: 'reconnecting',
+      updateDeadlineAt: new Date(Date.now() - 60_000).toISOString(),
     };
-    const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    const returning = vi.fn().mockResolvedValue([{ id: 'node-1' }]);
+    const where = vi.fn().mockReturnValue({ returning });
+    const set = vi.fn().mockReturnValue({ where });
     const db = {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ metadata }]) }),
         }),
       }),
+      update: vi.fn().mockReturnValue({ set }),
+    } as unknown as DrizzleClient;
+    const setNodeUpdateInProgress = vi.fn();
+    const service = new DaemonUpdateService(db, {
+      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+    } as Env);
+    service.setNodeRegistry({ getNode: vi.fn().mockReturnValue(undefined), setNodeUpdateInProgress } as never);
+
+    await expect(service.isNodeUpdateInProgress('node-1')).resolves.toBe(false);
+    expect(set).toHaveBeenCalledWith({ metadata: {}, updatedAt: expect.any(Date), status: 'offline' });
+    expect(setNodeUpdateInProgress).toHaveBeenCalledWith('node-1', false);
+  });
+
+  it('does not clear an update when a newer operation wins the expiry race', async () => {
+    const metadata = {
+      updateInProgress: true,
+      updateTargetVersion: 'v2.10.0',
+      updateStartedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+      updateOperationId: 'operation-1',
+      updatePhase: 'reconnecting',
+      updateDeadlineAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    const returning = vi.fn().mockResolvedValue([]);
+    const where = vi.fn().mockReturnValue({ returning });
+    const set = vi.fn().mockReturnValue({ where });
+    const db = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ metadata }]) }),
+        }),
+      }),
+      update: vi.fn().mockReturnValue({ set }),
+    } as unknown as DrizzleClient;
+    const setNodeUpdateInProgress = vi.fn();
+    const service = new DaemonUpdateService(db, {
+      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+    } as Env);
+    service.setNodeRegistry({ getNode: vi.fn().mockReturnValue(undefined), setNodeUpdateInProgress } as never);
+
+    await expect(service.isNodeUpdateInProgress('node-1')).resolves.toBe(true);
+    expect(setNodeUpdateInProgress).not.toHaveBeenCalled();
+  });
+
+  it('keeps the six-minute execution lock through the command window then starts a fresh reconnect deadline', async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-09-01T12:00:00.000Z');
+    vi.setSystemTime(startedAt);
+    let metadata: Record<string, unknown> = {};
+    const set = vi.fn((values: { metadata: Record<string, unknown> }) => ({
+      where: () => {
+        metadata = values.metadata;
+        return { returning: vi.fn().mockResolvedValue([{ id: 'node-1' }]) };
+      },
+    }));
+    const db = {
+      select: vi.fn().mockImplementation(() => ({
+        from: () => ({ where: () => ({ limit: vi.fn().mockResolvedValue([{ metadata }]) }) }),
+      })),
       update: vi.fn().mockReturnValue({ set }),
     } as unknown as DrizzleClient;
     const service = new DaemonUpdateService(db, {
@@ -164,28 +234,119 @@ describe('DaemonUpdateService update artifact URLs', () => {
       ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
     } as Env);
 
-    await expect(service.reconcileNodeUpdateRegistration('node-1', 'v2.10.0', true)).resolves.toEqual({
-      commitTarget: 'v2.10.0',
-    });
-    expect(set).not.toHaveBeenCalled();
+    try {
+      const operationId = await service.markNodeUpdateInProgress('node-1', 'v2.10.0');
+      expect(metadata).toMatchObject({
+        updateOperationId: operationId,
+        updatePhase: 'executing',
+        updateDeadlineAt: new Date(startedAt.getTime() + 6 * 60 * 1000).toISOString(),
+      });
+
+      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+      await expect(service.isNodeUpdateInProgress('node-1')).resolves.toBe(true);
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1000 + 31_000);
+      await expect(service.isNodeUpdateInProgress('node-1')).resolves.toBe(true);
+
+      service.trackNodeUpdateCompletion(
+        'node-1',
+        operationId,
+        Promise.resolve({ commandId: 'cmd-1', success: true, error: '', detail: '', data: Buffer.alloc(0) })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(metadata).toMatchObject({
+        updateOperationId: operationId,
+        updatePhase: 'reconnecting',
+        updateReconnectStartedAt: new Date().toISOString(),
+        updateDeadlineAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
-  it('records a rollback outcome and releases the update lock', async () => {
-    const metadata = {
+  it('reaps an expired persisted lock before acquiring a retry after backend restart', async () => {
+    const expiredMetadata = {
       updateInProgress: true,
       updateTargetVersion: 'v2.10.0',
-      updateStartedAt: '2026-08-31T00:00:00.000Z',
+      updateStartedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      updateOperationId: 'operation-1',
+      updatePhase: 'executing',
+      updateDeadlineAt: new Date(Date.now() - 60_000).toISOString(),
     };
-    const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-    const setNodeUpdateInProgress = vi.fn();
+    const selectRows = [[{ metadata: expiredMetadata }], [{ metadata: expiredMetadata }], [{ metadata: {} }]];
+    const select = vi.fn().mockImplementation(() => ({
+      from: () => ({
+        where: () => ({ limit: vi.fn().mockResolvedValue(selectRows.shift() ?? []) }),
+      }),
+    }));
+    const expireReturning = vi.fn().mockResolvedValue([{ id: 'node-1' }]);
+    const acquireReturning = vi.fn().mockResolvedValue([{ id: 'node-1' }]);
+    const update = vi
+      .fn()
+      .mockReturnValueOnce({ set: () => ({ where: () => ({ returning: expireReturning }) }) })
+      .mockReturnValueOnce({ set: () => ({ where: () => ({ returning: acquireReturning }) }) });
+    const service = new DaemonUpdateService(
+      { select, update } as unknown as DrizzleClient,
+      {
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+      } as Env
+    );
+    service.setNodeRegistry({ getNode: vi.fn().mockReturnValue(undefined), setNodeUpdateInProgress: vi.fn() } as never);
+
+    await expect(service.markNodeUpdateInProgress('node-1', 'v2.10.1')).resolves.toEqual(expect.any(String));
+    expect(expireReturning).toHaveBeenCalledOnce();
+    expect(acquireReturning).toHaveBeenCalledOnce();
+  });
+
+  it('does not let an old completion clear a newer update operation', async () => {
+    const metadata = {
+      updateInProgress: true,
+      updateTargetVersion: 'v2.10.1',
+      updateOperationId: 'operation-2',
+      updatePhase: 'executing',
+      updateDeadlineAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const update = vi.fn();
     const db = {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ metadata }]) }),
         }),
       }),
-      update: vi.fn().mockReturnValue({ set }),
+      update,
     } as unknown as DrizzleClient;
+    const service = new DaemonUpdateService(db, {
+      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+    } as Env);
+
+    await expect(service.clearNodeUpdateInProgress('node-1', 'operation-1')).resolves.toBe(false);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does not let an older registration clear a newer reconnecting operation', async () => {
+    const reconnectStartedAt = new Date();
+    const metadata = {
+      updateInProgress: true,
+      updateTargetVersion: 'v2.10.0',
+      updateOperationId: 'operation-2',
+      updatePhase: 'reconnecting',
+      updateDeadlineAt: new Date(Date.now() + 60_000).toISOString(),
+      updateReconnectStartedAt: reconnectStartedAt.toISOString(),
+    };
+    const update = vi.fn();
+    const db = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ metadata }]) }),
+        }),
+      }),
+      update,
+    } as unknown as DrizzleClient;
+    const setNodeUpdateInProgress = vi.fn();
     const service = new DaemonUpdateService(db, {
       RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
       ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
@@ -193,91 +354,31 @@ describe('DaemonUpdateService update artifact URLs', () => {
     service.setNodeRegistry({ setNodeUpdateInProgress } as never);
 
     await expect(
-      service.reconcileNodeUpdateRegistration('node-1', 'v2.9.15', true, {
-        status: 'rolled_back',
-        fromVersion: 'v2.9.15',
-        targetVersion: 'v2.10.0',
-        restoredVersion: 'v2.9.15',
-        reason: 'candidate exited: exit-code:1',
-        occurredAtUnix: '1788110400',
-      })
-    ).resolves.toEqual({ acknowledgeRollbackTarget: 'v2.10.0' });
-    expect(set).toHaveBeenCalledWith({
-      metadata: expect.objectContaining({
-        daemonUpdateFailedVersion: 'v2.10.0',
-        lastDaemonUpdateFailure: expect.objectContaining({
-          targetVersion: 'v2.10.0',
-          restoredVersion: 'v2.9.15',
-          reason: 'candidate exited: exit-code:1',
-        }),
-      }),
-      updatedAt: expect.any(Date),
-    });
-    expect(setNodeUpdateInProgress).toHaveBeenCalledWith('node-1', false);
+      service.clearNodeUpdateInProgressOnReconnect('node-1', 'v2.10.0', new Date(reconnectStartedAt.getTime() - 1))
+    ).resolves.toBe(false);
+    expect(update).not.toHaveBeenCalled();
+    expect(setNodeUpdateInProgress).not.toHaveBeenCalled();
   });
 
-  it('clears a failed-target suppression after a successful explicit retry commit', async () => {
-    const metadata = {
-      updateInProgress: true,
-      updateTargetVersion: 'v2.10.0',
-      updateStartedAt: '2026-08-31T00:00:00.000Z',
-      daemonUpdateFailedVersion: 'v2.10.0',
-      lastDaemonUpdateFailure: { reason: 'candidate exited' },
-    };
-    const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-    const db = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ metadata }]) }),
-        }),
-      }),
-      update: vi.fn().mockReturnValue({ set }),
-    } as unknown as DrizzleClient;
-    const service = new DaemonUpdateService(db, {
-      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
-      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
-    } as Env);
+  it('starts the reconnect deadline when the command times out', async () => {
+    const service = new DaemonUpdateService(
+      {} as DrizzleClient,
+      {
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+        ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
+      } as Env
+    );
+    const beginReconnect = vi.spyOn(service as any, 'beginNodeUpdateReconnectDeadline').mockResolvedValue(true);
 
-    await service.completeNodeUpdateAfterCommit('node-1', 'v2.10.0');
+    service.trackNodeUpdateCompletion(
+      'node-1',
+      'operation-1',
+      Promise.reject(new Error('Command cmd-1 timed out after 330000ms'))
+    );
+    await Promise.resolve();
+    await Promise.resolve();
 
-    expect(set).toHaveBeenCalledWith({ metadata: {}, updatedAt: expect.any(Date) });
-  });
-
-  it('suppresses automatic recommendation for a failed target but keeps manual retry visible', async () => {
-    const db = {
-      select: vi.fn(() => ({
-        from: vi.fn().mockResolvedValue([
-          {
-            id: 'node-1',
-            type: 'nginx',
-            daemonVersion: 'v2.9.15',
-            hostname: 'edge',
-            metadata: {
-              daemonUpdateFailedVersion: 'v2.10.0',
-              lastDaemonUpdateFailure: { reason: 'candidate exited' },
-            },
-          },
-        ]),
-      })),
-    } as unknown as DrizzleClient;
-    const service = new DaemonUpdateService(db, {
-      RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
-      ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
-    } as Env);
-    vi.spyOn(service as any, 'getSetting').mockImplementation(async (...args: unknown[]) => {
-      const key = args[0];
-      if (key === 'daemon-update:nginx:latest_version') return 'v2.10.0';
-      return null;
-    });
-
-    const status = await service.getCachedStatus();
-
-    expect(status.find((item) => item.daemonType === 'nginx')?.nodes[0]).toMatchObject({
-      updateAvailable: false,
-      retryAvailable: true,
-      failedVersion: 'v2.10.0',
-      failureReason: 'candidate exited',
-    });
+    expect(beginReconnect).toHaveBeenCalledWith('node-1', 'operation-1');
   });
 
   it('keeps the update lock when the daemon disconnects for its expected restart', async () => {
@@ -288,13 +389,15 @@ describe('DaemonUpdateService update artifact URLs', () => {
         ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
       } as Env
     );
-    const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(undefined);
+    const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(false);
+    const beginReconnect = vi.spyOn(service as any, 'beginNodeUpdateReconnectDeadline').mockResolvedValue(true);
 
-    service.trackNodeUpdateCompletion('node-1', Promise.reject(new Error('Node disconnected')));
+    service.trackNodeUpdateCompletion('node-1', 'operation-1', Promise.reject(new Error('Node disconnected')));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(clear).not.toHaveBeenCalled();
+    expect(beginReconnect).toHaveBeenCalledWith('node-1', 'operation-1');
   });
 
   it('clears the update lock after an explicit daemon rejection', async () => {
@@ -305,10 +408,11 @@ describe('DaemonUpdateService update artifact URLs', () => {
         ARTIFACT_BASE_URL: 'https://updates.thesqlabs.com/gateway',
       } as Env
     );
-    const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(undefined);
+    const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(true);
 
     service.trackNodeUpdateCompletion(
       'node-1',
+      'operation-1',
       Promise.resolve({
         commandId: 'cmd-1',
         success: false,
@@ -320,6 +424,6 @@ describe('DaemonUpdateService update artifact URLs', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(clear).toHaveBeenCalledWith('node-1');
+    expect(clear).toHaveBeenCalledWith('node-1', 'operation-1');
   });
 });

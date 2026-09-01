@@ -2,7 +2,7 @@ import { CliError } from './errors.js';
 import { assertTrustedEndpoint, type Fetch, requestJson } from './http.js';
 import type { InferenceDiscovery, OAuthMetadata } from './types.js';
 
-export const CLI_VERSION = '0.3.9';
+export const CLI_VERSION = '0.3.12';
 
 interface RawInferenceDiscovery {
   schemaVersion?: number;

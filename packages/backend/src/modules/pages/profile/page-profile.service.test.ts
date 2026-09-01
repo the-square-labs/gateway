@@ -72,7 +72,7 @@ describe('PageProfileService', () => {
   it('rejects mutations while Pages is disabled', async () => {
     const { db } = mockDb([[{ enabled: false }]]);
     const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');
-    service.setLicensePolicyService({ hasFeature: vi.fn(async () => true) } as never);
+    service.setLicensePolicyService({ hasFeatureForExistingRuntime: vi.fn(async () => true) } as never);
 
     await expect(service.requireEnabled()).rejects.toMatchObject({
       statusCode: 409,
@@ -83,7 +83,7 @@ describe('PageProfileService', () => {
   it('reports Pages disabled when the saved profile lacks the current entitlement', async () => {
     const { db, raw } = mockDb([]);
     const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');
-    service.setLicensePolicyService({ hasFeature: vi.fn(async () => false) } as never);
+    service.setLicensePolicyService({ hasFeatureForExistingRuntime: vi.fn(async () => false) } as never);
 
     await expect(service.isEnabled()).resolves.toBe(false);
     expect(raw.select).not.toHaveBeenCalled();

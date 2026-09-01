@@ -9,3 +9,10 @@ export function requireLicenseFeature(feature: LicenseFeature): MiddlewareHandle
     await next();
   };
 }
+
+export function requireLicenseFeatureForExistingRuntime(feature: LicenseFeature): MiddlewareHandler<AppEnv> {
+  return async (_c, next) => {
+    await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime(feature);
+    await next();
+  };
+}

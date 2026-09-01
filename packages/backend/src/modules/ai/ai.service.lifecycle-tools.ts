@@ -84,7 +84,7 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
               release.version,
               arch
             );
-            await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version);
+            const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version);
             try {
               const command = await container
                 .resolve(NodeDispatchService)
@@ -95,10 +95,10 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
                   artifact.checksum,
                   artifact.signedManifest
                 );
-              daemonUpdateService.trackNodeUpdateCompletion(nodeId, command.result);
+              daemonUpdateService.trackNodeUpdateCompletion(nodeId, operationId, command.result);
               await command.accepted;
             } catch (error) {
-              await daemonUpdateService.clearNodeUpdateInProgress(nodeId);
+              await daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId);
               throw error;
             }
 

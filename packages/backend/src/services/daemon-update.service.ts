@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { settings } from '@/db/schema/settings.js';
-import type { CommandResult, DaemonUpdateOutcome } from '@/grpc/generated/types.js';
+import type { CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import {
   type ReleaseArtifactSource,
@@ -19,6 +20,8 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
 const logger = createChildLogger('DaemonUpdateService');
+const NODE_UPDATE_RECONNECT_TIMEOUT_MS = 2 * 60 * 1000;
+const NODE_UPDATE_EXECUTION_TIMEOUT_MS = 6 * 60 * 1000;
 
 export type DaemonType = 'nginx' | 'docker' | 'monitoring' | 'relay' | 'relay-worker';
 
@@ -77,15 +80,7 @@ export interface DaemonNodeUpdateStatus {
   hostname: string;
   currentVersion: string;
   updateAvailable: boolean;
-  retryAvailable?: boolean;
-  failedVersion?: string;
-  failureReason?: string;
   arch?: string;
-}
-
-export interface DaemonUpdateRegistrationReconciliation {
-  commitTarget?: string;
-  acknowledgeRollbackTarget?: string;
 }
 
 export interface DaemonUpdateStatus {
@@ -203,18 +198,9 @@ export class DaemonUpdateService {
         .filter((n) => NODE_TYPE_MAP[n.type] === type)
         .map((n) => {
           const currentVersion = n.daemonVersion ?? 'unknown';
-          const metadata = (n.metadata ?? {}) as Record<string, unknown>;
-          const failedVersion =
-            typeof metadata.daemonUpdateFailedVersion === 'string' ? metadata.daemonUpdateFailedVersion : undefined;
-          const lastFailure =
-            metadata.lastDaemonUpdateFailure && typeof metadata.lastDaemonUpdateFailure === 'object'
-              ? (metadata.lastDaemonUpdateFailure as Record<string, unknown>)
-              : undefined;
-          const retryAvailable =
-            latestVersion != null && failedVersion === latestVersion && isNewerVersion(latestVersion, currentVersion);
           const updateAvailable =
             latestVersion != null && currentVersion !== 'unknown' && currentVersion !== 'dev'
-              ? isNewerVersion(latestVersion, currentVersion) && !retryAvailable
+              ? isNewerVersion(latestVersion, currentVersion)
               : false;
           const caps = (n.capabilities ?? {}) as Record<string, unknown>;
           return {
@@ -222,9 +208,6 @@ export class DaemonUpdateService {
             hostname: n.displayName ?? n.hostname,
             currentVersion,
             updateAvailable,
-            retryAvailable,
-            failedVersion,
-            failureReason: typeof lastFailure?.reason === 'string' ? lastFailure.reason : undefined,
             arch: (caps.architecture as string) ?? undefined,
           };
         });
@@ -255,54 +238,168 @@ export class DaemonUpdateService {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
     const metadata = (node.metadata ?? {}) as Record<string, unknown>;
+    if (await this.expireNodeUpdateIfDue(nodeId, metadata)) {
+      return false;
+    }
     return metadata.updateInProgress === true;
   }
 
-  async markNodeUpdateInProgress(nodeId: string, targetVersion: string): Promise<void> {
-    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  async markNodeUpdateInProgress(nodeId: string, targetVersion: string): Promise<string> {
+    let [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
 
-    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    let metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (metadata.updateInProgress === true) {
+      if (!(await this.expireNodeUpdateIfDue(nodeId, metadata))) {
+        throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is already in progress');
+      }
+      [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+      if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
+      metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    }
+
+    const now = Date.now();
+    const operationId = randomUUID();
+    metadata.updateInProgress = true;
+    metadata.updateTargetVersion = targetVersion;
+    metadata.updateStartedAt = new Date(now).toISOString();
+    metadata.updateOperationId = operationId;
+    metadata.updatePhase = 'executing';
+    metadata.updateDeadlineAt = new Date(now + NODE_UPDATE_EXECUTION_TIMEOUT_MS).toISOString();
+
+    const updated = await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`COALESCE(${nodes.metadata}->>'updateInProgress', 'false') <> 'true'`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is already in progress');
     }
 
-    metadata.updateInProgress = true;
-    metadata.updateTargetVersion = targetVersion;
-    metadata.updateStartedAt = new Date().toISOString();
-
-    await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
-
     this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
     this.emitNodeUpdated(nodeId);
+    this.scheduleNodeUpdateExpiry(nodeId, operationId, NODE_UPDATE_EXECUTION_TIMEOUT_MS);
+    return operationId;
   }
 
-  async clearNodeUpdateInProgress(nodeId: string): Promise<void> {
-    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
-    if (!node) return;
+  private scheduleNodeUpdateExpiry(nodeId: string, operationId: string, delayMs: number): void {
+    const timer = setTimeout(() => {
+      void this.expireNodeUpdate(nodeId, operationId).catch((error) => {
+        logger.error('Failed to expire daemon update deadline', {
+          nodeId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, delayMs);
+    timer.unref?.();
+  }
 
+  private async expireNodeUpdateIfDue(nodeId: string, metadata: Record<string, unknown>): Promise<boolean> {
+    if (metadata.updateInProgress !== true || typeof metadata.updateOperationId !== 'string') return false;
+    const deadlineAt =
+      typeof metadata.updateDeadlineAt === 'string' ? Date.parse(metadata.updateDeadlineAt) : Number.NaN;
+    if (!Number.isFinite(deadlineAt) || Date.now() < deadlineAt) return false;
+    return this.expireNodeUpdate(nodeId, metadata.updateOperationId);
+  }
+
+  private async expireNodeUpdate(nodeId: string, operationId: string): Promise<boolean> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return false;
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
-    if (metadata.updateInProgress !== true) return;
+    if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
+    const deadlineAt =
+      typeof metadata.updateDeadlineAt === 'string' ? Date.parse(metadata.updateDeadlineAt) : Number.NaN;
+    if (!Number.isFinite(deadlineAt) || Date.now() < deadlineAt) return false;
 
     delete metadata.updateInProgress;
     delete metadata.updateTargetVersion;
     delete metadata.updateStartedAt;
+    delete metadata.updateOperationId;
+    delete metadata.updatePhase;
+    delete metadata.updateDeadlineAt;
+    delete metadata.updateReconnectStartedAt;
+    const update =
+      this.nodeRegistry && !this.nodeRegistry.getNode(nodeId)
+        ? { metadata, updatedAt: new Date(), status: 'offline' as const }
+        : { metadata, updatedAt: new Date() };
 
-    await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
+    const updated = await this.db
+      .update(nodes)
+      .set(update)
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) return false;
 
     this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
     this.emitNodeUpdated(nodeId);
+    logger.error('Daemon did not reconnect before the update deadline', { nodeId, operationId });
+    return true;
   }
 
-  trackNodeUpdateCompletion(nodeId: string, completion: Promise<CommandResult>): void {
+  async clearNodeUpdateInProgress(nodeId: string, operationId: string): Promise<boolean> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return false;
+
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
+
+    delete metadata.updateInProgress;
+    delete metadata.updateTargetVersion;
+    delete metadata.updateStartedAt;
+    delete metadata.updateOperationId;
+    delete metadata.updatePhase;
+    delete metadata.updateDeadlineAt;
+    delete metadata.updateReconnectStartedAt;
+
+    const updated = await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) return false;
+
+    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
+    this.emitNodeUpdated(nodeId);
+    return true;
+  }
+
+  private async beginNodeUpdateReconnectDeadline(nodeId: string, operationId: string): Promise<boolean> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return false;
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
+
+    metadata.updatePhase = 'reconnecting';
+    metadata.updateReconnectStartedAt = new Date().toISOString();
+    metadata.updateDeadlineAt = new Date(Date.now() + NODE_UPDATE_RECONNECT_TIMEOUT_MS).toISOString();
+    const updated = await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) return false;
+    this.scheduleNodeUpdateExpiry(nodeId, operationId, NODE_UPDATE_RECONNECT_TIMEOUT_MS);
+    return true;
+  }
+
+  trackNodeUpdateCompletion(nodeId: string, operationId: string, completion: Promise<CommandResult>): void {
     void completion.then(
       async (result) => {
-        if (result.success) return;
+        if (result.success) {
+          await this.beginNodeUpdateReconnectDeadline(nodeId, operationId).catch((error) => {
+            logger.error('Failed to start daemon reconnect deadline after update success', {
+              nodeId,
+              operationId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+          return;
+        }
         logger.error('Daemon update failed after dispatch', {
           nodeId,
           error: result.error || result.detail || 'Daemon rejected the update',
         });
-        await this.clearNodeUpdateInProgress(nodeId).catch((error) => {
+        await this.clearNodeUpdateInProgress(nodeId, operationId).catch((error) => {
           logger.error('Failed to clear daemon update lock after rejection', {
             nodeId,
             error: error instanceof Error ? error.message : String(error),
@@ -311,12 +408,19 @@ export class DaemonUpdateService {
       },
       async (error) => {
         const message = error instanceof Error ? error.message : String(error);
-        if (message === 'Node disconnected') {
-          logger.info('Daemon disconnected while restarting after update', { nodeId });
+        if (message === 'Node disconnected' || message.includes('timed out after')) {
+          logger.info('Daemon update is awaiting reconnect after an uncertain command result', { nodeId, operationId });
+          await this.beginNodeUpdateReconnectDeadline(nodeId, operationId).catch((reconnectError) => {
+            logger.error('Failed to start daemon reconnect deadline after uncertain update result', {
+              nodeId,
+              operationId,
+              error: reconnectError instanceof Error ? reconnectError.message : String(reconnectError),
+            });
+          });
           return;
         }
         logger.error('Daemon update did not complete', { nodeId, error: message });
-        await this.clearNodeUpdateInProgress(nodeId).catch((clearError) => {
+        await this.clearNodeUpdateInProgress(nodeId, operationId).catch((clearError) => {
           logger.error('Failed to clear incomplete daemon update lock', {
             nodeId,
             error: clearError instanceof Error ? clearError.message : String(clearError),
@@ -326,12 +430,24 @@ export class DaemonUpdateService {
     );
   }
 
-  async clearNodeUpdateInProgressOnReconnect(nodeId: string, reportedVersion: string): Promise<boolean> {
+  async clearNodeUpdateInProgressOnReconnect(
+    nodeId: string,
+    reportedVersion: string,
+    registrationObservedAt = new Date()
+  ): Promise<boolean> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) return false;
 
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (metadata.updateInProgress !== true) return false;
+    const operationId = metadata.updateOperationId;
+    if (typeof operationId !== 'string') return false;
+    if (metadata.updatePhase !== 'reconnecting') return false;
+    const reconnectStartedAt =
+      typeof metadata.updateReconnectStartedAt === 'string'
+        ? Date.parse(metadata.updateReconnectStartedAt)
+        : Number.NaN;
+    if (!Number.isFinite(reconnectStartedAt) || registrationObservedAt.getTime() < reconnectStartedAt) return false;
 
     const targetVersion = metadata.updateTargetVersion;
     if (typeof targetVersion === 'string' && targetVersion.length > 0) {
@@ -343,86 +459,21 @@ export class DaemonUpdateService {
     delete metadata.updateInProgress;
     delete metadata.updateTargetVersion;
     delete metadata.updateStartedAt;
+    delete metadata.updateOperationId;
+    delete metadata.updatePhase;
+    delete metadata.updateDeadlineAt;
+    delete metadata.updateReconnectStartedAt;
 
-    await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
+    const updated = await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) return false;
 
     this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
     this.emitNodeUpdated(nodeId);
     return true;
-  }
-
-  async reconcileNodeUpdateRegistration(
-    nodeId: string,
-    reportedVersion: string,
-    supportsRollback: boolean,
-    outcome?: DaemonUpdateOutcome
-  ): Promise<DaemonUpdateRegistrationReconciliation> {
-    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
-    if (!node) return {};
-
-    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
-    if (outcome?.status === 'rolled_back' && outcome.targetVersion && outcome.restoredVersion === reportedVersion) {
-      const activeTarget = metadata.updateTargetVersion;
-      if (
-        metadata.updateInProgress === true &&
-        typeof activeTarget === 'string' &&
-        activeTarget !== outcome.targetVersion
-      ) {
-        logger.warn('Ignored daemon rollback outcome for a different update target', {
-          nodeId,
-          activeTarget,
-          outcomeTarget: outcome.targetVersion,
-        });
-        return {};
-      }
-      delete metadata.updateInProgress;
-      delete metadata.updateTargetVersion;
-      delete metadata.updateStartedAt;
-      metadata.daemonUpdateFailedVersion = outcome.targetVersion;
-      metadata.lastDaemonUpdateFailure = {
-        status: 'rolled_back',
-        fromVersion: outcome.fromVersion,
-        targetVersion: outcome.targetVersion,
-        restoredVersion: outcome.restoredVersion,
-        reason: outcome.reason || 'Candidate daemon failed during update verification',
-        occurredAt:
-          Number(outcome.occurredAtUnix) > 0
-            ? new Date(Number(outcome.occurredAtUnix) * 1000).toISOString()
-            : new Date().toISOString(),
-      };
-      await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
-      this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
-      this.emitNodeUpdated(nodeId);
-      return { acknowledgeRollbackTarget: outcome.targetVersion };
-    }
-
-    if (metadata.updateInProgress !== true) return {};
-    const targetVersion = metadata.updateTargetVersion;
-    if (typeof targetVersion !== 'string' || targetVersion.length === 0) return {};
-    const reported = parseSemver(reportedVersion);
-    const target = parseSemver(targetVersion);
-    if (!reported || !target || compareSemver(reportedVersion, targetVersion) < 0) return {};
-    if (supportsRollback) return { commitTarget: targetVersion };
-
-    await this.clearNodeUpdateInProgressOnReconnect(nodeId, reportedVersion);
-    return {};
-  }
-
-  async completeNodeUpdateAfterCommit(nodeId: string, targetVersion: string): Promise<void> {
-    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
-    if (!node) return;
-    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
-    if (metadata.updateInProgress !== true || metadata.updateTargetVersion !== targetVersion) return;
-    delete metadata.updateInProgress;
-    delete metadata.updateTargetVersion;
-    delete metadata.updateStartedAt;
-    if (metadata.daemonUpdateFailedVersion === targetVersion) {
-      delete metadata.daemonUpdateFailedVersion;
-      delete metadata.lastDaemonUpdateFailure;
-    }
-    await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
-    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
-    this.emitNodeUpdated(nodeId);
   }
 
   getDownloadUrl(daemonType: DaemonType, tag: string, arch: string): string {

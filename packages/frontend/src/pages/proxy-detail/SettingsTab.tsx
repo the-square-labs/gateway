@@ -307,7 +307,6 @@ export function SettingsTab({
             canResyncTls ? (
               <Button
                 variant="outline"
-                size="sm"
                 onClick={onTlsResync}
                 disabled={isTlsResyncing}
                 aria-label={`Retry TLS sync for ${host.domainNames[0] || "proxy host"}`}

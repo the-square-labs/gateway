@@ -113,7 +113,11 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 		cancel()
 		return errors.New("build is already running")
 	}
-	if len(m.jobs) >= m.config.MaxParallelism {
+	capacity := int(command.GetWorkerParallelism())
+	if capacity == 0 {
+		capacity = 1
+	}
+	if len(m.jobs) >= capacity {
 		m.mu.Unlock()
 		cancel()
 		return errors.New("builder is at its isolated job capacity")
@@ -248,6 +252,9 @@ func (m *Manager) validate(command *pb.DockerBuildCommand) error {
 	}
 	if command.GetTimeoutSeconds() < 30 || command.GetTimeoutSeconds() > 6*60*60 {
 		return errors.New("builder timeout must be between 30 seconds and 6 hours")
+	}
+	if command.GetWorkerParallelism() < 0 || command.GetWorkerParallelism() > 16 {
+		return errors.New("builder worker parallelism must be between 1 and 16")
 	}
 	return nil
 }

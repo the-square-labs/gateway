@@ -20,12 +20,12 @@ const mocks = vi.hoisted(() => ({
   daemonUpdateService: {
     getLatestRelease: vi.fn(),
     prepareTrustedDaemonUpdate: vi.fn(),
-    markNodeUpdateInProgress: vi.fn(),
+    markNodeUpdateInProgress: vi.fn().mockResolvedValue('operation-1'),
     trackNodeUpdateCompletion: vi.fn(),
     clearNodeUpdateInProgress: vi.fn(),
   },
   dispatch: {
-    prepareRelaySupervisorRollbackBootstrap: vi.fn(),
+    sendNodeExecCommand: vi.fn(),
     sendUpdateDaemonCommand: vi.fn(),
   },
   db: { select: vi.fn() },
@@ -123,20 +123,20 @@ describe('System RC update routes', () => {
     expect(mocks.updateService.getCachedStatus).not.toHaveBeenCalled();
   });
 
-  it('prepares the legacy Relay runner before marking a generic node update in progress', async () => {
+  it('dispatches the signed daemon updater and marks the node update in progress', async () => {
     mocks.db.select.mockReturnValue({
       from: () => ({
         where: () => ({
-          limit: vi.fn().mockResolvedValue([{ id: 'node-1', type: 'relay', capabilities: { architecture: 'amd64' } }]),
+          limit: vi.fn().mockResolvedValue([{ id: 'node-1', type: 'nginx', capabilities: { architecture: 'amd64' } }]),
         }),
       }),
     });
     mocks.daemonUpdateService.getLatestRelease.mockResolvedValue({
-      tagName: 'v2.10.0-rc.21-relay',
-      version: 'v2.10.0-rc.21',
+      tagName: 'v2.10.0-rc.27-nginx',
+      version: 'v2.10.0-rc.27',
     });
     mocks.daemonUpdateService.prepareTrustedDaemonUpdate.mockResolvedValue({
-      downloadUrl: 'https://updates.example/relay-supervisor',
+      downloadUrl: 'https://updates.example/nginx-daemon',
       checksum: 'abc',
       signedManifest: 'manifest',
     });
@@ -148,9 +148,12 @@ describe('System RC update routes', () => {
     const response = await app().request('/daemon-updates/node-1', { method: 'POST' });
 
     expect(response.status).toBe(200);
-    expect(mocks.dispatch.prepareRelaySupervisorRollbackBootstrap).toHaveBeenCalledWith('node-1');
-    expect(mocks.dispatch.prepareRelaySupervisorRollbackBootstrap.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.daemonUpdateService.markNodeUpdateInProgress.mock.invocationCallOrder[0]!
+    expect(mocks.dispatch.sendUpdateDaemonCommand).toHaveBeenCalledOnce();
+    expect(mocks.daemonUpdateService.markNodeUpdateInProgress).toHaveBeenCalledWith('node-1', 'v2.10.0-rc.27');
+    expect(mocks.daemonUpdateService.trackNodeUpdateCompletion).toHaveBeenCalledWith(
+      'node-1',
+      'operation-1',
+      expect.any(Promise)
     );
   });
 });

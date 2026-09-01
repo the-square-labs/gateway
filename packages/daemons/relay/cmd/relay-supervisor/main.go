@@ -21,17 +21,11 @@ func main() {
 		case "version":
 			fmt.Printf("relay-supervisor %s\n", Version)
 			return
-		case "update-guard":
-			runUpdateGuard(os.Args[2:])
-			return
 		case "run":
 		default:
-			fmt.Fprintln(os.Stderr, "Usage: relay-supervisor [run|update-guard|version]")
+			fmt.Fprintln(os.Stderr, "Usage: relay-supervisor [run|version]")
 			os.Exit(1)
 		}
-	}
-	if err := lifecycle.EnsureCurrentSystemdUpdateGuard("relay"); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: automatic update rollback guard unavailable: %v\n", err)
 	}
 	configPath := os.Getenv("RELAY_SUPERVISOR_CONFIG")
 	if configPath == "" {
@@ -55,17 +49,6 @@ func main() {
 	if err := daemon.Run(ctx); err != nil {
 		logger.Error("relay supervisor stopped", "error", err)
 		os.Exit(1)
-	}
-}
-
-func runUpdateGuard(args []string) {
-	rolledBack, err := lifecycle.RunUpdateGuardCommand(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "update guard failed: %v\n", err)
-		os.Exit(1)
-	}
-	if rolledBack {
-		fmt.Fprintln(os.Stderr, "daemon update rolled back to the previous version")
 	}
 }
 

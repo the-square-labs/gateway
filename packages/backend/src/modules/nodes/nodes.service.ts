@@ -452,6 +452,13 @@ export class NodesService {
       secondaryServiceAddress: serviceAddressesUpdateRequested
         ? (nextServiceAddresses[1] ?? null)
         : existing.secondaryServiceAddress,
+      metadata:
+        input.builderSettings === undefined
+          ? existing.metadata
+          : {
+              ...((existing.metadata ?? {}) as Record<string, unknown>),
+              builderSettings: input.builderSettings,
+            },
       updatedAt: new Date(),
     };
     const updateNode = async (slug?: string) => {
@@ -491,6 +498,7 @@ export class NodesService {
         ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
         ...(input.appearanceColor !== undefined ? { appearanceColor: input.appearanceColor } : {}),
         ...(serviceAddressesUpdateRequested ? { serviceAddresses: nextServiceAddresses } : {}),
+        ...(input.builderSettings !== undefined ? { builderSettings: input.builderSettings } : {}),
       },
     });
     const slugChange = updated.slug === existing.slug ? {} : { oldSlug: existing.slug, slug: updated.slug };

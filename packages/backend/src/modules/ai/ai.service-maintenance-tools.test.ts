@@ -275,8 +275,8 @@ describe('AIService maintenance tools', () => {
         checksum: 'sha256:test',
         signedManifest: 'signed',
       }),
-      markNodeUpdateInProgress: vi.fn().mockResolvedValue(undefined),
-      clearNodeUpdateInProgress: vi.fn().mockResolvedValue(undefined),
+      markNodeUpdateInProgress: vi.fn().mockResolvedValue('operation-1'),
+      clearNodeUpdateInProgress: vi.fn().mockResolvedValue(true),
       trackNodeUpdateCompletion: vi.fn(),
     };
     const completion = new Promise<never>(() => {});
@@ -346,6 +346,6 @@ describe('AIService maintenance tools', () => {
       'sha256:test',
       'signed'
     );
-    expect(daemonUpdateService.trackNodeUpdateCompletion).toHaveBeenCalledWith('node-1', completion);
+    expect(daemonUpdateService.trackNodeUpdateCompletion).toHaveBeenCalledWith('node-1', 'operation-1', completion);
   });
 });

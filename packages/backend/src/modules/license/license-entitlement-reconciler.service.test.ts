@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { LicenseEntitlementReconcilerService } from './license-entitlement-reconciler.service.js';
 
-function makeServices(features: string[], plan: 'community' | 'business' | 'enterprise' = 'community') {
+function makeServices(
+  features: string[],
+  plan: 'community' | 'business' | 'enterprise' = 'community',
+  status = 'community'
+) {
   const policy = {
     getSummary: vi.fn(async () => ({
-      status: 'community',
+      status,
       plan,
       entitlements: { features },
     })),
@@ -74,6 +78,32 @@ describe('LicenseEntitlementReconcilerService', () => {
     expect(logging.update).not.toHaveBeenCalled();
     expect(pages.disableForEntitlementLoss).not.toHaveBeenCalled();
     expect(internalRegistry.disableExternalAccessForEntitlementLoss).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'expired',
+    'unreachable_grace_expired',
+  ])('preserves existing paid runtimes after %s while policy gates new paid actions', async (status) => {
+    const { reconciler, settings, logging, pages, internalRegistry } = makeServices([], 'community', status);
+
+    await reconciler.reconcile();
+
+    expect(settings.getConfig).not.toHaveBeenCalled();
+    expect(settings.updateConfig).not.toHaveBeenCalled();
+    expect(logging.update).not.toHaveBeenCalled();
+    expect(pages.disableForEntitlementLoss).not.toHaveBeenCalled();
+    expect(internalRegistry.disableExternalAccessForEntitlementLoss).not.toHaveBeenCalled();
+  });
+
+  it('still disables paid runtimes after an authoritative revocation', async () => {
+    const { reconciler, settings, logging, pages, internalRegistry } = makeServices([], 'community', 'revoked');
+
+    await reconciler.reconcile();
+
+    expect(settings.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false, siemEnabled: false } });
+    expect(logging.update).toHaveBeenCalledWith({ mode: 'disabled' });
+    expect(pages.disableForEntitlementLoss).toHaveBeenCalledOnce();
+    expect(internalRegistry.disableExternalAccessForEntitlementLoss).toHaveBeenCalledOnce();
   });
 
   it('reconciles changes published through the existing notification event bus', async () => {

@@ -1470,9 +1470,8 @@ export async function initializeContainer(): Promise<void> {
       },
       prepareSupervisorUpdate: (version, arch) =>
         daemonUpdateService.prepareTrustedDaemonUpdate('relay', `${version}-relay`, version, arch),
-      prepareSupervisorRollbackBootstrap: (nodeId) => nodeDispatch.prepareRelaySupervisorRollbackBootstrap(nodeId),
       dispatchSupervisorUpdate: async (nodeId, artifact) => {
-        await daemonUpdateService.markNodeUpdateInProgress(nodeId, artifact.payload.version);
+        const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, artifact.payload.version);
         try {
           const command = await nodeDispatch.sendUpdateDaemonCommand(
             nodeId,
@@ -1481,16 +1480,12 @@ export async function initializeContainer(): Promise<void> {
             artifact.checksum,
             artifact.signedManifest
           );
-          daemonUpdateService.trackNodeUpdateCompletion(nodeId, command.result);
+          daemonUpdateService.trackNodeUpdateCompletion(nodeId, operationId, command.result);
           await command.accepted;
         } catch (error) {
-          await daemonUpdateService.clearNodeUpdateInProgress(nodeId);
+          await daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId);
           throw error;
         }
-      },
-      commitSupervisorUpdate: async (nodeId, targetVersion) => {
-        const result = await nodeDispatch.commitRelaySupervisorUpdate(nodeId, targetVersion);
-        if (!result.success) throw new Error(result.error || result.detail || 'Relay supervisor update commit failed');
       },
     });
   }

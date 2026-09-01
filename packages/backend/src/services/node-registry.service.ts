@@ -16,7 +16,12 @@ const TRAFFIC_STATS_CACHE_TTL_MS = 60_000;
 const TRAFFIC_STATS_CACHE_MAX_ENTRIES = 4_096;
 
 function hasUpdateInProgress(metadata: unknown): boolean {
-  return !!metadata && typeof metadata === 'object' && (metadata as Record<string, unknown>).updateInProgress === true;
+  if (!metadata || typeof metadata !== 'object') return false;
+  const value = metadata as Record<string, unknown>;
+  if (value.updateInProgress !== true) return false;
+  if (typeof value.updateDeadlineAt !== 'string') return true;
+  const deadlineAt = Date.parse(value.updateDeadlineAt);
+  return !Number.isFinite(deadlineAt) || Date.now() < deadlineAt;
 }
 
 function closeStream(stream: { end?: () => void; destroy?: () => void } | null | undefined): void {
@@ -101,6 +106,16 @@ export class NodeRegistryService {
 
   isNodeUpdateInProgress(nodeId: string): boolean {
     return this.updatingNodeIds.has(nodeId);
+  }
+
+  private isNodeUpdateProtected(nodeId: string, metadata: unknown): boolean {
+    if (metadata && typeof metadata === 'object') {
+      const protectedByMetadata = hasUpdateInProgress(metadata);
+      if (protectedByMetadata) this.updatingNodeIds.add(nodeId);
+      else this.updatingNodeIds.delete(nodeId);
+      return protectedByMetadata;
+    }
+    return this.isNodeUpdateInProgress(nodeId);
   }
 
   private observeNodeState(nodeId: string, state: 'online' | 'offline', hostname?: string) {
@@ -312,7 +327,7 @@ export class NodeRegistryService {
       .from(nodes)
       .where(eq(nodes.id, nodeId))
       .limit(1);
-    if (this.isNodeUpdateInProgress(nodeId) || hasUpdateInProgress(dbNode?.metadata)) {
+    if (this.isNodeUpdateProtected(nodeId, dbNode?.metadata)) {
       this.updatingNodeIds.add(nodeId);
       logger.info('Node disconnected for daemon update; preserving status', { nodeId });
       return;
@@ -581,7 +596,7 @@ export class NodeRegistryService {
       .where(eq(nodes.status, 'online'));
 
     for (const dbNode of dbOnlineNodes) {
-      if (this.isNodeUpdateInProgress(dbNode.id) || hasUpdateInProgress(dbNode.metadata)) continue;
+      if (this.isNodeUpdateProtected(dbNode.id, dbNode.metadata)) continue;
       if (!connectedIds.includes(dbNode.id)) {
         const lastSeen = dbNode.lastSeenAt?.getTime() ?? 0;
         if (now - lastSeen > staleThresholdMs) {
@@ -621,7 +636,7 @@ export class NodeRegistryService {
           .from(nodes)
           .where(eq(nodes.id, node.nodeId))
           .limit(1);
-        if (this.isNodeUpdateInProgress(node.nodeId) || hasUpdateInProgress(dbRow?.metadata)) continue;
+        if (this.isNodeUpdateProtected(node.nodeId, dbRow?.metadata)) continue;
 
         await this.recordOfflineStatus(node.nodeId);
         if (dbRow?.status === 'online') {
@@ -654,7 +669,7 @@ export class NodeRegistryService {
       .where(eq(nodes.status, 'offline'));
 
     for (const dbNode of offlineNodes) {
-      if (this.isNodeUpdateInProgress(dbNode.id) || hasUpdateInProgress(dbNode.metadata)) continue;
+      if (this.isNodeUpdateProtected(dbNode.id, dbNode.metadata)) continue;
       if (!connectedIds.includes(dbNode.id)) {
         await this.recordOfflineStatus(dbNode.id);
         this.observeNodeState(dbNode.id, 'offline', dbNode.hostname ?? undefined);

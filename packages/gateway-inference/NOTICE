@@ -1,11 +1,24 @@
 Good Gateway Inference
-Copyright (c) 2026 Square Labs (https://thesquarelabs.com)
+Copyright (c) 2026 Alexandr Slavinschii
+Operated under the Square Labs project name (https://thesquarelabs.com)
 All rights reserved except as expressly licensed.
 
-Square Labs-owned source is licensed for noncommercial use under
-the PolyForm Strict License 1.0.0. A paid Good Gateway key
-may provide the named licensee limited commercial-use rights
-under COMMERCIAL-LICENSE.md. Neither license permits modifying
-or redistributing this software.
+Alexandr Slavinschii is the current individual rights holder and
+Licensor. The Square Labs OÜ becomes the rights holder and Licensor
+only after registration and an effective written assignment.
+
+Licensor-owned source is licensed under the PolyForm
+Perimeter License 1.0.1. It permits use, modification, and
+distribution for permitted purposes, including internal
+business use. It does not permit providing to others a product
+marketed as a substitute for Good Gateway or this package.
+
+A paid Good Gateway key may unlock server-side Gateway
+Inference features and limits. It does not waive the source
+license's competition restriction. See COMMERCIAL-LICENSE.md.
+
+The package includes a Product Continuity MIT Grant with no
+release-age, inactivity, support, sales, website, or licensing-service
+trigger. See CONTINUITY-MIT-GRANT.md.
 
 Third-party components remain governed by their own licenses.

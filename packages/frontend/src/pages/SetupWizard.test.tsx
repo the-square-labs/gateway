@@ -573,12 +573,18 @@ describe("SetupWizardPage", () => {
     });
     expect(JSON.parse(String(init.body)).administrator).not.toHaveProperty("password");
     expect(await screen.findByRole("heading", { name: "Gateway edition" })).toBeInTheDocument();
-    expect(screen.getByText(/Community is for noncommercial use only/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Commercial Key License" })).toHaveAttribute(
+    expect(
+      screen.getByText(/Community is available for internal and other noncompeting use/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "PolyForm Perimeter License" })).toHaveAttribute(
+      "href",
+      "https://github.com/the-square-labs/gateway/blob/main/LICENSE.md"
+    );
+    expect(screen.getByRole("link", { name: "Paid Key Terms" })).toHaveAttribute(
       "href",
       "https://github.com/the-square-labs/gateway/blob/main/COMMERCIAL-LICENSE.md"
     );
-    await user.click(screen.getByRole("button", { name: "Continue for noncommercial use" }));
+    await user.click(screen.getByRole("button", { name: "Continue with Community" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
     const [licensePath, licenseInit] = fetchMock.mock.calls[4] as [string, RequestInit];
     expect(licensePath).toBe("/api/setup/wizard/license/community");

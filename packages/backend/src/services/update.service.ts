@@ -74,9 +74,7 @@ export interface RelayPoolUpdateRuntime {
   prepareWorkerUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
   dispatchWorkerUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
   prepareSupervisorUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
-  prepareSupervisorRollbackBootstrap(nodeId: string): Promise<void>;
   dispatchSupervisorUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
-  commitSupervisorUpdate(nodeId: string, targetVersion: string): Promise<void>;
 }
 
 export function isGatewayReleaseTag(tag: string): boolean {
@@ -764,7 +762,6 @@ exit 1`,
             .where(eq(relayPoolUpdateRuns.id, run.id));
           throw new Error(`Relay ${instance.displayName} still has active streams; rollout paused`);
         }
-        await this.relayPoolRuntime.prepareSupervisorRollbackBootstrap(instance.nodeId);
         await this.updatePoolStep(step.id, 'updating');
         const architecture = this.relayInstanceArchitecture(instance);
         const normalizedVersion = normalizeVersionTag(targetVersion);
@@ -777,7 +774,6 @@ exit 1`,
           this.waitForRelayInstanceVersion(instance.id, normalizedVersion),
           this.waitForRelaySupervisorVersion(instance.nodeId, normalizedVersion),
         ]);
-        await this.relayPoolRuntime.commitSupervisorUpdate(instance.nodeId, normalizedVersion);
         await this.relayPoolRuntime.drainInstance(instance.id, userId, false);
         await this.updatePoolStep(step.id, 'ready', true);
         currentStepId = null;

@@ -12,7 +12,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
-  hasConfiguredLicenseFeature,
+  hasConfiguredLicenseFeatureForExistingRuntime,
   type LicensePolicyService,
   requireConfiguredLicensePolicy,
 } from '@/modules/license/license-policy.service.js';
@@ -167,18 +167,18 @@ export class SiemDeliveryService {
 
   async runDueDeliveries(): Promise<void> {
     if (this.running) return;
-    if (!(await hasConfiguredLicenseFeature(this.licensePolicy, 'siem-export'))) return;
+    if (!(await hasConfiguredLicenseFeatureForExistingRuntime(this.licensePolicy, 'siem-export'))) return;
     if (!(await this.isFeatureEnabled())) return;
     this.running = true;
     try {
       await this.recoverExpiredLeases();
       for (let batchCount = 0; batchCount < MAX_BATCHES_PER_RUN; batchCount += 1) {
-        if (!(await hasConfiguredLicenseFeature(this.licensePolicy, 'siem-export'))) break;
+        if (!(await hasConfiguredLicenseFeatureForExistingRuntime(this.licensePolicy, 'siem-export'))) break;
         if (!(await this.isFeatureEnabled())) break;
         const batch = await this.claimNextBatch();
         if (!batch) break;
         if (
-          !(await hasConfiguredLicenseFeature(this.licensePolicy, 'siem-export')) ||
+          !(await hasConfiguredLicenseFeatureForExistingRuntime(this.licensePolicy, 'siem-export')) ||
           !(await this.isFeatureEnabled())
         ) {
           await this.releaseClaimedBatch(batch);

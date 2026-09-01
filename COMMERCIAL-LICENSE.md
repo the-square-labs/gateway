@@ -1,57 +1,66 @@
-# Good Gateway Commercial Key License 1.0
+# Good Gateway Paid Key Terms 1.2
 
-These terms provide a limited commercial-use license for official Good Gateway releases. They supplement, and do not modify, the [PolyForm Strict License 1.0.0](LICENSE.md).
+These terms govern Personal, Business, and Enterprise Good Gateway license keys issued by the **Licensor**. They supplement, and do not modify, the [PolyForm Perimeter License 1.0.1](LICENSE.md).
+
+The initial Licensor is **Alexandr Slavinschii**, operating the project under the Square Labs name. **The Square Labs OÜ** becomes the Licensor only after it has been entered in the Estonian commercial register and has received the relevant economic rights through an effective written assignment. References to the Licensor include a later legal successor or assignee that acquires those rights.
+
+PolyForm Perimeter permits use, modification, and redistribution for permitted purposes, including internal business use. It does not permit providing to others a product marketed as a substitute for Good Gateway. An ordinary paid key unlocks plan features and limits; it does not waive that competition restriction or grant OEM, white-label, resale, or competing hosted-service rights. Those uses require a separate written agreement signed by the Licensor.
+
+The release may also include the [Product Continuity MIT Grant](CONTINUITY-MIT-GRANT.md). That conditional grant is not based on release age, inactivity, support status, sales, or service availability.
 
 ## Acceptance
 
-These terms are automatically offered with every Personal, Business, or Enterprise Gateway license key issued by Square Labs. By activating or using the key, or by using Gateway commercially under the key, you accept these terms. If you act on behalf of an organization, you represent that you have authority to accept these terms for that organization.
+These terms are automatically offered with every Personal, Business, or Enterprise Gateway license key issued by the Licensor. By activating or using the key, you accept these terms. If you act on behalf of an organization, you represent that you have authority to accept these terms for that organization.
 
-## Commercial-use grant
+## Paid-plan access
 
-Subject to these terms, Square Labs grants the person or organization identified in the paid license record a non-exclusive, non-transferable license to use an official, unmodified release of Good Gateway for commercial purposes on one Gateway installation at a time.
+Subject to these terms, the Licensor grants the person or organization identified in the paid license record access to the features and limits of the key's plan for one active, official Good Gateway installation at a time.
 
-The grant includes using Gateway in the licensee's own business operations and in delivering the licensee's own services. It does not permit offering Gateway itself, or access to Gateway as a substantially similar hosted or managed product, for resale to third parties.
+The key does not restrict rights already granted independently by PolyForm Perimeter, an active Product Continuity MIT Grant, a third-party license, or another written agreement. Paid-plan access and support apply only to official, unmodified Gateway releases unless the Licensor agrees otherwise in writing.
 
-The paid key's plan determines the product features and limits available to the installation. The key grants no rights beyond the commercial use expressly stated here.
+## Term, grace period, and continuity
 
-## Term and 30-day grace period
+Paid-plan access begins when the Licensor issues the key. A key without an expiration date remains active until it is revoked, replaced, or deactivated.
 
-The commercial-use grant begins when Square Labs issues the paid key.
+For a key with an expiration date, Gateway applies the technical grace period documented for that plan. After the grace period, the same installation may continue operating paid-plan resources and services configured before expiration, including the infrastructure those resources serve. Expiration does not stop or delete already configured services.
 
-For a key with an expiration date, the grant continues through that expiration date and for 30 calendar days immediately afterwards. This post-expiration period permits continued commercial use of the most recently authorized installation while the licensee renews or stops commercial use. Paid product entitlements may end earlier according to the product's technical license state.
+The continuity period does not authorize creating new paid-plan resources, expanding into additional paid-only features, or moving the paid entitlement to another organization or installation. Renewing the key restores full paid-plan access.
 
-For a key without an expiration date, the grant continues while the key remains active.
-
-Revocation for a violation of these terms or other applicable Square Labs terms, fraud, chargeback, or refund ends this grant immediately. No post-expiration or other grace period applies after such a revocation.
+Revocation for a violation of these terms or other applicable Licensor terms, fraud, chargeback, or refund ends paid-plan access and continuity immediately. No expiration grace applies after such a revocation. Rights independently available under PolyForm Perimeter or another applicable license remain governed by those terms.
 
 ## One installation
 
-The grant covers one active Gateway installation at a time. When a key is detached or transferred, the old installation is no longer authorized for commercial use under that key once another installation becomes active. During the 30-day post-expiration period, the grant covers only the installation most recently authorized before expiration.
+The key covers one active Gateway installation at a time. When a key is detached or transferred, the old installation is no longer entitled to paid-plan access once another installation becomes active. During expiration grace and continuity, the key covers only the installation most recently authorized before expiration.
 
 ## Restrictions
 
-This license does not permit you to:
+These terms do not permit you to:
 
-- modify the software or create derivative works based on it;
-- distribute, publish, sublicense, sell, lease, or transfer the software or any modified copy;
 - share, resell, transfer, or make the paid key available to another person or organization;
-- bypass, remove, disable, or interfere with license validation, plan limits, feature entitlements, or other technical protection measures; or
-- use trademarks, names, or logos of Square Labs except as necessary to identify the software.
+- bypass, remove, disable, or interfere with license validation, plan limits, feature entitlements, or other technical protection measures;
+- use the key to provide an OEM, white-label, resale, competing hosted, or other substitute product without a separate written agreement signed by the Licensor; or
+- use trademarks, names, or logos of Square Labs, Good Gateway, or the Licensor except as necessary to identify the software.
 
-Any rights not expressly granted are reserved by Square Labs. A broader right requires a separate written agreement signed by Square Labs.
+Any additional rights require a separate written agreement signed by the Licensor.
 
 ## Third-party software
 
-These terms apply only to software for which Square Labs is the licensor. Third-party components remain governed by their own license terms.
+These terms apply only to the paid key and Licensor-provided paid-plan access. Third-party components remain governed by their own license terms.
+
+## Assignment and succession
+
+The Licensor may assign these terms, the related paid-license records, and the Licensor's rights and obligations to The Square Labs OÜ or another person or entity that acquires the relevant rights in Good Gateway. The assignment becomes effective only when that successor has legally acquired the relevant rights and assumed the associated obligations. Existing valid keys continue under the same plan, installation, term, continuity, and restriction rules after that assignment unless the key holder and successor agree otherwise in writing.
+
+The key holder may not assign or transfer a key or these paid-plan rights except as expressly permitted by these terms or agreed by the Licensor in writing.
 
 ## Termination
 
-This license ends automatically if you violate these terms. Ending this license does not limit claims or remedies arising from earlier use or violation. When the license ends, you must stop commercial use of Gateway unless another written agreement authorizes it.
+These paid-key terms end automatically if you violate them and do not cure the violation where applicable. Termination ends rights and access granted solely by the key, but does not terminate independent rights granted by PolyForm Perimeter, an active Product Continuity MIT Grant, a third-party license, or another written agreement.
 
 ## No warranty and limitation of liability
 
-As far as the law allows, the software is provided as is, without warranty or condition. Square Labs will not be liable for damages arising from these terms or the use or nature of the software under any kind of legal claim.
+As far as the law allows, the software and paid-plan access are provided as is, without warranty or condition. The Licensor will not be liable for damages arising from these terms or the use or nature of the software under any kind of legal claim.
 
 ## Contact
 
-Questions about commercial licensing may be sent to [contact@thesqlabs.com](mailto:contact@thesqlabs.com).
+Questions about competing products, OEM, white-label, resale, hosted services, or other commercial licensing may be sent to [contact@thesqlabs.com](mailto:contact@thesqlabs.com).

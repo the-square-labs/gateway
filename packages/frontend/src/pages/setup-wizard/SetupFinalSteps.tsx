@@ -50,16 +50,24 @@ export function LicenseStep({
       <div>
         <h2 className="text-lg font-semibold">Gateway edition</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Community is for noncommercial use only. A Personal, Business, or Enterprise key grants
-          the named licensee commercial use of one official, unmodified installation. By activating
-          it, you agree to the{" "}
+          Community is available for internal and other noncompeting use under the{" "}
+          <a
+            className="underline underline-offset-4 hover:text-foreground"
+            href="https://github.com/the-square-labs/gateway/blob/main/LICENSE.md"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            PolyForm Perimeter License
+          </a>
+          . A Personal, Business, or Enterprise key unlocks paid-plan features and limits. By
+          activating it, you agree to the{" "}
           <a
             className="underline underline-offset-4 hover:text-foreground"
             href="https://github.com/the-square-labs/gateway/blob/main/COMMERCIAL-LICENSE.md"
             target="_blank"
             rel="noopener noreferrer"
           >
-            Commercial Key License
+            Paid Key Terms
           </a>
           .
         </p>
@@ -86,7 +94,7 @@ export function LicenseStep({
         </div>
         <div className="flex flex-wrap justify-center gap-2">
           <Button type="button" variant="outline" onClick={onCommunity} disabled={busy}>
-            Continue for noncommercial use
+            Continue with Community
           </Button>
           <Button type="submit" disabled={busy || !trimmedKey}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound />}

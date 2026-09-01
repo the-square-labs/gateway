@@ -79,16 +79,24 @@ import { LoggingTokenService } from './logging-token.service.js';
 
 export const loggingRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
+const requireLoggingRuntimeMiddleware = async (_c: any, next: () => Promise<void>) => {
+  // Existing configured ingestion remains available during ordinary expiry continuity.
+  await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('structured-logging');
+  const feature = container.resolve(LoggingFeatureService);
+  feature.requireEnabled();
+  await next();
+};
+
 const requireLoggingEnabledMiddleware = async (_c: any, next: () => Promise<void>) => {
-  // LICENSE ENFORCEMENT: Every REST logging operation must enforce the Business entitlement at request time.
+  // Configuration and expansion still require the current Business entitlement.
   await container.resolve(LicensePolicyService).requireFeature('structured-logging');
   const feature = container.resolve(LoggingFeatureService);
   feature.requireEnabled();
   await next();
 };
 
-loggingRoutes.use('/ingest', requireLoggingEnabledMiddleware);
-loggingRoutes.use('/ingest/batch', requireLoggingEnabledMiddleware);
+loggingRoutes.use('/ingest', requireLoggingRuntimeMiddleware);
+loggingRoutes.use('/ingest/batch', requireLoggingRuntimeMiddleware);
 
 loggingRoutes.openapi({ ...loggingIngestRoute, middleware: loggingIngestAuthMiddleware }, async (c) => {
   const body = await c.req.json();

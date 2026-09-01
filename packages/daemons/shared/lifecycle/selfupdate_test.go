@@ -1,13 +1,18 @@
 package lifecycle
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"testing"
-	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/updateauth"
 )
 
 func TestSelfUpdateRejectsMissingChecksum(t *testing.T) {
@@ -15,251 +20,6 @@ func TestSelfUpdateRejectsMissingChecksum(t *testing.T) {
 	err := SelfUpdate("https://gitlab.wiolett.net/update", "v9.9.9", "", "manifest", "nginx", logger)
 	if err == nil {
 		t.Fatal("expected missing checksum to be rejected")
-	}
-}
-
-func TestCandidateFailuresRollbackAtThreshold(t *testing.T) {
-	dir := t.TempDir()
-	executable := filepath.Join(dir, "daemon")
-	if err := os.WriteFile(executable, []byte("candidate"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(previousBinaryPath(executable), []byte("previous"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	started := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
-	if err := StagePendingUpdate(executable, "v2.10.0", "v2.10.1", started); err != nil {
-		t.Fatal(err)
-	}
-	for attempt := 1; attempt <= 2; attempt++ {
-		if err := PrepareCandidateStart(executable); err != nil {
-			t.Fatal(err)
-		}
-		rolledBack, err := RecordCandidateFailure(executable, "candidate exited", started.Add(time.Duration(attempt)*10*time.Second))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if rolledBack {
-			t.Fatalf("attempt %d rolled back before threshold", attempt)
-		}
-	}
-	if err := PrepareCandidateStart(executable); err != nil {
-		t.Fatal(err)
-	}
-	rolledBack, err := RecordCandidateFailure(executable, "candidate exited", started.Add(30*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rolledBack {
-		t.Fatal("third failure did not roll back")
-	}
-	contents, err := os.ReadFile(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != "previous" {
-		t.Fatalf("restored executable = %q", contents)
-	}
-	if pending, err := ReadPendingUpdate(executable); err != nil || pending != nil {
-		t.Fatalf("pending update after rollback = %#v, %v", pending, err)
-	}
-	outcome, err := ReadUpdateOutcome(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outcome == nil || outcome.TargetVersion != "v2.10.1" || outcome.RestoredVersion != "v2.10.0" {
-		t.Fatalf("unexpected rollback outcome: %#v", outcome)
-	}
-}
-
-func TestCandidateFailureWindowExpires(t *testing.T) {
-	dir := t.TempDir()
-	executable := filepath.Join(dir, "daemon")
-	if err := os.WriteFile(executable, []byte("candidate"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(previousBinaryPath(executable), []byte("previous"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	started := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
-	if err := StagePendingUpdate(executable, "v2.10.0", "v2.10.1", started); err != nil {
-		t.Fatal(err)
-	}
-	for _, offset := range []time.Duration{0, 91 * time.Second, 182 * time.Second} {
-		if err := PrepareCandidateStart(executable); err != nil {
-			t.Fatal(err)
-		}
-		rolledBack, err := RecordCandidateFailure(executable, "candidate exited", started.Add(offset))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if rolledBack {
-			t.Fatal("spaced failures incorrectly triggered rollback")
-		}
-	}
-}
-
-func TestOldDaemonExitBeforeCandidateStartDoesNotCountAsFailure(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "daemon")
-	if err := StagePendingUpdate(executable, "v2.10.0", "v2.10.1", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	rolledBack, err := RecordCandidateFailure(executable, "old daemon exited for update", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rolledBack {
-		t.Fatal("old daemon exit triggered rollback")
-	}
-	state, err := ReadPendingUpdate(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil || len(state.Failures) != 0 {
-		t.Fatalf("old daemon exit recorded a candidate failure: %#v", state)
-	}
-}
-
-func TestCommitPendingUpdateKeepsPreviousBinary(t *testing.T) {
-	dir := t.TempDir()
-	executable := filepath.Join(dir, "daemon")
-	backup := previousBinaryPath(executable)
-	if err := os.WriteFile(backup, []byte("previous"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := StagePendingUpdate(executable, "v2.10.0", "v2.10.1", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if err := CommitPendingUpdate(executable, "v2.10.1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(backup); err != nil {
-		t.Fatalf("previous binary was not retained: %v", err)
-	}
-	if pending, err := ReadPendingUpdate(executable); err != nil || pending != nil {
-		t.Fatalf("pending update after commit = %#v, %v", pending, err)
-	}
-}
-
-func TestReadPendingUpdateSupportsLegacyRelayMarker(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "relay-supervisor")
-	if err := os.WriteFile(legacyPendingUpdatePath(executable), []byte("v2.10.0\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	state, err := ReadPendingUpdate(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil || state.TargetVersion != "v2.10.0" || state.SchemaVersion != 0 {
-		t.Fatalf("legacy pending update = %#v", state)
-	}
-}
-
-func TestRollbackCapabilityRequiresGuardStartedCandidateAndBackup(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "daemon")
-	if err := os.WriteFile(previousBinaryPath(executable), []byte("previous"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := StagePendingUpdate(executable, "v2.10.0", "v2.10.1", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if supported, err := PendingUpdateSupportsRollback(executable, "v2.10.1"); err != nil || supported {
-		t.Fatalf("unstated candidate advertised rollback support: supported=%v err=%v", supported, err)
-	}
-	if err := PrepareCandidateStart(executable); err != nil {
-		t.Fatal(err)
-	}
-	if supported, err := PendingUpdateSupportsRollback(executable, "v2.10.1"); err != nil || !supported {
-		t.Fatalf("guarded candidate did not advertise rollback support: supported=%v err=%v", supported, err)
-	}
-	if supported, err := PendingUpdateSupportsRollback(executable, "v2.10.2"); err != nil || supported {
-		t.Fatalf("wrong-version candidate advertised rollback support: supported=%v err=%v", supported, err)
-	}
-}
-
-func TestRollbackCapabilityRejectsLegacyBootstrapMarker(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "relay-supervisor")
-	if err := os.WriteFile(previousBinaryPath(executable), []byte("previous"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(legacyPendingUpdatePath(executable), []byte("v2.10.1\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if supported, err := PendingUpdateSupportsRollback(executable, "v2.10.1"); err != nil || supported {
-		t.Fatalf("legacy bootstrap marker advertised rollback support: supported=%v err=%v", supported, err)
-	}
-}
-
-func TestFinalizeUpdateRejectsMissingPendingState(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "daemon")
-	if err := finalizeUpdate(executable, "v2.10.1", "v2.10.1", false); err == nil {
-		t.Fatal("missing pending update was committed")
-	}
-}
-
-func TestFinalizeUpdateCommitsLegacyRelayBootstrap(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "relay-supervisor")
-	if err := os.WriteFile(legacyPendingUpdatePath(executable), []byte("v2.10.1\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := finalizeUpdate(executable, "v2.10.1", "v2.10.1", false); err != nil {
-		t.Fatal(err)
-	}
-	if pending, err := ReadPendingUpdate(executable); err != nil || pending != nil {
-		t.Fatalf("legacy pending state after commit = %#v, %v", pending, err)
-	}
-}
-
-func TestStagePendingUpdateRejectsConcurrentMarker(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "daemon")
-	if err := StagePendingUpdate(executable, "v2.10.0", "v2.10.1", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if err := StagePendingUpdate(executable, "v2.10.1", "v2.10.2", time.Now()); err == nil {
-		t.Fatal("expected concurrent pending update to be rejected")
-	}
-}
-
-func TestSystemdUpdateGuardRunsPreviousBinaryAroundCandidate(t *testing.T) {
-	dropIn := systemdUpdateGuardDropIn("/usr/local/bin/nginx-daemon")
-	for _, expected := range []string{
-		"StartLimitIntervalSec=120",
-		"StartLimitBurst=6",
-		"ExecStartPre=+/bin/sh",
-		"nginx-daemon.previous\" update-guard start",
-		"ExecStopPost=+/bin/sh",
-		"update-guard failure",
-		"${SERVICE_RESULT}:${EXIT_CODE}:${EXIT_STATUS}",
-		"nginx-daemon.update-state.json",
-	} {
-		if !strings.Contains(dropIn, expected) {
-			t.Fatalf("systemd guard missing %q:\n%s", expected, dropIn)
-		}
-	}
-}
-
-func TestBackupBinaryPublishesExecutableCopy(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "daemon")
-	backup := source + ".previous"
-	if err := os.WriteFile(source, []byte("old-binary"), 0751); err != nil {
-		t.Fatal(err)
-	}
-	if err := BackupBinary(source, backup); err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != "old-binary" {
-		t.Fatalf("backup contents = %q", contents)
-	}
-	info, err := os.Stat(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0751 {
-		t.Fatalf("backup mode = %o", info.Mode().Perm())
 	}
 }
 
@@ -275,5 +35,100 @@ func TestSelfUpdateRejectsMissingSignedManifest(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected missing signed manifest to be rejected")
+	}
+}
+
+func TestReplaceBinaryAtPathReplacesVerifiedArtifact(t *testing.T) {
+	artifact := []byte("new-daemon-binary")
+	checksum := fmt.Sprintf("%x", sha256.Sum256(artifact))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(artifact)
+	}))
+	defer server.Close()
+
+	destination := filepath.Join(t.TempDir(), "nginx-daemon")
+	if err := os.WriteFile(destination, []byte("old-daemon-binary"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	downloadURL := server.URL + "/v2.10.0-rc.27-nginx/nginx-daemon-linux-" + updateauth.NormalizeArch(runtime.GOARCH)
+	verifyCalled := false
+	verify := func(manifest string, expected updateauth.DaemonExpectation) (*updateauth.DaemonManifestPayload, error) {
+		verifyCalled = true
+		if manifest != "signed-manifest" {
+			t.Fatalf("manifest = %q", manifest)
+		}
+		if expected.DaemonType != "nginx" || expected.Version != "v2.10.0-rc.27" || expected.Tag != "v2.10.0-rc.27-nginx" {
+			t.Fatalf("unexpected manifest expectation: %#v", expected)
+		}
+		if expected.Arch != updateauth.NormalizeArch(runtime.GOARCH) || expected.DownloadURL != downloadURL || expected.SHA256 != checksum {
+			t.Fatalf("unexpected artifact expectation: %#v", expected)
+		}
+		return &updateauth.DaemonManifestPayload{}, nil
+	}
+
+	err := replaceBinaryAtPath(
+		downloadURL,
+		"v2.10.0-rc.27",
+		checksum,
+		"signed-manifest",
+		"nginx",
+		destination,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		verify,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verifyCalled {
+		t.Fatal("signed manifest was not verified")
+	}
+	contents, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != string(artifact) {
+		t.Fatalf("destination contents = %q", contents)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0755 {
+		t.Fatalf("destination mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestReplaceBinaryAtPathKeepsCurrentBinaryOnChecksumMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("corrupted-candidate"))
+	}))
+	defer server.Close()
+
+	destination := filepath.Join(t.TempDir(), "docker-daemon")
+	if err := os.WriteFile(destination, []byte("current-binary"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	verify := func(_ string, _ updateauth.DaemonExpectation) (*updateauth.DaemonManifestPayload, error) {
+		return &updateauth.DaemonManifestPayload{}, nil
+	}
+	err := replaceBinaryAtPath(
+		server.URL+"/v2.10.0-rc.27-docker/docker-daemon-linux-amd64",
+		"v2.10.0-rc.27",
+		fmt.Sprintf("%x", sha256.Sum256([]byte("expected-candidate"))),
+		"signed-manifest",
+		"docker",
+		destination,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		verify,
+	)
+	if err == nil {
+		t.Fatal("expected checksum mismatch")
+	}
+	contents, readErr := os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(contents) != "current-binary" {
+		t.Fatalf("current binary was replaced: %q", contents)
 	}
 }

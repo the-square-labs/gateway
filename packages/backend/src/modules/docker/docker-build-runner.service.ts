@@ -8,6 +8,7 @@ import type { IntegrationsService } from '@/modules/integrations/integrations.se
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerBuildService } from './docker-build.service.js';
+import { readBuilderNodeSettings } from './docker-build-policy.js';
 import type { DockerSourceService } from './docker-source.service.js';
 
 const logger = createChildLogger('DockerBuildRunner');
@@ -82,29 +83,36 @@ export class DockerBuildRunnerService {
     try {
       await this.reconcileCancellations();
       const builders = await this.db
-        .select({ id: nodes.id, capabilities: nodes.capabilities })
+        .select({ id: nodes.id, capabilities: nodes.capabilities, metadata: nodes.metadata })
         .from(nodes)
         .where(and(eq(nodes.type, 'builder'), eq(nodes.status, 'online')));
       for (const builder of builders) {
         const platform = builderPlatform(builder.capabilities);
         if (!platform || !builderReady(builder.capabilities)) continue;
-        const [active] = await this.db
+        const settings = readBuilderNodeSettings(builder.metadata);
+        const active = await this.db
           .select({ id: dockerBuilds.id })
           .from(dockerBuilds)
-          .where(and(eq(dockerBuilds.builderNodeId, builder.id), inArray(dockerBuilds.status, [...ACTIVE_STATUSES])))
-          .limit(1);
-        if (active) continue;
-        await this.claimAndDispatch(builder.id, platform);
+          .where(and(eq(dockerBuilds.builderNodeId, builder.id), inArray(dockerBuilds.status, [...ACTIVE_STATUSES])));
+        for (let slot = active.length; slot < settings.parallelism; slot += 1) {
+          if (!(await this.claimAndDispatch(builder.id, platform, settings))) break;
+        }
       }
     } finally {
       this.running = false;
     }
   }
 
-  private async claimAndDispatch(builderNodeId: string, platform: 'linux/amd64' | 'linux/arm64'): Promise<void> {
+  private async claimAndDispatch(
+    builderNodeId: string,
+    platform: 'linux/amd64' | 'linux/arm64',
+    settings = readBuilderNodeSettings(undefined)
+  ): Promise<boolean> {
     const leaseOwner = `gateway:${process.pid}:${randomUUID()}`;
     const build = await this.builds.claimNext({ builderNodeId, leaseOwner, platform });
-    if (!build) return;
+    if (!build) return false;
+    let dispatchAccepted = false;
+    let dispatchResultReceived = false;
     try {
       const [source] = await this.db
         .select()
@@ -117,7 +125,7 @@ export class DockerBuildRunnerService {
           errorCode: 'SUPERSEDED_BY_SOURCE_CONFIG',
           errorMessage: 'Build settings or Build Secrets changed before the build was dispatched',
         });
-        return;
+        return false;
       }
       if (!this.sources) throw new Error('Docker source secret service is unavailable');
       const buildSecrets = await this.sources.getDecryptedBuildSecrets(source.id);
@@ -136,7 +144,7 @@ export class DockerBuildRunnerService {
         contextId: build.id,
       });
       const policy = source.policy as Record<string, unknown>;
-      const result = await this.dispatch.sendDockerBuildCommand(builderNodeId, {
+      const command = await this.dispatch.dispatchDockerBuildCommand(builderNodeId, {
         buildId: build.id,
         repositoryUrl: source.repositoryCloneUrl,
         repositoryRemoteId: build.repositoryRemoteId,
@@ -155,7 +163,11 @@ export class DockerBuildRunnerService {
         cpuLimitMillis: String(policyLimit(policy, 'cpuLimitMillis', 2000)),
         memoryLimitBytes: String(policyLimit(policy, 'memoryLimitBytes', 4 * 1024 ** 3)),
         diskLimitBytes: String(policyLimit(policy, 'diskLimitBytes', 20 * 1024 ** 3)),
-        timeoutSeconds: policyLimit(policy, 'timeoutSeconds', 1800),
+        timeoutSeconds: Math.min(
+          policyLimit(policy, 'timeoutSeconds', settings.timeoutMinutes * 60),
+          settings.timeoutMinutes * 60
+        ),
+        workerParallelism: settings.parallelism,
         outputKind: source.targetKind === 'pages_project' ? 'pages_archive' : 'oci_image',
         applicationRoot: build.applicationRoot,
         packageManager: build.packageManager ?? '',
@@ -164,9 +176,34 @@ export class DockerBuildRunnerService {
         buildScript: build.buildScript ?? '',
         artifactDirectory: build.artifactDirectory ?? '',
       });
+      void command.result.catch(() => {});
+      await command.accepted;
+      dispatchAccepted = true;
+      const result = await command.result;
+      dispatchResultReceived = true;
       if (!result.success) throw new Error(result.error || 'Builder daemon rejected the build');
+      return true;
     } catch (error) {
       const errorMessage = (error as Error).message.slice(0, 4096);
+      if (dispatchResultReceived && errorMessage === 'builder is at its isolated job capacity') {
+        await this.builds.returnClaimToQueue(build.id, leaseOwner, 'Build Worker capacity changed before dispatch');
+        return false;
+      }
+      if (dispatchResultReceived && errorMessage === 'build is already running') {
+        logger.info('Build Worker confirmed that the claimed build is already running', {
+          buildId: build.id,
+          builderNodeId,
+        });
+        return true;
+      }
+      if (dispatchAccepted && !dispatchResultReceived) {
+        logger.warn('Build dispatch result is ambiguous after the worker accepted the command; preserving the lease', {
+          buildId: build.id,
+          builderNodeId,
+          error: errorMessage,
+        });
+        return true;
+      }
       logger.warn('Failed to dispatch Docker build', {
         buildId: build.id,
         builderNodeId,
@@ -182,6 +219,7 @@ export class DockerBuildRunnerService {
         errorCode: 'BUILD_DISPATCH_FAILED',
         errorMessage,
       });
+      return false;
     }
   }
 

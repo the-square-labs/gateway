@@ -16,12 +16,13 @@
     "build:daemon": "scripts/sync-update-trust-anchor.sh && make -C packages/daemons/nginx build && make -C packages/daemons/docker build && mkdir -p packages/daemons/monitoring/bin packages/daemons/relay/bin && (cd packages/daemons/monitoring && CGO_ENABLED=0 go build -o bin/monitoring-daemon ./cmd/monitoring-daemon) && (cd packages/daemons/relay && CGO_ENABLED=0 go build -o bin/relay-supervisor ./cmd/relay-supervisor)",
     "build:relay": "cd packages/relay && CGO_ENABLED=0 go build ./cmd/gateway-relay",
     "start": "nx run backend:start",
-    "test": "pnpm run test:backend && pnpm --filter frontend test && pnpm run test:logging-sdk && pnpm run test:gateway-inference && pnpm --filter @sqgateway/update-service test && pnpm run test:daemon && pnpm run test:relay",
+    "test": "pnpm run test:backend && pnpm --filter frontend test && pnpm run test:logging-sdk && pnpm run test:gateway-inference && pnpm --filter @sqgateway/update-service test && pnpm run test:daemon && pnpm run test:relay && pnpm run test:release-metadata",
     "test:backend": "nx run backend:test",
     "test:logging-sdk": "nx run logging-sdk:test",
     "test:gateway-inference": "nx run gateway-inference:test",
     "test:daemon": "scripts/sync-update-trust-anchor.sh && cd packages/daemons && go test ./docker/... ./monitoring/... ./nginx/... ./relay/... ./shared/... ./secure-link-connector/...",
     "test:relay": "cd packages/relay && go test ./...",
+    "test:release-metadata": "node --test scripts/verify-continuity-grant.test.mjs",
     "test:relay-pool": "scripts/relay-pool-e2e.sh",
     "test:release-upgrade": "scripts/release-upgrade-e2e.sh",
     "lint": "pnpm --filter frontend lint && pnpm --filter backend lint && pnpm --filter @sqgateway/logger lint && pnpm --filter @sqgateway/inference lint && pnpm --filter @sqgateway/update-service lint && pnpm run lint:daemon && pnpm run lint:relay",
@@ -45,14 +46,16 @@
   "packageManager": "pnpm@9.15.0",
   "pnpm": {
     "overrides": {
-      "@hono/node-server": "1.19.13",
+      "@hono/node-server": "1.19.15",
+      "body-parser": "2.3.0",
       "axios": "1.18.0",
       "follow-redirects": "1.16.0",
       "fast-uri": "3.1.5",
-      "hono": "4.12.25",
-      "postcss": "8.5.18",
+      "hono": "4.12.34",
+      "postcss": "8.5.23",
+      "postcss-selector-parser": "7.1.5",
       "postcss>nanoid": "3.3.18",
-      "protobufjs": "7.6.3",
+      "protobufjs": "7.6.5",
       "esbuild": "0.25.12",
       "vite": "7.3.5",
       "ip-address": "10.3.1",
@@ -60,16 +63,17 @@
       "ws": "8.21.0",
       "qs": "6.15.2",
       "react-router": "7.18.2",
-      "brace-expansion": "5.0.6",
+      "brace-expansion": "5.0.9",
       "@grpc/grpc-js": "1.14.4",
       "tmp": "0.2.7",
       "form-data": "4.0.6",
       "@babel/core": "7.29.6",
-      "js-yaml@3.15.0": "4.2.0",
-      "js-yaml@4.1.1": "4.2.0"
+      "browserslist": "4.28.7",
+      "js-yaml@3.15.0": "4.3.1",
+      "js-yaml@4.1.1": "4.3.1"
     }
   },
   "devDependencies": {
-    "nx": "22.6.3"
+    "nx": "22.7.7"
   }
 }

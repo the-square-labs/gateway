@@ -23,56 +23,6 @@ const managedDatabaseCommandTimeoutMs = 15 * 60 * 1000;
 // acknowledges the command. Leave a small margin for verification and replace.
 const daemonUpdateCommandTimeoutMs = 5 * 60 * 1000 + 30_000;
 const dockerComposeCommandTimeoutMs = 30 * 60 * 1000;
-const relaySupervisorRunnerPath = '/usr/local/lib/gateway-relay/run-supervisor';
-const relaySupervisorUnit = 'gateway-relay-supervisor.service';
-const relaySupervisorRunnerV2Capability = 'relay_supervisor_runner_v2';
-const currentRelaySupervisorRunner = '#!/bin/sh\nset -eu\nexec /usr/local/bin/relay-supervisor "$@"\n';
-const legacyRelaySupervisorRunner = `#!/bin/sh
-set -eu
-binary=/usr/local/bin/relay-supervisor
-pending="\${binary}.update-pending"
-previous="\${binary}.previous"
-while :; do
-  "$binary" "$@" &
-  child=$!
-  watchdog=""
-  if [ -f "$pending" ]; then
-    (
-      sleep 240
-      if [ -f "$pending" ]; then kill -TERM "$child" 2>/dev/null || true; fi
-    ) &
-    watchdog=$!
-  fi
-  trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT
-  set +e
-  wait "$child"
-  status=$?
-  set -e
-  trap - TERM INT
-  if [ -n "$watchdog" ]; then
-    kill "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
-  fi
-  if [ -f "$pending" ] && [ -f "$previous" ]; then
-    mv -f "$previous" "$binary"
-    rm -f "$pending"
-    continue
-  fi
-  exit "$status"
-done
-`;
-const installRelaySupervisorRunnerScript = [
-  'set -eu',
-  `runner=${relaySupervisorRunnerPath}`,
-  `tmp="\${runner}.gateway-update.$$"`,
-  'trap \'rm -f "$tmp"\' EXIT',
-  'umask 022',
-  "printf '%s\\n' '#!/bin/sh' 'set -eu' 'exec /usr/local/bin/relay-supervisor \"$@\"' >\"$tmp\"",
-  'chmod 0755 "$tmp"',
-  'mv -f "$tmp" "$runner"',
-  'trap - EXIT',
-  `systemctl restart --no-block ${relaySupervisorUnit}`,
-].join('\n');
 
 export class NodeDispatchService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -145,9 +95,18 @@ export class NodeDispatchService {
     nodeId: string,
     command: NonNullable<GatewayCommand['dockerBuild']>
   ): Promise<CommandResult> {
+    const dispatched = await this.dispatchDockerBuildCommand(nodeId, command);
+    void dispatched.accepted.catch(() => {});
+    return dispatched.result;
+  }
+
+  async dispatchDockerBuildCommand(
+    nodeId: string,
+    command: NonNullable<GatewayCommand['dockerBuild']>
+  ): Promise<DispatchedCommand> {
     await this.assertNodeMutable(nodeId);
     await this.assertBuilderNode(nodeId);
-    return this.registry.sendCommand(nodeId, { dockerBuild: command }, 30_000);
+    return this.registry.dispatchCommand(nodeId, { dockerBuild: command }, 30_000);
   }
 
   async cancelDockerBuild(nodeId: string, buildId: string, reason: string): Promise<CommandResult> {
@@ -519,102 +478,6 @@ export class NodeDispatchService {
       { updateRelayWorker: { downloadUrl, targetVersion, checksum, signedManifest } },
       daemonUpdateCommandTimeoutMs
     );
-  }
-
-  /**
-   * One-time migration for supervisors installed before the shared systemd
-   * rollback guard. The legacy wrapper rolls back immediately when the old
-   * process exits, before a candidate can start. Only the exact installer-owned
-   * wrapper is replaced; custom/unknown runners are never overwritten.
-   */
-  async prepareRelaySupervisorRollbackBootstrap(nodeId: string): Promise<void> {
-    await this.assertRelaySupervisorNode(nodeId);
-    await this.assertNodeMutable(nodeId);
-    const connected = this.registry.getNode(nodeId);
-    if (!connected) throw new AppError(409, 'NODE_NOT_CONNECTED', 'Relay supervisor is not connected');
-
-    const current = await this.registry.sendCommand(nodeId, {
-      nodeFile: { action: 'read', path: relaySupervisorRunnerPath, maxBytes: 16 * 1024 } as any,
-    });
-    if (!current.success || !current.data) {
-      throw new AppError(
-        409,
-        'RELAY_SUPERVISOR_RUNNER_UNREADABLE',
-        current.error || 'Cannot inspect the Relay supervisor update runner'
-      );
-    }
-    const runner = `${Buffer.from(current.data).toString('utf8').replaceAll('\r\n', '\n').trimEnd()}\n`;
-    const currentBinaryOwnsRunner = connected.capabilities?.has(relaySupervisorRunnerV2Capability) ?? false;
-    if (runner === currentRelaySupervisorRunner && currentBinaryOwnsRunner) return;
-    if (runner !== legacyRelaySupervisorRunner && runner !== currentRelaySupervisorRunner) {
-      throw new AppError(
-        409,
-        'RELAY_SUPERVISOR_RUNNER_UNSUPPORTED',
-        'Relay supervisor uses an unknown update runner; reinstall it before updating'
-      );
-    }
-
-    const previousConnectionId = connected.connectionId;
-    try {
-      const result = await this.registry.sendCommand(
-        nodeId,
-        {
-          nodeExec: {
-            action: 'run',
-            command: ['/bin/sh', '-c', installRelaySupervisorRunnerScript],
-            tty: false,
-            rows: 0,
-            cols: 0,
-          },
-        },
-        30_000
-      );
-      if (!result.success) {
-        throw new Error(result.error || result.detail || 'Relay supervisor runner migration failed');
-      }
-    } catch (error) {
-      // Restarting the unit can close the command stream before its result is
-      // delivered. That is expected only when a replacement connection follows.
-      if (!(error instanceof Error) || error.message !== 'Node disconnected') throw error;
-    }
-
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
-      const replacement = this.registry.getNode(nodeId);
-      if (replacement && replacement.connectionId !== previousConnectionId) {
-        const verified = await this.registry.sendCommand(nodeId, {
-          nodeFile: { action: 'read', path: relaySupervisorRunnerPath, maxBytes: 16 * 1024 } as any,
-        });
-        const installed = verified.data
-          ? `${Buffer.from(verified.data).toString('utf8').replaceAll('\r\n', '\n').trimEnd()}\n`
-          : '';
-        if (verified.success && installed === currentRelaySupervisorRunner) return;
-        throw new AppError(
-          409,
-          'RELAY_SUPERVISOR_RUNNER_MIGRATION_FAILED',
-          verified.error || 'Relay supervisor restarted without the rollback-compatible runner'
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    throw new AppError(
-      409,
-      'RELAY_SUPERVISOR_RESTART_TIMEOUT',
-      'Relay supervisor did not reconnect after preparing automatic rollback'
-    );
-  }
-
-  async commitRelaySupervisorUpdate(nodeId: string, targetVersion: string): Promise<CommandResult> {
-    await this.assertRelaySupervisorNode(nodeId);
-    return this.registry.sendCommand(nodeId, { commitRelaySupervisorUpdate: { targetVersion } }, 30_000);
-  }
-
-  async finalizeDaemonUpdate(
-    nodeId: string,
-    targetVersion: string,
-    acknowledgeRollback = false
-  ): Promise<CommandResult> {
-    return this.registry.sendCommand(nodeId, { finalizeDaemonUpdate: { targetVersion, acknowledgeRollback } }, 30_000);
   }
 
   async probeRelayCandidate(

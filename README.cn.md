@@ -251,20 +251,22 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 
 Gateway 提供四个产品计划。付费计划适用于一个 Gateway 实例，不按 managed node、用户或 custom permission group 额外收费。
 
-Community 仅可依据 [PolyForm Strict License 1.0.0](LICENSE.md) 用于非商业目的。由 Square Labs 签发的 Personal、Business 或 Enterprise 密钥，会依据 [Commercial Key License](COMMERCIAL-LICENSE.md) 自动向许可证记录中的被许可方授予一台官方未修改 Gateway 实例的有限商业使用权，并在密钥到期后继续有效 30 个自然日。两种许可证均不允许修改或再分发。
+Gateway 源代码目前由 Alexandr Slavinschii 所有，并以 Square Labs 项目名称运营，依据 [PolyForm Perimeter License 1.0.1](LICENSE.md) 提供。只有在 The Square Labs OÜ 于爱沙尼亚完成注册并通过有效书面协议取得相关经济权利后，该公司才成为权利人。该许可证允许为非竞争性目的使用、修改和再分发代码，包括企业内部使用；但不允许向他人提供被宣传为 Gateway 替代品的产品。Personal、Business 或 Enterprise 密钥依据 [Paid Key Terms](COMMERCIAL-LICENSE.md) 解锁相应计划的功能与限制；普通付费密钥不会自动授予 OEM、白标、转售或竞争性托管服务的权利。
+
+每个官方版本还附带[产品连续性 MIT 授权](CONTINUITY-MIT-GRANT.md)。该授权不包含按版本发布日期计算的倒计时；停止开发、支持或销售，发布停止产品的公告，以及网站或许可服务器不可用，都不会触发 MIT。公司注册并通过书面协议取得相关权利之前，不存在自动转换。权利转让给 The Square Labs OÜ 后，只有公司最终解散且连续 90 天没有继承人或受让人，或者当前权利人明确自愿选择 MIT 时，MIT 条款才可能生效。
 
 > [!NOTE]
 > 以下价格为初步价格，不构成要约，并可能发生变化。购买前请确认最新价格和条款。
 
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 仅限非商业使用的核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 商业使用权，managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；不包含正在开发的 application-cluster 功能。 |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference，可用于内部及其他非竞争性用途；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；不包含正在开发的 application-cluster 功能。 |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Compose management 和 Pages）的全部功能，并增加面向 containers、blue/green deployments、Compose Projects 与 Pages、带隔离 Build Workers 和 build vulnerability policy 的 Git push-to-deploy、private internal registry 的可选 external access、Docker Secure Runtime、structured logging、audit export、guided onboarding、发布后的 security scanning，以及正在开发的 application cluster 和 same-node multi-instance 功能。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business（包括 Pages）的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。
 
-付费密钥到期后，Personal、Business 和 Enterprise 的技术 entitlements 分别继续有效 24 小时、3 天和 7 天。该产品 grace period 与 offline validation 以及上述 30 天商业使用授权相互独立。
+付费密钥到期后，Personal、Business 和 Enterprise 的技术 entitlements 分别继续有效 24 小时、3 天和 7 天。此后 Gateway 会阻止创建新的付费资源和其他新的付费操作，但不会停止或删除已经配置的基础设施。已撤销、已替换、无效或明确停用的密钥会单独处理。
 
-Copyright (c) 2021-2026 [Square Labs](https://thesquarelabs.com)
+Copyright (c) 2021-2026 Alexandr Slavinschii，以 [Square Labs](https://thesquarelabs.com) 项目名称运营

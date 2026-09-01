@@ -17,6 +17,7 @@ describe('SiemDeliveryService', () => {
     const service = new SiemDeliveryService({} as never, {} as never, featureState as never);
     service.setLicensePolicyService({
       hasFeature: vi.fn().mockResolvedValue(true),
+      hasFeatureForExistingRuntime: vi.fn().mockResolvedValue(true),
       requireFeature: vi.fn().mockResolvedValue(undefined),
     } as never);
     const batch = {

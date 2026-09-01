@@ -95,4 +95,4 @@ Run `npx -y @sqgateway/inference@latest --help` for the complete public command 
 
 ## License
 
-Square Labs-owned source in this package is available for noncommercial use under the [PolyForm Strict License 1.0.0](LICENSE.md). A Square Labs-issued Personal, Business, or Enterprise Gateway key provides the named licensee a limited commercial-use grant under [Good Gateway Commercial Key License 1.0](COMMERCIAL-LICENSE.md). Neither license permits modification or redistribution.
+Source in this package owned by Alexandr Slavinschii, operating the project under the Square Labs name, is available under the [PolyForm Perimeter License 1.0.1](LICENSE.md). The Square Labs OÜ becomes the rights holder only after registration and an effective written assignment. A Personal, Business, or Enterprise Gateway key may unlock server-side Gateway Inference features and limits under the [paid access notice](COMMERCIAL-LICENSE.md), but an ordinary key does not waive Perimeter's restriction on providing a substitute product. The package also includes the [Product Continuity MIT Grant](CONTINUITY-MIT-GRANT.md), which has no release-age or inactivity countdown.

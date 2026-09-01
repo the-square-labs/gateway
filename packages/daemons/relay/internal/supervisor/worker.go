@@ -199,12 +199,7 @@ func (m *workerManager) update(
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 
-	backupPath := m.cfg.BinaryPath + ".previous"
 	m.shutdown()
-	if err := lifecycle.BackupBinary(m.cfg.BinaryPath, backupPath); err != nil {
-		_ = m.ensureRunning()
-		return fmt.Errorf("backup relay worker: %w", err)
-	}
 	if err := lifecycle.ReplaceBinaryAtPath(
 		downloadURL,
 		targetVersion,
@@ -214,22 +209,13 @@ func (m *workerManager) update(
 		m.cfg.BinaryPath,
 		logger,
 	); err != nil {
-		_ = os.Remove(backupPath)
 		_ = m.ensureRunning()
 		return err
 	}
 
 	if err := m.waitReadyVersion(ctx, targetVersion, 30*time.Second); err != nil {
-		m.shutdown()
-		if restoreErr := os.Rename(backupPath, m.cfg.BinaryPath); restoreErr != nil {
-			return fmt.Errorf("relay worker update failed (%v) and rollback failed: %w", err, restoreErr)
-		}
-		if restartErr := m.waitReadyVersion(ctx, "", 30*time.Second); restartErr != nil {
-			return fmt.Errorf("relay worker update failed (%v); previous worker restored but unhealthy: %w", err, restartErr)
-		}
-		return fmt.Errorf("relay worker update failed and was rolled back: %w", err)
+		return fmt.Errorf("relay worker did not become ready after update: %w", err)
 	}
-	_ = os.Remove(backupPath)
 	return nil
 }
 

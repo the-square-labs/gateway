@@ -147,6 +147,8 @@ export function AdminNodeDetail({
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [appearanceName, setAppearanceName] = useState("");
   const [appearanceColor, setAppearanceColor] = useState<NodeAppearanceColor | null>(null);
+  const [builderParallelism, setBuilderParallelism] = useState(1);
+  const [builderTimeoutMinutes, setBuilderTimeoutMinutes] = useState(30);
   const [serviceAddressRows, setServiceAddressRows] = useState<ServiceAddressRow[]>([
     { id: 0, value: "" },
   ]);
@@ -241,6 +243,10 @@ export function AdminNodeDetail({
       : node?.type === "nginx"
         ? hasScope("nodes:config:edit") || hasScope(`nodes:config:edit:${id}`)
         : hasScope("docker:containers:config") || hasScope(`docker:containers:config:${id}`));
+  const canEditBuilderSettings =
+    !!id &&
+    node?.type === "builder" &&
+    (hasScope("nodes:config:edit") || hasScope(`nodes:config:edit:${id}`));
   const canReadNodeFiles =
     !!id && (hasScope("nodes:files:read") || hasScope(`nodes:files:read:${id}`));
   const canWriteNodeFiles =
@@ -256,6 +262,7 @@ export function AdminNodeDetail({
     (node.type === "nginx" || node.type === "docker") &&
     (hasScope("nodes:lock") || hasScope(`nodes:lock:${node.id}`));
   const canRenameNode = !!id && hasScope(`nodes:rename:${id}`);
+  const canOpenNodeSettings = canRenameNode || canEditBuilderSettings;
   const daemonUpdate = useMemo(() => {
     if (!id || !node) return { available: false, latestVersion: null };
     const forced = getForcedDaemonUpdateForNode(node);
@@ -442,6 +449,16 @@ export function AdminNodeDetail({
         value,
       }))
     );
+    const builderSettings =
+      node.metadata.builderSettings && typeof node.metadata.builderSettings === "object"
+        ? (node.metadata.builderSettings as Record<string, unknown>)
+        : {};
+    const parallelism = Number(builderSettings.parallelism);
+    const timeoutMinutes = Number(builderSettings.timeoutMinutes);
+    setBuilderParallelism(Number.isSafeInteger(parallelism) && parallelism >= 1 ? parallelism : 1);
+    setBuilderTimeoutMinutes(
+      Number.isSafeInteger(timeoutMinutes) && timeoutMinutes >= 1 ? timeoutMinutes : 30
+    );
     setAppearanceOpen(true);
   };
 
@@ -450,11 +467,23 @@ export function AdminNodeDetail({
     setAppearanceSaving(true);
     try {
       const update = {
-        displayName: appearanceName.trim() || null,
-        appearanceColor,
+        ...(canRenameNode
+          ? {
+              displayName: appearanceName.trim() || null,
+              appearanceColor,
+            }
+          : {}),
         ...((node?.type === "docker" || node?.type === "databases" || node?.type === "nginx") &&
         canEditNodeServiceAddress
           ? { serviceAddresses: configuredServiceAddresses }
+          : {}),
+        ...(node?.type === "builder" && canEditBuilderSettings
+          ? {
+              builderSettings: {
+                parallelism: builderParallelism,
+                timeoutMinutes: builderTimeoutMinutes,
+              },
+            }
           : {}),
       };
       let updated: Node;
@@ -623,7 +652,7 @@ export function AdminNodeDetail({
                 onClick: () => setPinOpen(true),
                 disabled: nodeUpdating,
               },
-              ...(canRenameNode
+              ...(canOpenNodeSettings
                 ? [
                     {
                       label: "Settings",
@@ -676,7 +705,7 @@ export function AdminNodeDetail({
             >
               <Pin className="h-4 w-4" />
             </Button>
-            {canRenameNode && (
+            {canOpenNodeSettings && (
               <Button variant="outline" disabled={nodeUpdating} onClick={openAppearanceDialog}>
                 <Settings className="h-4 w-4" />
                 Settings
@@ -915,6 +944,7 @@ export function AdminNodeDetail({
                 <Input
                   aria-label="Display Name"
                   value={appearanceName}
+                  disabled={!canRenameNode}
                   onChange={(e) => setAppearanceName(e.target.value)}
                   placeholder={node.hostname}
                   onKeyDown={(e) => {
@@ -931,6 +961,7 @@ export function AdminNodeDetail({
                   <button
                     type="button"
                     aria-label="Default color"
+                    disabled={!canRenameNode}
                     className={cn(
                       "aspect-square w-full border border-input bg-muted",
                       appearanceColor === null && "border-white"
@@ -943,6 +974,7 @@ export function AdminNodeDetail({
                       key={option.value}
                       type="button"
                       aria-label={`${option.label} color`}
+                      disabled={!canRenameNode}
                       className={cn(
                         "aspect-square w-full border border-input",
                         option.swatchClassName,
@@ -1078,6 +1110,44 @@ export function AdminNodeDetail({
                   ) : null}
                 </div>
               )}
+              {node.type === "builder" && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="builder-parallelism">
+                      Parallel jobs
+                    </label>
+                    <Input
+                      id="builder-parallelism"
+                      type="number"
+                      min={1}
+                      max={16}
+                      value={builderParallelism}
+                      disabled={!canEditBuilderSettings}
+                      onChange={(event) => setBuilderParallelism(Number(event.target.value))}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Maximum builds assigned to this worker at the same time. Default: 1.
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="builder-timeout-minutes">
+                      Build timeout (minutes)
+                    </label>
+                    <Input
+                      id="builder-timeout-minutes"
+                      type="number"
+                      min={1}
+                      max={360}
+                      value={builderTimeoutMinutes}
+                      disabled={!canEditBuilderSettings}
+                      onChange={(event) => setBuilderTimeoutMinutes(Number(event.target.value))}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Hard upper limit for one build on this worker. Default: 30 minutes.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </AnimatedHeight>
           <DialogFooter>
@@ -1090,7 +1160,14 @@ export function AdminNodeDetail({
                 appearanceSaving ||
                 serviceAddressesIncomplete ||
                 serviceAddressesDuplicate ||
-                serviceAddressesInvalid
+                serviceAddressesInvalid ||
+                (node.type === "builder" &&
+                  (!Number.isSafeInteger(builderParallelism) ||
+                    builderParallelism < 1 ||
+                    builderParallelism > 16 ||
+                    !Number.isSafeInteger(builderTimeoutMinutes) ||
+                    builderTimeoutMinutes < 1 ||
+                    builderTimeoutMinutes > 360))
               }
             >
               {appearanceSaving ? "Saving..." : "Save"}

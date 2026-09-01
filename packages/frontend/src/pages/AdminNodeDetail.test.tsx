@@ -262,6 +262,61 @@ describe("AdminNodeDetail", () => {
     expect(screen.getByRole("tab", { name: "Jobs" })).toBeEnabled();
   });
 
+  it("edits Build Worker parallelism and timeout in the standard node settings dialog", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:details", "nodes:config:edit:builder-node"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const builder = {
+      ...makeNode({
+        id: "builder-node",
+        slug: "builder-node",
+        type: "builder",
+        hostname: "builder-1",
+        displayName: "Builder 1",
+        metadata: { builderSettings: { parallelism: 2, timeoutMinutes: 40 } },
+      }),
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    };
+    vi.mocked(api.getNode).mockResolvedValue(builder);
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+    vi.mocked(api.updateNode).mockResolvedValue(builder);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/builder-node/details"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Builder 1" })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /settings/i }));
+    expect(screen.getByLabelText("Display Name")).toBeDisabled();
+    const parallelism = screen.getByLabelText("Parallel jobs");
+    const timeout = screen.getByLabelText("Build timeout (minutes)");
+    expect(parallelism).toHaveValue(2);
+    expect(timeout).toHaveValue(40);
+    await user.clear(parallelism);
+    await user.type(parallelism, "3");
+    await user.clear(timeout);
+    await user.type(timeout, "60");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(api.updateNode).toHaveBeenCalledWith("builder-node", {
+        builderSettings: { parallelism: 3, timeoutMinutes: 60 },
+      })
+    );
+  });
+
   it("saves node appearance name and predefined color", async () => {
     useAuthStore.setState({
       user: makeUser({

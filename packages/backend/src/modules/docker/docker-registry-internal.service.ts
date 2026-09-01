@@ -238,7 +238,9 @@ export class DockerInternalRegistryService {
     if (!state.externalAccessEnabled) {
       throw new AppError(404, 'REGISTRY_EXTERNAL_ACCESS_DISABLED', 'Not found');
     }
-    await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('git-push-to-deploy');
+    await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeatureForExistingRuntime(
+      'git-push-to-deploy'
+    );
     return state;
   }
 
