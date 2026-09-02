@@ -1,4 +1,7 @@
-import { publishInferenceSelfUsage } from "@/lib/inference-self-usage";
+import {
+  INFERENCE_SELF_USAGE_CACHE_KEY,
+  publishInferenceSelfUsage,
+} from "@/lib/inference-self-usage";
 import type {
   InferenceActivityFilters,
   InferenceActivityPage,
@@ -37,8 +40,10 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
 
     async getInferenceSelfUsage(): Promise<InferenceSelfUsage> {
       const usage = await this.request<InferenceSelfUsage>("/inference/usage/self");
-      publishInferenceSelfUsage(usage);
-      return usage;
+      const accepted = this.acceptFreshSnapshot(INFERENCE_SELF_USAGE_CACHE_KEY, usage);
+      if (accepted !== usage) this.setCache(INFERENCE_SELF_USAGE_CACHE_KEY, accepted);
+      else publishInferenceSelfUsage(accepted);
+      return accepted;
     }
 
     getInferenceSelfUsageOverview(): Promise<InferenceUsageOverview> {

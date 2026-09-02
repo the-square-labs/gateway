@@ -215,6 +215,54 @@ describe('inference usage presentation', () => {
     });
   });
 
+  it('closes subscription windows on reset and leaves them idle until the next request', async () => {
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const values = vi.fn(() => ({ onConflictDoUpdate }));
+    const tx = {
+      delete: vi.fn(() => ({ where: deleteWhere })),
+      insert: vi.fn(() => ({ values })),
+    };
+    const db = {
+      query: { users: { findFirst: vi.fn().mockResolvedValue({ id: 'user-1' }) } },
+      transaction: vi.fn(async (callback: (database: typeof tx) => Promise<void>) => callback(tx)),
+    };
+    const policies = {
+      effective: vi.fn().mockResolvedValue({}),
+      usage: vi.fn().mockResolvedValue({
+        credits5h: 0,
+        credits7d: 0,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        active: { credits5h: false, credits7d: false, credits30d: false, apiMonthly: true },
+        recoveryAt: {
+          credits5h: new Date(0),
+          credits7d: new Date(0),
+          credits30d: new Date(0),
+          apiMonthly: new Date(0),
+        },
+      }),
+    };
+    const audit = { log: vi.fn().mockResolvedValue(undefined) };
+    const service = new InferenceUsageService(
+      db as unknown as ConstructorParameters<typeof InferenceUsageService>[0],
+      policies as unknown as ConstructorParameters<typeof InferenceUsageService>[1],
+      audit as unknown as ConstructorParameters<typeof InferenceUsageService>[2]
+    );
+
+    const result = await service.resetUserLimits('admin-1', 'user-1');
+
+    expect(tx.delete).not.toHaveBeenCalled();
+    expect(tx.insert).toHaveBeenCalledTimes(4);
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({ dimension: 'credits5h', windowActive: false, createdBy: 'admin-1' })
+    );
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({ dimension: 'apiMonthlyMicrodollars', windowActive: true, createdBy: 'admin-1' })
+    );
+    expect(result.usage.active).toMatchObject({ credits5h: false, credits7d: false, credits30d: false });
+  });
+
   it('exposes bounded percentages rather than raw values', () => {
     expect(__testOnly.percentage(25, 100)).toBe(25);
     expect(__testOnly.percentage(150, 100)).toBe(100);

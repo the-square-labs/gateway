@@ -1212,6 +1212,13 @@
       "when": 1788175864346,
       "tag": "0172_flaky_nico_minoru",
       "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1788311194420,
+      "tag": "0173_romantic_gunslinger",
+      "breakpoints": true
     }
   ]
 }

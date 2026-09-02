@@ -51,29 +51,34 @@ export class InferenceUsageService {
     private readonly modelAccess?: InferenceModelAccessService
   ) {}
 
-  async self(user: User) {
+  async self(user: User, now = new Date()) {
     const limits = await this.policies.effective(user.id);
-    const usage = await this.policies.usage(user.id, limits);
+    const usage = await this.policies.usage(user.id, limits, now);
     const available = limits.enabled ? await this.availableBudgetTypes(user) : { api: false, subscription: false };
     return {
+      measuredAt: now.toISOString(),
       enabled: limits.enabled,
       api: {
+        active: true,
         configured: available.api && limits.apiMonthlyMicrodollars > 0,
         percentage: percentage(usage.apiMonthlyMicrodollars, limits.apiMonthlyMicrodollars),
         recoveryAt: usage.recoveryAt.apiMonthly.toISOString(),
       },
       subscription: {
         '5h': {
+          active: usage.active?.credits5h ?? true,
           configured: available.subscription && limits.credits5hEnabled,
           percentage: subscriptionPercentage(usage.credits5h, limits.credits5h),
           recoveryAt: usage.recoveryAt.credits5h.toISOString(),
         },
         '7d': {
+          active: usage.active?.credits7d ?? true,
           configured: available.subscription && limits.credits7dEnabled,
           percentage: subscriptionPercentage(usage.credits7d, limits.credits7d),
           recoveryAt: usage.recoveryAt.credits7d.toISOString(),
         },
         '30d': {
+          active: usage.active?.credits30d ?? true,
           configured: available.subscription && limits.credits30dEnabled,
           percentage: subscriptionPercentage(usage.credits30d, limits.credits30d),
           recoveryAt: usage.recoveryAt.credits30d.toISOString(),
@@ -87,7 +92,7 @@ export class InferenceUsageService {
     const ledgerDay = sql<string>`to_char(date_trunc('day', ${inferenceUsageLedger.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD')`;
     const tokenTotal = sql<number>`COALESCE(SUM(${inferenceUsageLedger.uncachedInputTokens} + ${inferenceUsageLedger.cachedInputTokens} + ${inferenceUsageLedger.cacheWriteTokens} + ${inferenceUsageLedger.outputTokens} + ${inferenceUsageLedger.reasoningTokens}), 0)`;
     const [usage, lifetimeRows, dailyRows] = await Promise.all([
-      this.self(user),
+      this.self(user, now),
       this.db.select({ tokens: tokenTotal }).from(inferenceUsageLedger).where(eq(inferenceUsageLedger.userId, user.id)),
       this.db
         .select({ date: ledgerDay, tokens: tokenTotal })
@@ -407,12 +412,13 @@ export class InferenceUsageService {
     const dimensions: InferenceLimitDimension[] = ['credits5h', 'credits7d', 'credits30d', 'apiMonthlyMicrodollars'];
     await this.db.transaction(async (tx) => {
       for (const dimension of dimensions) {
+        const windowActive = dimension === 'apiMonthlyMicrodollars';
         await tx
           .insert(inferenceLimitUsageResets)
-          .values({ userId: targetUserId, dimension, resetAt, createdBy: userId })
+          .values({ userId: targetUserId, dimension, resetAt, windowActive, createdBy: userId })
           .onConflictDoUpdate({
             target: [inferenceLimitUsageResets.userId, inferenceLimitUsageResets.dimension],
-            set: { resetAt, createdBy: userId },
+            set: { resetAt, windowActive, createdBy: userId },
           });
       }
     });

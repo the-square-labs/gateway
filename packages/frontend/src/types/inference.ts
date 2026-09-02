@@ -9,6 +9,7 @@ export interface InferenceToken {
 }
 
 export interface InferenceUsageWindow {
+  active?: boolean;
   percentage: number;
   recoveryAt: string;
 }
@@ -18,6 +19,7 @@ export interface InferenceConfiguredUsageWindow extends InferenceUsageWindow {
 }
 
 export interface InferenceSelfUsage {
+  measuredAt?: string;
   enabled: boolean;
   api: InferenceConfiguredUsageWindow;
   subscription: {
@@ -259,6 +261,7 @@ export interface InferenceUserUsage {
     credits7d: number;
     credits30d: number;
     apiMonthlyMicrodollars: number;
+    active?: Record<string, boolean>;
     recoveryAt: Record<string, string>;
   };
 }

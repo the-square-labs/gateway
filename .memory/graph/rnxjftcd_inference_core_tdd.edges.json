@@ -33,16 +33,6 @@
     },
     {
       "from_id": "rnxjftcd",
-      "to_id": "dcfkgqwx",
-      "relation": "uses_service",
-      "weight": 0.2822,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736428,
-      "updated_at": 1787862736428
-    },
-    {
-      "from_id": "rnxjftcd",
       "to_id": "ip47mets",
       "relation": "uses_service",
       "weight": 0.274,

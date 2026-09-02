@@ -4,47 +4,45 @@
   "file_name": "dcfkgqwx_accounting_gateway_inference",
   "tags": [
     "accounting",
-    "assistant",
-    "cli",
     "gateway",
     "inference",
-    "providers",
+    "limits",
     "quota"
   ],
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.99,
+  "importance": 0.95,
   "created_at": 1784934085269,
-  "updated_at": 1787862445678
+  "updated_at": 1788310972296
 }
 ---
 # Gateway inference product contract
 
-Gateway inference is a standalone bounded context with the OpenAI-compatible `/api/inference/v1` data-plane adapter, dedicated `gwi_` tokens, and credentials/runtime isolated from the internal Assistant and remote MCP. Legacy harness-specific Codex, Anthropic, setup, and alternate OpenAI routes are removed; clients use discovery plus the single stable inference prefix.
+Gateway Inference is a standalone bounded context with the OpenAI-compatible `/api/inference/v1` data plane, dedicated `gwi_` tokens, and isolated provider/runtime credentials. Gateway owns authentication, provider/model configuration, limits, pricing, accounting, routing, and quota UX.
 
-Current product contract:
-- Inference availability is controlled only by persisted general:settings.features.inferenceEnabled, default false when absent. Administrators toggle it in Settings > Gateway > General settings beside PKI; changes apply immediately without restart. There is no INFERENCE_ENABLED environment variable.
-- When disabled, management/data-plane/WebSocket routes return INFERENCE_DISABLED and frontend inference surfaces are hidden. Provider credentials, model configuration, tokens, and immutable accounting data remain stored.
-- User usage percentages and inference API-token management live on the standalone /profile page; Preferences contains profile/preferences/usage and Authorizations contains Gateway API tokens, OAuth applications, and inference tokens. Administration lives in Settings > Inference; there is no standalone /inference page.
-- Profile is a standard main-sidebar navigation item. The normal and AI-lite sidebar account triggers use one shared account-menu composition with avatar/name/email, Profile, Settings, optional existing Administration, and Log out. Its Usage remaining section is expanded by default and collapsible, converts usage to remaining capacity (100 minus usage) so bars drain from 100% to 0%, shows only configured 5h/7d/30d/API rows, and shows Unlimited when no dimension is configured. The account dropdown is 16rem wide in both sidebar modes. Identity, email, top-level actions, and the Usage remaining trigger use shared DropdownMenu typography, padding, and 16px icon defaults; only the nested usage-limit rows use 14px text. The collapsible wrapper adds no second inset, every divider uses identical DropdownMenuSeparator geometry/color, and shared progress bars use the border-gray token for the unfilled track.
-- Settings > Inference Overview, Providers, Models, Limits, and Recent activity initialize synchronously from the last successful in-session GET cache and refresh in the background, so tab remounts never flash loading, empty, or zeroed states. The shared Settings/Profile Powered by footer replays the standard 200ms opacity/8px tab reveal when the active tab changes.
-- Default-policy 5h/7d/30d switches are global gates; a per-user policy may further disable an enabled window but cannot re-enable a globally disabled one. Raw user preferences and values remain stored while globally gated off. Disabled windows do not constrain atomic admission but usage remains measured; all three disabled means unlimited subscription usage. The editor keeps numeric values in the policy panel and switches in a separate Subscription limits panel. Billing timezone is a closed non-free-text IANA Combobox. API monthly budget semantics remain unchanged.
-- Provider administration is a flat list of individual connected accounts/keys. Identical provider templates may repeat and Gateway routes automatically across compatible account/model bindings. The unreleased /settings/inference/providers/:providerId route is removed without a redirect.
-- Clicking a provider connection opens a shared Dialog with reported subscription quota windows, health, enable/disable, manual sync, disconnect, and a subscription-only 0-100 minimum remaining reserve. The reserve is persisted per connection and routing compares the worst latest fresh quota window with max(configured reserve, 10% new-thread floor or 3% emergency floor). API connections cannot configure it.
-- A logical model selects exactly one provider template and one upstream model. Multiple internal bindings are only accounts/keys of that same provider/model, using provider-scoped Balanced or Sequential routing. Cross-provider fallback, mixed-provider sources, source priority/DnD, and vision sidecars are excluded.
-- The model dialog keeps Provider/Upstream in two columns and Public model ID/Display name/Subscription multiplier in one responsive three-column row. Capability badges are the only unavailable-capability summary. Technical metadata is a PanelShell of SettingsControlRow key/value rows. Context window, maximum input, and auto-compaction are required, prefilled from discovery, always editable, and persisted as explicit overrides. Maximum output is optional; missing output remains null and is omitted from public model discovery, while accounting uses maximum input only as an internal conservative reservation ceiling. OpenAI /v1/models does not expose context windows, token limits, compaction limits, or pricing; only explicitly audited known-catalog entries are enriched. API pricing has its own conditional shared tab, Reasoning is hidden when unsupported, and selected Access mirrors the reasoning two-column mapping table with the ghost Add action in its header.
-- Known first-party OpenAI, Anthropic/Claude, and Moonshot/Kimi models use source-attributed, date-versioned catalog defaults for context, documented output limits, capabilities, reasoning efforts, compaction defaults, and standard token pricing when upstream discovery omits them. OpenAI coverage includes the documented text/chat/reasoning families and exact snapshots whose pricing differs; Claude coverage includes current aliases, pinned IDs, limited-access models, and still-discoverable deprecated IDs with official metadata. Endpoint-specialized image-only, embeddings, moderation, transcription, TTS, and realtime-audio models remain outside the flat token catalog until their protocol-specific units can be represented and settled safely. Live upstream metadata always wins, explicit administrator overrides remain effective, and generic OpenAI-compatible/router providers never inherit first-party defaults. Flat catalog prices intentionally exclude batch, data-residency, fast-mode, long-context-tier, promotional, and negotiated modifiers.
-- The admin Limits panel uses the shared PanelShell with a primary Configure limits action, an embedded DataTable under the search band, and a PanelShell/SettingsControlRow limits editor. Interactive DataTable and SimpleTable rows use the same accent hover treatment.
-- Reasoning mappings use the existing environment-style key/value geometry: client effort is an Input and provider effort is the shared free-text Combobox, so discovered values remain selectable while custom wire values such as ultra -> max are allowed. Persisted mappings are trimmed and empty rows are discarded.
-- OpenAI/Codex subscription auth uses the official device-code flow rather than the Codex CLI localhost:1455 callback.
-- Budget safety uses transaction-scoped PostgreSQL advisory locks per user plus Redis reservations. WebSocket leases are unique/renewable, frames are bounded and rate-limited, and auto-compaction/affinity must remain intact.
-- Codex Fast is advertised only when every enabled primary source is an OpenAI/ChatGPT subscription binding whose synchronized upstream model metadata exposes the priority tier. Codex receives service_tiers id priority plus additional_speed_tiers fast; Responses and compaction preserve service_tier. Subscription accounting snapshots a separate fixed 2x service-tier multiplier on top of model and dynamic-burn multipliers. Compaction keeps dynamic burn at 1x but still gets the Fast 2x multiplier. API micro-dollar accounting and non-OpenAI subscription providers remain unchanged. Requests persist service_tier and service_tier_multiplier for settlement, retry, orphan reconciliation, and ledger auditability.
-- The embedded internal Assistant exposes permission-aware manage_inference_provider, manage_inference_model, manage_inference_limits, and manage_inference_token tools plus an inference documentation topic. These tools reuse existing inference services, enforce the persisted feature toggle and caller scopes, keep OAuth completion browser-driven, and redact copy-once gwi_ secrets from persisted tool history. They are explicitly excluded from the remote Gateway MCP; separation applies to runtime and credentials, not to scoped administration through the embedded Assistant.
-- The companion package is `@sqgateway/inference` with npm bin `gateway-inference`. Its interactive manager owns login, harness setup, diagnostics, repair, removal, and logout. Public automation remains intentionally narrow, while private runtime/proxy/catalog helpers reuse secure credential and lifecycle machinery. Portable `--home` state is supported without writing runtime tokens into harness configuration.
-- Companion Codex configuration lifecycle treats the current process `CODEX_HOME` as authoritative. Managed state is stored separately per resolved `config.toml` path; inspection, setup, diagnostics, and removal never read or write another Codex home. The implicit connection runtime token and catalog may be shared by multiple managed homes and are removed only with the last home. Any genuine conflicted no-op must be reported as not removed.
-- Provider synchronization is restart-safe: the scheduler performs a due pass immediately at backend startup and reclaims `syncStatus=running` work older than two five-minute sync intervals, while leaving younger in-flight work alone. Never unconditionally exclude all `running` rows: a restart between marking and settlement otherwise leaves permanent zombie state, lets 30-minute quota snapshots expire, and causes fail-closed routing to return `provider_capacity_unavailable`.
-- Codex 0.145 model catalogs must keep `web_search_tool_type` schema-valid (`text` or `text_and_image`); null is rejected and omission defaults to `text`. For Gateway models without native hosted search, advertise `supports_search_tool=false` and `use_responses_lite=true` so Codex suppresses hosted tools while retaining client-executed shell/function/MCP tools. The companion CLI validates these fields before atomically replacing the catalog and preserves the last-good file on invalid payloads. Validate this boundary with the generated catalog plus a real `codex exec -m <model>`, not `codex debug models` alone.
+## User limit windows
 
-- In the embedded Assistant's Gateway Inference mode, self-usage is one shared live frontend snapshot across the account menu and composer. The composer refreshes immediately and again after stream settlement, then polls every five seconds as a fallback. Configured subscription windows at 10% remaining or below show the neutral low-usage notice. If any configured 5h/7d/30d window falls strictly below 0.5% remaining, the composer, slash menu, and disclaimer are replaced by a compact two-line quota-exhausted blocking panel that matches the existing Conversation ended block geometry and typography, all empty-state quick-action chips are disabled, and command-palette Ask AI remains visible but is non-selectable with a Quota exhausted hint; its reset countdown uses the latest recoveryAt among all exhausted windows so it never promises availability before every blocking window recovers.
+- Subscription limits use independent fixed 5-hour, 7-day, and 30-day windows. They are not sliding or continuously repeating buckets.
+- A configured subscription window starts lazily on the user's first subscription-backed inference admission when no active window exists. It ends exactly one configured duration after that admission.
+- At the boundary, the whole window expires and usage becomes zero. No next window is created by time, status reads, dashboard refresh, or polling; the next subscription-backed request starts it.
+- Manual administrator reset closes subscription windows and leaves them idle until the user's next subscription-backed request. It does not delete immutable request or ledger history.
+- The monthly API budget remains calendar/anchor based and keeps its existing reset semantics.
+- Subscription settlements are attributed to the admission/start time, so a long request that finishes after a boundary remains charged to the window where it began.
+- Redis live reservations are scoped to the concrete window identity; reservations admitted in an expired window must not reduce capacity in the next lazily started window.
+- Usage remains monotonic while a fixed window is active. Frontend inference usage snapshots carry a measurement time, and consumers reject older dashboard/bootstrap snapshots so stale responses cannot roll displayed usage backward.
+
+## Established accounting safety
+
+- Admission uses transaction-scoped PostgreSQL advisory locks per user plus Redis reservations.
+- Durable request/accounting records and frozen pricing/multiplier snapshots remain authoritative.
+- Disabled subscription dimensions may still measure usage but do not constrain admission; all three disabled means unlimited subscription usage.
+- The final 5 percent of each subscription limit is protected for recovery/compaction, with the existing bounded final-request grace.
+- Quota-exhausted UX uses the latest recovery time among blocking active windows.
+
+## UI behavior
+
+- Active windows show remaining percentage and recovery time.
+- Expired/idle configured subscription windows show zero usage and `Starts on next use`, not a fabricated future reset countdown.
+- One shared live usage snapshot is used across profile/account menu/dashboard/composer surfaces.

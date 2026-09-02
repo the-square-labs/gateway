@@ -172,6 +172,7 @@ export const InferenceActivityQuerySchema = z.object({
 });
 
 const PercentageWindowSchema = z.object({
+  active: z.boolean().optional(),
   percentage: z.number().min(0).max(100),
   recoveryAt: z.string().datetime(),
 });
@@ -180,6 +181,7 @@ const ConfiguredPercentageWindowSchema = PercentageWindowSchema.extend({
 });
 
 export const InferenceSelfUsageResponseSchema = z.object({
+  measuredAt: z.string().datetime().optional(),
   enabled: z.boolean(),
   api: ConfiguredPercentageWindowSchema,
   subscription: z.object({

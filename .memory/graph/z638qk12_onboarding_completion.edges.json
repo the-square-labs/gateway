@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "z638qk12",
-      "to_id": "dcfkgqwx",
-      "relation": "uses_service",
-      "weight": 0.5617,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736396,
-      "updated_at": 1787862736396
-    },
-    {
-      "from_id": "z638qk12",
       "to_id": "8zbznen7",
       "relation": "same_area",
       "weight": 0.509,

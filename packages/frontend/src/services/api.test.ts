@@ -325,6 +325,56 @@ describe("api client contract", () => {
     window.removeEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
   });
 
+  it("does not let an older dashboard snapshot roll inference usage backward", async () => {
+    const olderUsage = {
+      measuredAt: "2030-01-01T00:00:00.000Z",
+      enabled: true,
+      api: { configured: false, percentage: 0, recoveryAt: "2030-02-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: true, percentage: 10, recoveryAt: "2030-01-01T05:00:00.000Z" },
+        "7d": { configured: false, percentage: 0, recoveryAt: "2030-01-08T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2030-01-31T00:00:00.000Z" },
+      },
+    };
+    const newerUsage = {
+      ...olderUsage,
+      measuredAt: "2030-01-01T00:01:00.000Z",
+      subscription: {
+        ...olderUsage.subscription,
+        "5h": { ...olderUsage.subscription["5h"], percentage: 25 },
+      },
+    };
+    let resolveBootstrap!: (response: Response) => void;
+    const bootstrapResponse = new Promise<Response>((resolve) => {
+      resolveBootstrap = resolve;
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/auth/csrf") return Promise.resolve(jsonResponse({ csrfToken: "csrf-token" }));
+      if (url === "/api/monitoring/dashboard/bootstrap") return bootstrapResponse;
+      if (url === "/api/inference/usage/self") return Promise.resolve(jsonResponse(newerUsage));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const onUsage = vi.fn();
+    window.addEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
+
+    const bootstrap = api.getDashboardBootstrap({});
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) => String(input) === "/api/monitoring/dashboard/bootstrap"
+        )
+      ).toBe(true)
+    );
+    await expect(api.getInferenceSelfUsage()).resolves.toEqual(newerUsage);
+    resolveBootstrap(jsonResponse({ data: { inferenceUsage: olderUsage } }));
+
+    await expect(bootstrap).resolves.toMatchObject({ inferenceUsage: newerUsage });
+    expect(api.getCached("req:/api/inference/usage/self")).toEqual(newerUsage);
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    window.removeEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
+  });
+
   it("replaces a user's exact additional permissions", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

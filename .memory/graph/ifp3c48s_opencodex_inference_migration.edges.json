@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "ifp3c48s",
-      "to_id": "dcfkgqwx",
-      "relation": "same_workflow",
-      "weight": 0.4856,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736104,
-      "updated_at": 1787862736104
-    },
-    {
-      "from_id": "ifp3c48s",
       "to_id": "z638qk12",
       "relation": "related_to",
       "weight": 0.4389,

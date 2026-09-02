@@ -40,16 +40,6 @@
       "source": "auto",
       "created_at": 1787862736720,
       "updated_at": 1787862736720
-    },
-    {
-      "from_id": "gahvf5k5",
-      "to_id": "dcfkgqwx",
-      "relation": "same_workflow",
-      "weight": 0.4155,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736720,
-      "updated_at": 1787862736720
     }
   ]
 }

@@ -97,6 +97,7 @@ export class InferenceReservationReconciler {
               outputTokens: request.outputTokens,
               reasoningTokens: request.reasoningTokens,
               reason: 'orphan_conservative_settlement',
+              occurredAt: request.startedAt,
               snapshot: {
                 priceVersion: request.priceVersion,
                 serviceTier: request.serviceTier,

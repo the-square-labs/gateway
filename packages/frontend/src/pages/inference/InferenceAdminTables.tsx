@@ -205,7 +205,7 @@ export function InferenceUsersTable({
     if (
       !(await confirm({
         title: "Reset usage limits?",
-        description: `Reset all active inference usage windows for ${editing.email}? Current usage will become zero and each reset date will move to a new window starting now.`,
+        description: `Reset all active inference usage windows for ${editing.email}? Current usage will become zero. New subscription windows will start with the user's next inference request.`,
         confirmLabel: "Reset limits",
         variant: "default",
       }))
@@ -394,6 +394,7 @@ export function InferenceUsersTable({
                   ? editing?.usage?.recoveryAt.credits5h
                   : undefined
               }
+              active={editing?.usage?.active?.credits5h}
             />
             <LimitInput
               label="Weekly credit limit"
@@ -406,6 +407,7 @@ export function InferenceUsersTable({
                   ? editing?.usage?.recoveryAt.credits7d
                   : undefined
               }
+              active={editing?.usage?.active?.credits7d}
             />
             <LimitInput
               label="Monthly credit limit"
@@ -418,6 +420,7 @@ export function InferenceUsersTable({
                   ? editing?.usage?.recoveryAt.credits30d
                   : undefined
               }
+              active={editing?.usage?.active?.credits30d}
             />
             <LimitInput
               label="API monthly limit · USD"
@@ -448,7 +451,7 @@ export function InferenceUsersTable({
             />
             <SettingsControlRow
               title="Billing timezone"
-              help="Defines calendar-month boundaries for the API USD budget. Rolling 5-hour, 7-day, and 30-day credit windows are unaffected."
+              help="Defines calendar-month boundaries for the API USD budget. Fixed 5-hour, 7-day, and 30-day credit windows use their own reset anchors."
             >
               <Combobox
                 value={form.billingTimezone}
@@ -465,7 +468,7 @@ export function InferenceUsersTable({
             {editing ? (
               <SettingsControlRow
                 title="Reset usage limits"
-                description="Start fresh usage windows from the current time. Limit values are unchanged."
+                description="Close active windows now. New subscription windows start on the user's next inference request. Limit values are unchanged."
               >
                 <Button variant="outline" onClick={() => void resetLimits()} disabled={resetting}>
                   {resetting ? "Resetting..." : "Reset limits"}
@@ -477,8 +480,8 @@ export function InferenceUsersTable({
             title="AI credit limits"
             description={
               editingDefault
-                ? "Choose which rolling credit windows apply to every user"
-                : "Further restrict rolling windows enabled by the default policy"
+                ? "Choose which fixed reset windows apply to every user"
+                : "Further restrict fixed windows enabled by the default policy"
             }
           >
             <SubscriptionLimitToggle
@@ -541,6 +544,7 @@ function LimitInput({
   description,
   trailingControl,
   recoveryAt,
+  active,
 }: {
   label: string;
   value: string;
@@ -550,9 +554,15 @@ function LimitInput({
   description?: string;
   trailingControl?: ReactNode;
   recoveryAt?: string;
+  active?: boolean;
 }) {
   const resolvedDescription =
-    description ?? (recoveryAt ? `Resets ${formatDateTime(recoveryAt)}` : undefined);
+    description ??
+    (active === false
+      ? "Starts on next use"
+      : recoveryAt
+        ? `Resets ${formatDateTime(recoveryAt)}`
+        : undefined);
   return (
     <SettingsControlRow
       title={label}

@@ -119,7 +119,7 @@ describe("InferenceUsersTable", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("AI credit limits")).toBeInTheDocument();
     expect(
-      screen.getByText("Choose which rolling credit windows apply to every user")
+      screen.getByText("Choose which fixed reset windows apply to every user")
     ).toBeInTheDocument();
 
     const fiveHourInput = screen.getByRole("spinbutton", {

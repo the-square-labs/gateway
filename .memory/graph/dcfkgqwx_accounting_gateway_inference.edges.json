@@ -3,53 +3,33 @@
   "edges": [
     {
       "from_id": "dcfkgqwx",
-      "to_id": "z638qk12",
-      "relation": "uses_service",
-      "weight": 0.5617,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "to_id": "ifp3c48s",
+      "relation": "same_workflow",
+      "weight": 0.94,
+      "reason": "Both define the Gateway Inference data-plane, accounting, limits, credentials, and runtime integration contract.",
       "source": "auto",
-      "created_at": 1787862736192,
-      "updated_at": 1787862736192
+      "created_at": 1788310977071,
+      "updated_at": 1788310977071
+    },
+    {
+      "from_id": "dcfkgqwx",
+      "to_id": "z36pcfh4",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both specify Gateway Inference request routing and runtime eligibility behavior.",
+      "source": "auto",
+      "created_at": 1788310977071,
+      "updated_at": 1788310977071
     },
     {
       "from_id": "dcfkgqwx",
       "to_id": "mzmjdewo",
-      "relation": "uses_service",
-      "weight": 0.4945,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "relation": "same_area",
+      "weight": 0.7,
+      "reason": "Codex companion setup consumes the Gateway Inference credentials, endpoint, feature, and quota contract.",
       "source": "auto",
-      "created_at": 1787862736192,
-      "updated_at": 1787862736192
-    },
-    {
-      "from_id": "dcfkgqwx",
-      "to_id": "ifp3c48s",
-      "relation": "uses_service",
-      "weight": 0.4856,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736192,
-      "updated_at": 1787862736192
-    },
-    {
-      "from_id": "dcfkgqwx",
-      "to_id": "gpx2fdwu",
-      "relation": "uses_service",
-      "weight": 0.4791,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736192,
-      "updated_at": 1787862736192
-    },
-    {
-      "from_id": "dcfkgqwx",
-      "to_id": "xg6y81q3",
-      "relation": "uses_service",
-      "weight": 0.4456,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736192,
-      "updated_at": 1787862736192
+      "created_at": 1788310977071,
+      "updated_at": 1788310977071
     }
   ]
 }
