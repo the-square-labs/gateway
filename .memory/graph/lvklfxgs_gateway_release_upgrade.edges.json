@@ -40,16 +40,6 @@
       "source": "auto",
       "created_at": 1787862736489,
       "updated_at": 1787862736489
-    },
-    {
-      "from_id": "lvklfxgs",
-      "to_id": "02e60mqr",
-      "relation": "same_workflow",
-      "weight": 0.4265,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736489,
-      "updated_at": 1787862736489
     }
   ]
 }

@@ -4,37 +4,58 @@
   "file_name": "02e60mqr_gateway_daemon_rc",
   "tags": [
     "daemon",
-    "downloader",
-    "gitlab-ci",
-    "installer",
+    "docker",
+    "gateway",
+    "github-actions",
     "rc",
-    "releases"
+    "relay",
+    "release"
   ],
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
-  "confidence": 0.9,
-  "importance": 0.8,
+  "confidence": 0.99,
+  "importance": 0.9,
   "created_at": 1785765229346,
-  "updated_at": 1785767925038
+  "updated_at": 1788309567528
 }
 ---
-Gateway and daemon RC release conventions and verification
+Gateway and daemon release conventions as verified from the current repository on 2026-09-02:
 
-Tag formats and ordering
-- Gateway RC tag format: vX.Y.Z-rc.N. This publishes the signed Gateway image manifest and the matching bundled installer archive without mutable image aliases. The shell loader downloads Gateway RC installers only with --nightly.
-- Daemon RC tag format: vX.Y.Z-<daemon>-rc.N (examples: v2.5.0-nginx-rc.1, v2.5.0-docker-rc.1, v2.5.0-monitoring-rc.1). Do NOT use vX.Y.Z-rc.N-<daemon>. Gateways (old and new) select stable daemon releases only by tags ending in -nginx/-docker/-monitoring; suffix-middle RC tags are ignored by Gateway update checks.
-- Publish the matching Gateway RC before publishing daemon RC tags because node --nightly downloads the latest Gateway RC installer. node --nightly resolves the latest matching daemon RC; --version accepts an exact full daemon RC tag.
+Versioning and tag classification
+- scripts/release-tag.sh is authoritative.
+- Gateway tags are vX.Y.Z and vX.Y.Z-rc.N.
+- Component tags append the component after the complete Gateway version:
+  - vX.Y.Z-relay or vX.Y.Z-rc.N-relay
+  - vX.Y.Z-nginx or vX.Y.Z-rc.N-nginx
+  - vX.Y.Z-docker or vX.Y.Z-rc.N-docker
+  - vX.Y.Z-monitoring or vX.Y.Z-rc.N-monitoring
+- Do not use vX.Y.Z-<component>-rc.N. That older ordering is not accepted by the current classifier.
+- For a component tag, RELEASE_VERSION is the tag with the final component suffix removed. For example, v2.10.0-rc.28-docker embeds/signs v2.10.0-rc.28.
 
-CI and packaging behavior
-- Daemon CI embeds vX.Y.Z-rc.N in the binary/signature manifest while the package/release tag remains vX.Y.Z-<daemon>-rc.N. Stable daemon tags, signed manifests, and normal automatic updates remain unchanged.
+GitHub release order
+- The repository remote is currently GitHub and releases run through .github/workflows/release.yml.
+- Push main first and verify the local and remote SHA match.
+- Wait for a successful push-triggered main CI run for the exact target SHA. Release verification rejects a tag when no successful main CI exists for that SHA.
+- Push an annotated Gateway RC tag, wait for the release workflow to finish, and verify the published non-draft prerelease plus signed manifest and installer assets.
+- Push only the component RC tags required by the changed binaries, then verify each component workflow and published assets.
+- Do not equate a pushed tag with a completed release.
 
-Installer compatibility and download behavior
-- Compatibility loaders must try curl first and fall back to wget when curl is unavailable. This applies to archive checksum/download requests and the fallback paths in install.sh and all setup-*.sh wrappers. Maintain this behavior for minimal Ubuntu/LXC hosts.
+Component selection
+- Backend/control-plane changes require a Gateway tag.
+- Docker daemon code or its generated protobuf bindings require a Docker component tag.
+- The relay is an opaque byte-level gRPC proxy for unknown services. A protobuf field added only to GatewayCommand does not by itself require a relay rebuild or relay tag when relay code and dependencies are unchanged.
+- Preserve operational upgrade order backend, relay when changed, then daemons.
 
-Verification used
-- bash scripts/test-gateway-installer-loader.sh (including a wget-only PATH)
-- Go installer tests
-- Targeted backend update tests plus typecheck
-- CI YAML parse
-- git diff --check
+Release verification
+- Confirm scripts/release-tag.sh classifies each candidate tag correctly.
+- Run release metadata checks and the change-specific test/lint/typecheck/build gates.
+- Confirm exact remote tag peeling to the intended commit.
+- Confirm GitHub Actions success and inspect the published release assets.
+- Production deployment remains separate from source push and release publication.
+
+Compatibility loaders and signed artifacts
+- Preserve curl-first and wget fallback behavior for installers.
+- Gateway releases must publish a valid signed gateway-image.update.json containing the immutable OCI digest.
+- Component releases must publish signed per-architecture update manifests, binaries, and checksums.
+- Stable automatic-update behavior remains separate from prerelease/nightly selection.

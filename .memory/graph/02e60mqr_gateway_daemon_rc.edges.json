@@ -3,53 +3,33 @@
   "edges": [
     {
       "from_id": "02e60mqr",
-      "to_id": "kufbu8qt",
+      "to_id": "lvklfxgs",
       "relation": "same_workflow",
-      "weight": 0.5161,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "weight": 0.75,
+      "reason": "Gateway release preparation and upgrade validation are stages of the same release workflow.",
       "source": "auto",
-      "created_at": 1787862736921,
-      "updated_at": 1787862736921
-    },
-    {
-      "from_id": "02e60mqr",
-      "to_id": "h0g48t5u",
-      "relation": "same_area",
-      "weight": 0.4602,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1787862736921,
-      "updated_at": 1787862736921
+      "created_at": 1788309575156,
+      "updated_at": 1788309575156
     },
     {
       "from_id": "02e60mqr",
       "to_id": "hqwh565e",
       "relation": "same_workflow",
-      "weight": 0.4364,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "weight": 0.68,
+      "reason": "Installer artifacts are published and consumed through the repository's release-tag conventions.",
       "source": "auto",
-      "created_at": 1787862736921,
-      "updated_at": 1787862736921
+      "created_at": 1788309575156,
+      "updated_at": 1788309575156
     },
     {
       "from_id": "02e60mqr",
-      "to_id": "lvklfxgs",
+      "to_id": "3ta908aa",
       "relation": "same_workflow",
-      "weight": 0.4265,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "weight": 0.58,
+      "reason": "Secure Link release candidates depend on immutable daemon and relay artifacts governed by these release conventions.",
       "source": "auto",
-      "created_at": 1787862736921,
-      "updated_at": 1787862736921
-    },
-    {
-      "from_id": "02e60mqr",
-      "to_id": "zq6da64z",
-      "relation": "related_to",
-      "weight": 0.3997,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736921,
-      "updated_at": 1787862736921
+      "created_at": 1788309575156,
+      "updated_at": 1788309575156
     }
   ]
 }

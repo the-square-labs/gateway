@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "h0g48t5u",
-      "to_id": "02e60mqr",
-      "relation": "same_area",
-      "weight": 0.4602,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1787862736877,
-      "updated_at": 1787862736877
-    },
-    {
-      "from_id": "h0g48t5u",
       "to_id": "muapjlzr",
       "relation": "same_area",
       "weight": 0.4379,

@@ -23,16 +23,6 @@
     },
     {
       "from_id": "kufbu8qt",
-      "to_id": "02e60mqr",
-      "relation": "same_workflow",
-      "weight": 0.5161,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862737179,
-      "updated_at": 1787862737179
-    },
-    {
-      "from_id": "kufbu8qt",
       "to_id": "vrch49nc",
       "relation": "related_to",
       "weight": 0.4517,

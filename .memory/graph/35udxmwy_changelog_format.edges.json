@@ -13,16 +13,6 @@
     },
     {
       "from_id": "35udxmwy",
-      "to_id": "02e60mqr",
-      "relation": "same_workflow",
-      "weight": 0.3435,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736615,
-      "updated_at": 1787862736615
-    },
-    {
-      "from_id": "35udxmwy",
       "to_id": "lvklfxgs",
       "relation": "same_workflow",
       "weight": 0.2981,

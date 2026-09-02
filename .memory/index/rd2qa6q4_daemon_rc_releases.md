@@ -4,11 +4,12 @@
   "file_name": "rd2qa6q4_daemon_rc_releases",
   "tags": [
     "daemon",
-    "downloader",
-    "gitlab-ci",
-    "installer",
+    "docker",
+    "gateway",
+    "github-actions",
     "rc",
-    "releases"
+    "relay",
+    "release"
   ],
   "layer": "lite",
   "ref": "02e60mqr",
@@ -16,7 +17,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785765229346,
-  "updated_at": 1785767925038
+  "updated_at": 1788309567528
 }
 ---
-[→ 02e60mqr] Safe Gateway and daemon RC release conventions and downloader fallback
+[→ 02e60mqr] Correct Gateway and daemon RC tag naming and current GitHub release ordering

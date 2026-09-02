@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "hqwh565e",
-      "to_id": "02e60mqr",
-      "relation": "same_workflow",
-      "weight": 0.4364,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736935,
-      "updated_at": 1787862736935
-    },
-    {
-      "from_id": "hqwh565e",
       "to_id": "kufbu8qt",
       "relation": "same_workflow",
       "weight": 0.4285,
