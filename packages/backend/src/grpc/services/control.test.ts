@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import { AppError } from '@/middleware/error-handler.js';
+import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import {
   createControlHandlers,
   diffDockerContainerStateReports,
@@ -233,6 +236,7 @@ function makeDeps(db: any) {
       }),
       getNode: vi.fn(() => connectedNode),
       publishNodeChanged: vi.fn(),
+      sendCommandNoWait: vi.fn(),
       handleCommandResult: vi.fn(),
       handleLogStream: vi.fn(),
       updateHealthReport: vi.fn(),
@@ -389,6 +393,448 @@ describe('mapGpuHealthDevices', () => {
 });
 
 describe('CommandStream daemon certificate identity', () => {
+  it('serializes lifecycle events for one Docker build in stream order', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const eventOrder: string[] = [];
+    let releaseFirst!: () => void;
+    const firstEventBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { status: string }) => {
+      eventOrder.push(event.status);
+      if (event.status === 'checking_out') await firstEventBlocked;
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      for (const status of ['checking_out', 'building', 'scanning', 'succeeded']) {
+        stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status } });
+      }
+
+      await vi.waitFor(() => expect(eventOrder).toEqual(['checking_out']));
+      releaseFirst();
+      await vi.waitFor(() => {
+        expect(eventOrder).toEqual(['checking_out', 'building', 'scanning', 'succeeded']);
+      });
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('does not block Docker build logs behind lifecycle processing', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const eventOrder: string[] = [];
+    let releaseLifecycle!: () => void;
+    const lifecycleBlocked = new Promise<void>((resolve) => {
+      releaseLifecycle = resolve;
+    });
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { status: string }) => {
+      eventOrder.push(event.status);
+      if (event.status === 'building') await lifecycleBlocked;
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'building' } });
+      await vi.waitFor(() => expect(eventOrder).toEqual(['building']));
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'log' } });
+
+      await vi.waitFor(() => expect(eventOrder).toEqual(['building', 'log']));
+      releaseLifecycle();
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('does not block Docker build heartbeats behind terminal rollout processing', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const eventOrder: string[] = [];
+    let releaseTerminal!: () => void;
+    const terminalBlocked = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { status: string }) => {
+      eventOrder.push(event.status);
+      if (event.status === 'succeeded') await terminalBlocked;
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'succeeded', attempt: 2 } });
+      await vi.waitFor(() => expect(eventOrder).toEqual(['succeeded']));
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'heartbeat', attempt: 2 } });
+
+      await vi.waitFor(() => expect(eventOrder).toEqual(['succeeded', 'heartbeat']));
+      expect(deps.registry.sendCommandNoWait).not.toHaveBeenCalled();
+      releaseTerminal();
+      await vi.waitFor(() =>
+        expect(deps.registry.sendCommandNoWait).toHaveBeenCalledWith(nodeId, {
+          dockerBuildEventAck: { buildId: 'build-1', attempt: 2, disposition: 'accepted' },
+        })
+      );
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('acknowledges only successfully processed tokenized terminal events', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { buildId: string }) => {
+      if (event.buildId === 'rejected') throw new Error('database unavailable');
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'accepted', status: 'failed', attempt: 3 } });
+      stream.emit('data', { dockerBuildEvent: { buildId: 'rejected', status: 'failed', attempt: 4 } });
+      stream.emit('data', { dockerBuildEvent: { buildId: 'legacy', status: 'failed', attempt: 0 } });
+
+      await vi.waitFor(() => expect(handleDaemonEvent).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(deps.registry.sendCommandNoWait).toHaveBeenCalledTimes(1));
+      expect(deps.registry.sendCommandNoWait).toHaveBeenCalledWith(nodeId, {
+        dockerBuildEventAck: { buildId: 'accepted', attempt: 3, disposition: 'accepted' },
+      });
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('acknowledges a stale terminal attempt as obsolete so the worker releases it', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const handleDaemonEvent = vi.fn(async () => {
+      throw new AppError(409, 'BUILD_EVENT_ATTEMPT_STALE', 'stale attempt');
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'stale', status: 'succeeded', attempt: 1 } });
+
+      await vi.waitFor(() =>
+        expect(deps.registry.sendCommandNoWait).toHaveBeenCalledWith(nodeId, {
+          dockerBuildEventAck: { buildId: 'stale', attempt: 1, disposition: 'obsolete' },
+        })
+      );
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('acknowledges a delayed worker failure as obsolete after rollout ownership transfers', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const handleDaemonEvent = vi.fn(async () => {
+      throw new AppError(409, 'BUILD_EVENT_TERMINAL_CONFLICT', 'backend rollout owns the attempt');
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'deploying', status: 'failed', attempt: 2 } });
+
+      await vi.waitFor(() =>
+        expect(deps.registry.sendCommandNoWait).toHaveBeenCalledWith(nodeId, {
+          dockerBuildEventAck: { buildId: 'deploying', attempt: 2, disposition: 'obsolete' },
+        })
+      );
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('coalesces terminal retries while the first delivery is still processing', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    let releaseTerminal!: () => void;
+    const terminalBlocked = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const handleDaemonEvent = vi.fn(async () => terminalBlocked);
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      const terminal = { buildId: 'build-1', status: 'succeeded', attempt: 2 };
+      stream.emit('data', { dockerBuildEvent: terminal });
+      stream.emit('data', { dockerBuildEvent: terminal });
+      await vi.waitFor(() => expect(handleDaemonEvent).toHaveBeenCalledOnce());
+
+      releaseTerminal();
+      await vi.waitFor(() => expect(deps.registry.sendCommandNoWait).toHaveBeenCalled());
+      expect(handleDaemonEvent).toHaveBeenCalledOnce();
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('allows lifecycle events for different Docker builds to progress independently', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const startedBuilds: string[] = [];
+    let releaseFirst!: () => void;
+    const firstBuildBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { buildId: string }) => {
+      startedBuilds.push(event.buildId);
+      if (event.buildId === 'build-1') await firstBuildBlocked;
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'building' } });
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-2', status: 'building' } });
+
+      await vi.waitFor(() => expect(startedBuilds).toEqual(['build-1', 'build-2']));
+      releaseFirst();
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('continues a Docker build lifecycle after one event handler rejects', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+    const eventOrder: string[] = [];
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { status: string }) => {
+      eventOrder.push(event.status);
+      if (event.status === 'building') throw new Error('state changed concurrently');
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-1',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'building' } });
+      stream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'scanning' } });
+
+      await vi.waitFor(() => expect(eventOrder).toEqual(['building', 'scanning']));
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
+  it('preserves Docker build lifecycle ordering across command stream replacement', async () => {
+    const db = makeDbNode({ type: 'builder' });
+    const deps = makeDeps(db);
+    const oldStream = makeStream({ serialNumber: 'aa01' });
+    const newStream = makeStream({ serialNumber: 'aa01' });
+    const eventOrder: string[] = [];
+    let releaseOldEvent!: () => void;
+    const oldEventBlocked = new Promise<void>((resolve) => {
+      releaseOldEvent = resolve;
+    });
+    const handleDaemonEvent = vi.fn(async (_nodeId: string, event: { status: string }) => {
+      eventOrder.push(event.status);
+      if (event.status === 'checking_out') await oldEventBlocked;
+    });
+    const resolve = vi.mocked(container.resolve);
+    const previousResolve = resolve.getMockImplementation();
+    resolve.mockImplementation((dependency: unknown) => {
+      if (dependency === DockerBuildService) return { handleDaemonEvent } as never;
+      return previousResolve?.(dependency as never) as never;
+    });
+
+    try {
+      const handlers = createControlHandlers(deps);
+      handlers.CommandStream(oldStream);
+      oldStream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-old',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(1));
+      oldStream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'checking_out' } });
+      await vi.waitFor(() => expect(eventOrder).toEqual(['checking_out']));
+
+      handlers.CommandStream(newStream);
+      newStream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'builder-new',
+          daemonVersion: 'dev',
+          daemonType: 'docker',
+          capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+        },
+      });
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(2));
+      newStream.emit('data', { dockerBuildEvent: { buildId: 'build-1', status: 'building' } });
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      expect(eventOrder).toEqual(['checking_out']);
+
+      releaseOldEvent();
+      await vi.waitFor(() => expect(eventOrder).toEqual(['checking_out', 'building']));
+    } finally {
+      if (previousResolve) resolve.mockImplementation(previousResolve);
+    }
+  });
+
   it('accepts only the isolated docker builder profile for builder nodes', async () => {
     const db = makeDbNode({ type: 'builder' });
     const deps = makeDeps(db);

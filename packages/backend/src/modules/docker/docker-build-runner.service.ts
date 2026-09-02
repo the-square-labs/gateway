@@ -8,12 +8,10 @@ import type { IntegrationsService } from '@/modules/integrations/integrations.se
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerBuildService } from './docker-build.service.js';
-import { readBuilderNodeSettings } from './docker-build-policy.js';
+import { readBuilderNodeSettings, WORKER_ACTIVE_BUILD_STATUSES } from './docker-build-policy.js';
 import type { DockerSourceService } from './docker-source.service.js';
 
 const logger = createChildLogger('DockerBuildRunner');
-const ACTIVE_STATUSES = ['claimed', 'checking_out', 'building', 'scanning', 'pushing'] as const;
-
 function builderPlatform(capabilities: unknown): 'linux/amd64' | 'linux/arm64' | null {
   const architecture =
     capabilities && typeof capabilities === 'object'
@@ -82,6 +80,7 @@ export class DockerBuildRunnerService {
     this.running = true;
     try {
       await this.reconcileCancellations();
+      await this.builds.recoverExpiredLeases();
       const builders = await this.db
         .select({ id: nodes.id, capabilities: nodes.capabilities, metadata: nodes.metadata })
         .from(nodes)
@@ -93,7 +92,9 @@ export class DockerBuildRunnerService {
         const active = await this.db
           .select({ id: dockerBuilds.id })
           .from(dockerBuilds)
-          .where(and(eq(dockerBuilds.builderNodeId, builder.id), inArray(dockerBuilds.status, [...ACTIVE_STATUSES])));
+          .where(
+            and(eq(dockerBuilds.builderNodeId, builder.id), inArray(dockerBuilds.status, WORKER_ACTIVE_BUILD_STATUSES))
+          );
         for (let slot = active.length; slot < settings.parallelism; slot += 1) {
           if (!(await this.claimAndDispatch(builder.id, platform, settings))) break;
         }
@@ -175,6 +176,7 @@ export class DockerBuildRunnerService {
         nodeVersion: build.nodeVersion ?? '',
         buildScript: build.buildScript ?? '',
         artifactDirectory: build.artifactDirectory ?? '',
+        attempt: build.attempt,
       });
       void command.result.catch(() => {});
       await command.accepted;
@@ -229,7 +231,7 @@ export class DockerBuildRunnerService {
       .from(dockerBuilds)
       .where(
         and(
-          inArray(dockerBuilds.status, [...ACTIVE_STATUSES]),
+          inArray(dockerBuilds.status, WORKER_ACTIVE_BUILD_STATUSES),
           isNotNull(dockerBuilds.cancellationRequestedAt),
           isNotNull(dockerBuilds.builderNodeId)
         )

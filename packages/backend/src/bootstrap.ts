@@ -809,7 +809,9 @@ export async function initializeContainer(): Promise<void> {
     : null;
   if (dockerBuildRolloutService) {
     container.registerInstance(DockerBuildRolloutService, dockerBuildRolloutService);
-    dockerBuildService.setArtifactRollout((buildId) => dockerBuildRolloutService.rollout(buildId));
+    dockerBuildService.setArtifactRollout((buildId, leaseOwner, operationId) =>
+      dockerBuildRolloutService.rollout(buildId, leaseOwner, operationId)
+    );
   }
   const dockerSourceService = new DockerSourceService(db, auditService, integrationsService, cryptoService);
   dockerSourceService.setBuildService(dockerBuildService);

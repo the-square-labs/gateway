@@ -181,10 +181,10 @@ func (m *Manager) failForContext(command *pb.DockerBuildCommand, ctx context.Con
 }
 
 func (m *Manager) status(command *pb.DockerBuildCommand, status string) {
-	m.emitEvent(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: status, OccurredAtUnixMs: time.Now().UnixMilli()})
+	_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: status, Attempt: command.GetAttempt(), OccurredAtUnixMs: time.Now().UnixMilli()})
 }
 func (m *Manager) fail(command *pb.DockerBuildCommand, code string, err error) {
-	m.emitEvent(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: "failed", ErrorCode: code, ErrorMessage: err.Error(), OccurredAtUnixMs: time.Now().UnixMilli()})
+	m.emitTerminal(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: "failed", ErrorCode: code, ErrorMessage: err.Error(), Attempt: command.GetAttempt(), OccurredAtUnixMs: time.Now().UnixMilli()})
 }
 func (m *Manager) log(buildID string, chunk []byte) {
 	redactor := newStreamRedactor(m.secretValues(buildID), func(redacted []byte) {
@@ -204,10 +204,68 @@ func (m *Manager) emitLog(buildID string, chunk []byte) {
 	if len(chunk) == 0 {
 		return
 	}
-	m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "log", Sequence: m.sequence.Add(1), LogChunk: append([]byte(nil), chunk...), OccurredAtUnixMs: time.Now().UnixMilli()})
+	_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "log", Sequence: m.sequence.Add(1), LogChunk: append([]byte(nil), chunk...), Attempt: m.attemptFor(buildID), OccurredAtUnixMs: time.Now().UnixMilli()})
 }
-func (m *Manager) emitEvent(event *pb.DockerBuildEvent) {
+func (m *Manager) attemptFor(buildID string) uint32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.attempts[buildID]
+}
+
+func (m *Manager) emitEvent(event *pb.DockerBuildEvent) error {
 	if m.emit != nil {
-		m.emit(event)
+		return m.emit(event)
+	}
+	return errors.New("build event sink is unavailable")
+}
+
+func (m *Manager) emitTerminal(event *pb.DockerBuildEvent) {
+	if event == nil {
+		return
+	}
+	m.mu.Lock()
+	m.terminalEvents[event.GetBuildId()] = event
+	m.mu.Unlock()
+}
+
+func (m *Manager) takeTerminal(buildID string) *pb.DockerBuildEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	event := m.terminalEvents[buildID]
+	delete(m.terminalEvents, buildID)
+	return event
+}
+
+func (m *Manager) deliverTerminal(event *pb.DockerBuildEvent) {
+	if event.GetAttempt() == 0 {
+		_ = m.emitEvent(event)
+		return
+	}
+	key := terminalAckKey(event.GetBuildId(), event.GetAttempt())
+	ack := make(chan string, 1)
+	m.mu.Lock()
+	m.terminalAcks[key] = ack
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if m.terminalAcks[key] == ack {
+			delete(m.terminalAcks, key)
+		}
+		m.mu.Unlock()
+	}()
+
+	retry := time.NewTicker(m.terminalRetryInterval)
+	timeout := time.NewTimer(m.terminalAckTimeout)
+	defer retry.Stop()
+	defer timeout.Stop()
+	for {
+		_ = m.emitEvent(event)
+		select {
+		case <-ack:
+			return
+		case <-retry.C:
+		case <-timeout.C:
+			return
+		}
 	}
 }

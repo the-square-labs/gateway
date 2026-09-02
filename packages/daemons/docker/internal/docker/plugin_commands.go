@@ -3,10 +3,12 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"time"
+
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	runtimemanager "github.com/wiolett-industries/gateway/docker-daemon/internal/runtime"
-	"time"
 )
 
 func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
@@ -26,6 +28,17 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 				result.Success = false
 				result.Error = "build is not running"
 			}
+		case *pb.GatewayCommand_DockerBuildEventAck:
+			if p.builderManager == nil {
+				result.Success = false
+				result.Error = "builder execution is not initialized"
+			} else {
+				p.builderManager.Acknowledge(
+					payload.DockerBuildEventAck.GetBuildId(),
+					payload.DockerBuildEventAck.GetAttempt(),
+					payload.DockerBuildEventAck.GetDisposition(),
+				)
+			}
 		case *pb.GatewayCommand_SyncDockerRegistryBindings:
 			detail, err := p.SyncDockerRegistryBindings(payload.SyncDockerRegistryBindings)
 			if err != nil {
@@ -38,7 +51,7 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 			stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)
 		default:
 			result.Success = false
-			result.Error = "builder-profile daemon accepts only docker_build, docker_build_cancel, and registry binding commands"
+			result.Error = "builder-profile daemon accepts only docker build, acknowledgement, cancellation, and registry binding commands"
 		}
 		return result
 	}
@@ -118,13 +131,23 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	return result
 }
 
-func (p *DockerPlugin) emitBuildEvent(event *pb.DockerBuildEvent) {
-	if event == nil || p.writer == nil {
-		return
+func (p *DockerPlugin) emitBuildEvent(event *pb.DockerBuildEvent) error {
+	if event == nil {
+		return fmt.Errorf("docker build event is required")
 	}
-	if err := p.writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_DockerBuildEvent{DockerBuildEvent: event}}); err != nil && p.logger != nil {
-		p.logger.Warn("failed to report Docker build event", "build_id", event.GetBuildId(), "error", err)
+	p.buildEventMu.RLock()
+	writer := p.buildEventWriter
+	p.buildEventMu.RUnlock()
+	if writer == nil {
+		return fmt.Errorf("command stream is unavailable")
 	}
+	if err := writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_DockerBuildEvent{DockerBuildEvent: event}}); err != nil {
+		if p.logger != nil {
+			p.logger.Warn("failed to report Docker build event", "build_id", event.GetBuildId(), "attempt", event.GetAttempt(), "error", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func (p *DockerPlugin) handleRuntimeCommand(cmd *pb.DockerRuntimeCommand, result *pb.CommandResult) {

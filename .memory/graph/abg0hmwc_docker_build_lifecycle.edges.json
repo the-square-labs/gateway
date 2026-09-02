@@ -1,0 +1,15 @@
+{
+  "file_name": "abg0hmwc_docker_build_lifecycle",
+  "edges": [
+    {
+      "from_id": "abg0hmwc",
+      "to_id": "kufbu8qt",
+      "relation": "same_area",
+      "weight": 0.67,
+      "reason": "Both define Gateway Docker image build and release lifecycle conventions, including terminal handling and rollout-facing release behavior.",
+      "source": "auto",
+      "created_at": 1788308030286,
+      "updated_at": 1788308030286
+    }
+  ]
+}

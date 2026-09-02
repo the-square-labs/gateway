@@ -61,6 +61,7 @@ func TestBuilderProfileRecognizesOnlyBuildCommandFamily(t *testing.T) {
 	}{
 		{command: &pb.GatewayCommand{CommandId: "build", Payload: &pb.GatewayCommand_DockerBuild{DockerBuild: &pb.DockerBuildCommand{BuildId: "build-1"}}}, error: "builder execution is not initialized"},
 		{command: &pb.GatewayCommand{CommandId: "cancel", Payload: &pb.GatewayCommand_DockerBuildCancel{DockerBuildCancel: &pb.DockerBuildCancelCommand{BuildId: "build-1"}}}, error: "build is not running"},
+		{command: &pb.GatewayCommand{CommandId: "ack", Payload: &pb.GatewayCommand_DockerBuildEventAck{DockerBuildEventAck: &pb.DockerBuildEventAck{BuildId: "build-1", Attempt: 1}}}, error: "builder execution is not initialized"},
 	} {
 		command := test.command
 		result := plugin.HandleCommand(command)

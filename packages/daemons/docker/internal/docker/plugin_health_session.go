@@ -46,6 +46,9 @@ func (p *DockerPlugin) CollectStats() *pb.StatsReport {
 // OnSessionStart is called when a new gRPC session is established.
 func (p *DockerPlugin) OnSessionStart(ctx context.Context, writer *stream.Writer) error {
 	p.writer = writer
+	p.buildEventMu.Lock()
+	p.buildEventWriter = writer
+	p.buildEventMu.Unlock()
 	p.sessionCtx = ctx
 	p.logStreamCancel = make(map[string]context.CancelFunc)
 	if p.cfg.Docker.Mode == "builder" {
@@ -79,6 +82,9 @@ func (p *DockerPlugin) OnSessionEnd() {
 	if p.composeExecutor != nil {
 		p.composeExecutor.cancelAll()
 	}
+	p.buildEventMu.Lock()
+	p.buildEventWriter = nil
+	p.buildEventMu.Unlock()
 	p.writer = nil
 	p.sessionCtx = nil
 }

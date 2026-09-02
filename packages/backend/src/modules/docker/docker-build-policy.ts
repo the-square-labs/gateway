@@ -6,23 +6,51 @@ import type {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 
-export const ACTIVE_BUILD_STATUSES: DockerBuildStatus[] = [
+export const WORKER_ACTIVE_BUILD_STATUSES: DockerBuildStatus[] = [
   'claimed',
   'checking_out',
   'building',
   'scanning',
   'pushing',
-  'deploying',
 ];
+
+export const ACTIVE_BUILD_STATUSES: DockerBuildStatus[] = [...WORKER_ACTIVE_BUILD_STATUSES, 'deploying'];
 
 export const TERMINAL_BUILD_STATUSES: DockerBuildStatus[] = ['succeeded', 'failed', 'cancelled', 'superseded'];
 
 export const BUILD_LOG_CHUNK_MAX_BYTES = 256 * 1024;
 export const BUILD_LOG_TOTAL_MAX_BYTES = 10 * 1024 * 1024;
-export const DEFAULT_BUILD_LEASE_MS = 45_000;
+export const DEFAULT_BUILD_LEASE_MS = 60_000;
 export const ENFORCED_BUILD_CPU_LIMIT_MILLIS = 2000;
 export const ENFORCED_BUILD_MEMORY_LIMIT_BYTES = 4 * 1024 ** 3;
 export const ENFORCED_BUILD_DISK_LIMIT_BYTES = 20 * 1024 ** 3;
+
+export interface DockerBuildRolloutProgress {
+  operationId: string;
+  attempt: number;
+  phase: 'accepted' | 'executing';
+}
+
+export function readDockerBuildRolloutProgress(progress: unknown): DockerBuildRolloutProgress | null {
+  if (!progress || typeof progress !== 'object') return null;
+  const rollout = (progress as Record<string, unknown>).rollout;
+  if (!rollout || typeof rollout !== 'object') return null;
+  const value = rollout as Record<string, unknown>;
+  if (
+    typeof value.operationId !== 'string' ||
+    !value.operationId ||
+    !Number.isSafeInteger(value.attempt) ||
+    Number(value.attempt) < 1 ||
+    (value.phase !== 'accepted' && value.phase !== 'executing')
+  ) {
+    return null;
+  }
+  return {
+    operationId: value.operationId,
+    attempt: Number(value.attempt),
+    phase: value.phase,
+  };
+}
 
 export const dockerBuildLimits = {
   logChunkMaxBytes: BUILD_LOG_CHUNK_MAX_BYTES,

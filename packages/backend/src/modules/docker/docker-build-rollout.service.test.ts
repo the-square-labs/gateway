@@ -8,6 +8,10 @@ import {
 } from './docker-compose-build-rollout.service.js';
 
 describe('DockerBuildRolloutService', () => {
+  const leaseOwner = 'gateway-rollout:test';
+  const operationId = 'docker-build:build-1:attempt:1';
+  const executingProgress = { rollout: { operationId, attempt: 1, phase: 'executing' } };
+
   it('pulls immutable Compose artifacts before applying a Git revision', () => {
     expect(COMPOSE_GIT_ROLLOUT_ACTION).toBe('pull_apply');
   });
@@ -274,7 +278,14 @@ describe('DockerBuildRolloutService', () => {
 
   it('does not deploy a completed artifact after a newer desired commit supersedes it', async () => {
     const joined = {
-      build: { id: 'build-1', commitSha: 'a'.repeat(40), createdById: null },
+      build: {
+        id: 'build-1',
+        commitSha: 'a'.repeat(40),
+        createdById: null,
+        status: 'deploying',
+        leaseOwner,
+        progress: executingProgress,
+      },
       source: { id: 'source-1', desiredCommitSha: 'b'.repeat(40) },
       artifact: { policyDecision: 'approved', status: 'ready' },
     };
@@ -299,7 +310,11 @@ describe('DockerBuildRolloutService', () => {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           innerJoin: vi.fn(() => ({
-            where: vi.fn(() => ({ limit: vi.fn(async () => [{ targetKind: 'container' }]) })),
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => [
+                { targetKind: 'container', status: 'deploying', leaseOwner, progress: executingProgress },
+              ]),
+            })),
           })),
         })),
       })),
@@ -308,15 +323,50 @@ describe('DockerBuildRolloutService', () => {
     const service = new DockerBuildRolloutService(db as never, {} as never, {} as never, {} as never);
     const deployTarget = vi.spyOn(service as any, 'deployTarget');
 
-    await expect(service.rollout('build-1')).resolves.toBe('superseded');
+    await expect(service.rollout('build-1', leaseOwner, operationId)).resolves.toBe('superseded');
     expect(tx.execute).toHaveBeenCalledOnce();
     expect(deployTarget).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rollout whose backend lease was replaced before external mutation', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => [
+                {
+                  targetKind: 'container',
+                  status: 'deploying',
+                  leaseOwner: 'gateway-rollout:new',
+                  progress: executingProgress,
+                },
+              ]),
+            })),
+          })),
+        })),
+      })),
+      transaction: vi.fn(),
+    };
+    const service = new DockerBuildRolloutService(db as never, {} as never, {} as never, {} as never);
+
+    await expect(service.rollout('build-1', leaseOwner, operationId)).rejects.toMatchObject({
+      code: 'BUILD_ROLLOUT_LEASE_LOST',
+    });
+    expect(db.transaction).not.toHaveBeenCalled();
   });
 
   it('serializes duplicate rollout events and deploys an immutable commit only once', async () => {
     const commitSha = 'a'.repeat(40);
     const joined = {
-      build: { id: 'build-1', commitSha, createdById: null },
+      build: {
+        id: 'build-1',
+        commitSha,
+        createdById: null,
+        status: 'deploying',
+        leaseOwner,
+        progress: executingProgress,
+      },
       source: {
         id: 'source-1',
         desiredCommitSha: commitSha,
@@ -336,7 +386,11 @@ describe('DockerBuildRolloutService', () => {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           innerJoin: vi.fn(() => ({
-            where: vi.fn(() => ({ limit: vi.fn(async () => [{ targetKind: 'container' }]) })),
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => [
+                { targetKind: 'container', status: 'deploying', leaseOwner, progress: executingProgress },
+              ]),
+            })),
           })),
         })),
       })),
@@ -382,10 +436,12 @@ describe('DockerBuildRolloutService', () => {
     const deployTarget = vi.spyOn(service as any, 'deployTarget').mockResolvedValue('container:node-1:api');
     vi.spyOn(service as any, 'rotatePins').mockResolvedValue(undefined);
 
-    await expect(Promise.all([service.rollout('build-1'), service.rollout('build-1')])).resolves.toEqual([
-      'deployed',
-      'deployed',
-    ]);
+    await expect(
+      Promise.all([
+        service.rollout('build-1', leaseOwner, operationId),
+        service.rollout('build-1', leaseOwner, operationId),
+      ])
+    ).resolves.toEqual(['deployed', 'deployed']);
     expect(deployTarget).toHaveBeenCalledOnce();
     expect(deployTarget).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'source-1' }),

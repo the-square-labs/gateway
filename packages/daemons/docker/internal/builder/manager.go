@@ -19,10 +19,14 @@ import (
 )
 
 const (
-	DefaultGitAskpassPath    = "/usr/local/lib/gateway-builder/git-askpass"
-	maxBuildLogChunk         = 64 * 1024
-	maxScanVulnerabilities   = 100
-	commandCancellationGrace = 10 * time.Second
+	DefaultGitAskpassPath      = "/usr/local/lib/gateway-builder/git-askpass"
+	maxBuildLogChunk           = 64 * 1024
+	maxScanVulnerabilities     = 100
+	commandCancellationGrace   = 10 * time.Second
+	terminalEventRetryInterval = 15 * time.Second
+	// ACK confirms durable backend acceptance, not rollout completion. This is
+	// only a bounded reconnect/retry window and is independent of build timeout.
+	terminalEventAckTimeout = 2 * time.Minute
 )
 
 var (
@@ -35,20 +39,26 @@ var (
 	errDiskLimit       = errors.New("builder disk limit exceeded")
 )
 
-type EventSink func(*pb.DockerBuildEvent)
+type EventSink func(*pb.DockerBuildEvent) error
 
 type Manager struct {
-	config      RuntimeConfig
-	workspace   string
-	askpass     string
-	emit        EventSink
-	mu          sync.Mutex
-	jobs        map[string]context.CancelFunc
-	secrets     map[string][]string
-	cleanupOnce sync.Once
-	cleanupErr  error
-	sequence    atomic.Uint64
-	executable  func(string) (string, error)
+	config                RuntimeConfig
+	workspace             string
+	askpass               string
+	emit                  EventSink
+	mu                    sync.Mutex
+	jobs                  map[string]context.CancelFunc
+	secrets               map[string][]string
+	attempts              map[string]uint32
+	terminalEvents        map[string]*pb.DockerBuildEvent
+	terminalAcks          map[string]chan string
+	cleanupOnce           sync.Once
+	cleanupErr            error
+	sequence              atomic.Uint64
+	executable            func(string) (string, error)
+	cleanupAfterJob       func(string)
+	terminalRetryInterval time.Duration
+	terminalAckTimeout    time.Duration
 }
 
 type checkoutCredential struct {
@@ -62,10 +72,13 @@ type buildMetadata struct {
 }
 
 func NewManager(config RuntimeConfig, workspace, askpass string, emit EventSink) *Manager {
-	return &Manager{
+	manager := &Manager{
 		config: config, workspace: workspace, askpass: askpass, emit: emit, jobs: map[string]context.CancelFunc{}, secrets: map[string][]string{},
-		executable: exec.LookPath,
+		attempts: map[string]uint32{}, terminalEvents: map[string]*pb.DockerBuildEvent{}, terminalAcks: map[string]chan string{},
+		executable: exec.LookPath, terminalRetryInterval: terminalEventRetryInterval, terminalAckTimeout: terminalEventAckTimeout,
 	}
+	manager.cleanupAfterJob = manager.pruneAfterJob
+	return manager
 }
 
 func (m *Manager) Ready() error {
@@ -106,11 +119,13 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	if m.cleanupErr != nil {
 		return fmt.Errorf("clean stale builder workspace: %w", m.cleanupErr)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(command.GetTimeoutSeconds())*time.Second)
+	jobCtx, cancelJob := context.WithCancel(context.Background())
+	ctx, cancelBuild := context.WithTimeout(jobCtx, time.Duration(command.GetTimeoutSeconds())*time.Second)
 	m.mu.Lock()
 	if _, exists := m.jobs[command.GetBuildId()]; exists {
 		m.mu.Unlock()
-		cancel()
+		cancelBuild()
+		cancelJob()
 		return errors.New("build is already running")
 	}
 	capacity := int(command.GetWorkerParallelism())
@@ -119,10 +134,14 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	}
 	if len(m.jobs) >= capacity {
 		m.mu.Unlock()
-		cancel()
+		cancelBuild()
+		cancelJob()
 		return errors.New("builder is at its isolated job capacity")
 	}
-	m.jobs[command.GetBuildId()] = cancel
+	// Cancellation stops build execution, while the parent job context keeps
+	// heartbeats alive through cleanup and terminal acknowledgement.
+	m.jobs[command.GetBuildId()] = cancelBuild
+	m.attempts[command.GetBuildId()] = command.GetAttempt()
 	secretValues := make([]string, 0, len(command.GetBuildSecrets())+1)
 	for _, value := range command.GetBuildSecrets() {
 		secretValues = append(secretValues, string(value))
@@ -135,21 +154,43 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	m.mu.Unlock()
 	go func() {
 		defer func() {
-			cancel()
-			m.mu.Lock()
-			delete(m.jobs, command.GetBuildId())
-			delete(m.secrets, command.GetBuildId())
-			m.mu.Unlock()
+			cancelBuild()
+			cancelJob()
+			m.releaseAttemptState(command.GetBuildId(), command.GetAttempt())
 		}()
 		heartbeatDone := make(chan struct{})
-		go m.emitHeartbeats(ctx, command.GetBuildId(), heartbeatDone)
+		go m.emitHeartbeats(jobCtx, command.GetBuildId(), command.GetAttempt(), heartbeatDone)
 		m.run(ctx, command)
+		terminal := m.prepareCompletedJob(command.GetBuildId(), command.GetAttempt())
+		if terminal != nil {
+			m.deliverTerminal(terminal)
+		}
 		close(heartbeatDone)
 	}()
 	return nil
 }
 
-func (m *Manager) emitHeartbeats(ctx context.Context, buildID string, done <-chan struct{}) {
+func (m *Manager) prepareCompletedJob(buildID string, attempt uint32) *pb.DockerBuildEvent {
+	m.cleanupAfterJob(buildID)
+	terminal := m.takeTerminal(buildID)
+	m.releaseAttemptState(buildID, attempt)
+	return terminal
+}
+
+func (m *Manager) releaseAttemptState(buildID string, attempt uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	currentAttempt, exists := m.attempts[buildID]
+	if !exists || currentAttempt != attempt {
+		return
+	}
+	delete(m.jobs, buildID)
+	delete(m.secrets, buildID)
+	delete(m.attempts, buildID)
+	delete(m.terminalEvents, buildID)
+}
+
+func (m *Manager) emitHeartbeats(ctx context.Context, buildID string, attempt uint32, done <-chan struct{}) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -159,9 +200,35 @@ func (m *Manager) emitHeartbeats(ctx context.Context, buildID string, done <-cha
 		case <-done:
 			return
 		case <-ticker.C:
-			m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "heartbeat", OccurredAtUnixMs: time.Now().UnixMilli()})
+			_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "heartbeat", Attempt: attempt, OccurredAtUnixMs: time.Now().UnixMilli()})
 		}
 	}
+}
+
+func terminalAckKey(buildID string, attempt uint32) string {
+	return fmt.Sprintf("%s:%d", buildID, attempt)
+}
+
+func (m *Manager) Acknowledge(buildID string, attempt uint32, disposition string) bool {
+	if buildID == "" || attempt == 0 {
+		return false
+	}
+	if disposition == "" {
+		disposition = "accepted"
+	}
+	if disposition != "accepted" && disposition != "obsolete" {
+		return false
+	}
+	key := terminalAckKey(buildID, attempt)
+	m.mu.Lock()
+	ack := m.terminalAcks[key]
+	if ack != nil {
+		delete(m.terminalAcks, key)
+		ack <- disposition
+		close(ack)
+	}
+	m.mu.Unlock()
+	return ack != nil
 }
 
 func (m *Manager) Cancel(buildID string) bool {
@@ -270,7 +337,6 @@ func (m *Manager) run(ctx context.Context, command *pb.DockerBuildCommand) {
 		m.fail(command, "BUILDER_CACHE_RESET_FAILED", err)
 		return
 	}
-	defer m.pruneAfterJob(command.GetBuildId())
 	jobCtx, cancelJob := context.WithCancelCause(ctx)
 	monitorDone := make(chan struct{})
 	go func() {
@@ -317,10 +383,10 @@ func (m *Manager) run(ctx context.Context, command *pb.DockerBuildCommand) {
 	}
 	m.status(command, "scanning")
 	if command.GetOutputKind() == "pages_archive" {
-		m.emitEvent(&pb.DockerBuildEvent{
+		m.emitTerminal(&pb.DockerBuildEvent{
 			BuildId: command.GetBuildId(), Status: "succeeded", ArtifactRepository: command.GetOutputRepository(),
 			ArtifactDigest: metadata.Digest, ArtifactSizeBytes: metadata.Size, Platform: command.GetPlatform(),
-			PolicyDecision: "pending", OccurredAtUnixMs: time.Now().UnixMilli(),
+			PolicyDecision: "pending", Attempt: command.GetAttempt(), OccurredAtUnixMs: time.Now().UnixMilli(),
 		})
 		return
 	}
@@ -329,10 +395,10 @@ func (m *Manager) run(ctx context.Context, command *pb.DockerBuildCommand) {
 		m.failForContext(command, jobCtx, "ARTIFACT_POLICY_FAILED", err)
 		return
 	}
-	m.emitEvent(&pb.DockerBuildEvent{
+	m.emitTerminal(&pb.DockerBuildEvent{
 		BuildId: command.GetBuildId(), Status: "succeeded", ArtifactRepository: command.GetOutputRepository(),
 		ArtifactDigest: metadata.Digest, ArtifactSizeBytes: metadata.Size, Platform: command.GetPlatform(),
 		ScanSummaryJson: scanSummary,
-		PolicyDecision:  "pending", OccurredAtUnixMs: time.Now().UnixMilli(),
+		PolicyDecision:  "pending", Attempt: command.GetAttempt(), OccurredAtUnixMs: time.Now().UnixMilli(),
 	})
 }

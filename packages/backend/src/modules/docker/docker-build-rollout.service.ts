@@ -12,6 +12,7 @@ import type { PageBuildRolloutService } from '@/modules/pages/deployments/page-b
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerComposeService } from './compose/compose.service.js';
 import type { DockerManagementService } from './docker.service.js';
+import { readDockerBuildRolloutProgress } from './docker-build-policy.js';
 import { DockerComposeBuildRolloutService } from './docker-compose-build-rollout.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 
@@ -33,13 +34,23 @@ export class DockerBuildRolloutService {
     this.pagesRollout = service;
   }
 
-  async rollout(buildId: string): Promise<'deployed' | 'superseded' | 'pending'> {
+  async rollout(
+    buildId: string,
+    leaseOwner: string,
+    operationId: string
+  ): Promise<'deployed' | 'superseded' | 'pending'> {
     const [target] = await this.db
-      .select({ targetKind: dockerSourceBindings.targetKind })
+      .select({
+        targetKind: dockerSourceBindings.targetKind,
+        status: dockerBuilds.status,
+        leaseOwner: dockerBuilds.leaseOwner,
+        progress: dockerBuilds.progress,
+      })
       .from(dockerBuilds)
       .innerJoin(dockerSourceBindings, eq(dockerSourceBindings.id, dockerBuilds.sourceBindingId))
       .where(eq(dockerBuilds.id, buildId))
       .limit(1);
+    this.assertRolloutLease(target, leaseOwner, operationId);
     if (target?.targetKind === 'compose_project') {
       if (!this.composeRollout) {
         throw new AppError(503, 'COMPOSE_ROLLOUT_UNAVAILABLE', 'Compose rollout is unavailable');
@@ -70,6 +81,7 @@ export class DockerBuildRolloutService {
         .where(eq(dockerBuilds.id, buildId))
         .limit(1);
       if (!joined) throw new AppError(404, 'BUILD_ARTIFACT_NOT_FOUND', 'Approved build artifact was not found');
+      this.assertRolloutLease(joined.build, leaseOwner, operationId);
       if (joined.artifact.policyDecision !== 'approved' || joined.artifact.status !== 'ready') {
         throw new AppError(409, 'BUILD_ARTIFACT_NOT_APPROVED', 'Only approved immutable artifacts can be deployed');
       }
@@ -93,6 +105,22 @@ export class DockerBuildRolloutService {
         .where(eq(dockerSourceBindings.id, joined.source.id));
       return 'deployed';
     });
+  }
+
+  private assertRolloutLease(
+    build: { status?: string; leaseOwner?: string | null; progress?: unknown } | null | undefined,
+    leaseOwner: string,
+    operationId: string
+  ): void {
+    const rollout = readDockerBuildRolloutProgress(build?.progress);
+    if (
+      build?.status !== 'deploying' ||
+      build.leaseOwner !== leaseOwner ||
+      rollout?.operationId !== operationId ||
+      rollout.phase !== 'executing'
+    ) {
+      throw new AppError(409, 'BUILD_ROLLOUT_LEASE_LOST', 'Backend rollout lease is no longer current');
+    }
   }
 
   async recoverInterruptedComposeRollouts(now = new Date()) {

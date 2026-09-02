@@ -6,6 +6,7 @@ import type { NodeGpuDevice } from '@/db/schema/nodes.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { isMinorCompatible } from '@/lib/semver.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { DockerRuntimeStatusSchema } from '@/modules/docker/docker.schemas.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
@@ -265,6 +266,70 @@ export function diffDockerContainerStateReports(
 }
 
 export function createControlHandlers(deps: GrpcServerDeps) {
+  type DockerBuildEventDisposition = 'accepted' | 'obsolete' | null;
+  const dockerBuildEventTails = new Map<string, Promise<DockerBuildEventDisposition>>();
+  const dockerBuildTerminalEvents = new Map<string, Promise<DockerBuildEventDisposition>>();
+  const handleDockerBuildEvent = async (
+    nodeId: string,
+    event: NonNullable<DaemonMessage['dockerBuildEvent']>
+  ): Promise<DockerBuildEventDisposition> => {
+    try {
+      await container.resolve(DockerBuildService).handleDaemonEvent(nodeId, event);
+      return 'accepted';
+    } catch (error) {
+      logger.warn('Rejected Docker builder event', {
+        nodeId,
+        buildId: event.buildId,
+        status: event.status,
+        error: (error as Error).message,
+      });
+      if (
+        error instanceof AppError &&
+        ['BUILD_EVENT_ATTEMPT_STALE', 'BUILD_EVENT_TERMINAL_CONFLICT', 'BUILD_EVENT_OWNER_MISMATCH'].includes(
+          error.code
+        )
+      ) {
+        return 'obsolete';
+      }
+      return null;
+    }
+  };
+  const dispatchDockerBuildEvent = (
+    nodeId: string,
+    event: NonNullable<DaemonMessage['dockerBuildEvent']>
+  ): Promise<DockerBuildEventDisposition> => {
+    // Log chunks are independent inserts and must not delay lifecycle
+    // transitions. Heartbeats must also bypass a long terminal rollout so the
+    // lease remains live. Serialize state-bearing events per build so the database
+    // observes the same checking_out -> building -> scanning -> terminal
+    // order as the authenticated gRPC stream.
+    if (event.status === 'log' || event.status === 'heartbeat') return handleDockerBuildEvent(nodeId, event);
+
+    const key = `${nodeId}:${event.buildId}`;
+    const attempt = Number(event.attempt ?? 0);
+    const terminalKey =
+      attempt > 0 && (event.status === 'succeeded' || event.status === 'failed')
+        ? `${key}:${attempt}:${event.status}`
+        : null;
+    if (terminalKey) {
+      const existing = dockerBuildTerminalEvents.get(terminalKey);
+      if (existing) return existing;
+    }
+    const previous = dockerBuildEventTails.get(key) ?? Promise.resolve<DockerBuildEventDisposition>('accepted');
+    const task = previous.then(() => handleDockerBuildEvent(nodeId, event));
+    const settled = task.finally(() => {
+      if (dockerBuildEventTails.get(key) === settled) dockerBuildEventTails.delete(key);
+    });
+    dockerBuildEventTails.set(key, settled);
+    if (terminalKey) {
+      dockerBuildTerminalEvents.set(terminalKey, settled);
+      void settled.finally(() => {
+        if (dockerBuildTerminalEvents.get(terminalKey) === settled) dockerBuildTerminalEvents.delete(terminalKey);
+      });
+    }
+    return settled;
+  };
+
   return {
     CommandStream(stream: ServerDuplexStream<DaemonMessage, GatewayCommand>) {
       let nodeId: string | null = null;
@@ -733,15 +798,26 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 .where(eq(relayInstances.id, instance.id));
               deps.registry.publishNodeChanged(activeNodeId, 'online');
             } else if (msg.dockerBuildEvent) {
-              try {
-                await container.resolve(DockerBuildService).handleDaemonEvent(activeNodeId, msg.dockerBuildEvent);
-              } catch (error) {
-                logger.warn('Rejected Docker builder event', {
-                  nodeId: activeNodeId,
-                  buildId: msg.dockerBuildEvent.buildId,
-                  status: msg.dockerBuildEvent.status,
-                  error: (error as Error).message,
-                });
+              const disposition = await dispatchDockerBuildEvent(activeNodeId, msg.dockerBuildEvent);
+              const attempt = Number(msg.dockerBuildEvent.attempt ?? 0);
+              if (
+                disposition &&
+                attempt > 0 &&
+                (msg.dockerBuildEvent.status === 'succeeded' || msg.dockerBuildEvent.status === 'failed') &&
+                isCurrentCommandStream()
+              ) {
+                try {
+                  deps.registry.sendCommandNoWait(activeNodeId, {
+                    dockerBuildEventAck: { buildId: msg.dockerBuildEvent.buildId, attempt, disposition },
+                  });
+                } catch (error) {
+                  logger.debug('Docker build terminal acknowledgement was not sent', {
+                    nodeId: activeNodeId,
+                    buildId: msg.dockerBuildEvent.buildId,
+                    attempt,
+                    error: (error as Error).message,
+                  });
+                }
               }
             } else if (msg.dockerRuntimeStatus) {
               const runtimeStatus = mapDockerRuntimeStatus(msg.dockerRuntimeStatus);

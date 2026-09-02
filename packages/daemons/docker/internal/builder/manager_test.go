@@ -127,13 +127,146 @@ func TestPagesBuildControlFilesStayOutsideRepositoryCheckout(t *testing.T) {
 
 func TestBuildLogRedactsBuildSecretValues(t *testing.T) {
 	var emitted *pb.DockerBuildEvent
-	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) {
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) error {
 		emitted = event
+		return nil
 	})
 	manager.secrets["build-1"] = []string{"super-secret"}
 	manager.log("build-1", []byte("token=super-secret"))
 	if emitted == nil || strings.Contains(string(emitted.LogChunk), "super-secret") || !strings.Contains(string(emitted.LogChunk), "[REDACTED]") {
 		t.Fatalf("Build Secret was not redacted: %#v", emitted)
+	}
+}
+
+func TestTerminalEventRetriesUntilMatchingAttemptIsAcknowledged(t *testing.T) {
+	events := make(chan *pb.DockerBuildEvent, 4)
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) error {
+		events <- event
+		return nil
+	})
+	manager.terminalRetryInterval = 10 * time.Millisecond
+	manager.terminalAckTimeout = time.Second
+	done := make(chan struct{})
+	go func() {
+		manager.deliverTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 2})
+		close(done)
+	}()
+
+	first := <-events
+	if first.GetAttempt() != 2 {
+		t.Fatalf("terminal event attempt = %d, want 2", first.GetAttempt())
+	}
+	if manager.Acknowledge("build-1", 1, "obsolete") {
+		t.Fatal("stale attempt acknowledgement was accepted")
+	}
+	select {
+	case <-events:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("terminal event was not retried")
+	}
+	if !manager.Acknowledge("build-1", 2, "accepted") {
+		t.Fatal("matching terminal acknowledgement was rejected")
+	}
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("terminal delivery did not finish after acknowledgement")
+	}
+}
+
+func TestObsoleteTerminalAcknowledgementStopsRetryImmediately(t *testing.T) {
+	events := make(chan *pb.DockerBuildEvent, 1)
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) error {
+		events <- event
+		return nil
+	})
+	manager.terminalRetryInterval = time.Second
+	manager.terminalAckTimeout = time.Minute
+	done := make(chan struct{})
+	go func() {
+		manager.deliverTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 3})
+		close(done)
+	}()
+	<-events
+	if !manager.Acknowledge("build-1", 3, "obsolete") {
+		t.Fatal("obsolete terminal acknowledgement was rejected")
+	}
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("obsolete acknowledgement did not release terminal delivery")
+	}
+}
+
+func TestLegacyTerminalEventDoesNotWaitForAcknowledgement(t *testing.T) {
+	events := 0
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(_ *pb.DockerBuildEvent) error {
+		events++
+		return nil
+	})
+	manager.deliverTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "failed"})
+	if events != 1 {
+		t.Fatalf("legacy terminal event emitted %d times, want 1", events)
+	}
+}
+
+func TestJobCleanupCompletesBeforeTerminalEventDelivery(t *testing.T) {
+	order := make([]string, 0, 2)
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(_ *pb.DockerBuildEvent) error {
+		order = append(order, "terminal")
+		return nil
+	})
+	manager.cleanupAfterJob = func(_ string) {
+		order = append(order, "cleanup")
+	}
+	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded"})
+	manager.attempts["build-1"] = 0
+	terminal := manager.prepareCompletedJob("build-1", 0)
+	manager.deliverTerminal(terminal)
+	if strings.Join(order, ",") != "cleanup,terminal" {
+		t.Fatalf("completion order = %v, want cleanup before terminal delivery", order)
+	}
+}
+
+func TestJobCapacityIsReleasedBeforeTerminalAcknowledgement(t *testing.T) {
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, nil)
+	manager.cleanupAfterJob = func(_ string) {}
+	manager.jobs["build-1"] = func() {}
+	manager.secrets["build-1"] = []string{"secret"}
+	manager.attempts["build-1"] = 2
+	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 2})
+
+	terminal := manager.prepareCompletedJob("build-1", 2)
+	if terminal == nil || terminal.GetAttempt() != 2 {
+		t.Fatalf("prepared terminal event = %#v, want attempt 2", terminal)
+	}
+	manager.mu.Lock()
+	_, jobExists := manager.jobs["build-1"]
+	_, secretExists := manager.secrets["build-1"]
+	_, attemptExists := manager.attempts["build-1"]
+	manager.mu.Unlock()
+	if jobExists || secretExists || attemptExists {
+		t.Fatalf("completed job still occupies capacity: job=%v secret=%v attempt=%v", jobExists, secretExists, attemptExists)
+	}
+}
+
+func TestOldAttemptCleanupDoesNotDeleteReplacementJobState(t *testing.T) {
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, nil)
+	manager.jobs["build-1"] = func() {}
+	manager.secrets["build-1"] = []string{"replacement-secret"}
+	manager.attempts["build-1"] = 3
+	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 3})
+
+	manager.releaseAttemptState("build-1", 2)
+
+	manager.mu.Lock()
+	_, jobExists := manager.jobs["build-1"]
+	secret := manager.secrets["build-1"]
+	attempt := manager.attempts["build-1"]
+	terminal := manager.terminalEvents["build-1"]
+	manager.mu.Unlock()
+	if !jobExists || len(secret) != 1 || secret[0] != "replacement-secret" || attempt != 3 || terminal == nil {
+		t.Fatalf("old attempt cleanup removed replacement state: job=%v secret=%v attempt=%d terminal=%#v", jobExists, secret, attempt, terminal)
 	}
 }
 

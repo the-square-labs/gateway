@@ -10,6 +10,7 @@ import {
   dockerSourceBindings,
 } from '@/db/schema/index.js';
 import type { DockerBuildEvent } from '@/grpc/generated/types.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { DockerBuildArtifactStore } from './docker-build-artifact.js';
@@ -21,6 +22,7 @@ import {
   expiredDockerBuildDisposition,
   parseDockerBuildProgress,
   parseDockerBuildScanSummary,
+  readDockerBuildRolloutProgress,
   TERMINAL_BUILD_STATUSES,
 } from './docker-build-policy.js';
 import { type DockerBuildListInput, DockerBuildQuery } from './docker-build-query.js';
@@ -44,6 +46,15 @@ export interface DockerBuildEnqueueInput {
 }
 
 const TERMINAL_BUILD_LOG_GRACE_MS = 5 * 60 * 1000;
+const ROLLOUT_HEARTBEAT_INTERVAL_MS = 15_000;
+const logger = createChildLogger('DockerBuildService');
+
+type DockerBuildRow = typeof dockerBuilds.$inferSelect;
+type RecoveredDockerBuild = { build: DockerBuildRow; resumeRollout: boolean; releaseBuild: boolean };
+
+function dockerBuildRolloutOperationId(buildId: string, attempt: number): string {
+  return `docker-build:${buildId}:attempt:${attempt}`;
+}
 
 export function canAcceptDockerBuildLogEvent(
   build: {
@@ -56,18 +67,25 @@ export function canAcceptDockerBuildLogEvent(
   now = new Date()
 ): boolean {
   if (build.builderNodeId !== builderNodeId) return false;
-  if (build.leaseOwner) return true;
-  if (!TERMINAL_BUILD_STATUSES.includes(build.status) || !build.completedAt) return false;
-  const completedAge = now.getTime() - build.completedAt.getTime();
-  return completedAge >= 0 && completedAge <= TERMINAL_BUILD_LOG_GRACE_MS;
+  if (TERMINAL_BUILD_STATUSES.includes(build.status)) {
+    if (!build.completedAt) return false;
+    const completedAge = now.getTime() - build.completedAt.getTime();
+    return completedAge >= 0 && completedAge <= TERMINAL_BUILD_LOG_GRACE_MS;
+  }
+  return Boolean(build.leaseOwner);
 }
 
 export class DockerBuildService {
   private eventBus?: EventBusService;
   private admissionGuard?: () => Promise<void>;
   private licenseGuard?: () => Promise<void>;
-  private artifactRollout?: (buildId: string) => Promise<'deployed' | 'superseded' | 'pending'>;
+  private artifactRollout?: (
+    buildId: string,
+    leaseOwner: string,
+    operationId: string
+  ) => Promise<'deployed' | 'superseded' | 'pending'>;
   private buildReleaseHandler?: (buildId: string) => Promise<void>;
+  private readonly artifactRolloutTasks = new Map<string, { leaseOwner: string; task: Promise<void> }>();
 
   private readonly artifacts: DockerBuildArtifactStore;
   private readonly query: DockerBuildQuery;
@@ -89,7 +107,13 @@ export class DockerBuildService {
     this.licenseGuard = guard;
   }
 
-  setArtifactRollout(handler: (buildId: string) => Promise<'deployed' | 'superseded' | 'pending'>): void {
+  setArtifactRollout(
+    handler: (
+      buildId: string,
+      leaseOwner: string,
+      operationId: string
+    ) => Promise<'deployed' | 'superseded' | 'pending'>
+  ): void {
     this.artifactRollout = handler;
   }
 
@@ -373,8 +397,7 @@ export class DockerBuildService {
         .returning();
       return { claimed: row ?? null, recovered };
     });
-    for (const recovered of result.recovered) this.emit(recovered);
-    await Promise.allSettled(result.recovered.map((recovered) => this.buildReleaseHandler?.(recovered.id)));
+    await this.processRecoveredLeases(result.recovered);
     if (result.claimed) this.emit(result.claimed);
     return result.claimed;
   }
@@ -392,6 +415,38 @@ export class DockerBuildService {
       )
       .returning();
     if (!row) throw new AppError(409, 'BUILD_LEASE_LOST', 'Build lease is no longer owned by this worker');
+    this.emit(row);
+    return row;
+  }
+
+  async beginArtifactRollout(
+    buildId: string,
+    workerLeaseOwner: string,
+    attempt: number,
+    progress: Record<string, unknown>,
+    now = new Date()
+  ) {
+    const rolloutLeaseOwner = `gateway-rollout:${process.pid}:${randomUUID()}`;
+    const operationId = dockerBuildRolloutOperationId(buildId, attempt);
+    const [row] = await this.db
+      .update(dockerBuilds)
+      .set({
+        status: 'deploying',
+        leaseOwner: rolloutLeaseOwner,
+        leaseHeartbeatAt: now,
+        leaseExpiresAt: new Date(now.getTime() + DEFAULT_BUILD_LEASE_MS),
+        progress: { ...progress, rollout: { operationId, attempt, phase: 'accepted' } },
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(dockerBuilds.id, buildId),
+          eq(dockerBuilds.status, 'pushing'),
+          eq(dockerBuilds.leaseOwner, workerLeaseOwner)
+        )
+      )
+      .returning();
+    if (!row) throw new AppError(409, 'BUILD_STATE_CONFLICT', 'Build state changed before rollout ownership transfer');
     this.emit(row);
     return row;
   }
@@ -443,9 +498,7 @@ export class DockerBuildService {
         progress: input.progress ?? current.progress,
         errorCode: input.errorCode ?? (nextStatus === 'failed' ? 'BUILD_FAILED' : null),
         errorMessage: input.errorMessage ?? null,
-        leaseOwner: terminal ? null : current.leaseOwner,
-        leaseHeartbeatAt: terminal ? null : current.leaseHeartbeatAt,
-        leaseExpiresAt: terminal ? null : current.leaseExpiresAt,
+        ...(terminal ? { leaseOwner: null, leaseHeartbeatAt: null, leaseExpiresAt: null } : {}),
         completedAt: terminal ? now : null,
         updatedAt: now,
       })
@@ -523,9 +576,9 @@ export class DockerBuildService {
   }
 
   async recoverExpiredLeases(now = new Date()) {
-    const rows = await this.db.transaction((tx) => this.recoverExpiredLeasesWith(tx, now));
-    for (const row of rows) this.emit(row);
-    return rows;
+    const recovered = await this.db.transaction((tx) => this.recoverExpiredLeasesWith(tx, now));
+    await this.processRecoveredLeases(recovered);
+    return recovered.map(({ build }) => build);
   }
 
   async appendLog(
@@ -539,6 +592,16 @@ export class DockerBuildService {
 
   async handleDaemonEvent(builderNodeId: string, event: DockerBuildEvent) {
     const current = await this.get(event.buildId);
+    const eventAttempt = Number(event.attempt ?? 0);
+    if (!Number.isSafeInteger(eventAttempt) || eventAttempt < 0) {
+      throw new AppError(400, 'BUILD_EVENT_ATTEMPT_INVALID', 'Build event attempt is invalid');
+    }
+    if (eventAttempt === 0 && current.attempt !== 1) {
+      throw new AppError(409, 'BUILD_EVENT_ATTEMPT_STALE', 'Legacy build event no longer matches the active attempt');
+    }
+    if (eventAttempt > 0 && current.attempt !== eventAttempt) {
+      throw new AppError(409, 'BUILD_EVENT_ATTEMPT_STALE', 'Build event belongs to a stale build attempt');
+    }
     if (event.status === 'log') {
       if (!canAcceptDockerBuildLogEvent(current, builderNodeId)) {
         throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build log does not belong to this builder');
@@ -549,10 +612,32 @@ export class DockerBuildService {
       }
       return this.appendLog(event.buildId, sequence, event.logChunk.toString('utf8'));
     }
-    if (current.builderNodeId !== builderNodeId || !current.leaseOwner) {
+    if (current.builderNodeId !== builderNodeId) {
+      throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build event does not belong to this builder lease');
+    }
+    const terminalEvent = event.status === 'succeeded' || event.status === 'failed';
+    if (TERMINAL_BUILD_STATUSES.includes(current.status)) {
+      if (event.status === 'heartbeat') return current;
+      if (event.status === 'succeeded' && current.artifact) return current;
+      if (event.status === 'failed' && !current.artifact && ['failed', 'cancelled'].includes(current.status)) {
+        return current;
+      }
+      if (terminalEvent) {
+        throw new AppError(409, 'BUILD_EVENT_TERMINAL_CONFLICT', 'Build attempt already completed with another result');
+      }
+      throw new AppError(409, 'BUILD_EVENT_STATE_INVALID', 'Build is already terminal');
+    }
+    if (!current.leaseOwner) {
       throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build event does not belong to this builder lease');
     }
     const leaseOwner = current.leaseOwner;
+    if (current.status === 'deploying') {
+      if (event.status === 'heartbeat' || event.status === 'succeeded') return current;
+      if (event.status === 'failed') {
+        throw new AppError(409, 'BUILD_EVENT_TERMINAL_CONFLICT', 'Backend rollout already owns this build attempt');
+      }
+      throw new AppError(409, 'BUILD_EVENT_STATE_INVALID', 'Backend rollout already owns this build attempt');
+    }
     if (event.status === 'heartbeat') {
       return this.heartbeat(event.buildId, leaseOwner);
     }
@@ -621,16 +706,18 @@ export class DockerBuildService {
     if (!this.artifactRollout) {
       throw new AppError(503, 'BUILD_ROLLOUT_UNAVAILABLE', 'Artifact rollout service is unavailable');
     }
-    await this.transition(event.buildId, leaseOwner, 'deploying');
-    try {
-      const disposition = await this.artifactRollout(event.buildId);
-      return this.transition(event.buildId, leaseOwner, disposition === 'superseded' ? 'superseded' : 'succeeded');
-    } catch (error) {
-      return this.transition(event.buildId, leaseOwner, 'failed', {
-        errorCode: 'BUILD_ROLLOUT_FAILED',
-        errorMessage: (error as Error).message.slice(0, 4096),
-      });
+    const deploying = await this.beginArtifactRollout(
+      event.buildId,
+      leaseOwner,
+      current.attempt,
+      current.progress as Record<string, unknown>
+    );
+    const rollout = readDockerBuildRolloutProgress(deploying.progress);
+    if (!rollout) {
+      throw new AppError(500, 'BUILD_ROLLOUT_STATE_INVALID', 'Backend rollout state was not persisted');
     }
+    this.scheduleArtifactRollout(event.buildId, deploying.leaseOwner!, rollout.operationId);
+    return deploying;
   }
 
   async recordArtifact(input: {
@@ -662,13 +749,116 @@ export class DockerBuildService {
     return this.query.list(input);
   }
 
-  private async recoverExpiredLeasesWith(db: DrizzleExecutor, now: Date) {
+  private async recoverExpiredLeasesWith(db: DrizzleExecutor, now: Date): Promise<RecoveredDockerBuild[]> {
     const expired = await db
       .select()
       .from(dockerBuilds)
       .where(and(inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES), lt(dockerBuilds.leaseExpiresAt, now)));
-    const recovered = [];
+    const recovered: RecoveredDockerBuild[] = [];
     for (const build of expired) {
+      if (build.status === 'deploying') {
+        let [source] = await db
+          .select({
+            targetKind: dockerSourceBindings.targetKind,
+            desiredCommitSha: dockerSourceBindings.desiredCommitSha,
+            deployedCommitSha: dockerSourceBindings.deployedCommitSha,
+          })
+          .from(dockerSourceBindings)
+          .where(eq(dockerSourceBindings.id, build.sourceBindingId))
+          .limit(1);
+        const rollout = readDockerBuildRolloutProgress(build.progress);
+        const idempotentTarget = source?.targetKind === 'compose_project' || source?.targetKind === 'pages_project';
+        const safeToResume =
+          !build.cancellationRequestedAt && (rollout?.phase === 'accepted' || Boolean(idempotentTarget));
+        if (safeToResume) {
+          const rolloutLeaseOwner = `gateway-rollout:${process.pid}:${randomUUID()}`;
+          const recoveredProgress = rollout
+            ? build.progress
+            : {
+                ...build.progress,
+                rollout: {
+                  operationId: dockerBuildRolloutOperationId(build.id, build.attempt),
+                  attempt: build.attempt,
+                  phase: 'executing',
+                },
+              };
+          const [row] = await db
+            .update(dockerBuilds)
+            .set({
+              leaseOwner: rolloutLeaseOwner,
+              leaseHeartbeatAt: now,
+              leaseExpiresAt: new Date(now.getTime() + DEFAULT_BUILD_LEASE_MS),
+              progress: recoveredProgress,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(dockerBuilds.id, build.id),
+                eq(dockerBuilds.status, 'deploying'),
+                eq(dockerBuilds.leaseExpiresAt, build.leaseExpiresAt!)
+              )
+            )
+            .returning();
+          if (row) recovered.push({ build: row, resumeRollout: true, releaseBuild: false });
+          continue;
+        }
+
+        if (!idempotentTarget && source) {
+          const lockResult = (await db.execute(
+            sql`select pg_try_advisory_xact_lock(hashtext(${`docker-build-source:${build.sourceBindingId}`})) as acquired`
+          )) as { rows?: Array<{ acquired?: boolean }> };
+          if (lockResult.rows?.[0]?.acquired !== true) continue;
+          [source] = await db
+            .select({
+              targetKind: dockerSourceBindings.targetKind,
+              desiredCommitSha: dockerSourceBindings.desiredCommitSha,
+              deployedCommitSha: dockerSourceBindings.deployedCommitSha,
+            })
+            .from(dockerSourceBindings)
+            .where(eq(dockerSourceBindings.id, build.sourceBindingId))
+            .limit(1);
+        }
+
+        const deployed = source?.deployedCommitSha?.toLowerCase() === build.commitSha.toLowerCase();
+        const superseded = Boolean(source) && source?.desiredCommitSha?.toLowerCase() !== build.commitSha.toLowerCase();
+        const terminalStatus = build.cancellationRequestedAt
+          ? 'cancelled'
+          : superseded
+            ? 'superseded'
+            : deployed
+              ? 'succeeded'
+              : 'failed';
+        const [row] = await db
+          .update(dockerBuilds)
+          .set({
+            status: terminalStatus,
+            leaseOwner: null,
+            leaseHeartbeatAt: null,
+            leaseExpiresAt: null,
+            completedAt: now,
+            errorCode:
+              terminalStatus === 'failed'
+                ? 'BUILD_ROLLOUT_INTERRUPTED'
+                : terminalStatus === 'cancelled'
+                  ? 'CANCELLED_BY_USER'
+                  : null,
+            errorMessage:
+              terminalStatus === 'failed'
+                ? 'Backend rollout lease expired after external execution may have started; automatic replay was refused'
+                : null,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(dockerBuilds.id, build.id),
+              eq(dockerBuilds.status, 'deploying'),
+              eq(dockerBuilds.leaseExpiresAt, build.leaseExpiresAt!)
+            )
+          )
+          .returning();
+        if (row) recovered.push({ build: row, resumeRollout: false, releaseBuild: true });
+        continue;
+      }
       const disposition = expiredDockerBuildDisposition(build);
       const retry = disposition === 'retry';
       const [row] = await db
@@ -702,9 +892,97 @@ export class DockerBuildService {
           )
         )
         .returning();
-      if (row) recovered.push(row);
+      if (row) recovered.push({ build: row, resumeRollout: false, releaseBuild: true });
     }
     return recovered;
+  }
+
+  private async processRecoveredLeases(recovered: RecoveredDockerBuild[]): Promise<void> {
+    for (const { build } of recovered) this.emit(build);
+    await Promise.allSettled(
+      recovered.filter(({ releaseBuild }) => releaseBuild).map(({ build }) => this.buildReleaseHandler?.(build.id))
+    );
+    for (const { build, resumeRollout } of recovered) {
+      const rollout = readDockerBuildRolloutProgress(build.progress);
+      if (resumeRollout && build.leaseOwner && rollout) {
+        this.scheduleArtifactRollout(build.id, build.leaseOwner, rollout.operationId);
+      }
+    }
+  }
+
+  private scheduleArtifactRollout(buildId: string, leaseOwner: string, operationId: string): void {
+    if (this.artifactRolloutTasks.get(buildId)?.leaseOwner === leaseOwner) return;
+    const task = this.runArtifactRollout(buildId, leaseOwner, operationId);
+    this.artifactRolloutTasks.set(buildId, { leaseOwner, task });
+    void task.finally(() => {
+      if (this.artifactRolloutTasks.get(buildId)?.task === task) this.artifactRolloutTasks.delete(buildId);
+    });
+  }
+
+  private async markArtifactRolloutExecuting(buildId: string, leaseOwner: string, operationId: string) {
+    const [current] = await this.db.select().from(dockerBuilds).where(eq(dockerBuilds.id, buildId)).limit(1);
+    const rollout = current ? readDockerBuildRolloutProgress(current.progress) : null;
+    if (
+      !current ||
+      current.status !== 'deploying' ||
+      current.leaseOwner !== leaseOwner ||
+      rollout?.operationId !== operationId
+    ) {
+      throw new AppError(409, 'BUILD_ROLLOUT_LEASE_LOST', 'Backend rollout lease is no longer current');
+    }
+    if (rollout.phase === 'executing') return current;
+    const [row] = await this.db
+      .update(dockerBuilds)
+      .set({
+        progress: { ...current.progress, rollout: { ...rollout, phase: 'executing' } },
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(dockerBuilds.id, buildId), eq(dockerBuilds.status, 'deploying'), eq(dockerBuilds.leaseOwner, leaseOwner))
+      )
+      .returning();
+    if (!row) throw new AppError(409, 'BUILD_ROLLOUT_LEASE_LOST', 'Backend rollout lease is no longer current');
+    return row;
+  }
+
+  private async runArtifactRollout(buildId: string, leaseOwner: string, operationId: string): Promise<void> {
+    if (!this.artifactRollout) return;
+    let heartbeatRunning = false;
+    const heartbeatTimer = setInterval(() => {
+      if (heartbeatRunning) return;
+      heartbeatRunning = true;
+      void this.heartbeat(buildId, leaseOwner)
+        .catch((error) => {
+          logger.warn('Docker build rollout lease heartbeat failed', {
+            buildId,
+            error: (error as Error).message,
+          });
+        })
+        .finally(() => {
+          heartbeatRunning = false;
+        });
+    }, ROLLOUT_HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref?.();
+    try {
+      await this.markArtifactRolloutExecuting(buildId, leaseOwner, operationId);
+      const disposition = await this.artifactRollout(buildId, leaseOwner, operationId);
+      await this.transition(buildId, leaseOwner, disposition === 'superseded' ? 'superseded' : 'succeeded');
+    } catch (error) {
+      try {
+        await this.transition(buildId, leaseOwner, 'failed', {
+          errorCode: 'BUILD_ROLLOUT_FAILED',
+          errorMessage: (error as Error).message.slice(0, 4096),
+        });
+      } catch (transitionError) {
+        logger.warn('Docker build rollout could not finalize after losing its lease', {
+          buildId,
+          rolloutError: (error as Error).message,
+          transitionError: (transitionError as Error).message,
+        });
+      }
+    } finally {
+      clearInterval(heartbeatTimer);
+    }
   }
 
   private emit(build: typeof dockerBuilds.$inferSelect): void {

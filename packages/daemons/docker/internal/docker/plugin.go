@@ -58,10 +58,12 @@ type DockerPlugin struct {
 	runtimeStatus     runtimemanager.Status
 
 	// Log stream follow support
-	writer          *stream.Writer
-	sessionCtx      context.Context
-	logStreamMu     sync.Mutex
-	logStreamCancel map[string]context.CancelFunc // containerId -> cancel
+	writer           *stream.Writer
+	buildEventMu     sync.RWMutex
+	buildEventWriter *stream.Writer
+	sessionCtx       context.Context
+	logStreamMu      sync.Mutex
+	logStreamCancel  map[string]context.CancelFunc // containerId -> cancel
 }
 
 var _ lifecycle.ProxySecureLinkPlugin = (*DockerPlugin)(nil)

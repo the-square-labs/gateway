@@ -305,6 +305,9 @@ message GatewayCommand {
     // Probe one managed Pages Route through node-local nginx while preserving
     // its real Host header and TLS SNI. Accepted only by nginx-daemon.
     ProbePagesRouteCommand probe_pages_route = 66;
+    // Confirms durable processing of one attempt-scoped Docker build terminal
+    // event. Accepted only by docker-daemon running with docker.mode=builder.
+    DockerBuildEventAck docker_build_event_ack = 68;
   }
 }
 
@@ -857,6 +860,9 @@ message DockerBuildCommand {
   string build_script = 25;
   string artifact_directory = 26;
   int32 worker_parallelism = 27;
+  // Attempt number echoed by worker events. Zero preserves compatibility with
+  // peers that predate terminal-event acknowledgements.
+  uint32 attempt = 28;
 }
 
 message DockerBuildCancelCommand {
@@ -881,6 +887,13 @@ message DockerBuildEvent {
   string error_code = 14;
   string error_message = 15;
   int64 occurred_at_unix_ms = 16;
+  uint32 attempt = 17;
+}
+
+message DockerBuildEventAck {
+  string build_id = 1;
+  uint32 attempt = 2;
+  string disposition = 3; // accepted or obsolete
 }
 
 message SyncDockerRegistryBindingsCommand {

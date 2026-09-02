@@ -13,6 +13,28 @@ function serviceWithBuilders(builders: Array<{ capabilities: unknown }>) {
 }
 
 describe('DockerBuildRunnerService admission', () => {
+  it('recovers expired backend-owned rollout leases even when no Build Worker is online', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(async () => []),
+        })),
+      })),
+    };
+    const builds = { recoverExpiredLeases: vi.fn(async () => []) };
+    const service = new DockerBuildRunnerService(
+      db as never,
+      builds as never,
+      { cancelDockerBuild: vi.fn(async () => undefined) } as never,
+      {} as never,
+      {} as never
+    );
+
+    await service.reconcile();
+
+    expect(builds.recoverExpiredLeases).toHaveBeenCalledOnce();
+  });
+
   it('rejects new builds when no online worker advertises the complete dedicated worker profile', async () => {
     const service = serviceWithBuilders([
       {
@@ -143,6 +165,7 @@ describe('DockerBuildRunnerService admission', () => {
   it('returns a capacity-rejected claim to the queue instead of failing the build', async () => {
     const build = {
       id: 'build-1',
+      attempt: 1,
       sourceBindingId: 'source-1',
       sourceConfigGeneration: 1,
       repositoryRemoteId: 'repo-1',
@@ -212,6 +235,10 @@ describe('DockerBuildRunnerService admission', () => {
       'build-1',
       expect.any(String),
       'Build Worker capacity changed before dispatch'
+    );
+    expect(dispatch.dispatchDockerBuildCommand).toHaveBeenCalledWith(
+      'builder-1',
+      expect.objectContaining({ attempt: build.attempt })
     );
     expect(builds.appendLog).not.toHaveBeenCalled();
     expect(builds.transition).not.toHaveBeenCalled();

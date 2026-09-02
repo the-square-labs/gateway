@@ -90,6 +90,7 @@ export interface DockerBuildEvent {
   errorCode: string;
   errorMessage: string;
   occurredAtUnixMs: string;
+  attempt?: number;
 }
 
 export interface DaemonLogEntry {
@@ -284,6 +285,7 @@ export interface GatewayCommand {
   syncDockerRegistryBindings?: SyncDockerRegistryBindingsCommand;
   dockerBuild?: DockerBuildCommand;
   dockerBuildCancel?: DockerBuildCancelCommand;
+  dockerBuildEventAck?: DockerBuildEventAck;
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
   applyTlsBundle?: ApplyTlsBundleCommand;
@@ -340,11 +342,18 @@ export interface DockerBuildCommand {
   buildScript: string;
   artifactDirectory: string;
   workerParallelism?: number;
+  attempt?: number;
 }
 
 export interface DockerBuildCancelCommand {
   buildId: string;
   reason: string;
+}
+
+export interface DockerBuildEventAck {
+  buildId: string;
+  attempt: number;
+  disposition: string;
 }
 
 export interface SyncRelayPolicyCommand {
