@@ -55,6 +55,28 @@ describe("InferenceUsage", () => {
     expect(grid).not.toHaveClass("sm:grid-cols-2");
   });
 
+  it("shows that an expired subscription window waits for the next request", async () => {
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: false, percentage: 0, recoveryAt: "2026-09-01T00:00:00.000Z" },
+      subscription: {
+        "5h": {
+          active: false,
+          configured: true,
+          percentage: 0,
+          recoveryAt: "2026-08-30T00:00:00.000Z",
+        },
+        "7d": { configured: false, percentage: 0, recoveryAt: "2026-09-05T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2026-09-28T00:00:00.000Z" },
+      },
+    });
+
+    render(<InferenceUsage />);
+
+    expect(await screen.findByText("Starts on next use")).toBeInTheDocument();
+    expect(screen.queryByText(/Recovers.*2026/)).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
 import { __testOnly, InferenceBudgetPolicyService } from './inference-budget-policy.js';
 
-describe('effective inference rolling-window policy', () => {
+describe('effective inference fixed-window policy', () => {
   it('keeps setup and status available before a default policy is configured', async () => {
     const database = {
       select: vi.fn(() => ({
@@ -67,26 +67,28 @@ describe('effective inference rolling-window policy', () => {
     expect(__testOnly.effectiveLimits(user, defaults).credits7dEnabled).toBe(false);
   });
 
-  it('derives rolling recovery timestamps from ledger expiry bases', async () => {
+  it('keeps usage monotonic inside fixed windows and reports their reset boundaries', async () => {
     const now = new Date('2026-07-31T00:00:00.000Z');
-    const execute = vi
+    const execute = vi.fn().mockResolvedValue({
+      rows: [{ credits_5h: '95', credits_7d: '475', credits_30d: '950' }],
+    });
+    const select = vi
       .fn()
-      .mockResolvedValueOnce({
-        rows: [{ used: '95', recovery_base: new Date('2026-07-30T22:00:00.000Z') }],
-      })
-      .mockResolvedValueOnce({
-        rows: [{ used: '475', recovery_base: new Date('2026-07-27T12:00:00.000Z') }],
-      })
-      .mockResolvedValueOnce({
-        rows: [{ used: '950', recovery_base: new Date('2026-07-10T06:00:00.000Z') }],
-      });
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([
+            { dimension: 'credits5h', resetAt: new Date('2026-07-30T22:00:00.000Z'), windowActive: true },
+            { dimension: 'credits7d', resetAt: new Date('2026-07-30T22:00:00.000Z'), windowActive: true },
+            { dimension: 'credits30d', resetAt: new Date('2026-07-30T22:00:00.000Z'), windowActive: true },
+          ]),
+        })),
+      }))
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ value: 0 }]) })),
+      }));
     const database = {
       execute,
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([{ value: 0 }]),
-        })),
-      })),
+      select,
     };
     const limits = __testOnly.effectiveLimits(policy({}));
     const service = new InferenceBudgetPolicyService(database as never);
@@ -99,22 +101,35 @@ describe('effective inference rolling-window policy', () => {
       credits30d: 950,
     });
     expect(usage.recoveryAt.credits5h).toEqual(new Date('2026-07-31T03:00:00.000Z'));
-    expect(usage.recoveryAt.credits7d).toEqual(new Date('2026-08-03T12:00:00.000Z'));
-    expect(usage.recoveryAt.credits30d).toEqual(new Date('2026-08-09T06:00:00.000Z'));
+    expect(usage.recoveryAt.credits7d).toEqual(new Date('2026-08-06T22:00:00.000Z'));
+    expect(usage.recoveryAt.credits30d).toEqual(new Date('2026-08-29T22:00:00.000Z'));
+    expect(execute).toHaveBeenCalledOnce();
   });
 
-  it('starts every usage window from a manual reset marker', async () => {
+  it('closes the whole window at its reset boundary without opening the next one', () => {
+    const anchor = new Date('2026-07-30T22:00:00.000Z');
+
+    expect(__testOnly.activeUsageWindow(new Date('2026-07-31T02:59:59.999Z'), anchor, 5 * 60 * 60_000)).toEqual({
+      start: anchor,
+      end: new Date('2026-07-31T03:00:00.000Z'),
+    });
+    expect(__testOnly.activeUsageWindow(new Date('2026-07-31T03:00:00.000Z'), anchor, 5 * 60 * 60_000)).toBeNull();
+  });
+
+  it('keeps expired subscription windows idle during usage reads', async () => {
     const now = new Date('2026-07-31T00:00:00.000Z');
-    const execute = vi.fn().mockResolvedValue({ rows: [{ used: '0', recovery_base: null }] });
+    const execute = vi.fn().mockResolvedValue({
+      rows: [{ credits_5h: '0', credits_7d: '0', credits_30d: '0' }],
+    });
     const select = vi
       .fn()
       .mockImplementationOnce(() => ({
         from: vi.fn(() => ({
           where: vi.fn().mockResolvedValue([
-            { dimension: 'credits5h', resetAt: now },
-            { dimension: 'credits7d', resetAt: now },
-            { dimension: 'credits30d', resetAt: now },
-            { dimension: 'apiMonthlyMicrodollars', resetAt: now },
+            { dimension: 'credits5h', resetAt: new Date('2026-07-30T19:00:00.000Z'), windowActive: true },
+            { dimension: 'credits7d', resetAt: new Date('2026-07-24T00:00:00.000Z'), windowActive: true },
+            { dimension: 'credits30d', resetAt: new Date('2026-07-01T00:00:00.000Z'), windowActive: true },
+            { dimension: 'apiMonthlyMicrodollars', resetAt: now, windowActive: true },
           ]),
         })),
       }))
@@ -138,11 +153,84 @@ describe('effective inference rolling-window policy', () => {
       apiMonthlyMicrodollars: 0,
     });
     expect(usage.recoveryAt).toEqual({
+      credits5h: now,
+      credits7d: now,
+      credits30d: now,
+      apiMonthly: new Date('2026-08-31T00:00:00.000Z'),
+    });
+  });
+
+  it('starts fresh subscription windows only on the first request after expiry', async () => {
+    const now = new Date('2026-07-31T00:00:00.000Z');
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const values = vi.fn(() => ({ onConflictDoUpdate }));
+    const database = {
+      select: vi
+        .fn()
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        }))
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ value: 0 }]) })),
+        })),
+      insert: vi.fn(() => ({ values })),
+      execute: vi.fn().mockResolvedValue({
+        rows: [{ credits_5h: '0', credits_7d: '0', credits_30d: '0' }],
+      }),
+    };
+    const service = new InferenceBudgetPolicyService(database as never);
+
+    const usage = await service.usage(
+      'cef8fbd8-f149-4cd6-b69f-34bea4a10c52',
+      __testOnly.effectiveLimits(policy({})),
+      now,
+      database as never,
+      { startSubscriptionWindows: true }
+    );
+
+    expect(database.insert).toHaveBeenCalledTimes(3);
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({ dimension: 'credits5h', resetAt: now, createdBy: null })
+    );
+    expect(usage.recoveryAt).toEqual({
       credits5h: new Date('2026-07-31T05:00:00.000Z'),
       credits7d: new Date('2026-08-07T00:00:00.000Z'),
       credits30d: new Date('2026-08-30T00:00:00.000Z'),
-      apiMonthly: new Date('2026-08-31T00:00:00.000Z'),
+      apiMonthly: new Date('2026-08-01T00:00:00.000Z'),
     });
+  });
+
+  it('reconstructs an existing active window from immutable ledger history', async () => {
+    const now = new Date('2026-07-31T00:00:00.000Z');
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ started_at: new Date('2026-07-30T22:00:00.000Z') }] })
+      .mockResolvedValueOnce({ rows: [{ started_at: new Date('2026-07-30T22:00:00.000Z') }] })
+      .mockResolvedValueOnce({ rows: [{ started_at: new Date('2026-07-30T22:00:00.000Z') }] })
+      .mockResolvedValueOnce({ rows: [{ credits_5h: '10', credits_7d: '10', credits_30d: '10' }] });
+    const database = {
+      execute,
+      select: vi
+        .fn()
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        }))
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ value: 0 }]) })),
+        })),
+    };
+    const service = new InferenceBudgetPolicyService(database as never);
+
+    const usage = await service.usage(
+      'cef8fbd8-f149-4cd6-b69f-34bea4a10c52',
+      __testOnly.effectiveLimits(policy({})),
+      now,
+      database as never
+    );
+
+    expect(usage.credits5h).toBe(10);
+    expect(usage.active).toMatchObject({ credits5h: true, credits7d: true, credits30d: true });
+    expect(usage.recoveryAt.credits5h).toEqual(new Date('2026-07-31T03:00:00.000Z'));
   });
 });
 

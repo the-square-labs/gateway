@@ -30,6 +30,13 @@ export interface BudgetReservation {
 }
 
 const RESERVE_SCRIPT = `
+local function amount_for_window(value, window)
+  if not value then return 0 end
+  local separator = string.find(value, ':', 1, true)
+  if not separator then return tonumber(value) or 0 end
+  if string.sub(value, 1, separator - 1) ~= window then return 0 end
+  return tonumber(string.sub(value, separator + 1)) or 0
+end
 local now = tonumber(ARGV[1])
 local reservation = ARGV[2]
 for i = 1, 4 do
@@ -39,22 +46,24 @@ for i = 1, 4 do
   for _, member in ipairs(expired) do redis.call('HDEL', hkey, member) end
   if #expired > 0 then redis.call('ZREM', zkey, unpack(expired)) end
   local values = redis.call('HVALS', hkey)
+  local window = ARGV[14 + i]
   local live = 0
-  for _, value in ipairs(values) do live = live + tonumber(value) end
-  local existing = tonumber(redis.call('HGET', hkey, reservation) or '0')
+  for _, value in ipairs(values) do live = live + amount_for_window(value, window) end
+  local existing = amount_for_window(redis.call('HGET', hkey, reservation), window)
   local amount = tonumber(ARGV[2 + i])
   local spent = tonumber(ARGV[6 + i])
   local limit = tonumber(ARGV[10 + i])
   if spent + live - existing + amount > limit then return i end
 end
-local expiry = tonumber(ARGV[15])
+local expiry = tonumber(ARGV[19])
 for i = 1, 4 do
   local zkey = KEYS[(i - 1) * 2 + 1]
   local hkey = KEYS[(i - 1) * 2 + 2]
   local amount = tonumber(ARGV[2 + i])
   if amount > 0 then
+    local window = ARGV[14 + i]
     redis.call('ZADD', zkey, expiry, reservation)
-    redis.call('HSET', hkey, reservation, amount)
+    redis.call('HSET', hkey, reservation, window .. ':' .. amount)
     redis.call('PEXPIRE', zkey, expiry - now + 60000)
     redis.call('PEXPIRE', hkey, expiry - now + 60000)
   end
@@ -119,6 +128,7 @@ export class InferenceBudgetReservationService {
         ...dimensions.map((dimension) => input.amounts[dimension]),
         ...dimensions.map((dimension) => input.usage[dimension]),
         ...limits,
+        ...reservationWindowIds(input.usage),
         expiresAt.getTime()
       );
     } catch (error) {
@@ -227,4 +237,13 @@ function publicDimension(dimension: InferenceBudgetDimension): string {
   return dimension.replace('credits', '').toLowerCase();
 }
 
-export const __testOnly = { reservationKeys, reservationLimit, publicDimension };
+function reservationWindowIds(usage: InferenceBudgetUsage): string[] {
+  return [
+    usage.recoveryAt.credits5h,
+    usage.recoveryAt.credits7d,
+    usage.recoveryAt.credits30d,
+    usage.recoveryAt.apiMonthly,
+  ].map((date) => String(date.getTime()));
+}
+
+export const __testOnly = { reservationKeys, reservationLimit, reservationWindowIds, publicDimension };

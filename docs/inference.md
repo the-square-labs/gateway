@@ -117,12 +117,12 @@ Responses, Chat Completions, and Messages support unary and SSE responses. Respo
 Users see percentages only:
 
 - monthly API usage;
-- shared subscription usage for rolling 5-hour, 7-day, and 30-day windows;
+- shared subscription usage for fixed 5-hour, 7-day, and 30-day reset windows;
 - recovery/reset timestamps.
 
 Administrators can see raw cost, tokens, credits, upstream quota, and request metadata.
 
-Profile includes a 30-day request/token/cost overview for the signed-in user. An inference limits administrator can reset all four usage baselines for one user. Resetting does not delete ledger or request history: rolling 5-hour/7-day/30-day windows start at the reset instant until their natural windows overtake it, while the API monthly cycle remains anchored to the reset's local calendar date and time.
+Profile includes a 30-day request/token/cost overview for the signed-in user. An inference limits administrator can reset all four usage baselines for one user. Resetting does not delete ledger or request history: each fixed 5-hour/7-day/30-day window closes completely at its reset boundary, then the next window starts only when the user next makes a subscription-backed inference request. Usage remains monotonic while a window is active. A manual reset closes the active subscription windows immediately and leaves them idle until the next request, while the API monthly cycle remains anchored to the reset's local calendar date and time.
 
 Setting a user's monthly API budget to zero disables API-funded usage for that user. Logical models whose usable sources are API-only are then omitted from the OpenAI-compatible catalog and the AI Workspace model picker instead of being shown as unusable choices.
 

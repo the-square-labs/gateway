@@ -1,0 +1,1 @@
+ALTER TABLE "inference_limit_usage_resets" ADD COLUMN "window_active" boolean DEFAULT true NOT NULL;

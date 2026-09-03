@@ -749,8 +749,13 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
         })
       );
       if (snapshot.inferenceUsage) {
-        this.setCache(INFERENCE_SELF_USAGE_CACHE_KEY, snapshot.inferenceUsage);
-        publishInferenceSelfUsage(snapshot.inferenceUsage);
+        const accepted = this.acceptFreshSnapshot(
+          INFERENCE_SELF_USAGE_CACHE_KEY,
+          snapshot.inferenceUsage
+        );
+        this.setCache(INFERENCE_SELF_USAGE_CACHE_KEY, accepted);
+        if (accepted === snapshot.inferenceUsage) publishInferenceSelfUsage(accepted);
+        else snapshot.inferenceUsage = accepted;
       }
       return snapshot;
     }

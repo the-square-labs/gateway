@@ -13,9 +13,14 @@ export const SUBSCRIPTION_WINDOWS = {
   '30d': 30 * 24 * 60 * 60_000,
 } as const;
 
+const SUBSCRIPTION_LIMIT_WINDOWS = [
+  { dimension: 'credits5h', enabled: 'credits5hEnabled', durationMs: SUBSCRIPTION_WINDOWS['5h'] },
+  { dimension: 'credits7d', enabled: 'credits7dEnabled', durationMs: SUBSCRIPTION_WINDOWS['7d'] },
+  { dimension: 'credits30d', enabled: 'credits30dEnabled', durationMs: SUBSCRIPTION_WINDOWS['30d'] },
+] as const;
+
 export const SUBSCRIPTION_CHAT_BUDGET_FRACTION = 0.95;
 export const SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION = 0.96;
-const SUBSCRIPTION_RECOVERY_BUDGET_FRACTION = SUBSCRIPTION_CHAT_BUDGET_FRACTION * 0.995;
 
 export interface EffectiveInferenceLimits {
   enabled: boolean;
@@ -34,6 +39,7 @@ export interface InferenceBudgetUsage {
   credits7d: number;
   credits30d: number;
   apiMonthlyMicrodollars: number;
+  active?: { credits5h: boolean; credits7d: boolean; credits30d: boolean; apiMonthly: boolean };
   recoveryAt: { credits5h: Date; credits7d: Date; credits30d: Date; apiMonthly: Date };
 }
 
@@ -76,78 +82,106 @@ export class InferenceBudgetPolicyService {
     userId: string,
     limits: EffectiveInferenceLimits,
     now = new Date(),
-    database: DrizzleExecutor = this.db
+    database: DrizzleExecutor = this.db,
+    options: { startSubscriptionWindows?: boolean } = {}
   ): Promise<InferenceBudgetUsage> {
     const resetRows = await database
-      .select({ dimension: inferenceLimitUsageResets.dimension, resetAt: inferenceLimitUsageResets.resetAt })
+      .select({
+        dimension: inferenceLimitUsageResets.dimension,
+        resetAt: inferenceLimitUsageResets.resetAt,
+        windowActive: inferenceLimitUsageResets.windowActive,
+      })
       .from(inferenceLimitUsageResets)
       .where(eq(inferenceLimitUsageResets.userId, userId));
-    const resets = new Map(resetRows.map((row) => [row.dimension, row.resetAt]));
-    const apiReset = resets.get('apiMonthlyMicrodollars');
+    const resets = new Map(resetRows.map((row) => [row.dimension, row]));
+    const legacyStarts = new Map(
+      await Promise.all(
+        SUBSCRIPTION_LIMIT_WINDOWS.map(
+          async (window) =>
+            [
+              window.dimension,
+              resets.has(window.dimension)
+                ? null
+                : await legacyUsageWindowStart(database, userId, now, window.durationMs),
+            ] as const
+        )
+      )
+    );
+    if (options.startSubscriptionWindows) {
+      for (const window of SUBSCRIPTION_LIMIT_WINDOWS) {
+        if (!limits[window.enabled]) continue;
+        const reset = resets.get(window.dimension);
+        const active = activeUsageWindow(
+          now,
+          reset?.windowActive ? reset.resetAt : (legacyStarts.get(window.dimension) ?? undefined),
+          window.durationMs
+        );
+        if (reset?.windowActive && active) continue;
+        const resetAt = active?.start ?? now;
+        await database
+          .insert(inferenceLimitUsageResets)
+          .values({ userId, dimension: window.dimension, resetAt, windowActive: true, createdBy: null })
+          .onConflictDoUpdate({
+            target: [inferenceLimitUsageResets.userId, inferenceLimitUsageResets.dimension],
+            set: { resetAt, windowActive: true, createdBy: null },
+          });
+        resets.set(window.dimension, {
+          dimension: window.dimension,
+          resetAt,
+          windowActive: true,
+        });
+      }
+    }
+    const apiReset = resets.get('apiMonthlyMicrodollars')?.resetAt;
     const month = apiReset
       ? anchoredCalendarMonthWindow(now, apiReset, limits.billingTimezone)
       : calendarMonthWindow(now, limits.billingTimezone);
-    const cutoffs = {
-      credits5h: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['5h']),
-      credits7d: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['7d']),
-      credits30d: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['30d']),
+    const subscriptionWindows = {
+      credits5h: currentUsageWindow(
+        now,
+        resets.get('credits5h'),
+        legacyStarts.get('credits5h'),
+        SUBSCRIPTION_WINDOWS['5h']
+      ),
+      credits7d: currentUsageWindow(
+        now,
+        resets.get('credits7d'),
+        legacyStarts.get('credits7d'),
+        SUBSCRIPTION_WINDOWS['7d']
+      ),
+      credits30d: currentUsageWindow(
+        now,
+        resets.get('credits30d'),
+        legacyStarts.get('credits30d'),
+        SUBSCRIPTION_WINDOWS['30d']
+      ),
     };
-    const rollingWindowUsage = async (naturalCutoff: Date, durationMs: number, limit: number, resetAt?: Date) => {
-      const cutoff = resetAt && resetAt > naturalCutoff ? resetAt : naturalCutoff;
-      const result = await database.execute(
+    const [subscriptionResult, apiRow] = await Promise.all([
+      database.execute(
         sql<{
-          used: string;
-          recovery_base: Date | string | null;
+          credits_5h: string;
+          credits_7d: string;
+          credits_30d: string;
         }>`
-          WITH grouped_entries AS (
-            SELECT
-              ${inferenceUsageLedger.occurredAt} AS occurred_at,
-              SUM(${inferenceUsageLedger.credits})::numeric AS credits
-            FROM ${inferenceUsageLedger}
-            WHERE
-              ${inferenceUsageLedger.userId} = ${userId}
-              AND ${inferenceUsageLedger.budgetType} = 'subscription'
-              AND ${inferenceUsageLedger.occurredAt} >= ${cutoff}
-            GROUP BY ${inferenceUsageLedger.occurredAt}
-          ),
-          windowed_entries AS (
-            SELECT
-              occurred_at,
-              SUM(credits) OVER () AS used,
-              COALESCE(
-                SUM(credits) OVER (
-                  ORDER BY occurred_at
-                  ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
-                ),
-                0
-              ) AS remaining_after_expiry
-            FROM grouped_entries
-          )
           SELECT
-            COALESCE(MAX(used), 0)::text AS used,
-            MIN(occurred_at) FILTER (
-              WHERE remaining_after_expiry <= ${limit * SUBSCRIPTION_RECOVERY_BUDGET_FRACTION}
-            ) AS recovery_base
-          FROM windowed_entries
+            COALESCE(SUM(${inferenceUsageLedger.credits}) FILTER (
+              WHERE ${inferenceUsageLedger.occurredAt} >= ${subscriptionWindows.credits5h?.start ?? now}
+                AND ${inferenceUsageLedger.occurredAt} < ${subscriptionWindows.credits5h?.end ?? now}
+            ), 0)::text AS credits_5h,
+            COALESCE(SUM(${inferenceUsageLedger.credits}) FILTER (
+              WHERE ${inferenceUsageLedger.occurredAt} >= ${subscriptionWindows.credits7d?.start ?? now}
+                AND ${inferenceUsageLedger.occurredAt} < ${subscriptionWindows.credits7d?.end ?? now}
+            ), 0)::text AS credits_7d,
+            COALESCE(SUM(${inferenceUsageLedger.credits}) FILTER (
+              WHERE ${inferenceUsageLedger.occurredAt} >= ${subscriptionWindows.credits30d?.start ?? now}
+                AND ${inferenceUsageLedger.occurredAt} < ${subscriptionWindows.credits30d?.end ?? now}
+            ), 0)::text AS credits_30d
+          FROM ${inferenceUsageLedger}
+          WHERE
+            ${inferenceUsageLedger.userId} = ${userId}
+            AND ${inferenceUsageLedger.budgetType} = 'subscription'
         `
-      );
-      const row = result.rows[0] as { used: string; recovery_base: Date | string | null } | undefined;
-      const recoveryBase = row?.recovery_base
-        ? new Date(row.recovery_base)
-        : resetAt && resetAt > naturalCutoff
-          ? resetAt
-          : now;
-      return {
-        used: Number(row?.used ?? 0),
-        recoveryAt: new Date(
-          recoveryBase.getTime() + (row?.recovery_base || (resetAt && resetAt > naturalCutoff) ? durationMs : 0)
-        ),
-      };
-    };
-    const [credits5h, credits7d, credits30d, apiRow] = await Promise.all([
-      rollingWindowUsage(cutoffs.credits5h, SUBSCRIPTION_WINDOWS['5h'], limits.credits5h, resets.get('credits5h')),
-      rollingWindowUsage(cutoffs.credits7d, SUBSCRIPTION_WINDOWS['7d'], limits.credits7d, resets.get('credits7d')),
-      rollingWindowUsage(cutoffs.credits30d, SUBSCRIPTION_WINDOWS['30d'], limits.credits30d, resets.get('credits30d')),
+      ),
       database
         .select({ value: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)` })
         .from(inferenceUsageLedger)
@@ -159,19 +193,94 @@ export class InferenceBudgetPolicyService {
           )
         ),
     ]);
+    const subscriptionRow = subscriptionResult.rows[0] as
+      | { credits_5h: string; credits_7d: string; credits_30d: string }
+      | undefined;
     return {
-      credits5h: credits5h.used,
-      credits7d: credits7d.used,
-      credits30d: credits30d.used,
+      credits5h: Number(subscriptionRow?.credits_5h ?? 0),
+      credits7d: Number(subscriptionRow?.credits_7d ?? 0),
+      credits30d: Number(subscriptionRow?.credits_30d ?? 0),
       apiMonthlyMicrodollars: Number(apiRow[0]?.value ?? 0),
+      active: {
+        credits5h: subscriptionWindows.credits5h !== null,
+        credits7d: subscriptionWindows.credits7d !== null,
+        credits30d: subscriptionWindows.credits30d !== null,
+        apiMonthly: true,
+      },
       recoveryAt: {
-        credits5h: credits5h.recoveryAt,
-        credits7d: credits7d.recoveryAt,
-        credits30d: credits30d.recoveryAt,
+        credits5h: subscriptionWindows.credits5h?.end ?? now,
+        credits7d: subscriptionWindows.credits7d?.end ?? now,
+        credits30d: subscriptionWindows.credits30d?.end ?? now,
         apiMonthly: month.end,
       },
     };
   }
+}
+
+function currentUsageWindow(
+  now: Date,
+  reset: { resetAt: Date; windowActive: boolean } | undefined,
+  legacyStart: Date | null | undefined,
+  durationMs: number
+): { start: Date; end: Date } | null {
+  return activeUsageWindow(
+    now,
+    reset?.windowActive ? reset.resetAt : reset ? undefined : (legacyStart ?? undefined),
+    durationMs
+  );
+}
+
+async function legacyUsageWindowStart(
+  database: DrizzleExecutor,
+  userId: string,
+  now: Date,
+  durationMs: number
+): Promise<Date | null> {
+  const result = await database.execute(
+    sql<{ started_at: Date | string | null }>`
+      WITH RECURSIVE ordered_entries AS (
+        SELECT
+          ${inferenceUsageLedger.occurredAt} AS occurred_at,
+          ROW_NUMBER() OVER (ORDER BY ${inferenceUsageLedger.occurredAt}, ${inferenceUsageLedger.id}) AS sequence
+        FROM ${inferenceUsageLedger}
+        WHERE
+          ${inferenceUsageLedger.userId} = ${userId}
+          AND ${inferenceUsageLedger.budgetType} = 'subscription'
+          AND ${inferenceUsageLedger.occurredAt} <= ${now}
+      ),
+      window_starts AS (
+        SELECT occurred_at AS started_at, sequence
+        FROM ordered_entries
+        WHERE sequence = 1
+        UNION ALL
+        SELECT next_entry.occurred_at, next_entry.sequence
+        FROM window_starts current_window
+        CROSS JOIN LATERAL (
+          SELECT occurred_at, sequence
+          FROM ordered_entries
+          WHERE occurred_at >= current_window.started_at + (${durationMs} * INTERVAL '1 millisecond')
+          ORDER BY occurred_at, sequence
+          LIMIT 1
+        ) next_entry
+      )
+      SELECT started_at
+      FROM window_starts
+      ORDER BY started_at DESC
+      LIMIT 1
+    `
+  );
+  const startedAt = (result.rows[0] as { started_at: Date | string | null } | undefined)?.started_at;
+  return startedAt ? new Date(startedAt) : null;
+}
+
+function activeUsageWindow(
+  now: Date,
+  startedAt: Date | undefined,
+  durationMs: number
+): { start: Date; end: Date } | null {
+  if (!startedAt || startedAt > now) return null;
+  const end = new Date(startedAt.getTime() + durationMs);
+  return end > now ? { start: startedAt, end } : null;
 }
 
 function effectiveLimits(policy: InferenceLimitPolicy, defaultPolicy?: InferenceLimitPolicy): EffectiveInferenceLimits {
@@ -371,4 +480,4 @@ function zonedDateToUtc(
   return candidate;
 }
 
-export const __testOnly = { effectiveLimits, apiMicrodollars, subscriptionCreditsForUsage };
+export const __testOnly = { effectiveLimits, activeUsageWindow, apiMicrodollars, subscriptionCreditsForUsage };

@@ -134,7 +134,11 @@ function UsageStatCard({
         percent: remaining,
         color: isLow ? "var(--color-warning)" : undefined,
       }}
-      subtitle={`Recovers ${formatDateTime(value.recoveryAt)}`}
+      subtitle={
+        value.active === false
+          ? "Starts on next use"
+          : `Recovers ${formatDateTime(value.recoveryAt)}`
+      }
       subtitleClassName="text-xs"
     />
   );
@@ -234,7 +238,10 @@ export function DashboardInferenceUsage({
     { label: "Weekly", value: usage.subscription["7d"] },
     { label: "Monthly", value: usage.subscription["30d"] },
   ].filter(
-    ({ value }) => value.configured && 100 - value.percentage < DASHBOARD_INFERENCE_USAGE_THRESHOLD
+    ({ value }) =>
+      value.configured &&
+      value.active !== false &&
+      100 - value.percentage < DASHBOARD_INFERENCE_USAGE_THRESHOLD
   );
 
   if (lowWindows.length === 0) return null;

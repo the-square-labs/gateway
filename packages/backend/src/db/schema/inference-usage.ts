@@ -183,6 +183,7 @@ export const inferenceLimitUsageResets = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     dimension: varchar('dimension', { length: 32 }).$type<InferenceLimitDimension>().notNull(),
     resetAt: timestamp('reset_at', { withTimezone: true }).notNull().defaultNow(),
+    windowActive: boolean('window_active').notNull().default(true),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   },
   (table) => [

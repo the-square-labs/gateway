@@ -166,6 +166,7 @@ export class ApiClientBase {
   private persistentHydrationEpoch = 0;
   private persistentCacheScope: string | null = null;
   private persistentCacheHydration: Promise<void> | null = null;
+  private readonly latestSnapshots = new Map<string, { measuredAt: number; data: unknown }>();
   private csrfToken: string | null = null;
   private sessionGeneration = 0;
 
@@ -207,6 +208,15 @@ export class ApiClientBase {
     if (this.persistentCacheScope) {
       void persistCacheEntry(this.persistentCacheScope, key, data).catch(() => {});
     }
+  }
+
+  protected acceptFreshSnapshot<T extends { measuredAt?: string }>(key: string, data: T): T {
+    const measuredAt = data.measuredAt ? Date.parse(data.measuredAt) : Number.NaN;
+    if (!Number.isFinite(measuredAt)) return data;
+    const current = this.latestSnapshots.get(key);
+    if (current && current.measuredAt > measuredAt) return current.data as T;
+    this.latestSnapshots.set(key, { measuredAt, data });
+    return data;
   }
 
   async hydratePersistentCache(scope: string): Promise<void> {
@@ -262,6 +272,7 @@ export class ApiClientBase {
     const previousScope = this.persistentCacheScope;
     this.cache.clear();
     this.cacheInflight.clear();
+    this.latestSnapshots.clear();
     this.cacheEpoch += 1;
     this.prefixEpochs.clear();
     this.persistentHydrationEpoch += 1;

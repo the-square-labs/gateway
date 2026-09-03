@@ -42,6 +42,23 @@ describe('inference live reservation policy', () => {
     expect(keys.every((key) => key.includes('{user-1}'))).toBe(true);
   });
 
+  it('separates live reservations by the fixed window they were admitted into', () => {
+    expect(
+      __testOnly.reservationWindowIds({
+        credits5h: 0,
+        credits7d: 0,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        recoveryAt: {
+          credits5h: new Date('2026-09-02T08:00:00.000Z'),
+          credits7d: new Date('2026-09-09T03:00:00.000Z'),
+          credits30d: new Date('2026-10-02T03:00:00.000Z'),
+          apiMonthly: new Date('2026-10-01T00:00:00.000Z'),
+        },
+      })
+    ).toEqual(['1788336000000', '1788922800000', '1790910000000', '1790812800000']);
+  });
+
   it('fails closed when Redis admission is unavailable', async () => {
     const service = new InferenceBudgetReservationService({
       eval: async () => {

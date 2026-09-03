@@ -4,11 +4,9 @@
   "file_name": "v9afebs7_accounting_gateway_inference",
   "tags": [
     "accounting",
-    "assistant",
-    "cli",
     "gateway",
     "inference",
-    "providers",
+    "limits",
     "quota"
   ],
   "layer": "lite",
@@ -17,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1784934085269,
-  "updated_at": 1787862445678
+  "updated_at": 1788310972296
 }
 ---
-[→ dcfkgqwx] Remove stale workflow status and update inference companion package contract
+[→ dcfkgqwx] Gateway inference product contract

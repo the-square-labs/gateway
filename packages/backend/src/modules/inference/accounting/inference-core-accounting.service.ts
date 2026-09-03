@@ -283,7 +283,9 @@ export class InferenceCoreAccountingService {
     connection: ConnectionRow,
     limits: EffectiveInferenceLimits
   ): Promise<InferenceCoreAdmissionResponse> {
-    const usage = await this.policies.usage(userId, limits, new Date(), database);
+    const usage = await this.policies.usage(userId, limits, new Date(), database, {
+      startSubscriptionWindows: source.sourceType === 'subscription',
+    });
     const pricing = source.sourceType === 'api' ? await latestPricing(database, source.id) : null;
     const quota = source.sourceType === 'subscription' ? await latestQuota(database, connection.id) : [];
     const burnMultiplier = dynamicBurnMultiplier(quota, new Date(), request.isCompaction);
@@ -513,6 +515,7 @@ export class InferenceCoreAccountingService {
           outputTokens: input.usage.outputTokens,
           reasoningTokens: input.usage.reasoningTokens,
           reason: input.usageEstimated ? 'estimated_terminal_usage' : 'upstream_terminal_usage',
+          occurredAt: attempt.startedAt,
           snapshot: {
             priceVersion: attempt.priceVersion ?? null,
             serviceTier: request.serviceTier ?? null,

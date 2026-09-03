@@ -87,7 +87,9 @@ export class InferenceAccountingService {
     return this.locks.withUserLock(input.userId, async (database) => {
       const limits = await this.policies.effective(input.userId, database);
       if (!limits.enabled) throw new InferenceProtocolError(403, 'inference_disabled', 'Inference usage is disabled');
-      const usage = await this.policies.usage(input.userId, limits, new Date(), database);
+      const usage = await this.policies.usage(input.userId, limits, new Date(), database, {
+        startSubscriptionWindows: input.source.sourceType === 'subscription',
+      });
       const pricing = input.source.sourceType === 'api' ? await latestPricing(database, input.source.id) : null;
       const quota = input.source.sourceType === 'subscription' ? await latestQuota(database, input.connection.id) : [];
       const burnMultiplier = dynamicBurnMultiplier(quota, new Date(), input.request.isCompaction);
@@ -471,6 +473,7 @@ export class InferenceAccountingService {
         outputTokens: usage.outputTokens,
         reasoningTokens: usage.reasoningTokens,
         reason: usage.estimated ? 'estimated_terminal_usage' : 'upstream_terminal_usage',
+        occurredAt: new Date(admission.startedAtMs),
         snapshot: {
           priceVersion: admission.pricing?.version ?? null,
           serviceTier: admission.serviceTier,

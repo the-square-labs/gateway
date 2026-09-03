@@ -462,7 +462,7 @@ describe('inference management token routes', () => {
     expect(selfOverview).toHaveBeenCalledWith(expect.objectContaining({ id: USER.id }));
   });
 
-  it('accepts independently disabled rolling windows in the default limit policy', async () => {
+  it('accepts independently disabled fixed windows in the default limit policy', async () => {
     const limitsAdmin = { ...USER, scopes: [...USER.scopes, 'inference:limits:manage'] };
     registerSession(limitsAdmin);
     const service = { setDefault: vi.fn().mockResolvedValue([]) };
