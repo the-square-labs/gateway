@@ -204,7 +204,16 @@ describe("CreateProxyHostDialog", () => {
         },
       },
     ] as never);
-    vi.spyOn(api, "listSSLCertificates").mockResolvedValue({ data: [] } as never);
+    vi.spyOn(api, "listSSLCertificates").mockResolvedValue({
+      data: [
+        {
+          id: "certificate-1",
+          name: "Pages certificate",
+          type: "acme",
+          domainNames: ["pages.example.com"],
+        },
+      ],
+    } as never);
     vi.spyOn(api, "listNginxTemplates").mockResolvedValue([]);
     vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
     vi.spyOn(api, "searchDomains").mockResolvedValue([]);
@@ -235,10 +244,24 @@ describe("CreateProxyHostDialog", () => {
 
     const pageProjectSelect = screen.getByRole("combobox", { name: "Page Project" });
     await user.click(pageProjectSelect);
-    await user.click(screen.getByRole("option", { name: /Marketing · marketing/i }));
+    await user.type(pageProjectSelect, "missing");
+    expect(screen.getByText("No matching Page Projects.")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(pageProjectSelect).toHaveValue("");
+
+    await user.click(pageProjectSelect);
+    await user.click(screen.getByRole("button", { name: /Marketing · marketing/i }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Tag" })).not.toBeDisabled());
     await user.click(screen.getByRole("combobox", { name: "Tag" }));
-    await user.click(screen.getByRole("option", { name: /production/i }));
+    await user.click(screen.getByRole("button", { name: /production/i }));
+
+    const sslEnabledRow = screen.getByText("SSL Enabled").parentElement?.parentElement;
+    expect(sslEnabledRow).toBeTruthy();
+    await user.click(within(sslEnabledRow as HTMLElement).getByRole("button"));
+    const certificateCombobox = screen.getByRole("combobox", { name: "SSL Certificate" });
+    await user.click(certificateCombobox);
+    await user.type(certificateCombobox, "Pages certificate");
+    await user.click(screen.getByRole("button", { name: /Pages certificate \(acme\)/i }));
     await user.click(screen.getByRole("button", { name: /create/i }));
 
     await waitFor(() => expect(createProxyHost).toHaveBeenCalledOnce());
@@ -250,6 +273,8 @@ describe("CreateProxyHostDialog", () => {
         pageTagId: "tag-production",
         nodeId: "node-ready",
         websocketSupport: false,
+        sslEnabled: true,
+        sslCertificateId: "certificate-1",
       })
     );
   });

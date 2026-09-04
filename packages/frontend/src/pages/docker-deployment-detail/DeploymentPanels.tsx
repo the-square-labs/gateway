@@ -2,12 +2,20 @@ import { ArrowRight, ClipboardCopy } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { DetailRow } from "@/components/common/DetailRow";
+import { PanelShell } from "@/components/common/PanelShell";
+import { AvailabilitySummary } from "@/components/docker/availability/AvailabilitySummary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
+import { resolveDeploymentImageReference } from "@/lib/docker-image-ref";
 import { api } from "@/services/api";
 import type { DockerDeployment, DockerDeploymentRelease, DockerDeploymentSlot } from "@/types";
-import { copyToClipboard, formatDate, STATUS_BADGE } from "../docker-detail/helpers";
+import {
+  copyToClipboard,
+  formatDate,
+  type InspectData,
+  STATUS_BADGE,
+} from "../docker-detail/helpers";
 
 export function statusVariant(
   status?: string
@@ -15,7 +23,8 @@ export function statusVariant(
   if (!status) return "secondary";
   if (STATUS_BADGE[status]) return STATUS_BADGE[status];
   if (status === "ready" || status === "healthy" || status === "succeeded") return "success";
-  if (status === "failed" || status === "unhealthy") return "destructive";
+  if (status === "failed" || status === "unhealthy" || status === "unavailable")
+    return "destructive";
   if (
     status === "deploying" ||
     status === "draining" ||
@@ -26,7 +35,11 @@ export function statusVariant(
     status === "killing" ||
     status === "removing" ||
     status === "switching" ||
-    status === "rolling_back"
+    status === "rolling_back" ||
+    status === "enabling" ||
+    status === "scaling" ||
+    status === "rolling_out" ||
+    status === "disabling"
   )
     return "warning";
   return "secondary";
@@ -36,158 +49,152 @@ function shortId(value?: string | null) {
   return value ? value.slice(0, 12) : "-";
 }
 
-function Section({
-  title,
-  badge,
-  actions,
-  active,
-  children,
-}: {
-  title: string;
-  badge?: string | number;
-  actions?: React.ReactNode;
-  active?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="border border-border bg-card"
-      style={active ? { borderColor: "#fff" } : undefined}
-    >
-      <div
-        className={`flex items-center justify-between border-b border-border px-4 ${actions ? "py-3" : "py-4"}`}
-      >
-        <h2 className="font-semibold">{title}</h2>
-        <div className="flex items-center gap-2">
-          {badge !== undefined && <Badge variant="secondary">{badge}</Badge>}
-          {actions}
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
 export function DeploymentOverview({
   deployment,
   active,
   serviceState,
   activeState,
   primaryRoute,
+  sourceImageReference,
 }: {
   deployment: DockerDeployment;
   active: DockerDeploymentSlot | null;
   serviceState: string;
   activeState: string;
   primaryRoute: DockerDeployment["routes"][number] | null;
+  sourceImageReference?: string | null;
 }) {
+  const configuredImage = deployment.desiredConfig.image;
+  const desiredImage = resolveDeploymentImageReference(
+    configuredImage,
+    configuredImage,
+    sourceImageReference ?? active?.image
+  );
+  const activeImage = resolveDeploymentImageReference(
+    active?.image,
+    configuredImage,
+    sourceImageReference
+  );
   return (
     <div className="space-y-4 pb-6">
+      <AvailabilitySummary
+        resource={{ type: "deployment", deploymentId: deployment.id }}
+        runtimeState={serviceState}
+      />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Section title="General">
-          <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-            <DetailRow
-              label="Status"
-              value={<Badge variant={statusVariant(serviceState)}>{serviceState}</Badge>}
-            />
-            <DetailRow
-              label="Deployment ID"
-              value={
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 font-mono hover:text-primary cursor-pointer"
-                  onClick={() => copyToClipboard(deployment.id)}
-                >
-                  {shortId(deployment.id)}
-                  <ClipboardCopy className="h-3 w-3" />
-                </button>
-              }
-            />
-            <DetailRow
-              label="Desired Image"
-              value={<span className="font-mono">{deployment.desiredConfig.image}</span>}
-            />
-            <DetailRow
-              label="Active Image"
-              value={<span className="font-mono">{active?.image ?? "-"}</span>}
-            />
-            <DetailRow label="Created" value={formatDate(deployment.createdAt)} />
-            <DetailRow label="Updated" value={formatDate(deployment.updatedAt)} />
-          </div>
-        </Section>
+        <PanelShell
+          title="General"
+          bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
+        >
+          <DetailRow
+            label="Status"
+            value={<Badge variant={statusVariant(serviceState)}>{serviceState}</Badge>}
+          />
+          <DetailRow
+            label="Deployment ID"
+            value={
+              <button
+                type="button"
+                className="flex items-center gap-1.5 font-mono hover:text-primary cursor-pointer"
+                onClick={() => copyToClipboard(deployment.id)}
+              >
+                {shortId(deployment.id)}
+                <ClipboardCopy className="h-3 w-3" />
+              </button>
+            }
+          />
+          <DetailRow
+            label="Desired Image"
+            value={<span className="font-mono">{desiredImage}</span>}
+          />
+          <DetailRow
+            label="Active Image"
+            value={<span className="font-mono">{activeImage}</span>}
+          />
+          <DetailRow label="Created" value={formatDate(deployment.createdAt)} />
+          <DetailRow label="Updated" value={formatDate(deployment.updatedAt)} />
+        </PanelShell>
 
-        <Section title="Active Slot">
-          <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-            <DetailRow
-              label="Slot"
-              value={<span className="capitalize">{deployment.activeSlot}</span>}
-            />
-            <DetailRow
-              label="Health"
-              value={
-                <Badge variant={statusVariant(active?.health)}>{active?.health ?? "unknown"}</Badge>
-              }
-            />
-            <DetailRow
-              label="Status"
-              value={
-                <Badge variant={statusVariant(active?.status)}>{active?.status ?? "unknown"}</Badge>
-              }
-            />
-            <DetailRow label="Runtime" value={activeState} />
-          </div>
-        </Section>
+        <PanelShell
+          title="Active Slot"
+          bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
+        >
+          <DetailRow
+            label="Slot"
+            value={<span className="capitalize">{deployment.activeSlot}</span>}
+          />
+          <DetailRow
+            label="Health"
+            value={
+              <Badge variant={statusVariant(active?.health)}>{active?.health ?? "unknown"}</Badge>
+            }
+          />
+          <DetailRow
+            label="Status"
+            value={
+              <Badge variant={statusVariant(active?.status)}>{active?.status ?? "unknown"}</Badge>
+            }
+          />
+          <DetailRow label="Runtime" value={activeState} />
+        </PanelShell>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Section title="Port Mappings" badge={deployment.routes.length}>
-          <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-            {deployment.routes.map((route) => (
-              <DetailRow
-                key={route.id}
-                label={`0.0.0.0:${route.hostPort}`}
-                value={
-                  <span className="inline-flex items-center gap-2">
-                    <span className="font-mono">tcp/{route.containerPort}</span>
-                    {route.isPrimary && (
-                      <Badge variant="secondary" size="inline">
-                        Primary
-                      </Badge>
-                    )}
-                  </span>
-                }
-              />
-            ))}
-          </div>
-        </Section>
+        <PanelShell
+          title="Port Mappings"
+          actions={
+            <Badge variant="secondary" size="inline">
+              {deployment.routes.length}
+            </Badge>
+          }
+          bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
+        >
+          {deployment.routes.map((route) => (
+            <DetailRow
+              key={route.id}
+              label={`0.0.0.0:${route.hostPort}`}
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <span className="font-mono">tcp/{route.containerPort}</span>
+                  {route.isPrimary && (
+                    <Badge variant="secondary" size="inline">
+                      Primary
+                    </Badge>
+                  )}
+                </span>
+              }
+            />
+          ))}
+        </PanelShell>
 
-        <Section title="Health Check">
-          <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-            <DetailRow
-              label="Path"
-              value={<span className="font-mono">{deployment.healthConfig.path}</span>}
-            />
-            <DetailRow
-              label="Status"
-              value={
-                <span className="font-mono">
-                  {deployment.healthConfig.statusMin}-{deployment.healthConfig.statusMax}
-                </span>
-              }
-            />
-            <DetailRow label="Interval" value={`${deployment.healthConfig.intervalSeconds}s`} />
-            <DetailRow label="Timeout" value={`${deployment.healthConfig.timeoutSeconds}s`} />
-            <DetailRow label="Drain" value={`${deployment.drainSeconds}s`} />
-            <DetailRow
-              label="Primary"
-              value={
-                <span className="font-mono">
-                  {primaryRoute ? `${primaryRoute.hostPort} -> ${primaryRoute.containerPort}` : "-"}
-                </span>
-              }
-            />
-          </div>
-        </Section>
+        <PanelShell
+          title="Health Check"
+          bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
+        >
+          <DetailRow
+            label="Path"
+            value={<span className="font-mono">{deployment.healthConfig.path}</span>}
+          />
+          <DetailRow
+            label="Status"
+            value={
+              <span className="font-mono">
+                {deployment.healthConfig.statusMin}-{deployment.healthConfig.statusMax}
+              </span>
+            }
+          />
+          <DetailRow label="Interval" value={`${deployment.healthConfig.intervalSeconds}s`} />
+          <DetailRow label="Timeout" value={`${deployment.healthConfig.timeoutSeconds}s`} />
+          <DetailRow label="Drain" value={`${deployment.drainSeconds}s`} />
+          <DetailRow
+            label="Primary"
+            value={
+              <span className="font-mono">
+                {primaryRoute ? `${primaryRoute.hostPort} -> ${primaryRoute.containerPort}` : "-"}
+              </span>
+            }
+          />
+        </PanelShell>
       </div>
     </div>
   );
@@ -200,6 +207,9 @@ export function DeploymentSlots({
   serviceBusy,
   runAction,
   canManage,
+  activeSlotOverride,
+  slotInspects,
+  sourceImageReference,
 }: {
   deployment: DockerDeployment;
   nodeId: string;
@@ -207,7 +217,11 @@ export function DeploymentSlots({
   serviceBusy: boolean;
   runAction: (name: string, fn: () => Promise<void>) => Promise<void>;
   canManage: boolean;
+  activeSlotOverride?: "blue" | "green";
+  slotInspects?: Partial<Record<"blue" | "green", InspectData>>;
+  sourceImageReference?: string | null;
 }) {
+  const activeSlot = activeSlotOverride ?? deployment.activeSlot;
   const orderedSlots = (["blue", "green"] as const)
     .map((slotName) => deployment.slots.find((slot) => slot.slot === slotName))
     .filter((slot): slot is DockerDeploymentSlot => Boolean(slot));
@@ -216,19 +230,43 @@ export function DeploymentSlots({
     <div className="space-y-4 pb-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {orderedSlots.map((slot) => {
-          const desiredImage = deployment.desiredConfig.image;
-          const effectiveImage =
-            slot.slot === deployment.activeSlot ? (slot.image ?? desiredImage) : desiredImage;
+          const inspect = slotInspects?.[slot.slot];
+          const runtimeStatus = String(
+            inspect?.State?.Status ?? (inspect?.State?.Running ? "running" : "")
+          );
+          const status = slot.status === "stopping" ? slot.status : runtimeStatus || slot.status;
+          const runtimeHealth = String(inspect?.State?.Health?.Status ?? "");
+          // Docker retains the last health result after a normal slot stop.
+          // Only a settled standby is intentionally stopped; keep failures and
+          // in-flight transitions visible rather than masking them as neutral.
+          const stoppedStandby =
+            slot.slot !== activeSlot &&
+            ["exited", "stopped", "standby"].includes(status) &&
+            !serviceBusy &&
+            !action &&
+            !deployment._transition &&
+            !slot.drainingUntil &&
+            slot.status !== "failed" &&
+            !String(inspect?.State?.Error ?? "").trim();
+          const health = stoppedStandby ? "stopped" : runtimeHealth || slot.health;
+          const containerId = String(inspect?.Id ?? inspect?.ID ?? slot.containerId ?? "");
+          const effectiveImage = resolveDeploymentImageReference(
+            slot.image,
+            deployment.desiredConfig.image,
+            sourceImageReference,
+            inspect
+          );
 
           return (
-            <Section
+            <PanelShell
               key={slot.slot}
-              title={`${slot.slot[0].toUpperCase()}${slot.slot.slice(1)} Slot`}
-              active={slot.slot === deployment.activeSlot}
+              title={`${slot.slot[0].toUpperCase()}${slot.slot.slice(1)} slot`}
+              className={slot.slot === activeSlot ? "border-white" : undefined}
+              headerClassName="min-h-[4.25rem]"
               actions={
-                canManage && slot.slot !== deployment.activeSlot ? (
+                canManage && slot.slot !== activeSlot ? (
                   <Button
-                    disabled={!!action || serviceBusy || !slot.containerId}
+                    disabled={!!action || serviceBusy || !containerId}
                     onClick={() =>
                       runAction(`switch-${slot.slot}`, async () => {
                         await api.switchDockerDeployment(nodeId, deployment.id, slot.slot);
@@ -246,9 +284,9 @@ export function DeploymentSlots({
                   label="Role"
                   value={
                     <div className="flex justify-end gap-2">
-                      {slot.slot === deployment.activeSlot && <Badge>Active</Badge>}
-                      {slot.status === "draining" && <Badge variant="warning">Draining</Badge>}
-                      {slot.slot !== deployment.activeSlot && slot.status !== "draining" && (
+                      {slot.slot === activeSlot && <Badge>Active</Badge>}
+                      {status === "draining" && <Badge variant="warning">Draining</Badge>}
+                      {slot.slot !== activeSlot && status !== "draining" && (
                         <Badge variant="secondary">Standby</Badge>
                       )}
                     </div>
@@ -256,17 +294,15 @@ export function DeploymentSlots({
                 />
                 <DetailRow
                   label="Status"
-                  value={<Badge variant={statusVariant(slot.status)}>{slot.status}</Badge>}
+                  value={<Badge variant={statusVariant(status)}>{status}</Badge>}
                 />
                 <DetailRow
                   label="Health"
-                  value={<Badge variant={statusVariant(slot.health)}>{slot.health}</Badge>}
+                  value={<Badge variant={statusVariant(health)}>{health}</Badge>}
                 />
                 <div
                   className="grid grid-cols-[6rem_minmax(0,1fr)] items-start gap-4 border-b border-border px-4 py-3 md:grid-cols-[8rem_minmax(0,1fr)]"
-                  style={
-                    slot.slot === deployment.activeSlot ? { borderBottomColor: "#fff" } : undefined
-                  }
+                  style={slot.slot === activeSlot ? { borderBottomColor: "#fff" } : undefined}
                 >
                   <span className="pt-0.5 text-sm text-muted-foreground">Image</span>
                   <span className="min-w-0 justify-self-end text-right text-sm">
@@ -274,18 +310,24 @@ export function DeploymentSlots({
                   </span>
                 </div>
               </div>
-            </Section>
+            </PanelShell>
           );
         })}
       </div>
 
-      <Section title="Recent Activity" badge={deployment.releases.length}>
-        <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-          {deployment.releases.map((release) => (
-            <ReleaseRow key={release.id} release={release} />
-          ))}
-        </div>
-      </Section>
+      <PanelShell
+        title="Recent Activity"
+        actions={
+          <Badge variant="secondary" size="inline">
+            {deployment.releases.length}
+          </Badge>
+        }
+        bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
+      >
+        {deployment.releases.map((release) => (
+          <ReleaseRow key={release.id} release={release} />
+        ))}
+      </PanelShell>
     </div>
   );
 }
@@ -316,7 +358,13 @@ function ReleaseRow({ release }: { release: DockerDeploymentRelease }) {
   );
 }
 
-export function DeploymentConfig({ deployment }: { deployment: DockerDeployment }) {
+export function DeploymentConfig({
+  deployment,
+  editorHeight,
+}: {
+  deployment: DockerDeployment;
+  editorHeight?: string;
+}) {
   const jsonText = useMemo(
     () =>
       JSON.stringify(
@@ -348,27 +396,31 @@ export function DeploymentConfig({ deployment }: { deployment: DockerDeployment 
   );
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
-      <div className="overflow-hidden flex flex-col flex-1 min-h-0">
-        <div className="flex items-center justify-between px-4 py-3 shrink-0 border border-border border-b-0 bg-card">
-          <div>
-            <h3 className="text-sm font-semibold">Deployment Config</h3>
-            <p className="text-xs text-muted-foreground">Service-level configuration</p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => copyToClipboard(jsonText)}
-            title="Copy JSON"
-          >
-            <ClipboardCopy className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col">
-          <CodeEditor value={jsonText} onChange={() => {}} readOnly language="json" />
-        </div>
-      </div>
-    </div>
+    <PanelShell
+      title="Deployment Config"
+      description="Service-level configuration"
+      className="flex flex-1 flex-col min-h-0"
+      bodyClassName="flex min-h-0 flex-1 flex-col"
+      actions={
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => copyToClipboard(jsonText)}
+          title="Copy JSON"
+        >
+          <ClipboardCopy className="h-3.5 w-3.5" />
+        </Button>
+      }
+    >
+      <CodeEditor
+        value={jsonText}
+        onChange={() => {}}
+        readOnly
+        language="json"
+        height={editorHeight}
+        bordered={false}
+      />
+    </PanelShell>
   );
 }

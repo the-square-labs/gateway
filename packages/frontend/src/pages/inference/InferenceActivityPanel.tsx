@@ -2,6 +2,7 @@ import { Activity } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -166,7 +167,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
     loadingMore.current = false;
     setRows([]);
     setNextPage(null);
-    setLoading(false);
+    setLoading(true);
     setSearch("");
     setDebouncedSearch("");
     setStatus("all");
@@ -263,92 +264,95 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
               Metadata-only request history. Scroll the table to load older requests.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 overflow-hidden">
-            <SearchFilterBar
-              search={search}
-              onSearchChange={setSearch}
-              hasActiveFilters={Boolean(
-                search || status !== "all" || userId !== "all" || model !== "all"
-              )}
-              onReset={() => {
-                setSearch("");
-                setStatus("all");
-                setUserId("all");
-                setModel("all");
-              }}
-              placeholder="Search user, model, status, or error..."
-              inlineFilters
-              filters={
-                <>
-                  <Select
-                    value={status}
-                    onValueChange={(value) => setStatus(value as ActivityStatus)}
-                  >
-                    <SelectTrigger className="w-40" aria-label="Activity status">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All statuses</SelectItem>
-                      <SelectItem value="reserved">Reserved</SelectItem>
-                      <SelectItem value="running">Running</SelectItem>
-                      <SelectItem value="completed">Completed</SelectItem>
-                      <SelectItem value="failed">Failed</SelectItem>
-                      <SelectItem value="cancelled">Cancelled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Combobox
-                    value={userId}
-                    options={userOptions}
-                    onValueChange={setUserId}
-                    placeholder="All users"
-                    searchPlaceholder="Search users..."
-                    ariaLabel="Activity user"
-                    className="w-52"
-                  />
-                  <Combobox
-                    value={model}
-                    options={modelOptions}
-                    onValueChange={setModel}
-                    placeholder="All models"
-                    searchPlaceholder="Search models..."
-                    ariaLabel="Activity model"
-                    className="w-52"
-                  />
-                </>
-              }
-            />
-            <div
-              className="max-h-[min(56dvh,36rem)]"
-              style={activityTableHeight ? { height: activityTableHeight } : undefined}
-            >
-              <DataTable
-                columns={activityColumns}
-                data={rows}
-                keyFn={(row) => row.id}
-                horizontalScroll
-                minWidth="52rem"
-                className="h-full"
-                fixedRowHeight={49}
-                emptyMessage="No inference activity"
-                scrollRef={tableScrollRef}
-                loading={loading && rows.length === 0}
-                footer={
-                  nextPage ? (
-                    <div
-                      ref={sentinelRef}
-                      className="py-3 text-center text-xs text-muted-foreground"
+          {loading && rows.length === 0 ? (
+            <LoadingSpinner className="min-h-48" label="Loading inference activity" />
+          ) : (
+            <div className="space-y-3 overflow-hidden">
+              <SearchFilterBar
+                search={search}
+                onSearchChange={setSearch}
+                hasActiveFilters={Boolean(
+                  search || status !== "all" || userId !== "all" || model !== "all"
+                )}
+                onReset={() => {
+                  setSearch("");
+                  setStatus("all");
+                  setUserId("all");
+                  setModel("all");
+                }}
+                placeholder="Search user, model, status, or error..."
+                inlineFilters
+                filters={
+                  <>
+                    <Select
+                      value={status}
+                      onValueChange={(value) => setStatus(value as ActivityStatus)}
                     >
-                      {loading ? "Loading more…" : "Scroll to load older requests"}
-                    </div>
-                  ) : rows.length > 0 ? (
-                    <div className="py-3 text-center text-xs text-muted-foreground">
-                      End of activity
-                    </div>
-                  ) : null
+                      <SelectTrigger className="w-40" aria-label="Activity status">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        <SelectItem value="reserved">Reserved</SelectItem>
+                        <SelectItem value="running">Running</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="failed">Failed</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Combobox
+                      value={userId}
+                      options={userOptions}
+                      onValueChange={setUserId}
+                      placeholder="All users"
+                      searchPlaceholder="Search users..."
+                      ariaLabel="Activity user"
+                      className="w-52"
+                    />
+                    <Combobox
+                      value={model}
+                      options={modelOptions}
+                      onValueChange={setModel}
+                      placeholder="All models"
+                      searchPlaceholder="Search models..."
+                      ariaLabel="Activity model"
+                      className="w-52"
+                    />
+                  </>
                 }
               />
+              <div
+                className="max-h-[min(56dvh,36rem)]"
+                style={activityTableHeight ? { height: activityTableHeight } : undefined}
+              >
+                <DataTable
+                  columns={activityColumns}
+                  data={rows}
+                  keyFn={(row) => row.id}
+                  horizontalScroll
+                  minWidth="52rem"
+                  className="h-full"
+                  fixedRowHeight={49}
+                  emptyMessage="No inference activity"
+                  scrollRef={tableScrollRef}
+                  footer={
+                    nextPage ? (
+                      <div
+                        ref={sentinelRef}
+                        className="py-3 text-center text-xs text-muted-foreground"
+                      >
+                        {loading ? "Loading more…" : "Scroll to load older requests"}
+                      </div>
+                    ) : rows.length > 0 ? (
+                      <div className="py-3 text-center text-xs text-muted-foreground">
+                        End of activity
+                      </div>
+                    ) : null
+                  }
+                />
+              </div>
             </div>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
     </TooltipProvider>

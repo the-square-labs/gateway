@@ -138,24 +138,35 @@ export class DockerInternalRegistryService {
     const diskPressure =
       capacityBytes !== null && capacityBytes > 0 && usedBytes / capacityBytes >= DEFAULT_DISK_PRESSURE_RATIO;
     const writable = input.healthy && input.writable && !maintenance && !diskPressure;
+    const status = !input.healthy
+      ? 'unhealthy'
+      : maintenance
+        ? 'maintenance'
+        : diskPressure
+          ? 'degraded'
+          : writable
+            ? 'ready'
+            : 'read_only';
+    const lastError = !input.healthy
+      ? 'Registry health report marked the service unhealthy'
+      : diskPressure
+        ? 'Registry storage is at or above the write-admission threshold'
+        : null;
+    if (
+      current.status === status &&
+      current.writable === writable &&
+      current.storageUsedBytes === usedBytes &&
+      current.storageCapacityBytes === capacityBytes &&
+      current.lastError === lastError
+    ) {
+      return current;
+    }
     const state = await this.store.updateState({
-      status: !input.healthy
-        ? 'unhealthy'
-        : maintenance
-          ? 'maintenance'
-          : diskPressure
-            ? 'degraded'
-            : writable
-              ? 'ready'
-              : 'read_only',
+      status,
       writable,
       storageUsedBytes: usedBytes,
       storageCapacityBytes: capacityBytes,
-      lastError: !input.healthy
-        ? 'Registry health report marked the service unhealthy'
-        : diskPressure
-          ? 'Registry storage is at or above the write-admission threshold'
-          : null,
+      lastError,
     });
     this.emitChanged('health', state);
     return state;

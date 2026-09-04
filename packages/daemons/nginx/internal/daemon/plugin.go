@@ -151,7 +151,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
 	if err != nil {
 		logger.Warn("Gateway Pages runtime is unavailable; Pages capability is disabled", "error", err)
-	} else if _, err := p.pagesRuntime.StoragePreflight(0); err != nil {
+	} else if err := p.pagesRuntime.RepairStorage(); err != nil {
 		logger.Warn("Gateway Pages storage is unavailable; Pages capability is disabled", "error", err)
 		p.pagesRuntime = nil
 	} else {
@@ -345,6 +345,9 @@ func (p *NginxPlugin) capabilities() []string {
 	}
 	if p.pagesRuntimeConfigAvailable && p.pagesRuntime != nil {
 		capabilities = append(capabilities, "nginx_pages_config_v1")
+		if p.pagesV1Available {
+			capabilities = append(capabilities, "nginx_pages_reconcile_v1")
+		}
 	}
 	return capabilities
 }

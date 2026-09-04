@@ -130,7 +130,7 @@ func (h *Handler) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	case *pb.GatewayCommand_PagesCleanupDeployment:
 		h.handlePagesCleanupDeployment(payload.PagesCleanupDeployment, result)
 	case *pb.GatewayCommand_PagesInventory:
-		h.handlePagesInventory(result)
+		h.handlePagesInventory(payload.PagesInventory, result)
 	case *pb.GatewayCommand_PagesStoragePreflight:
 		h.handlePagesStoragePreflight(payload.PagesStoragePreflight, result)
 	case *pb.GatewayCommand_PagesDeployCertificate:

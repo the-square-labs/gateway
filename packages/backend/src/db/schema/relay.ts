@@ -211,11 +211,11 @@ export const dockerRegistryNodeBindings = pgTable(
     nodeId: uuid('node_id')
       .notNull()
       .references(() => nodes.id, { onDelete: 'cascade' }),
-    role: varchar('role', { length: 16 }).$type<'builder' | 'runtime'>().notNull(),
+    role: varchar('role', { length: 16 }).$type<'builder' | 'runtime' | 'mirror'>().notNull(),
     repository: text('repository').notNull(),
     actions: text('actions').array().notNull(),
     contextKind: varchar('context_kind', { length: 32 })
-      .$type<'build' | 'container' | 'deployment' | 'compose_project'>()
+      .$type<'build' | 'container' | 'deployment' | 'compose_project' | 'availability'>()
       .notNull(),
     contextId: text('context_id').notNull(),
     generation: bigint('generation', { mode: 'number' }).notNull().default(1),

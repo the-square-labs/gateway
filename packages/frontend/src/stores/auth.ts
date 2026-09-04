@@ -12,7 +12,7 @@ export function registerAuthContextReset(callback: AuthContextResetCallback) {
   authContextResetCallback = callback;
 }
 
-function authContextKey(user: User | null): string {
+export function authContextKey(user: User | null): string {
   if (!user) return "anonymous";
   return `${user.id}:${[...user.scopes].sort().join(",")}:${user.isBlocked ? "blocked" : "active"}`;
 }

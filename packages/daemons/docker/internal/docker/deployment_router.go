@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -28,7 +29,15 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 			return "", fmt.Errorf("parse router port: %w", err)
 		}
 		exposedPorts[port] = struct{}{}
-		portBindings[port] = []network.PortBinding{{HostPort: fmt.Sprintf("%d", route.HostPort)}}
+		hostIP := strings.TrimSpace(route.HostIP)
+		if hostIP == "" {
+			hostIP = "0.0.0.0"
+		}
+		parsedHostIP, err := netip.ParseAddr(hostIP)
+		if err != nil {
+			return "", fmt.Errorf("parse router host IP: %w", err)
+		}
+		portBindings[port] = []network.PortBinding{{HostIP: parsedHostIP, HostPort: fmt.Sprintf("%d", route.HostPort)}}
 	}
 	config := renderDeploymentNginx(payload.Routes, activeSlot)
 	cmd := []string{"sh", "-c", "cat > /etc/nginx/conf.d/default.conf <<'EOF'\n" + config + "\nEOF\nnginx -g 'daemon off;'"}
@@ -69,21 +78,29 @@ func (c *Client) deploymentRouterNeedsRecreate(ctx context.Context, routerName s
 		}
 		return false, fmt.Errorf("inspect deployment router: %w", err)
 	}
-	actual := map[string]struct{}{}
+	actual := map[string]string{}
 	if inspect.Container.HostConfig != nil {
-		for port := range inspect.Container.HostConfig.PortBindings {
-			actual[port.String()] = struct{}{}
+		for port, bindings := range inspect.Container.HostConfig.PortBindings {
+			hostIP := "0.0.0.0"
+			if len(bindings) > 0 && bindings[0].HostIP.IsValid() {
+				hostIP = bindings[0].HostIP.String()
+			}
+			actual[port.String()] = hostIP
 		}
 	}
-	desired := map[string]struct{}{}
+	desired := map[string]string{}
 	for _, route := range routes {
-		desired[fmt.Sprintf("%d/tcp", route.HostPort)] = struct{}{}
+		hostIP := strings.TrimSpace(route.HostIP)
+		if hostIP == "" {
+			hostIP = "0.0.0.0"
+		}
+		desired[fmt.Sprintf("%d/tcp", route.HostPort)] = hostIP
 	}
 	if len(actual) != len(desired) {
 		return true, nil
 	}
-	for port := range desired {
-		if _, ok := actual[port]; !ok {
+	for port, hostIP := range desired {
+		if actual[port] != hostIP {
 			return true, nil
 		}
 	}
@@ -234,16 +251,7 @@ func (c *Client) pullImageIfNeeded(ctx context.Context, imageRef string, registr
 	if imageRef == "" {
 		return nil
 	}
-	opts := mobyclient.ImagePullOptions{}
-	if registryAuth != "" {
-		opts.RegistryAuth = registryAuth
-	}
-	reader, err := c.cli.ImagePull(ctx, imageRef, opts)
-	if err != nil {
-		return fmt.Errorf("pull image %s: %w", imageRef, err)
-	}
-	_, _ = io.Copy(io.Discard, reader)
-	return reader.Close()
+	return c.EnsureImage(ctx, imageRef, registryAuth)
 }
 
 func (c *Client) removeContainerByName(ctx context.Context, name string, force bool) error {

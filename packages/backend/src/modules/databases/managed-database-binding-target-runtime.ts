@@ -102,7 +102,7 @@ export class ManagedDatabaseBindingTargetRuntime {
     private readonly dockerSecrets: DockerSecretService,
     private readonly relayPolicy?: Pick<
       RelayPolicyService,
-      'ensureBindingRoute' | 'syncNodeGrantBundle' | 'probeManagedDatabaseBindingRoute'
+      'ensureBindingRoute' | 'adoptBindingRoute' | 'syncNodeGrantBundle' | 'probeManagedDatabaseBindingRoute'
     >,
     private readonly dockerCompose?: DockerComposeService
   ) {}
@@ -126,6 +126,135 @@ export class ManagedDatabaseBindingTargetRuntime {
     } finally {
       if (this.reconciliations.get(binding.id) === reconciliation) this.reconciliations.delete(binding.id);
     }
+  }
+
+  async prepareAvailabilityPlacement(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    credentials: ManagedDatabaseBindingCredentials,
+    allowedSources: string[]
+  ): Promise<{
+    networkName: string;
+    connectorAlias: string;
+    connectorAddress: string;
+    environment: Record<string, string>;
+  }> {
+    const connectorAddress = await this.ensureHostListener(database, binding, {
+      allowedSources,
+      persistAddress: false,
+    });
+    return {
+      networkName: binding.networkName,
+      connectorAlias: binding.connectorAlias,
+      connectorAddress,
+      environment: this.environmentValues(database, binding, credentials),
+    };
+  }
+
+  async bindingNetworkExists(binding: ManagedDatabaseBindingRow): Promise<boolean> {
+    return (await this.networkState(binding)).exists;
+  }
+
+  async adoptAvailabilityPlacement(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    placementBindingId: string,
+    credentials: ManagedDatabaseBindingCredentials,
+    allowedSources: string[]
+  ): Promise<{
+    networkName: string;
+    connectorAlias: string;
+    connectorAddress: string;
+    environment: Record<string, string>;
+  }> {
+    const network = await this.networkState(binding);
+    if (!network.exists) throw new Error(`managed database network ${binding.networkName} is unavailable for adoption`);
+    const listener = managedDatabaseBindingListenerConfig({
+      networkName: binding.networkName,
+      gatewayAddress: network.gateway,
+      listenPort: enginePort(database.type),
+      allowedSources,
+    });
+    await this.relayPolicy!.adoptBindingRoute(
+      placementBindingId,
+      binding.id,
+      binding.managedDatabaseId,
+      binding.targetNodeId,
+      database.nodeId,
+      listener
+    );
+    const targetPrepared = await this.relayPolicy!.syncNodeGrantBundle(binding.targetNodeId);
+    requireManagedDatabaseBindingListenerReady(targetPrepared, binding.id, listener.listenAddress);
+    if (database.nodeId !== binding.targetNodeId) {
+      requireSuccess(await this.relayPolicy!.syncNodeGrantBundle(database.nodeId));
+    }
+    await this.relayPolicy!.probeManagedDatabaseBindingRoute(binding.targetNodeId, binding.id);
+    return {
+      networkName: binding.networkName,
+      connectorAlias: binding.connectorAlias,
+      connectorAddress: listener.listenAddress,
+      environment: this.environmentValues(database, binding, credentials),
+    };
+  }
+
+  async projectParentBindingToAvailabilityPlacement(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    placementBindingId: string,
+    credentials: ManagedDatabaseBindingCredentials,
+    allowedSources: string[]
+  ): Promise<{
+    networkName: string;
+    connectorAlias: string;
+    connectorAddress: string;
+    environment: Record<string, string>;
+  }> {
+    const network = await this.networkState(binding);
+    if (!network.exists)
+      throw new Error(`managed database network ${binding.networkName} is unavailable for projection`);
+    const listener = managedDatabaseBindingListenerConfig({
+      networkName: binding.networkName,
+      gatewayAddress: network.gateway,
+      listenPort: enginePort(database.type),
+      allowedSources,
+    });
+    await this.relayPolicy!.adoptBindingRoute(
+      binding.id,
+      placementBindingId,
+      binding.managedDatabaseId,
+      binding.targetNodeId,
+      database.nodeId,
+      listener
+    );
+    const targetPrepared = await this.relayPolicy!.syncNodeGrantBundle(binding.targetNodeId);
+    requireManagedDatabaseBindingListenerReady(targetPrepared, placementBindingId, listener.listenAddress);
+    if (database.nodeId !== binding.targetNodeId) {
+      requireSuccess(await this.relayPolicy!.syncNodeGrantBundle(database.nodeId));
+    }
+    await this.relayPolicy!.probeManagedDatabaseBindingRoute(binding.targetNodeId, placementBindingId);
+    return {
+      networkName: binding.networkName,
+      connectorAlias: binding.connectorAlias,
+      connectorAddress: listener.listenAddress,
+      environment: this.environmentValues(database, binding, credentials),
+    };
+  }
+
+  async cleanupSupersededRuntime(binding: ManagedDatabaseBindingRow): Promise<void> {
+    await this.reconciler?.releaseTargetNetwork(binding.targetNodeId, binding.networkName);
+    await this.reconciler?.reconcileTargetNode(binding.targetNodeId);
+    if (this.relayPolicy) requireSuccess(await this.relayPolicy.syncNodeGrantBundle(binding.targetNodeId));
+    requireSuccessOrMissing(
+      await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
+        containerId: binding.connectorName,
+        force: true,
+      })
+    );
+    requireSuccessOrMissing(
+      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'remove', {
+        networkId: binding.networkName,
+      })
+    );
   }
 
   private async performReconciliation(
@@ -152,7 +281,11 @@ export class ManagedDatabaseBindingTargetRuntime {
     );
   }
 
-  private async ensureHostListener(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
+  private async ensureHostListener(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    options: { allowedSources?: string[]; persistAddress?: boolean } = {}
+  ) {
     let network = await this.networkState(binding);
     if (!network.exists) {
       requireSuccess(
@@ -167,7 +300,7 @@ export class ManagedDatabaseBindingTargetRuntime {
       networkName: binding.networkName,
       gatewayAddress: network.gateway,
       listenPort: enginePort(database.type),
-      allowedSources: await this.bindingTargetSources(binding),
+      allowedSources: options.allowedSources ?? (await this.bindingTargetSources(binding)),
     });
     await this.relayPolicy!.ensureBindingRoute(
       binding.id,
@@ -182,10 +315,10 @@ export class ManagedDatabaseBindingTargetRuntime {
       requireSuccess(await this.relayPolicy!.syncNodeGrantBundle(database.nodeId));
     }
     await this.relayPolicy!.probeManagedDatabaseBindingRoute(binding.targetNodeId, binding.id);
-    if (binding.connectorAddress !== listener.listenAddress) {
+    if (binding.connectorAddress !== listener.listenAddress && options.persistAddress !== false) {
       await this.persistEndpointAddress(binding.id, listener.listenAddress);
-      binding.connectorAddress = listener.listenAddress;
     }
+    binding.connectorAddress = listener.listenAddress;
     return listener.listenAddress;
   }
 
@@ -376,16 +509,20 @@ export class ManagedDatabaseBindingTargetRuntime {
     const expected = this.environmentValues(database, binding, credentials);
     const variableNames = Object.keys(expected);
     if (binding.targetType === 'compose_service') {
-      await this.requireComposeService().removeManagedDatabaseBinding(
-        binding.targetNodeId,
-        binding.targetResourceId,
-        binding.id,
-        binding.networkName,
-        binding.connectorAlias,
-        binding.connectorAddress ?? undefined,
-        expected,
-        userId
-      );
+      try {
+        await this.requireComposeService().removeManagedDatabaseBinding(
+          binding.targetNodeId,
+          binding.targetResourceId,
+          binding.id,
+          binding.networkName,
+          binding.connectorAlias,
+          binding.connectorAddress ?? undefined,
+          expected,
+          userId
+        );
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== 'COMPOSE_PROJECT_NOT_FOUND') throw error;
+      }
       return;
     }
     if (binding.targetType === 'deployment') {

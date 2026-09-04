@@ -13,7 +13,7 @@ import (
 var composeServiceFields = map[string]bool{
 	"image": true, "environment": true, "command": true, "entrypoint": true, "working_dir": true, "user": true,
 	"hostname": true, "ports": true, "healthcheck": true, "depends_on": true, "restart": true, "volumes": true,
-	"networks": true, "labels": true, "cpus": true, "cpu_shares": true, "mem_limit": true,
+	"networks": true, "extra_hosts": true, "labels": true, "cpus": true, "cpu_shares": true, "mem_limit": true,
 	"mem_reservation": true, "memswap_limit": true, "pids_limit": true,
 }
 

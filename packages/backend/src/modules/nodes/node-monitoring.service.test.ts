@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NodeMonitoringService } from './node-monitoring.service.js';
+import { compactMonitoringHistorySnapshot, NodeMonitoringService } from './node-monitoring.service.js';
 
 afterEach(() => {
   vi.clearAllTimers();
@@ -21,6 +21,17 @@ describe('NodeMonitoringService active polling', () => {
     };
     return { service: new NodeMonitoringService(registry as never), registry, write };
   }
+
+  it('keeps container stats in live monitoring snapshots', () => {
+    const containerStats = [{ containerId: 'container-1', cpuPercent: 12.5 }];
+    expect(
+      compactMonitoringHistorySnapshot({
+        timestamp: '2026-09-02T20:00:00.000Z',
+        health: { containerStats },
+        stats: {},
+      }).health.containerStats
+    ).toEqual(containerStats);
+  });
 
   it('keeps non-focused stream consumers on the 5 second cadence', async () => {
     vi.useFakeTimers();

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isInternalAvailabilityImage, isUserDockerRegistry } from "@/lib/docker-image-visibility";
 import { api } from "@/services/api";
 import type { DockerBuildAdmissionStatus, DockerRegistry, Node } from "@/types";
 import type { DockerDeploySourceMode } from "./types";
@@ -17,7 +18,7 @@ function extractTags(data: unknown): string[] {
   const tags: string[] = [];
   for (const img of Array.isArray(data) ? data : []) {
     for (const tag of (img as any).repoTags ?? (img as any).RepoTags ?? []) {
-      if (tag && tag !== "<none>:<none>") tags.push(tag);
+      if (tag && tag !== "<none>:<none>" && !isInternalAvailabilityImage(tag)) tags.push(tag);
     }
   }
   return tags;
@@ -46,7 +47,7 @@ export function useDockerDeployData({
     }
     api
       .listDockerRegistries()
-      .then(setRegistries)
+      .then((items) => setRegistries(items.filter(isUserDockerRegistry)))
       .catch(() => setRegistries([]));
   }, [hasScope, open]);
 

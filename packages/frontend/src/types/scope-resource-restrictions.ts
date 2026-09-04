@@ -63,6 +63,7 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:containers:webhooks",
   "docker:containers:mounts",
   "docker:containers:migrate",
+  "docker:availability:manage",
   "docker:compose:view",
   "docker:compose:create",
   "docker:compose:manage",

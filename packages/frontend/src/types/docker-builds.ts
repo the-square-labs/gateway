@@ -257,14 +257,16 @@ export type DockerSourceResourceCreateRequest = {
 
 export interface DockerSourceResourceCreateResult {
   source: DockerSourceBinding;
-  build: DockerBuild;
+  build: DockerBuild | null;
+  initialBuildError?: { code: string; message: string } | null;
   target: DockerSourceTarget;
 }
 
 export interface DockerComposeSourceProjectCreateResult {
   project: { id: string; nodeId: string; name: string };
   source: DockerSourceBinding;
-  build: DockerBuild;
+  build: DockerBuild | null;
+  initialBuildError?: { code: string; message: string } | null;
   builds: DockerBuild[];
   created: boolean;
 }

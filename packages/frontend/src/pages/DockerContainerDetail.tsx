@@ -26,6 +26,15 @@ import {
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import {
+  ALL_AVAILABILITY_INSTANCES,
+  AvailabilityInstanceSelect,
+} from "@/components/docker/availability/AvailabilityInstanceSelect";
+import {
+  AvailabilityProgress,
+  isAvailabilityReplacing,
+} from "@/components/docker/availability/AvailabilityProgress";
+import { resolveAvailabilitySurfaceStatus } from "@/components/docker/availability/availability-status";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,6 +59,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
+import { projectComposeServicePolicy } from "@/lib/compose-service-availability";
 import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
 import {
   isDockerMigrationOwnedByTab,
@@ -65,7 +75,12 @@ import { useDockerStore } from "@/stores/docker";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
-import type { DockerHealthCheck, DockerMigration, DockerSourceBinding } from "@/types";
+import type {
+  DockerAvailabilityPolicy,
+  DockerHealthCheck,
+  DockerMigration,
+  DockerSourceBinding,
+} from "@/types";
 import { ConfigTab } from "./docker-detail/ConfigTab";
 import { ConsoleTab } from "./docker-detail/ConsoleTab";
 import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
@@ -80,6 +95,7 @@ import {
 } from "./docker-detail/helpers";
 import type { ContainerDatabaseLink } from "./docker-detail/LinkRuntimeTab";
 import { LogsTab } from "./docker-detail/LogsTab";
+import { MultiContainerMonitoring } from "./docker-detail/MultiContainerMonitoring";
 import {
   buildContainerMutationSnapshot,
   shouldSettleMutationTransition,
@@ -87,7 +103,6 @@ import {
 } from "./docker-detail/mutation-transition";
 import { OverviewTab } from "./docker-detail/OverviewTab";
 import { SettingsTab } from "./docker-detail/SettingsTab";
-import { StatsTab } from "./docker-detail/StatsTab";
 import { useContainerDetailRealtime } from "./docker-detail/useContainerDetailRealtime";
 
 export {
@@ -117,12 +132,52 @@ export async function inspectContainerAfterMutation(
   }
 }
 
+export function splitContainerAvailabilityPolicy(policy: DockerAvailabilityPolicy | null) {
+  return policy?.resourceKind === "container"
+    ? { own: policy, parent: null }
+    : { own: null, parent: policy };
+}
+
+export function resolveComposeOwnerName(
+  policy: DockerAvailabilityPolicy | null,
+  labels: Record<string, string>
+) {
+  return policy?.resourceKind === "compose"
+    ? policy.displayName
+    : labels["com.docker.compose.project"];
+}
+
 export function hasContainerRuntimeIdentityChanged(
   containerId: string | undefined,
   inspected: InspectData | null
 ) {
   const inspectedId = String(inspected?.Id ?? inspected?.id ?? "");
   return !!containerId && !!inspectedId && inspectedId !== containerId;
+}
+
+export function resolveContainerRouteName(
+  resolvedContainerName: string | undefined,
+  paramContainerName: string | undefined,
+  paramContainerId: string | undefined,
+  pathnameContainerName?: string
+) {
+  return (
+    pathnameContainerName ?? paramContainerName ?? paramContainerId ?? resolvedContainerName ?? ""
+  );
+}
+
+export function resolveContainerNameFromPathname(pathname: string) {
+  const parts = pathname.split("/").filter(Boolean);
+  const containersIndex = parts.findIndex(
+    (part, index) => part === "containers" && parts[index - 1] === "docker"
+  );
+  const encodedName = containersIndex >= 0 ? parts[containersIndex + 2] : undefined;
+  if (!encodedName) return undefined;
+  try {
+    return decodeURIComponent(encodedName);
+  } catch {
+    return encodedName;
+  }
 }
 
 // ── Main Page ────────────────────────────────────────────────────
@@ -149,13 +204,17 @@ export function DockerContainerDetail({
     containerName?: string;
     tab?: string;
   }>();
+  const location = useLocation();
   const nodeId = resolvedNodeId ?? params.nodeId;
   const nodeSlug = resolvedNodeSlug ?? params.nodeSlug ?? params.nodeId ?? "";
-  const routeContainerName =
-    resolvedContainerName ?? params.containerName ?? params.containerId ?? "";
+  const routeContainerName = resolveContainerRouteName(
+    resolvedContainerName,
+    params.containerName,
+    params.containerId,
+    resolveContainerNameFromPathname(location.pathname)
+  );
   const [containerId, setContainerId] = useState(resolvedContainerId ?? params.containerId);
   const navigate = useStableNavigate();
-  const location = useLocation();
   const backTarget = getReturnNavigationTarget(location.state, "/docker");
   const [container, setContainer] = useState<InspectData | null>(resolvedContainer ?? null);
   const containerRef = useRef<InspectData | null>(resolvedContainer ?? null);
@@ -189,6 +248,7 @@ export function DockerContainerDetail({
   });
   const invalidate = useDockerStore((s) => s.invalidate);
   const setSelectedNode = useDockerStore((s) => s.setSelectedNode);
+  const dockerNodes = useDockerStore((s) => s.dockerNodes);
   const previousNodeIdRef = useRef(useDockerStore.getState().selectedNodeId);
 
   // Temporarily scope store-backed invalidation to this node while the detail page is mounted,
@@ -205,9 +265,97 @@ export function DockerContainerDetail({
   const [healthCheck, setHealthCheck] = useState<DockerHealthCheck | null>(null);
   const [sourceIdentity, setSourceIdentity] = useState<Pick<
     DockerSourceBinding,
-    "repositoryFullPath" | "deployedCommitSha"
+    "id" | "repositoryFullPath" | "deployedCommitSha"
   > | null>(null);
+  const [sourceIdentityRevision, setSourceIdentityRevision] = useState(0);
   const [runtimeSecureLinkDown, setRuntimeSecureLinkDown] = useState(false);
+  const [ownAvailabilityPolicy, setAvailabilityPolicy] = useState<DockerAvailabilityPolicy | null>(
+    null
+  );
+  const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
+  const [parentAvailabilityPolicy, setParentAvailabilityPolicy] =
+    useState<DockerAvailabilityPolicy | null>(null);
+  const [composeServiceImage, setComposeServiceImage] = useState<string | null>(null);
+  const composeServiceName = String(
+    (container?.Config?.Labels ?? resolvedContainer?.Config?.Labels)?.[
+      "com.docker.compose.service"
+    ] ?? ""
+  );
+  const sourceOwnerLabels = (container?.Config?.Labels ?? container?.Labels ?? {}) as Record<
+    string,
+    string
+  >;
+  const sourceOwnerComposeId =
+    parentAvailabilityPolicy?.composeProjectId ||
+    sourceOwnerLabels["wiolett.gateway.compose.project-id"];
+  const sourceOwnerDeploymentId =
+    parentAvailabilityPolicy?.deploymentId || sourceOwnerLabels["wiolett.gateway.deployment.id"];
+  const serviceAvailabilityPolicy = useMemo(
+    () =>
+      projectComposeServicePolicy(
+        parentAvailabilityPolicy,
+        composeServiceName,
+        composeServiceImage
+      ),
+    [parentAvailabilityPolicy, composeServiceName, composeServiceImage]
+  );
+  const availabilityPolicy = serviceAvailabilityPolicy ?? ownAvailabilityPolicy;
+  useEffect(() => {
+    // A new Compose revision must refresh the service image even when the project ID is stable.
+    void parentAvailabilityPolicy?.composeRevisionId;
+    if (!parentAvailabilityPolicy?.composeProjectId || !composeServiceName) return;
+    let cancelled = false;
+    setComposeServiceImage(null);
+    void api
+      .getDockerComposeProject(
+        parentAvailabilityPolicy.sourceNodeId ?? parentAvailabilityPolicy.originNodeId ?? nodeId!,
+        parentAvailabilityPolicy.composeProjectId
+      )
+      .then((project) => {
+        if (!cancelled)
+          setComposeServiceImage(
+            project.activeRevision?.normalizedModel.services[composeServiceName]?.image ?? null
+          );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    parentAvailabilityPolicy?.composeProjectId,
+    parentAvailabilityPolicy?.composeRevisionId,
+    parentAvailabilityPolicy?.sourceNodeId,
+    parentAvailabilityPolicy?.originNodeId,
+    composeServiceName,
+    nodeId,
+  ]);
+  const applyAvailabilityPolicy = useCallback((policy: DockerAvailabilityPolicy | null) => {
+    // A Compose child resolves to its parent's policy, whose placements contain
+    // arrays of services, not the scalar containerId used by this page's selector.
+    const split = splitContainerAvailabilityPolicy(policy);
+    setAvailabilityPolicy(split.own);
+    if (split.parent) setParentAvailabilityPolicy(split.parent);
+  }, []);
+  const runtimeReplacingRef = useRef(false);
+  const [selectedPlacementId, setSelectedPlacementId] = useState<string | null>(null);
+  const [selectedLogsPlacementId, setSelectedLogsPlacementId] = useState(
+    ALL_AVAILABILITY_INSTANCES
+  );
+  const logicalWorkloadIdentity = (container?.logicalWorkload ??
+    resolvedContainer?.logicalWorkload) as
+    | {
+        policyId?: string;
+        mode?: string;
+        managementNodeId?: string;
+        managementResourceId?: string;
+        runtimeNodeId?: string;
+        runtimeContainerId?: string;
+        placementId?: string;
+      }
+    | undefined;
+  const availabilityManaged = Boolean(
+    logicalWorkloadIdentity || (availabilityPolicy && availabilityPolicy.mode !== "single")
+  );
   const runtimeSecureLinkContainerRef = useRef(containerId);
 
   const [activeTab, setActiveTab] = useUrlTab(
@@ -260,6 +408,8 @@ export function DockerContainerDetail({
   }, [params.containerId, resolvedContainer, resolvedContainerId]);
 
   useEffect(() => {
+    // Realtime build events deliberately retrigger this source lookup.
+    void sourceIdentityRevision;
     const runtimeContainerId = container?.Id ?? containerId;
     if (!nodeId || !routeContainerName || !runtimeContainerId) {
       setSourceIdentity(null);
@@ -268,12 +418,27 @@ export function DockerContainerDetail({
 
     let cancelled = false;
     void api
-      .getDockerSource({ kind: "container", nodeId, containerName: routeContainerName })
+      .getDockerSource(
+        sourceOwnerComposeId
+          ? {
+              kind: "compose_project",
+              nodeId: parentAvailabilityPolicy?.originNodeId || nodeId,
+              composeProjectId: sourceOwnerComposeId,
+            }
+          : sourceOwnerDeploymentId
+            ? {
+                kind: "deployment",
+                nodeId: parentAvailabilityPolicy?.originNodeId || nodeId,
+                deploymentId: sourceOwnerDeploymentId,
+              }
+            : { kind: "container", nodeId, containerName: routeContainerName }
+      )
       .then((source) => {
         if (cancelled) return;
         setSourceIdentity(
           source
             ? {
+                id: source.id,
                 repositoryFullPath: source.repositoryFullPath,
                 deployedCommitSha: source.deployedCommitSha,
               }
@@ -287,7 +452,70 @@ export function DockerContainerDetail({
     return () => {
       cancelled = true;
     };
-  }, [container?.Id, containerId, nodeId, routeContainerName]);
+  }, [
+    container?.Id,
+    containerId,
+    nodeId,
+    routeContainerName,
+    sourceOwnerComposeId,
+    sourceOwnerDeploymentId,
+    parentAvailabilityPolicy?.originNodeId,
+    sourceIdentityRevision,
+  ]);
+
+  useRealtime(
+    sourceIdentity ? "docker.build.changed" : null,
+    (payload) => {
+      if ((payload as { sourceBindingId?: string })?.sourceBindingId === sourceIdentity?.id)
+        setSourceIdentityRevision((revision) => revision + 1);
+    },
+    { onReconnect: () => setSourceIdentityRevision((revision) => revision + 1) }
+  );
+
+  useEffect(() => {
+    if (!nodeId || !routeContainerName) {
+      setAvailabilityPolicy(null);
+      setAvailabilityLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    setAvailabilityLoaded(false);
+    void api
+      .getDockerAvailability({ type: "container", nodeId, containerName: routeContainerName })
+      .then((policy) => {
+        if (!cancelled) applyAvailabilityPolicy(policy);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailabilityPolicy(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAvailabilityLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyAvailabilityPolicy, nodeId, routeContainerName]);
+
+  useRealtime("docker.availability.changed", (payload) => {
+    const event = payload as { policyId?: string };
+    if (availabilityPolicy?.id && event.policyId && event.policyId !== availabilityPolicy.id)
+      return;
+    if (!nodeId || !routeContainerName) return;
+    void api
+      .getDockerAvailability({ type: "container", nodeId, containerName: routeContainerName })
+      .then(applyAvailabilityPolicy)
+      .catch(() => setAvailabilityPolicy(null));
+  });
+  useRealtime("docker.availability.operation.changed", (payload) => {
+    const event = payload as { policyId?: string };
+    if (availabilityPolicy?.id && event.policyId && event.policyId !== availabilityPolicy.id)
+      return;
+    if (!nodeId || !routeContainerName) return;
+    void api
+      .getDockerAvailability({ type: "container", nodeId, containerName: routeContainerName })
+      .then(applyAvailabilityPolicy)
+      .catch(() => setAvailabilityPolicy(null));
+  });
 
   // Pin
   const [pinOpen, setPinOpen] = useState(false);
@@ -415,13 +643,24 @@ export function DockerContainerDetail({
 
   const fetchContainer = useCallback(
     async (silent = false, noCache = false) => {
-      if (!nodeId || !containerId) return;
+      if (runtimeReplacingRef.current) return;
+      if (!nodeId || (!containerId && !routeContainerName)) return;
       if (!silent) setIsLoading(true);
       try {
         const data = await resolveMigrationTarget(!!migrationHandoff?.cutoverAt, async () => {
+          if (logicalWorkloadIdentity) {
+            const inspected = (await api.inspectContainerByName(
+              logicalWorkloadIdentity.managementNodeId || nodeId,
+              logicalWorkloadIdentity.managementResourceId || routeContainerName,
+              noCache
+            )) as InspectData;
+            const replacementId = String(inspected.Id ?? inspected.id ?? containerId ?? "");
+            if (replacementId) adoptReplacementContainerId(replacementId);
+            return inspected;
+          }
           const inspected = await inspectContainerAfterMutation(
             nodeId,
-            containerId,
+            containerId!,
             routeContainerName,
             noCache
           );
@@ -433,7 +672,7 @@ export function DockerContainerDetail({
           clearMutationTransition();
         }
         // Keep pinned meta in sync
-        if (usePinnedContainersStore.getState().isPinnedSidebar(containerId)) {
+        if (containerId && usePinnedContainersStore.getState().isPinnedSidebar(containerId)) {
           const cName =
             String((data as any)?.Name ?? "").replace(/^\//, "") || containerId.slice(0, 12);
           const cState = (data as any)?._transition ?? (data as any)?.State?.Status ?? "unknown";
@@ -446,7 +685,12 @@ export function DockerContainerDetail({
           });
         }
       } catch (err) {
-        if (!migrationHandoff && err instanceof ApiRequestError && err.status === 404) {
+        if (
+          containerId &&
+          !migrationHandoff &&
+          err instanceof ApiRequestError &&
+          err.status === 404
+        ) {
           usePinnedContainersStore.getState().removePin(containerId);
         }
         if (!silent) {
@@ -468,6 +712,7 @@ export function DockerContainerDetail({
       navigate,
       updateMeta,
       routeContainerName,
+      logicalWorkloadIdentity,
     ]
   );
 
@@ -477,6 +722,7 @@ export function DockerContainerDetail({
   }, [containerId, migrationHandoff?.targetResourceId]);
 
   useEffect(() => {
+    if (!availabilityLoaded || availabilityManaged) return;
     const runtimeIdentityChanged = hasContainerRuntimeIdentityChanged(
       containerId,
       containerRef.current
@@ -488,7 +734,14 @@ export function DockerContainerDetail({
     // catches anything that slipped through (e.g. between reconnects).
     const interval = setInterval(() => void fetchContainer(true, true), 30000);
     return () => clearInterval(interval);
-  }, [containerId, fetchContainer, migrationHandoff?.targetResourceId, resolvedContainer]);
+  }, [
+    availabilityLoaded,
+    availabilityManaged,
+    containerId,
+    fetchContainer,
+    migrationHandoff?.targetResourceId,
+    resolvedContainer,
+  ]);
 
   const refreshContainer = useCallback(() => fetchContainer(true, true), [fetchContainer]);
 
@@ -538,6 +791,143 @@ export function DockerContainerDetail({
   const databaseLinks = (
     ((container as any)?.databaseLinks ?? []) as ContainerDatabaseLink[]
   ).filter((link) => link?.binding?.targetType === "container");
+  const servingPlacements = useMemo(
+    () =>
+      (availabilityPolicy?.placements ?? [])
+        .filter((placement) => placement.serving && placement.actualState === "serving")
+        .sort(
+          (left, right) =>
+            right.generation - left.generation || left.nodeId.localeCompare(right.nodeId)
+        ),
+    [availabilityPolicy?.placements]
+  );
+  const availabilityRuntimePlacement =
+    servingPlacements.find((placement) => placement.id === selectedPlacementId) ??
+    servingPlacements.find((placement) => placement.nodeId === nodeId) ??
+    servingPlacements[0];
+  useEffect(() => {
+    if (servingPlacements.length === 0) {
+      setSelectedPlacementId(null);
+      return;
+    }
+    if (!servingPlacements.some((placement) => placement.id === selectedPlacementId)) {
+      setSelectedPlacementId(
+        (servingPlacements.find((placement) => placement.nodeId === nodeId) ??
+          servingPlacements[0])!.id
+      );
+    }
+  }, [nodeId, selectedPlacementId, servingPlacements]);
+  const availabilityRuntimeContainerId = String(
+    availabilityRuntimePlacement?.runtimeIdentity?.containerId ?? ""
+  );
+  const runtimeNodeId =
+    availabilityRuntimePlacement?.nodeId || logicalWorkloadIdentity?.runtimeNodeId || nodeId!;
+  const runtimeContainerId =
+    availabilityRuntimeContainerId || logicalWorkloadIdentity?.runtimeContainerId || containerId!;
+  const managementNodeId = availabilityManaged
+    ? availabilityPolicy?.sourceNodeId || logicalWorkloadIdentity?.managementNodeId || nodeId!
+    : nodeId!;
+  const managementContainerId = availabilityManaged
+    ? logicalWorkloadIdentity?.managementResourceId || routeContainerName
+    : containerId!;
+  useEffect(() => {
+    if (!availabilityManaged || !runtimeNodeId || !availabilityRuntimeContainerId) return;
+    let cancelled = false;
+    void api
+      .inspectContainer(runtimeNodeId, availabilityRuntimeContainerId, true)
+      .then((runtimeContainer) => {
+        if (!cancelled) setContainer(runtimeContainer as InspectData);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [availabilityManaged, availabilityRuntimeContainerId, runtimeNodeId]);
+  const availabilityLogSources = useMemo(
+    () =>
+      servingPlacements.flatMap((placement) => {
+        const placementContainerId = String(placement.runtimeIdentity?.containerId ?? "");
+        if (!placementContainerId) return [];
+        const runtimeNode = dockerNodes.find((candidate) => candidate.id === placement.nodeId);
+        const title =
+          runtimeNode?.displayName ||
+          runtimeNode?.hostname ||
+          runtimeNode?.slug ||
+          placement.nodeId.slice(0, 8);
+        return [
+          {
+            channelId: placement.id,
+            runtimeKey: `${placement.nodeId}:${placementContainerId}`,
+            title,
+            description: `stdout and stderr from ${title}`,
+            state: "running",
+            downloadFileName: `${routeContainerName}-${title}-logs.txt`,
+            createWebSocket: (tail: number) =>
+              api.createLogStreamWebSocket(placement.nodeId, placementContainerId, tail),
+            getLogs: (params: { tail?: number; timestamps?: boolean }) =>
+              api.getContainerLogs(placement.nodeId, placementContainerId, params),
+            popoutUrl: `/docker/logs/${placement.nodeId}/${placementContainerId}`,
+          },
+        ];
+      }),
+    [dockerNodes, routeContainerName, servingPlacements]
+  );
+  const monitoringInstances = useMemo(() => {
+    if (availabilityManaged && servingPlacements.length > 0) {
+      return servingPlacements.flatMap((placement) => {
+        const placementContainerId = String(
+          placement.runtimeIdentity?.containerId ?? placement.runtimeIdentity?.containerName ?? ""
+        );
+        if (!placementContainerId) return [];
+        const runtimeNode = dockerNodes.find((candidate) => candidate.id === placement.nodeId);
+        const nodeTitle =
+          runtimeNode?.displayName ||
+          runtimeNode?.hostname ||
+          runtimeNode?.slug ||
+          placement.nodeId.slice(0, 8);
+        return [
+          {
+            id: placement.id,
+            title: nodeTitle,
+            description: routeContainerName,
+            nodeId: placement.nodeId,
+            containerId: placementContainerId,
+          },
+        ];
+      });
+    }
+    const fallbackNodeId = availabilityManaged ? runtimeNodeId : nodeId!;
+    const fallbackContainerId = availabilityManaged ? runtimeContainerId : containerId!;
+    const runtimeNode = dockerNodes.find((candidate) => candidate.id === fallbackNodeId);
+    return [
+      {
+        id:
+          (availabilityManaged ? logicalWorkloadIdentity?.placementId : undefined) ||
+          fallbackContainerId ||
+          routeContainerName,
+        title:
+          runtimeNode?.displayName ||
+          runtimeNode?.hostname ||
+          runtimeNode?.slug ||
+          routeContainerName,
+        description: runtimeNode?.displayName || runtimeNode?.hostname || runtimeNode?.slug,
+        nodeId: fallbackNodeId,
+        containerId: fallbackContainerId,
+        data: container ?? undefined,
+      },
+    ];
+  }, [
+    availabilityManaged,
+    container,
+    containerId,
+    dockerNodes,
+    logicalWorkloadIdentity?.placementId,
+    nodeId,
+    routeContainerName,
+    runtimeContainerId,
+    runtimeNodeId,
+    servingPlacements,
+  ]);
   useEffect(() => {
     if (runtimeSecureLinkContainerRef.current === containerId) return;
     runtimeSecureLinkContainerRef.current = containerId;
@@ -549,6 +939,10 @@ export function DockerContainerDetail({
   useRealtime("database.changed", () => void refreshContainer());
 
   const fetchHealthCheck = useCallback(async () => {
+    if (!availabilityLoaded || availabilityManaged) {
+      if (availabilityManaged) setHealthCheck(null);
+      return;
+    }
     if (!nodeId || !containerName) return;
 
     try {
@@ -557,7 +951,7 @@ export function DockerContainerDetail({
     } catch {
       setHealthCheck(null);
     }
-  }, [containerName, nodeId]);
+  }, [availabilityLoaded, availabilityManaged, containerName, nodeId]);
 
   useEffect(() => {
     void fetchHealthCheck();
@@ -621,7 +1015,9 @@ export function DockerContainerDetail({
       await fn();
       toast.success(successMsg);
       invalidate("containers", "tasks");
-      fetchContainer();
+      // A cached pre-action inspect can overwrite the fresh realtime result.
+      // Read the authoritative state without remounting the detail page.
+      await refreshContainer();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -630,6 +1026,10 @@ export function DockerContainerDetail({
   };
 
   const handleRemove = async () => {
+    if (availabilityManaged) {
+      toast.error("Disable Availability in Settings before removing this container.");
+      return;
+    }
     const ok = await confirm({
       title: "Remove Container",
       description: `Remove "${containerDisplayName(container?.Name ?? "")}"? This cannot be undone.`,
@@ -767,18 +1167,106 @@ export function DockerContainerDetail({
     }
   };
 
-  const name = containerDisplayName(container?.Name ?? "");
+  const name = availabilityManaged
+    ? routeContainerName
+    : containerDisplayName(container?.Name ?? "");
   const baseState = container?.State?.Status ?? (container?.State?.Running ? "running" : "stopped");
   const state = effectiveTransition ?? baseState;
-  const lifecycleActions = containerLifecycleActions(state);
-  const image = container ? resolveContainerImageReference(container) : "";
+  const availabilityServing =
+    (availabilityPolicy?.placements ?? []).filter(
+      (placement) => placement.serving && placement.actualState === "serving"
+    ).length ?? 0;
+  const availabilityDesired =
+    availabilityPolicy?.mode === "replicated" ? availabilityPolicy.desiredReplicaCount : 1;
+  const availabilitySurfaceStatus =
+    availabilityManaged && availabilityPolicy
+      ? resolveAvailabilitySurfaceStatus({
+          policyStatus: availabilityPolicy.status,
+          operation: availabilityPolicy.latestOperation,
+          shouldRun: availabilityPolicy.shouldRun,
+          serving: availabilityServing,
+          desired: availabilityDesired,
+        })
+      : null;
+  const availabilityTransition =
+    availabilitySurfaceStatus &&
+    ["rolling_out", "starting", "stopping", "restarting"].includes(availabilitySurfaceStatus)
+      ? availabilitySurfaceStatus
+      : null;
+  const logicalAvailabilityStatus = availabilityManaged ? availabilitySurfaceStatus : null;
+  const displayState = logicalAvailabilityStatus ?? state;
+  const logicalHealthStatus =
+    availabilityManaged && availabilityPolicy
+      ? !availabilityPolicy.shouldRun
+        ? "stopped"
+        : availabilityTransition
+          ? "online"
+          : availabilityServing === 0
+            ? "offline"
+            : availabilityServing < availabilityDesired
+              ? "degraded"
+              : "online"
+      : null;
+  const lifecycleActions = containerLifecycleActions(
+    availabilityManaged ? (availabilityPolicy?.shouldRun ? "running" : "stopped") : state
+  );
+  const environmentWorkloadState = availabilityManaged
+    ? availabilityPolicy?.shouldRun
+      ? "running"
+      : "stopped"
+    : state;
+  const image =
+    (serviceAvailabilityPolicy
+      ? composeServiceImage || "—"
+      : availabilityPolicy?.sourceImageReference) ||
+    (container ? resolveContainerImageReference(container) : "");
   const unavailable = container?.availability === "unavailable";
   const secureLinkDown = Boolean((container as any)?.secureLinkDown) || runtimeSecureLinkDown;
   const labels = (container?.Config?.Labels ?? container?.Labels ?? {}) as Record<string, string>;
   const composeManaged = Boolean(labels["com.docker.compose.project"]);
-  const composeProjectName = labels["com.docker.compose.project"];
-  const composeProjectId = labels["wiolett.gateway.compose.project-id"];
-  const actionDisabled = actionLoading || !!effectiveTransition || unavailable || composeManaged;
+  const composeProjectName = resolveComposeOwnerName(parentAvailabilityPolicy, labels);
+  const composeProjectId =
+    parentAvailabilityPolicy?.composeProjectId || labels["wiolett.gateway.compose.project-id"];
+  const parentDeploymentId = labels["wiolett.gateway.deployment.id"];
+  const refreshParentAvailability = useCallback(async () => {
+    const resource = composeProjectId
+      ? { type: "compose" as const, composeProjectId }
+      : parentDeploymentId
+        ? { type: "deployment" as const, deploymentId: parentDeploymentId }
+        : null;
+    if (!resource) {
+      setParentAvailabilityPolicy(null);
+      return;
+    }
+    try {
+      setParentAvailabilityPolicy(await api.getDockerAvailability(resource));
+    } catch {
+      setParentAvailabilityPolicy(null);
+    }
+  }, [composeProjectId, parentDeploymentId]);
+  useEffect(() => {
+    void refreshParentAvailability();
+  }, [refreshParentAvailability]);
+  useRealtime("docker.availability.operation.changed", refreshParentAvailability);
+  useRealtime("docker.availability.changed", refreshParentAvailability);
+  const runtimePolicy = availabilityPolicy ?? parentAvailabilityPolicy;
+  const runtimeReplacing = isAvailabilityReplacing(runtimePolicy);
+  const wasReplacing = useRef(false);
+  runtimeReplacingRef.current = runtimeReplacing;
+  useEffect(() => {
+    if (wasReplacing.current && !runtimeReplacing) void fetchContainer(true, true);
+    wasReplacing.current = runtimeReplacing;
+  }, [runtimeReplacing, fetchContainer]);
+  const availabilityBusy = Boolean(
+    availabilityPolicy?.latestOperation &&
+      ["pending", "running", "waiting", "cleanup_pending"].includes(
+        availabilityPolicy.latestOperation.status
+      )
+  );
+  const actionDisabled =
+    actionLoading ||
+    (availabilityManaged ? availabilityBusy : !!effectiveTransition || unavailable) ||
+    composeManaged;
   const deploymentManaged = labels["wiolett.gateway.deployment.managed"] === "true";
   const gpuMapped =
     container?.gpuAttachment?.mode === "managed" || container?.gpuAttachment?.mode === "external";
@@ -793,7 +1281,7 @@ export function DockerContainerDetail({
         : actionDisabled
           ? "Container is unavailable or changing state"
           : undefined;
-  const currentTransition = effectiveTransition;
+  const currentTransition = runtimeReplacing ? "replacing" : effectiveTransition;
   const currentBaseState = baseState;
 
   useEffect(() => {
@@ -822,8 +1310,15 @@ export function DockerContainerDetail({
   useEffect(() => {
     if (isLoading || !container) return;
     const needsRunning = unavailable
-      ? new Set(["logs", "console", "files", "stats", "environment", "settings"])
-      : new Set(["console", "files", "stats"]);
+      ? new Set([
+          "logs",
+          "console",
+          "files",
+          "stats",
+          "environment",
+          ...(availabilityManaged ? [] : ["settings"]),
+        ])
+      : new Set(["console", "files", "stats", ...(currentTransition ? ["logs"] : [])]);
     const shouldDisable = unavailable || currentBaseState !== "running" || !!currentTransition;
     if (!shouldDisable) return;
 
@@ -852,6 +1347,7 @@ export function DockerContainerDetail({
     isLoading,
     setActiveTab,
     unavailable,
+    availabilityManaged,
   ]);
 
   if (isLoading) return <DetailPageSkeleton label="Loading container" tabs={6} />;
@@ -879,7 +1375,11 @@ export function DockerContainerDetail({
       onClick: () => setPinOpen(true),
       disabled: actionDisabled,
     },
-    ...(!composeManaged && canMigrate
+    ...(!composeManaged &&
+    canMigrate &&
+    availabilityLoaded &&
+    !availabilityManaged &&
+    (!parentAvailabilityPolicy || parentAvailabilityPolicy.mode === "single")
       ? [
           {
             label: "Migrate",
@@ -899,7 +1399,10 @@ export function DockerContainerDetail({
             label: "Start",
             icon: <Play className="h-4 w-4" />,
             onClick: () =>
-              doAction(() => api.startContainer(nodeId!, containerId!), "Container started"),
+              doAction(
+                () => api.startContainer(managementNodeId, managementContainerId),
+                "Container started"
+              ),
             disabled: actionDisabled,
             priority: HEADER_ACTION_PRIORITY.primary,
           },
@@ -911,7 +1414,10 @@ export function DockerContainerDetail({
             label: "Stop",
             icon: <Square className="h-4 w-4" />,
             onClick: () =>
-              doAction(() => api.stopContainer(nodeId!, containerId!), "Container stopping"),
+              doAction(
+                () => api.stopContainer(managementNodeId, managementContainerId),
+                "Container stopping"
+              ),
             disabled: actionDisabled,
             priority: HEADER_ACTION_PRIORITY.primary,
           },
@@ -922,7 +1428,7 @@ export function DockerContainerDetail({
                   icon: <RotateCcw className="h-4 w-4" />,
                   onClick: () =>
                     doAction(
-                      () => api.restartContainer(nodeId!, containerId!),
+                      () => api.restartContainer(managementNodeId, managementContainerId),
                       "Container restarting"
                     ),
                   disabled: actionDisabled,
@@ -978,7 +1484,10 @@ export function DockerContainerDetail({
             label: "Kill",
             icon: <Skull className="h-4 w-4" />,
             onClick: () =>
-              doAction(() => api.killContainer(nodeId!, containerName), "Container killed"),
+              doAction(
+                () => api.killContainer(managementNodeId, managementContainerId),
+                "Container killed"
+              ),
             disabled: unavailable || !lifecycleActions.canKill,
             destructive: true,
             separatorBefore: true,
@@ -992,7 +1501,10 @@ export function DockerContainerDetail({
             label: "Remove",
             icon: <Trash2 className="h-4 w-4" />,
             onClick: handleRemove,
-            disabled: actionDisabled,
+            disabled: actionDisabled || availabilityManaged,
+            disabledReason: availabilityManaged
+              ? "Disable Availability in Settings before removing this container."
+              : undefined,
             destructive: true,
             separatorBefore: !canManage,
           },
@@ -1000,19 +1512,27 @@ export function DockerContainerDetail({
       : []),
   ];
   const isTerminalTab = activeTab === "console" || activeTab === "logs";
-  const isStopped = baseState !== "running";
+  const isStopped = availabilityManaged
+    ? !availabilityPolicy?.shouldRun || availabilityServing === 0
+    : baseState !== "running";
   const isTabDisabled = (tab: string) => {
     if (
+      (runtimeReplacing || effectiveTransition) &&
+      ["console", "files", "logs", "stats"].includes(tab)
+    )
+      return true;
+    if (
       unavailable &&
+      !availabilityManaged &&
       new Set(["logs", "console", "files", "stats", "environment", "settings"]).has(tab)
     ) {
       return true;
     }
     const needsRunning = new Set(["console", "files", "stats"]);
     if (tab === "environment" || tab === "settings") {
-      return !!effectiveTransition;
+      return availabilityManaged ? false : !!effectiveTransition;
     }
-    return needsRunning.has(tab) && (!!effectiveTransition || isStopped);
+    return needsRunning.has(tab) && ((!availabilityManaged && !!effectiveTransition) || isStopped);
   };
 
   return (
@@ -1030,11 +1550,11 @@ export function DockerContainerDetail({
               <div className="flex min-w-0 items-center gap-2">
                 <h1 className="truncate text-2xl font-bold">{name}</h1>
                 <Badge
-                  variant={unavailable ? "secondary" : (STATUS_BADGE[state] ?? "secondary")}
+                  variant={STATUS_BADGE[displayState] ?? "secondary"}
                   size="inline"
                   className="shrink-0"
                 >
-                  {unavailable ? "Unavailable" : state}
+                  {displayState.replaceAll("_", " ")}
                 </Badge>
                 {secureLinkDown && (
                   <>
@@ -1112,11 +1632,19 @@ export function DockerContainerDetail({
         {healthCheck?.enabled && (
           <HealthBars
             history={healthCheck.healthHistory}
-            currentStatus={secureLinkDown ? "offline" : healthCheck.healthStatus}
+            currentStatus={
+              logicalHealthStatus ??
+              (healthCheck.healthStatus === "stopped"
+                ? "stopped"
+                : secureLinkDown
+                  ? "offline"
+                  : healthCheck.healthStatus)
+            }
           />
         )}
 
         {/* Tabs */}
+        <AvailabilityProgress policy={runtimePolicy} />
         <Tabs
           value={activeTab}
           onValueChange={setActiveTab}
@@ -1164,9 +1692,17 @@ export function DockerContainerDetail({
               nodeId={nodeId!}
               containerId={containerId!}
               data={container}
+              imageReferenceOverride={
+                serviceAvailabilityPolicy
+                  ? composeServiceImage || "—"
+                  : availabilityPolicy?.sourceImageReference
+              }
               sourceIdentity={sourceIdentity}
               databaseLinks={databaseLinks}
               onSecureLinkHealthChange={setRuntimeSecureLinkDown}
+              logicalContainerName={routeContainerName}
+              availabilityPolicy={availabilityPolicy}
+              availabilityLoading={!availabilityLoaded}
             />
           </TabsContent>
           <TabsContent value="source" className="pb-6">
@@ -1176,77 +1712,128 @@ export function DockerContainerDetail({
               includeBuilds
             />
           </TabsContent>
-          {canViewContainer && !unavailable && (
+          {canViewContainer && !currentTransition && (!unavailable || availabilityManaged) && (
             <TabsContent value="logs" className="flex flex-col flex-1 min-h-0 pb-0">
-              <LogsTab
-                nodeId={nodeId!}
-                containerId={containerId!}
-                containerState={state}
-                inspectData={container}
-              />
+              {availabilityManaged && servingPlacements.length > 1 ? (
+                <LogsTab
+                  {...(selectedLogsPlacementId === ALL_AVAILABILITY_INSTANCES
+                    ? { sources: availabilityLogSources }
+                    : {
+                        source:
+                          availabilityLogSources.find(
+                            (source) => source.channelId === selectedLogsPlacementId
+                          ) ?? availabilityLogSources[0]!,
+                      })}
+                  headerActions={
+                    <AvailabilityInstanceSelect
+                      placements={servingPlacements}
+                      nodes={dockerNodes}
+                      value={selectedLogsPlacementId}
+                      onValueChange={setSelectedLogsPlacementId}
+                      includeAll
+                    />
+                  }
+                />
+              ) : (
+                <LogsTab
+                  nodeId={runtimeNodeId}
+                  containerId={runtimeContainerId}
+                  containerState={state}
+                  inspectData={container}
+                />
+              )}
             </TabsContent>
           )}
-          {canUseConsole && !unavailable && (
+          {canUseConsole && !currentTransition && (!unavailable || availabilityManaged) && (
             <TabsContent value="console" className="flex flex-col flex-1 min-h-0">
               <ConsoleTab
-                nodeId={nodeId!}
-                containerId={containerId!}
+                nodeId={runtimeNodeId}
+                containerId={runtimeContainerId}
                 scopeResourceId={scopeResourceId}
+                scopeNodeId={nodeId!}
+                headerActions={
+                  servingPlacements.length > 1 ? (
+                    <AvailabilityInstanceSelect
+                      placements={servingPlacements}
+                      nodes={dockerNodes}
+                      value={availabilityRuntimePlacement?.id ?? servingPlacements[0]!.id}
+                      onValueChange={setSelectedPlacementId}
+                    />
+                  ) : undefined
+                }
               />
             </TabsContent>
           )}
-          {canReadFiles && !unavailable && (
+          {canReadFiles && !currentTransition && (!unavailable || availabilityManaged) && (
             <TabsContent value="files" className="pb-0">
               <FilesTab
-                nodeId={nodeId!}
-                containerId={containerId!}
+                nodeId={runtimeNodeId}
+                containerId={runtimeContainerId}
                 scopeResourceId={scopeResourceId}
+                scopeNodeId={nodeId!}
                 canWrite={canWriteFiles}
+                headerActions={
+                  servingPlacements.length > 1 ? (
+                    <AvailabilityInstanceSelect
+                      placements={servingPlacements}
+                      nodes={dockerNodes}
+                      value={availabilityRuntimePlacement?.id ?? servingPlacements[0]!.id}
+                      onValueChange={setSelectedPlacementId}
+                    />
+                  ) : undefined
+                }
               />
             </TabsContent>
           )}
-          {canViewContainer && !unavailable && (
+          {canViewContainer && (!unavailable || availabilityManaged) && (
             <TabsContent value="stats" className="pb-0">
-              <StatsTab
-                key={`${containerId}:${String(container?.State?.StartedAt ?? "")}`}
-                nodeId={nodeId!}
-                containerId={containerId!}
-                data={container}
-              />
+              <MultiContainerMonitoring instances={monitoringInstances} />
             </TabsContent>
           )}
-          {(canUseEnvironment || canUseSecrets) && !unavailable && !composeManaged && (
-            <TabsContent value="environment" className="flex flex-col flex-1 min-h-0 pb-0">
-              <EnvironmentTab
-                nodeId={nodeId!}
-                containerId={containerId!}
-                containerName={name}
-                scopeResourceId={scopeResourceId}
-                containerState={state}
-                disabled={!!effectiveTransition}
-                onMutationStart={beginMutationTransition}
-                onMutationEnd={clearMutationTransition}
-                onRecreating={refreshAfterMutation}
-              />
-            </TabsContent>
-          )}
-          {(canEdit || (composeManaged && canViewContainer)) && !unavailable && (
-            <TabsContent value="settings" className="pb-0">
-              <SettingsTab
-                nodeId={nodeId!}
-                containerId={containerId!}
-                scopeResourceId={scopeResourceId}
-                data={container}
-                onMutationStart={beginMutationTransition}
-                onMutationEnd={clearMutationTransition}
-                onRecreating={refreshAfterMutation}
-                onRefresh={refreshAfterMutation}
-                onHealthCheckSaved={setHealthCheck}
-                transition={effectiveTransition}
-                readOnly={composeManaged}
-              />
-            </TabsContent>
-          )}
+          {(canUseEnvironment || canUseSecrets) &&
+            (!unavailable || availabilityManaged) &&
+            !composeManaged && (
+              <TabsContent value="environment" className="flex flex-col flex-1 min-h-0 pb-0">
+                <EnvironmentTab
+                  nodeId={managementNodeId}
+                  containerId={managementContainerId}
+                  containerName={name}
+                  scopeResourceId={scopeResourceId}
+                  containerState={environmentWorkloadState}
+                  disabled={!!effectiveTransition}
+                  onMutationStart={beginMutationTransition}
+                  onMutationEnd={clearMutationTransition}
+                  onRecreating={refreshAfterMutation}
+                />
+              </TabsContent>
+            )}
+          {(canEdit || (composeManaged && canViewContainer)) &&
+            (!unavailable || availabilityManaged) && (
+              <TabsContent value="settings" className="pb-0">
+                <SettingsTab
+                  nodeId={managementNodeId}
+                  containerId={managementContainerId}
+                  scopeResourceId={scopeResourceId}
+                  data={container}
+                  onMutationStart={beginMutationTransition}
+                  onMutationEnd={clearMutationTransition}
+                  onRecreating={refreshAfterMutation}
+                  onRefresh={refreshAfterMutation}
+                  onHealthCheckSaved={setHealthCheck}
+                  transition={effectiveTransition}
+                  readOnly={composeManaged}
+                  availabilityManaged={availabilityManaged}
+                  logicalContainerName={availabilityManaged ? routeContainerName : undefined}
+                  imageReferenceOverride={availabilityPolicy?.sourceImageReference}
+                  onAvailabilityDisableQueued={({ nodeSlug: survivorNodeSlug }) =>
+                    navigate(
+                      dockerContainerRoute(survivorNodeSlug, routeContainerName, "settings"),
+                      { replace: true }
+                    )
+                  }
+                />
+              </TabsContent>
+            )}
         </Tabs>
       </div>
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>

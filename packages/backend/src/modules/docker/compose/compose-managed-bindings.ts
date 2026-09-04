@@ -173,6 +173,16 @@ export function addManagedDatabaseBindingToYaml(yaml: string, serviceName: strin
   };
 }
 
+/** Availability backends are reached through placement Secure Links, never host-published Compose ports. */
+export function removeComposePublishedPortsForAvailability(yaml: string) {
+  const root = parseYaml(yaml);
+  if (!isRecord(root.services)) return stringify(root, { lineWidth: 0 });
+  for (const service of Object.values(root.services)) {
+    if (isRecord(service)) delete service.ports;
+  }
+  return stringify(root, { lineWidth: 0 });
+}
+
 export function removeManagedDatabaseBindingFromYaml(
   yaml: string,
   serviceName: string,

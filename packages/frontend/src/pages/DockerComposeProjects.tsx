@@ -60,13 +60,20 @@ type ComposeProjectTransition = {
 
 const ACTIVE_OPERATION_STATUSES = new Set(["pending", "running", "cancelling"]);
 
-function statusVariant(
-  status: DockerComposeProjectSummary["status"] | ComposeProjectTransition["label"]
-) {
-  if (status === "running") return "success" as const;
-  if (status === "failed" || status === "missing") return "destructive" as const;
+function statusVariant(status: string) {
+  if (status === "running" || status === "healthy" || status === "online")
+    return "success" as const;
+  if (status === "failed" || status === "missing" || status === "unavailable")
+    return "destructive" as const;
   if (
     status === "degraded" ||
+    status === "starting" ||
+    status === "stopping" ||
+    status === "restarting" ||
+    status === "enabling" ||
+    status === "scaling" ||
+    status === "rolling_out" ||
+    status === "disabling" ||
     status === "applying" ||
     status === "validating" ||
     status === "deleting"
@@ -320,14 +327,23 @@ export function DockerComposeProjects({
         width: "8rem",
         renderCell: (project) => {
           const transition = projectTransitions[project.id];
-          const status = transition?.label ?? (project.drifted ? "drift" : project.status);
+          const status =
+            project.availabilityPolicyStatus ??
+            transition?.label ??
+            (project.drifted ? "drift" : project.status);
           return (
             <Badge
-              variant={transition || project.drifted ? "warning" : statusVariant(project.status)}
+              variant={
+                project.availabilityPolicyStatus
+                  ? statusVariant(status as DockerComposeProjectSummary["status"])
+                  : transition || project.drifted
+                    ? "warning"
+                    : statusVariant(project.status)
+              }
               className="gap-1"
             >
               {transition && <Loader2 className="h-3 w-3 animate-spin" />}
-              {status}
+              {status.replaceAll("_", " ")}
             </Badge>
           );
         },

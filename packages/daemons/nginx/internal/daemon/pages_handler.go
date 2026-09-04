@@ -147,8 +147,21 @@ func (h *Handler) handlePagesCleanupDeployment(cmd *pb.PagesCleanupDeploymentCom
 		h.pagesCommandError(result, "release cleanup", err)
 	}
 }
-func (h *Handler) handlePagesInventory(result *pb.CommandResult) {
+func (h *Handler) handlePagesInventory(cmd *pb.PagesInventoryCommand, result *pb.CommandResult) {
 	if h.pagesUnavailable(result) {
+		return
+	}
+	if len(cmd.ExpectationsJson) > 0 {
+		if h.pagesRuntimeConfigUnavailable(result) {
+			return
+		}
+		var expectations []pages.BindingExpectation
+		if len(cmd.ExpectationsJson) > 8<<20 || json.Unmarshal(cmd.ExpectationsJson, &expectations) != nil || len(expectations) > 1000 {
+			result.Success = false
+			result.Error = "invalid Pages inspection expectations"
+			return
+		}
+		setPagesData(result, h.pagesRuntime.InspectBindings(expectations))
 		return
 	}
 	inventory, err := h.pagesRuntime.Inventory()

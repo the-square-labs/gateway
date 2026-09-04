@@ -93,11 +93,15 @@ export function StatsTab({
   containerId,
   data,
   showProcesses = true,
+  className = "pb-6",
+  onInitialLoadComplete,
 }: {
   nodeId: string;
   containerId: string;
   data: InspectData;
   showProcesses?: boolean;
+  className?: string;
+  onInitialLoadComplete?: () => void;
 }) {
   const [current, setCurrent] = useState<ContainerStats | null>(null);
   const [gpuDevices, setGpuDevices] = useState<NodeGpuDevice[]>([]);
@@ -111,6 +115,10 @@ export function StatsTab({
   } | null>(null);
   const [processStatus, setProcessStatus] = useState<ProcessLoadStatus>("loading");
   const [statsBootstrapLoading, setStatsBootstrapLoading] = useState(true);
+
+  useEffect(() => {
+    if (!statsBootstrapLoading) onInitialLoadComplete?.();
+  }, [statsBootstrapLoading, onInitialLoadComplete]);
 
   const [cpuHist, setCpuHist] = useState<number[]>([]);
   const [memHist, setMemHist] = useState<number[]>([]);
@@ -126,7 +134,9 @@ export function StatsTab({
     diskW: number;
   } | null>(null);
   const runtimeStartedAtMs = timestampMs(data.State?.StartedAt);
-  const monitoringIdentity = `${nodeId}:${containerId}:${runtimeStartedAtMs ?? "unknown"}`;
+  const inspectedRuntimeId = String(data.Id ?? data.ID ?? "");
+  const inspectedRuntimeName = String(data.Name ?? data.name ?? "").replace(/^\/+/, "");
+  const monitoringIdentity = `${nodeId}:${containerId}:${inspectedRuntimeId}:${runtimeStartedAtMs ?? "unknown"}`;
   const monitoringIdentityRef = useRef(monitoringIdentity);
   monitoringIdentityRef.current = monitoringIdentity;
 
@@ -252,9 +262,21 @@ export function StatsTab({
       }
       const stats = snapshot?.health?.containerStats as any[] | undefined;
       if (!stats) return null;
-      const match = stats.find(
-        (s: any) => (s.containerId ?? s.container_id) === containerId && hasAvailableMetrics(s)
-      );
+      const requestedName = containerId.replace(/^\/+/, "");
+      const match = stats.find((s: any) => {
+        const sampleId = String(s.containerId ?? s.container_id ?? "");
+        const sampleName = String(s.name ?? s.containerName ?? s.container_name ?? "").replace(
+          /^\/+/,
+          ""
+        );
+        return (
+          hasAvailableMetrics(s) &&
+          (sampleId === containerId ||
+            (inspectedRuntimeId && sampleId === inspectedRuntimeId) ||
+            sampleName === requestedName ||
+            (inspectedRuntimeName && sampleName === inspectedRuntimeName))
+        );
+      });
       return match ? normalizeStats(match) : null;
     };
     const updateGpuDevices = (snapshot: any) => {
@@ -294,7 +316,15 @@ export function StatsTab({
     });
 
     return () => es.close();
-  }, [nodeId, containerId, monitoringIdentity, pushStats, runtimeStartedAtMs]);
+  }, [
+    nodeId,
+    containerId,
+    inspectedRuntimeId,
+    inspectedRuntimeName,
+    monitoringIdentity,
+    pushStats,
+    runtimeStartedAtMs,
+  ]);
 
   // Fetch process list (separate from SSE — needs direct call)
   useEffect(() => {
@@ -361,6 +391,7 @@ export function StatsTab({
   const memPercent = memLimit > 0 ? (memUsage / memLimit) * 100 : 0;
   const memoryAvailable = hasMemoryStats(current);
   const sharedGpuDevices = attachedGpuDevices(data, gpuDevices);
+  const initialStatsPending = !showProcesses && statsBootstrapLoading && current === null;
 
   // Filter out TTY column from process list
   const ttIdx = processes?.Titles?.findIndex((t) => t === "TTY" || t === "TT") ?? -1;
@@ -369,15 +400,15 @@ export function StatsTab({
     processes?.Processes?.map((row) => row.filter((_, i) => i !== ttIdx)) ?? [];
 
   return (
-    <div className="space-y-6 pb-6">
-      {(statsBootstrapLoading || (showProcesses && processStatus === "loading")) && <Skeleton />}
+    <div className={`space-y-6 ${className}`}>
+      {(initialStatsPending || (showProcesses && processStatus === "loading")) && <Skeleton />}
       {!isRunning && (
         <div className="py-8 text-center text-muted-foreground">
           Container is not running. Start it to see monitoring data.
         </div>
       )}
 
-      {isRunning && (
+      {isRunning && !initialStatsPending && (
         <>
           {/* Stat Cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">

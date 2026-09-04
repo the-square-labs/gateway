@@ -158,6 +158,8 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
           if (host.secureLinkGeneration > 0) await this.secureLinks?.cleanup(host);
           continue;
         }
+        const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
+        if (availabilityManaged) continue;
         const updated = await this.resolveStoredDockerUpstream(host, force);
         const secureLinkChanged =
           updated.forwardHost !== host.forwardHost ||

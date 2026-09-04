@@ -114,6 +114,41 @@ afterEach(() => {
 });
 
 describe('core responses websocket proxy', () => {
+  it.each([
+    'max',
+    'ultra',
+  ])('records the requested %s effort before provider mapping over WebSocket', async (effort) => {
+    const { proxy, accounting } = registerCommon();
+    const target = await proxy.resolveTarget();
+    proxy.resolveTarget.mockResolvedValue({
+      ...target,
+      model: { ...target.model, reasoningEfforts: ['max', 'ultra'] },
+      selected: {
+        ...target.selected,
+        source: { ...target.selected.source, reasoningEffortMap: { max: 'max', ultra: 'max' } },
+      },
+    });
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      {
+        data: JSON.stringify({
+          type: 'response.create',
+          response: { model: 'gpt-5.5', input: 'hi', reasoning: { effort } },
+        }),
+      } as never,
+      ws as never
+    );
+
+    expect(accounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: effort }));
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    expect(JSON.parse(upstream.sent[0]!).response.reasoning.effort).toBe('max');
+    upstream.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_effort' } }));
+    upstream.handlers.close?.();
+  });
+
   it('proxies a turn with rewritten model and signed headers, then finalizes', async () => {
     const { accounting } = registerCommon();
     const ws = clientSocket();

@@ -1,16 +1,13 @@
 import type { WSContext } from 'hono/ws';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
-import {
-  resolveWebSocketCredential,
-  resolveWebSocketCredentialForScopeBase,
-  type WebSocketCredential,
-} from '@/modules/auth/websocket-auth.js';
+import { resolveWebSocketCredentialForScopeBase, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
 import { DockerManagementService } from './docker.service.js';
-import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
+import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
 
 const logger = createChildLogger('DockerLogStream');
@@ -20,8 +17,9 @@ async function authorizeLogAccess(
   nodeId: string,
   resourceId: string
 ): Promise<User | null> {
-  const result = await resolveWebSocketCredential(credential, `docker:containers:view:${nodeId}/${resourceId}`);
-  return result?.user ?? null;
+  const result = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:view');
+  if (!result) return null;
+  return hasDockerResourceScope(result.scopes, 'docker:containers:view', nodeId, resourceId) ? result.user : null;
 }
 
 function send(ws: WSContext, msg: Record<string, unknown>): void {
@@ -75,16 +73,29 @@ interface LogStreamWSState {
   user: User | null;
   authenticated: boolean;
   streaming: boolean;
-  handlerKey: string | null;
+  unsubscribe: (() => void) | null;
   keepaliveInterval: ReturnType<typeof setInterval> | null;
   /** Oldest timestamp seen (for load_more pagination) */
   oldestTimestamp: string | undefined;
   /** Whether a load_more request is in-flight */
   loadingMore: boolean;
   scopeResourceId: string | null;
+  scopeNodeId: string | null;
 }
 
 const wsStates = new WeakMap<WSContext, LogStreamWSState>();
+
+function releaseLogHandler(state: LogStreamWSState): void {
+  state.unsubscribe?.();
+  state.unsubscribe = null;
+  state.streaming = false;
+}
+
+function cleanupLogStream(ws: WSContext, state: LogStreamWSState): void {
+  releaseLogHandler(state);
+  if (state.keepaliveInterval) clearInterval(state.keepaliveInterval);
+  if (wsStates.get(ws) === state) wsStates.delete(ws);
+}
 
 /**
  * Create WebSocket handlers for Docker container log streaming.
@@ -106,6 +117,7 @@ export function createDockerLogStreamWSHandlers(
   const dispatch = container.resolve(NodeDispatchService);
   const registry = container.resolve(NodeRegistryService);
   const docker = container.resolve(DockerManagementService);
+  const availability = container.resolve(DockerAvailabilityService);
 
   return {
     onOpen(_event: Event, ws: WSContext) {
@@ -113,11 +125,12 @@ export function createDockerLogStreamWSHandlers(
         user: null,
         authenticated: false,
         streaming: false,
-        handlerKey: null,
+        unsubscribe: null,
         keepaliveInterval: null,
         oldestTimestamp: undefined,
         loadingMore: false,
         scopeResourceId: null,
+        scopeNodeId: null,
       };
       wsStates.set(ws, state);
 
@@ -126,18 +139,29 @@ export function createDockerLogStreamWSHandlers(
       }, 30_000);
 
       // Authenticate, fetch initial logs, then start follow stream
-      authenticateAndStartStream(ws, state, credential, nodeId, containerId, tail, dispatch, registry, docker).catch(
-        (err) => {
-          logger.error('Auth/stream start failed', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-          try {
-            ws.close();
-          } catch {
-            /* ignore */
-          }
+      authenticateAndStartStream(
+        ws,
+        state,
+        credential,
+        nodeId,
+        containerId,
+        tail,
+        dispatch,
+        registry,
+        docker,
+        availability
+      ).catch((err) => {
+        if (wsStates.get(ws) !== state) return;
+        cleanupLogStream(ws, state);
+        logger.error('Auth/stream start failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
         }
-      );
+      });
     },
 
     async onMessage(event: MessageEvent, ws: WSContext) {
@@ -154,12 +178,14 @@ export function createDockerLogStreamWSHandlers(
         if (msg?.type === 'load_more') {
           if (!state.authenticated || state.loadingMore) return;
           if (!(await revalidateLogAccess(ws, state, credential, nodeId))) return;
+          if (wsStates.get(ws) !== state) return;
           if (!state.oldestTimestamp) {
             send(ws, { type: 'history', lines: [], hasMore: false });
             return;
           }
           state.loadingMore = true;
           handleLoadMore(ws, state, nodeId, containerId, dispatch).catch((err) => {
+            if (wsStates.get(ws) !== state) return;
             state.loadingMore = false;
             logger.error('load_more failed', {
               error: err instanceof Error ? err.message : String(err),
@@ -169,11 +195,8 @@ export function createDockerLogStreamWSHandlers(
         }
         if (msg?.type === 'stop') {
           // Client requested stop — clean up follow stream handler
-          if (state.streaming) {
-            if (state.handlerKey) {
-              registry.removeLogStreamHandler(state.handlerKey);
-            }
-            state.streaming = false;
+          if (state.unsubscribe) {
+            releaseLogHandler(state);
             send(ws, { type: 'stopped' });
           }
         }
@@ -196,11 +219,7 @@ export function createDockerLogStreamWSHandlers(
   function cleanup(ws: WSContext) {
     const state = wsStates.get(ws);
     if (state) {
-      if (state.handlerKey) {
-        registry.removeLogStreamHandler(state.handlerKey);
-      }
-      if (state.keepaliveInterval) clearInterval(state.keepaliveInterval);
-      wsStates.delete(ws);
+      cleanupLogStream(ws, state);
     }
   }
 }
@@ -217,22 +236,27 @@ async function authenticateAndStartStream(
   tail: number,
   dispatch: NodeDispatchService,
   registry: NodeRegistryService,
-  docker: DockerManagementService
+  docker: DockerManagementService,
+  availability: DockerAvailabilityService
 ): Promise<void> {
   const initialAuth = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:view');
-  if (
-    !initialAuth ||
-    (!hasDockerResourceScope(initialAuth.scopes, 'docker:containers:view', nodeId, '') &&
-      !dockerScopedNodeIds(initialAuth.scopes, ['docker:containers:view']).includes(nodeId))
-  ) {
+  if (wsStates.get(ws) !== state) return;
+  if (!initialAuth) {
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     ws.close(1008, 'Authentication failed');
     return;
   }
-  const inspect = await inspectUserContainer(docker, nodeId, containerId).catch(() => null);
-  const scopeResourceId = String(inspect?.scopeResourceId ?? '');
+  // Generated deployment slots may be inspectable, but their physical identity is
+  // not the authorization boundary. Prefer the logical Availability workload.
+  const placementIdentity = await availability.resolveRuntimeAccessIdentity(nodeId, containerId).catch(() => null);
+  if (wsStates.get(ws) !== state) return;
+  const inspect = placementIdentity ? null : await inspectUserContainer(docker, nodeId, containerId).catch(() => null);
+  if (wsStates.get(ws) !== state) return;
+  const scopeNodeId = placementIdentity?.nodeId ?? nodeId;
+  const scopeResourceId = String(placementIdentity?.resourceId ?? inspect?.scopeResourceId ?? '');
   const user =
-    scopeResourceId && hasDockerResourceScope(initialAuth.scopes, 'docker:containers:view', nodeId, scopeResourceId)
+    scopeResourceId &&
+    hasDockerResourceScope(initialAuth.scopes, 'docker:containers:view', scopeNodeId, scopeResourceId)
       ? initialAuth.user
       : null;
   if (!user) {
@@ -244,6 +268,7 @@ async function authenticateAndStartStream(
   state.user = user;
   state.authenticated = true;
   state.scopeResourceId = scopeResourceId;
+  state.scopeNodeId = scopeNodeId;
 
   logger.info('Docker log stream authenticated', { nodeId, containerId, userId: user.id });
 
@@ -263,6 +288,7 @@ async function authenticateAndStartStream(
       follow: false,
       timestamps: true,
     });
+    if (wsStates.get(ws) !== state) return;
 
     if (!result.success) {
       send(ws, { type: 'error', message: result.error || 'Failed to fetch initial logs' });
@@ -279,6 +305,7 @@ async function authenticateAndStartStream(
       }
     }
   } catch (err) {
+    if (wsStates.get(ws) !== state) return;
     const message = err instanceof Error ? err.message : 'Failed to fetch initial logs';
     send(ws, { type: 'error', message });
     ws.close(1011, 'Initial fetch failed');
@@ -294,12 +321,14 @@ async function authenticateAndStartStream(
   send(ws, { type: 'initial', lines: initialLines, hasMore });
 
   // ── Step 2: Start follow stream ──
+  if (wsStates.get(ws) !== state) return;
   const handlerKey = `${nodeId}:${containerId}`;
-  state.handlerKey = handlerKey;
 
-  registry.registerLogStreamHandler(handlerKey, (lines: string[], ended?: boolean) => {
+  const unsubscribe = registry.registerLogStreamHandler(handlerKey, (lines: string[], ended?: boolean) => {
     void (async () => {
+      if (state.unsubscribe !== unsubscribe) return;
       if (!(await revalidateLogAccess(ws, state, credential, nodeId))) return;
+      if (wsStates.get(ws) !== state || state.unsubscribe !== unsubscribe) return;
       if (ended) {
         send(ws, { type: 'logs_ended' });
         ws.close(1012, 'Log stream ended');
@@ -310,12 +339,14 @@ async function authenticateAndStartStream(
       }
     })();
   });
+  state.unsubscribe = unsubscribe;
 
   // Start follow stream from newest timestamp to avoid duplicates
   // Use since with a tiny offset to skip the last line we already sent
   const newestTs = extractNewestTimestamp(initialLines);
   let result: import('@/grpc/generated/types.js').CommandResult;
   try {
+    if (wsStates.get(ws) !== state) return;
     result = await dispatch.sendDockerLogsCommand(nodeId, containerId, {
       tailLines: 0,
       follow: true,
@@ -323,17 +354,17 @@ async function authenticateAndStartStream(
       since: newestTs,
     });
   } catch (err) {
-    registry.removeLogStreamHandler(handlerKey);
-    state.handlerKey = null;
+    if (wsStates.get(ws) !== state || state.unsubscribe !== unsubscribe) return;
+    releaseLogHandler(state);
     const message = err instanceof Error ? err.message : 'Failed to start log stream';
     send(ws, { type: 'error', message });
     ws.close(1011, 'Stream start failed');
     return;
   }
 
+  if (wsStates.get(ws) !== state || state.unsubscribe !== unsubscribe) return;
   if (!result.success) {
-    registry.removeLogStreamHandler(handlerKey);
-    state.handlerKey = null;
+    releaseLogHandler(state);
     send(ws, { type: 'error', message: result.error || 'Failed to start log stream' });
     ws.close(1011, 'Stream start failed');
     return;
@@ -363,6 +394,7 @@ async function handleLoadMore(
       timestamps: true,
       until: exclusiveUntil,
     });
+    if (wsStates.get(ws) !== state) return;
 
     if (!result.success) {
       send(ws, { type: 'error', message: result.error || 'Failed to load more logs' });
@@ -390,7 +422,7 @@ async function handleLoadMore(
     const hasMore = lines.length >= BATCH_SIZE;
     send(ws, { type: 'history', lines, hasMore });
   } finally {
-    state.loadingMore = false;
+    if (wsStates.get(ws) === state) state.loadingMore = false;
   }
 }
 
@@ -398,16 +430,18 @@ async function revalidateLogAccess(
   ws: WSContext,
   state: LogStreamWSState,
   credential: WebSocketCredential | null,
-  nodeId: string,
+  _nodeId: string,
   emitPong = false
 ): Promise<boolean> {
-  const user = state.scopeResourceId ? await authorizeLogAccess(credential, nodeId, state.scopeResourceId) : null;
+  if (wsStates.get(ws) !== state) return false;
+  const user =
+    state.scopeNodeId && state.scopeResourceId
+      ? await authorizeLogAccess(credential, state.scopeNodeId, state.scopeResourceId)
+      : null;
+  if (wsStates.get(ws) !== state) return false;
   if (!user) {
     state.authenticated = false;
-    if (state.handlerKey) {
-      container.resolve(NodeRegistryService).removeLogStreamHandler(state.handlerKey);
-      state.handlerKey = null;
-    }
+    cleanupLogStream(ws, state);
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     try {
       ws.close(1008, 'Authentication failed');

@@ -101,6 +101,15 @@ export function TerminalConsole({
     if (!mountedRef.current) return;
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     reconnectTimer.current = setTimeout(() => {
+      reconnectTimer.current = null;
+      const currentSocket = wsRef.current;
+      if (
+        currentSocket &&
+        (currentSocket.readyState === WebSocket.CONNECTING ||
+          currentSocket.readyState === WebSocket.OPEN)
+      ) {
+        return;
+      }
       connectRef.current?.();
     }, 3000);
   }, []);
@@ -120,9 +129,14 @@ export function TerminalConsole({
   }, [resolvedTheme]);
 
   const connect = useCallback(async () => {
-    if (wsRef.current) {
-      wsRef.current.close();
+    const previousSocket = wsRef.current;
+    if (previousSocket) {
       wsRef.current = null;
+      previousSocket.onopen = null;
+      previousSocket.onmessage = null;
+      previousSocket.onclose = null;
+      previousSocket.onerror = null;
+      previousSocket.close();
     }
 
     if (!mountedRef.current) return;
@@ -185,10 +199,17 @@ export function TerminalConsole({
         resizeDisposable.dispose();
         dataDisposable.dispose();
         terminal.dispose();
-        wsRef.current?.close();
+        const activeSocket = wsRef.current;
+        wsRef.current = null;
+        if (activeSocket) {
+          activeSocket.onopen = null;
+          activeSocket.onmessage = null;
+          activeSocket.onclose = null;
+          activeSocket.onerror = null;
+          activeSocket.close();
+        }
         terminalRef.current = null;
         fitRef.current = null;
-        wsRef.current = null;
       };
     }
 
@@ -208,7 +229,11 @@ export function TerminalConsole({
     authFailedRef.current = false;
 
     ws.onopen = () => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || wsRef.current !== ws) return;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
       terminal.focus();
       sendTerminalResize(ws, terminal.rows, terminal.cols);
     };
@@ -216,6 +241,7 @@ export function TerminalConsole({
     let cleared = false;
 
     ws.onmessage = (evt) => {
+      if (wsRef.current !== ws) return;
       try {
         const msg = JSON.parse(evt.data);
         if (msg.type === "connected") {
@@ -238,8 +264,7 @@ export function TerminalConsole({
           if (normalized.length > 0) terminal.write(normalized);
         } else if (msg.type === "exit") {
           terminal.write(`\r\nProcess exited (code ${msg.exitCode}). Reconnecting...\r\n`);
-          isReconnect.current = false;
-          scheduleReconnect();
+          isReconnect.current = true;
         } else if (msg.type === "auth_error") {
           authFailedRef.current = true;
           terminal.write(`\r\nAccess denied: ${msg.message}\r\n`);
@@ -257,7 +282,8 @@ export function TerminalConsole({
     };
 
     ws.onclose = () => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || wsRef.current !== ws) return;
+      wsRef.current = null;
       if (authFailedRef.current) return;
       terminal.write(`\r\nConnection lost. Reconnecting...\r\n`);
       isReconnect.current = true;
@@ -265,11 +291,9 @@ export function TerminalConsole({
     };
 
     ws.onerror = () => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || wsRef.current !== ws) return;
       if (authFailedRef.current) return;
-      terminal.write(`\r\nConnection error. Reconnecting...\r\n`);
-      isReconnect.current = true;
-      scheduleReconnect();
+      terminal.write(`\r\nConnection error. Waiting for reconnect...\r\n`);
     };
   }, [scheduleReconnect, wsFactory, connectLabel, getTerminalTheme]);
 

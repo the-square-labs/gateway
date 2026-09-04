@@ -331,6 +331,28 @@ describe("eventStream", () => {
     unsubscribe();
   });
 
+  it("dispatches proxy health samples without invalidating broad proxy and dashboard caches", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const handler = vi.fn();
+
+    const unsubscribe = eventStream.subscribe("proxy.host.changed", handler);
+    eventStream.start();
+    vi.runAllTimers();
+
+    const socket = MockWebSocket.instances[0];
+    expect(socket).toBeDefined();
+    socket.open();
+
+    const payload = { id: "proxy-1", action: "health.sampled", health_status: "online" };
+    socket.emit({ type: "event", channel: "proxy.host.changed", payload });
+
+    expect(invalidateCache).not.toHaveBeenCalledWith("req:/api/proxy-hosts");
+    expect(invalidateCache).not.toHaveBeenCalledWith("req:/api/monitoring/dashboard");
+    expect(handler).toHaveBeenCalledWith(payload);
+
+    unsubscribe();
+  });
+
   it("invalidates request and warmed projection namespaces for session-wide events", async () => {
     const { eventStream } = await import("@/services/event-stream");
     const unsubs = [

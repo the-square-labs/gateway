@@ -17,6 +17,12 @@ import type { PageArtifactStore } from '../artifacts/page-artifact-store.js';
 import type { PageProfileRuntimeAdapter } from '../profile/page-profile.service.js';
 import { renderPageHostname, withPageProfileLock } from '../profile/page-profile.service.js';
 import { withPageDefaultRuntimeConfigLock } from '../runtime-config/page-runtime-config.service.js';
+import {
+  bindingInspectionKey,
+  bindingInspectionMatches,
+  type PageBindingExpectation,
+  type PageBindingInspection,
+} from './page-binding-inspection.js';
 
 const PROFILE_ID = 'default';
 
@@ -99,6 +105,124 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
     private readonly certificates: NginxCertificateDistributionService
   ) {}
 
+  async supportsInspection(nodeId: string): Promise<boolean> {
+    return (await this.dispatch.supportsPagesReconciliation?.(nodeId)) === true;
+  }
+
+  async inspectBindings(
+    bindings: Array<{ nodeId: string; expectation: PageBindingExpectation }>
+  ): Promise<PageBindingInspection> {
+    const matches: PageBindingInspection = new Map();
+    const byNode = new Map<string, PageBindingExpectation[]>();
+    for (const { nodeId, expectation } of bindings) {
+      const batch = byNode.get(nodeId) ?? [];
+      batch.push(expectation);
+      byNode.set(nodeId, batch);
+    }
+    for (const [nodeId, expected] of byNode) {
+      // Bounded command payloads; no snapshot or verification survives a cycle.
+      for (let start = 0; start < expected.length; start += 64) {
+        const batch = expected.slice(start, start + 64);
+        let result: { matches?: unknown };
+        try {
+          result = await this.dispatch.sendPagesCommand<{ matches?: unknown }>(nodeId, {
+            pagesInventory: { expectationsJson: Buffer.from(JSON.stringify(batch)) },
+          });
+        } catch {
+          // No proof means no fast path. Preserve per-binding recovery and
+          // failure reporting instead of aborting unrelated node reconciliation.
+          continue;
+        }
+        if (!Array.isArray(result.matches) || result.matches.length !== batch.length) continue;
+        const matched = result.matches;
+        batch.forEach((binding, index) => {
+          matches.set(bindingInspectionKey(nodeId, binding), {
+            expectation: structuredClone(binding),
+            matches: matched[index] === true,
+          });
+        });
+      }
+    }
+    return matches;
+  }
+
+  async routeExpectation(input: {
+    routeId: string;
+    deploymentId: string;
+    generation: number;
+    stateGeneration: number;
+    runtimeConfig: Record<string, unknown>;
+  }): Promise<PageBindingExpectation | null> {
+    const [deployment] = await this.db
+      .select({ sha256: pageDeployments.artifactSha256, size: pageDeployments.compressedSizeBytes })
+      .from(pageDeployments)
+      .where(and(eq(pageDeployments.id, input.deploymentId), eq(pageDeployments.status, 'ready')))
+      .limit(1);
+    if (!deployment?.sha256 || !deployment.size || input.generation <= 0) return null;
+    return {
+      kind: 'route',
+      id: input.routeId,
+      deploymentId: input.deploymentId,
+      sha256: deployment.sha256,
+      size: deployment.size,
+      generation: input.generation,
+      stateGeneration: input.stateGeneration,
+      runtimeConfig: input.runtimeConfig,
+    };
+  }
+
+  private async previewExpectation(
+    nodeId: string,
+    deploymentId: string,
+    hostname: string,
+    certificate: { certificateId: string; certificateVersion: string }
+  ): Promise<PageBindingExpectation | null> {
+    const [state] = await this.db
+      .select({
+        generation: pageDeploymentReplicas.runtimeConfigGeneration,
+        sourceGeneration: pageRuntimeConfigs.generation,
+        value: pageRuntimeConfigs.value,
+        sha256: pageDeployments.artifactSha256,
+        size: pageDeployments.compressedSizeBytes,
+        spaFallback: pageProjects.spaFallback,
+        fallbackUrl: pageProjects.fallbackUrl,
+      })
+      .from(pageDeploymentReplicas)
+      .innerJoin(pageDeployments, eq(pageDeploymentReplicas.deploymentId, pageDeployments.id))
+      .innerJoin(pageProjects, eq(pageDeployments.projectId, pageProjects.id))
+      .innerJoin(
+        pageRuntimeConfigs,
+        and(eq(pageRuntimeConfigs.projectId, pageDeployments.projectId), isNull(pageRuntimeConfigs.tagId))
+      )
+      .where(
+        and(
+          eq(pageDeploymentReplicas.nodeId, nodeId),
+          eq(pageDeploymentReplicas.deploymentId, deploymentId),
+          eq(pageDeploymentReplicas.purpose, 'preview'),
+          eq(pageDeploymentReplicas.referenceId, hostname),
+          eq(pageDeploymentReplicas.status, 'ready'),
+          eq(pageDeployments.status, 'ready'),
+          eq(pageProjects.nodeId, nodeId)
+        )
+      )
+      .limit(1);
+    if (!state?.sha256 || !state.size || state.generation <= 0) return null;
+    return {
+      kind: 'preview',
+      id: hostname,
+      deploymentId,
+      sha256: state.sha256,
+      size: state.size,
+      // A disk generation ahead of the replica row still needs reconciliation.
+      generation: state.generation,
+      stateGeneration: state.sourceGeneration,
+      runtimeConfig: state.value,
+      ...certificate,
+      spaFallback: state.spaFallback,
+      fallbackUrl: state.fallbackUrl ?? '',
+    };
+  }
+
   async preflight(nodeId: string, requiredBytes: number): Promise<void> {
     const result = await this.dispatch.sendPagesCommand<{ available?: boolean }>(nodeId, {
       pagesStoragePreflight: { requiredBytes: String(requiredBytes) },
@@ -129,37 +253,62 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
       .from(pageDeployments)
       .innerJoin(pageProjects, eq(pageDeployments.projectId, pageProjects.id))
       .where(eq(pageDeployments.status, 'ready'));
-    const certificates = new Map<string, { certificateId: string; certificateVersion: string }>();
+    const byNode = new Map<string, typeof rows>();
     for (const row of rows) {
       if (!row.nodeId) continue;
-      let certificate = certificates.get(row.nodeId);
-      if (!certificate) {
-        certificate = await this.certificates.deployForPages(row.nodeId, profile.certificateId);
-        certificates.set(row.nodeId, certificate);
-      }
-      const hostname =
-        row.deployment.previewHostname ??
-        renderPageHostname(profile.labelTemplate, row.deployment.publicSlug, row.projectSlug, profile.domain);
-      if (!row.deployment.previewHostname) {
-        const [assigned] = await this.db
-          .update(pageDeployments)
-          .set({ previewHostname: hostname, updatedAt: new Date() })
-          .where(and(eq(pageDeployments.id, row.deployment.id), isNull(pageDeployments.previewHostname)))
-          .returning({ previewHostname: pageDeployments.previewHostname });
-        if (!assigned) {
-          const [current] = await this.db
-            .select({ previewHostname: pageDeployments.previewHostname })
-            .from(pageDeployments)
-            .where(eq(pageDeployments.id, row.deployment.id))
-            .limit(1);
-          if (!current?.previewHostname)
-            throw new AppError(409, 'PAGES_PREVIEW_ASSIGNMENT_FAILED', 'Preview hostname changed');
-          await this.materializePreview(row.nodeId, row.deployment.id, current.previewHostname, certificate);
-          continue;
-        }
-      }
-      await this.materializePreview(row.nodeId, row.deployment.id, hostname, certificate);
+      const nodeRows = byNode.get(row.nodeId) ?? [];
+      nodeRows.push(row);
+      byNode.set(row.nodeId, nodeRows);
     }
+    const failures: unknown[] = [];
+    for (const [nodeId, nodeRows] of byNode) {
+      try {
+        // Finish each node independently: an unavailable certificate/daemon on
+        // another node must not prevent healthy previews from recovering.
+        const certificate = await this.certificates.deployForPages(nodeId, profile.certificateId);
+        const pending: Array<{ deploymentId: string; hostname: string }> = [];
+        for (const row of nodeRows) {
+          let hostname =
+            row.deployment.previewHostname ??
+            renderPageHostname(profile.labelTemplate, row.deployment.publicSlug, row.projectSlug, profile.domain);
+          if (!row.deployment.previewHostname) {
+            const [assigned] = await this.db
+              .update(pageDeployments)
+              .set({ previewHostname: hostname, updatedAt: new Date() })
+              .where(and(eq(pageDeployments.id, row.deployment.id), isNull(pageDeployments.previewHostname)))
+              .returning({ previewHostname: pageDeployments.previewHostname });
+            if (!assigned) {
+              const [current] = await this.db
+                .select({ previewHostname: pageDeployments.previewHostname })
+                .from(pageDeployments)
+                .where(eq(pageDeployments.id, row.deployment.id))
+                .limit(1);
+              if (!current?.previewHostname)
+                throw new AppError(409, 'PAGES_PREVIEW_ASSIGNMENT_FAILED', 'Preview hostname changed');
+              hostname = current.previewHostname;
+            }
+          }
+          pending.push({ deploymentId: row.deployment.id, hostname });
+        }
+        const supported = await this.supportsInspection(nodeId);
+        const bindings: Array<{ nodeId: string; expectation: PageBindingExpectation }> = [];
+        if (supported) {
+          for (const item of pending) {
+            const expectation = await this.previewExpectation(nodeId, item.deploymentId, item.hostname, certificate);
+            if (expectation) bindings.push({ nodeId, expectation });
+          }
+        }
+        const inspection = await this.inspectBindings(bindings);
+        for (const item of pending) {
+          await this.materializePreview(nodeId, item.deploymentId, item.hostname, certificate, inspection);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    // Preserve specific capability/error codes for the usual single failure.
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, 'Pages preview reconciliation failed on some nodes');
   }
 
   async disable(profile: { domain: string }): Promise<void> {
@@ -589,11 +738,27 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
     nodeId: string,
     deploymentId: string,
     hostname: string,
-    certificate: { certificateId: string; certificateVersion: string }
+    certificate: { certificateId: string; certificateVersion: string },
+    inspection?: PageBindingInspection
   ): Promise<void> {
     try {
       await withPageProfileLock(this.db, async () => {
         await this.assertProfileEnabled();
+        let repairExisting = false;
+        if (inspection?.has(bindingInspectionKey(nodeId, { kind: 'preview', id: hostname }))) {
+          const project = await this.previewProjectConfig(deploymentId);
+          const unchanged = await withPageDefaultRuntimeConfigLock(this.db, project.projectId, () =>
+            this.withDeploymentLock(`${nodeId}:${deploymentId}`, async () =>
+              bindingInspectionMatches(
+                inspection,
+                nodeId,
+                await this.previewExpectation(nodeId, deploymentId, hostname, certificate)
+              )
+            )
+          );
+          if (unchanged) return;
+          repairExisting = true;
+        }
         await this.ensureRelease(nodeId, deploymentId, 'preview', hostname);
         const project = await this.previewProjectConfig(deploymentId);
         // Take the project lock before the deployment lock. Default publication
@@ -603,7 +768,12 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
             for (let attempt = 0; attempt < 8; attempt += 1) {
               // The profile lock serializes the complete materialization and
               // ready transition with disable().
-              const { sourceGeneration } = await this.ensurePreviewRuntimeConfig(nodeId, deploymentId, hostname);
+              const { sourceGeneration } = await this.ensurePreviewRuntimeConfig(
+                nodeId,
+                deploymentId,
+                hostname,
+                repairExisting && attempt === 0
+              );
               await this.dispatch.sendPagesCommand(nodeId, {
                 pagesMaterializePreview: {
                   profileId: PROFILE_ID,
@@ -671,7 +841,8 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
   private async ensurePreviewRuntimeConfig(
     nodeId: string,
     deploymentId: string,
-    hostname: string
+    hostname: string,
+    advanceGeneration = false
   ): Promise<{ sourceGeneration: number }> {
     const [state] = await this.db
       .select({
@@ -699,7 +870,11 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
       throw new AppError(500, 'PAGE_RUNTIME_CONFIG_DEFAULT_MISSING', 'Default runtime configuration is missing');
     // Replica generations are independent immutable daemon files. Keep them
     // monotonic while also catching up to a newer Default source generation.
-    const generation = Math.max(state.runtimeConfigGeneration, state.defaultGeneration, 1);
+    const generation = Math.max(
+      state.runtimeConfigGeneration + (advanceGeneration ? 1 : 0),
+      state.defaultGeneration,
+      1
+    );
     await this.publishRuntimeConfig(nodeId, 'preview', hostname, generation, state.value);
     try {
       const [updated] = await this.db

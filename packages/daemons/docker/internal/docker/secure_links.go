@@ -36,6 +36,7 @@ const (
 )
 
 var immutableConnectorImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
+var officialConnectorReleaseTagPattern = regexp.MustCompile(`^ghcr\.io/the-square-labs/gateway/secure-link-connector:v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-relay$`)
 var proxySecureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var errSecureLinkTargetUnavailable = errors.New("target container is unavailable")
 
@@ -130,8 +131,8 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 	}
 
 	image := bindings[0].ConnectorImage
-	if image != developmentSecureLinkImage && !immutableConnectorImagePattern.MatchString(image) {
-		return nil, errors.New("secure-link connector image must use an immutable sha256 digest")
+	if !allowedSecureLinkConnectorImage(image) {
+		return nil, errors.New("secure-link connector image must use an immutable sha256 digest or an official Gateway Relay release tag")
 	}
 	seen := map[string]struct{}{}
 	for _, binding := range bindings {
@@ -246,6 +247,12 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 	return statuses, nil
 }
 
+func allowedSecureLinkConnectorImage(image string) bool {
+	return image == developmentSecureLinkImage ||
+		immutableConnectorImagePattern.MatchString(image) ||
+		officialConnectorReleaseTagPattern.MatchString(image)
+}
+
 // failClosed prevents a partially applied connector state from accepting new
 // relay streams. The committed snapshot remains available for a clean retry.
 func (m *dockerSecureLinkManager) failClosed(ctx context.Context) {
@@ -287,8 +294,8 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 			return fmt.Errorf("inspect secure-link connector: %w", err)
 		}
 		if image != developmentSecureLinkImage {
-			if err := m.plugin.client.pullImageIfNeeded(ctx, image, ""); err != nil {
-				return fmt.Errorf("pull secure-link connector: %w", err)
+			if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
+				return fmt.Errorf("ensure secure-link connector image: %w", err)
 			}
 		}
 		_ = os.Remove(m.socketPath)
@@ -375,7 +382,9 @@ func managedSecureLinkConnector(inspect container.InspectResponse, controlDirect
 	config := inspect.Config
 	host := inspect.HostConfig
 	if config == nil || host == nil ||
-		(config.Image != developmentSecureLinkImage && !immutableConnectorImagePattern.MatchString(config.Image)) ||
+		(config.Image != developmentSecureLinkImage &&
+			!immutableConnectorImagePattern.MatchString(config.Image) &&
+			!officialConnectorReleaseTagPattern.MatchString(config.Image)) ||
 		config.User != "65532:65532" ||
 		config.Labels["wiolett.gateway.managed"] != "secure-link-connector" ||
 		!validSecureLinkConnectorEnv(config.Env) ||

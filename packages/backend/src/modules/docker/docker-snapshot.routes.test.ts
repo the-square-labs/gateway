@@ -6,6 +6,8 @@ import { errorHandler } from '@/middleware/error-handler.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
+import { DockerWorkloadResolverService } from './availability/docker-workload-resolver.service.js';
 import { DockerManagementService } from './docker.service.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
 import { registerImageRoutes } from './docker-image.routes.js';
@@ -90,6 +92,7 @@ async function setup() {
     })),
     listContainers: vi.fn(),
     listGpuAttachmentUsers: vi.fn(),
+    inspectContainer: vi.fn(),
   };
   const dispatch = {
     sendDockerContainerCommand: vi.fn(),
@@ -98,11 +101,21 @@ async function setup() {
     sendDockerNetworkCommand: vi.fn(),
   };
   const reconciler = { enqueue: vi.fn(), refreshNow: vi.fn().mockResolvedValue(undefined) };
+  const availability = {
+    listContainerSurfaceStates: vi.fn().mockResolvedValue({}),
+    resolveRuntimeAccessIdentity: vi.fn().mockResolvedValue(null),
+  };
+  const workloads = {
+    resolve: vi.fn().mockResolvedValue(null),
+    resolveContainerRuntimeTarget: vi.fn().mockResolvedValue(null),
+  };
   container.registerInstance(DockerSnapshotService, snapshots);
   container.registerInstance(DockerManagementService, docker as never);
   container.registerInstance(NodeDispatchService, dispatch as never);
   container.registerInstance(DockerSnapshotReconciler, reconciler as never);
-  return { snapshots, docker, dispatch, reconciler };
+  container.registerInstance(DockerAvailabilityService, availability as never);
+  container.registerInstance(DockerWorkloadResolverService, workloads as never);
+  return { snapshots, docker, dispatch, reconciler, availability, workloads };
 }
 
 function appWithScopes(scopes: string[]) {
@@ -279,6 +292,44 @@ describe('Docker snapshot routes', () => {
     expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
   });
 
+  it('uses the same logical Availability status and source image in aggregate and node lists', async () => {
+    const { availability } = await setup();
+    availability.listContainerSurfaceStates.mockResolvedValue({
+      'container:one': {
+        status: 'online',
+        healthStatus: 'online',
+        serving: 2,
+        desired: 2,
+        sourceImageReference: 'nginx:1.29-alpine',
+      },
+    });
+    const app = appWithScopes([`docker:containers:view:${NODE_1}`]);
+    registerContainerRoutes(app);
+    registerDockerSnapshotRoutes(app);
+
+    const aggregate = await app.request(`/containers?nodeId=${NODE_1}`);
+    const direct = await app.request(`/nodes/${NODE_1}/containers`);
+
+    await expect(aggregate.json()).resolves.toMatchObject({
+      data: [
+        expect.objectContaining({
+          image: 'nginx:1.29-alpine',
+          availabilityPolicyStatus: 'online',
+          availabilityHealthStatus: 'online',
+        }),
+      ],
+    });
+    await expect(direct.json()).resolves.toMatchObject({
+      data: [
+        expect.objectContaining({
+          image: 'nginx:1.29-alpine',
+          availabilityPolicyStatus: 'online',
+          availabilityHealthStatus: 'online',
+        }),
+      ],
+    });
+  });
+
   it('per-node list GET reads the snapshot and does not call the live list service or dispatch', async () => {
     const { docker, dispatch } = await setup();
     const app = appWithScopes([`docker:containers:view:${NODE_1}`]);
@@ -313,6 +364,51 @@ describe('Docker snapshot routes', () => {
     expect(response.status).toBe(200);
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(1, NODE_1, 'containers');
     expect(reconciler.refreshNow).toHaveBeenNthCalledWith(2, NODE_1, 'container-detail', 'one');
+  });
+
+  it('resolves a logical Availability container directly to its serving runtime', async () => {
+    const { docker, reconciler, workloads } = await setup();
+    workloads.resolveContainerRuntimeTarget.mockResolvedValue({
+      nodeId: NODE_2,
+      containerId: 'runtime-2',
+      placementId: 'placement-2',
+      workload: {
+        policy: {
+          id: 'policy-2',
+          resourceKind: 'container',
+          mode: 'failover',
+        },
+        managementTarget: {
+          nodeId: NODE_1,
+          resourceId: 'availability-container',
+        },
+      },
+    });
+    docker.inspectContainer.mockResolvedValue({ Id: 'runtime-2', Name: '/gwav-container-runtime' });
+    const app = appWithScopes(['docker:containers:view']);
+    registerContainerRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/containers/by-name/availability-container?_t=123`);
+
+    expect(response.status).toBe(200);
+    expect(docker.inspectContainer).toHaveBeenCalledWith(NODE_2, 'runtime-2');
+    expect(reconciler.refreshNow).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({
+      data: {
+        Id: 'runtime-2',
+        Name: '/availability-container',
+        nodeId: NODE_2,
+        logicalWorkload: {
+          policyId: 'policy-2',
+          mode: 'failover',
+          managementNodeId: NODE_1,
+          managementResourceId: 'availability-container',
+          runtimeNodeId: NODE_2,
+          runtimeContainerId: 'runtime-2',
+          placementId: 'placement-2',
+        },
+      },
+    });
   });
 
   it('cache-busted runtime-ID inspect refreshes the list before the detail snapshot', async () => {

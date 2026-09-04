@@ -28,6 +28,7 @@ import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { PanelShell } from "@/components/common/PanelShell";
 import {
   type ResourceListColumn,
   ResourceListFrame,
@@ -281,33 +282,37 @@ export function FilesTab({
   nodeId,
   containerId,
   scopeResourceId,
+  scopeNodeId = nodeId,
   canBrowse,
   canWrite,
   fetchDirectory,
   operations,
   realtimeEvent = "docker.file.changed",
   realtimeMatches,
+  headerActions,
 }: {
   nodeId: string;
   containerId?: string;
   scopeResourceId?: string;
+  scopeNodeId?: string;
   canBrowse?: boolean;
   canWrite?: boolean;
   fetchDirectory?: (path: string) => Promise<FileEntry[]>;
   operations?: FileManagerOperations;
   realtimeEvent?: string | null;
   realtimeMatches?: (payload: DockerFileChangedPayload) => boolean;
+  headerActions?: ReactNode;
 }) {
   const { hasScope } = useAuthStore();
   const canBrowseFiles =
     canBrowse ??
     hasScope(
-      `docker:containers:files:read:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
+      `docker:containers:files:read:${scopeNodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
     );
   const canWriteFiles =
     canWrite ??
     hasScope(
-      `docker:containers:files:write:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
+      `docker:containers:files:write:${scopeNodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
     );
   const containerOperations = useMemo<FileManagerOperations | undefined>(() => {
     if (!containerId) return undefined;
@@ -976,77 +981,84 @@ export function FilesTab({
         multiple
         onChange={handleUploadChange}
       />
-      {hasTruncatedDirectory && (
-        <div className="mb-3 border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-          Some directories are showing only the first{" "}
-          {roots.find((entry) => entry._listTruncated)?._listLimit ?? 1000} entries.
-        </div>
-      )}
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <RootDropZone
-          disabled={!canMutateFiles}
-          onDropFiles={handleExternalDrop}
-          onDragOverFiles={handleExternalDragOver}
-        >
-          <div onContextMenu={(event) => openContextMenu(event, null)}>
-            <ResourceListFrame minWidth={900}>
-              <ResourceListHeaderTable columns={FILE_TABLE_COLUMNS} />
-              <ResourceListTable
-                columns={FILE_TABLE_COLUMNS}
-                bodyClassName="divide-y divide-border"
-              >
-                {isLoading && (
-                  <tr>
-                    <td
-                      colSpan={FILE_TABLE_COLUMNS.length}
-                      className="p-8 text-center text-muted-foreground text-sm"
-                    >
-                      <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
-                      Loading...
-                    </td>
-                  </tr>
-                )}
-                {!isLoading && loadError && (
-                  <tr>
-                    <td
-                      colSpan={FILE_TABLE_COLUMNS.length}
-                      className="p-8 text-center text-muted-foreground text-sm"
-                    >
-                      {loadError}
-                    </td>
-                  </tr>
-                )}
-                {!isLoading && !loadError && roots.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={FILE_TABLE_COLUMNS.length}
-                      className="p-8 text-center text-muted-foreground text-sm"
-                    >
-                      Empty directory
-                    </td>
-                  </tr>
-                )}
-                {!isLoading &&
-                  roots.map((node) => (
-                    <TreeRow
-                      key={node.path}
-                      node={node}
-                      depth={0}
-                      canDrag={canMutateFiles}
-                      pendingMovePaths={pendingMovePaths}
-                      openMaxBytes={openMaxBytes}
-                      onToggle={toggleDir}
-                      onOpenFile={canOpenFiles ? openFile : undefined}
-                      onContextMenu={openContextMenu}
-                      onDropFiles={handleExternalDrop}
-                      onDragOverFiles={handleExternalDragOver}
-                    />
-                  ))}
-              </ResourceListTable>
-            </ResourceListFrame>
+      <PanelShell
+        title="Files"
+        description="Browse and manage files in the selected container instance"
+        actions={headerActions}
+        bodyClassName="min-w-0"
+      >
+        {hasTruncatedDirectory && (
+          <div className="border-b border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+            Some directories are showing only the first{" "}
+            {roots.find((entry) => entry._listTruncated)?._listLimit ?? 1000} entries.
           </div>
-        </RootDropZone>
-      </DndContext>
+        )}
+        <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+          <RootDropZone
+            disabled={!canMutateFiles}
+            onDropFiles={handleExternalDrop}
+            onDragOverFiles={handleExternalDragOver}
+          >
+            <div onContextMenu={(event) => openContextMenu(event, null)}>
+              <ResourceListFrame minWidth={900} className="border-0">
+                <ResourceListHeaderTable columns={FILE_TABLE_COLUMNS} />
+                <ResourceListTable
+                  columns={FILE_TABLE_COLUMNS}
+                  bodyClassName="divide-y divide-border"
+                >
+                  {isLoading && (
+                    <tr>
+                      <td
+                        colSpan={FILE_TABLE_COLUMNS.length}
+                        className="p-8 text-center text-muted-foreground text-sm"
+                      >
+                        <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
+                        Loading...
+                      </td>
+                    </tr>
+                  )}
+                  {!isLoading && loadError && (
+                    <tr>
+                      <td
+                        colSpan={FILE_TABLE_COLUMNS.length}
+                        className="p-8 text-center text-muted-foreground text-sm"
+                      >
+                        {loadError}
+                      </td>
+                    </tr>
+                  )}
+                  {!isLoading && !loadError && roots.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={FILE_TABLE_COLUMNS.length}
+                        className="p-8 text-center text-muted-foreground text-sm"
+                      >
+                        Empty directory
+                      </td>
+                    </tr>
+                  )}
+                  {!isLoading &&
+                    roots.map((node) => (
+                      <TreeRow
+                        key={node.path}
+                        node={node}
+                        depth={0}
+                        canDrag={canMutateFiles}
+                        pendingMovePaths={pendingMovePaths}
+                        openMaxBytes={openMaxBytes}
+                        onToggle={toggleDir}
+                        onOpenFile={canOpenFiles ? openFile : undefined}
+                        onContextMenu={openContextMenu}
+                        onDropFiles={handleExternalDrop}
+                        onDragOverFiles={handleExternalDragOver}
+                      />
+                    ))}
+                </ResourceListTable>
+              </ResourceListFrame>
+            </div>
+          </RootDropZone>
+        </DndContext>
+      </PanelShell>
       {contextMenu && (
         <FileContextMenu
           x={contextMenu.x}

@@ -77,8 +77,10 @@ function createService(connected = true) {
       })),
     })),
   };
-  const service = new DockerSnapshotService(db as never, cache as never, registry as never, new EventBusService());
-  return { service, cache, registry };
+  const eventBus = new EventBusService();
+  const publish = vi.spyOn(eventBus, 'publish');
+  const service = new DockerSnapshotService(db as never, cache as never, registry as never, eventBus);
+  return { service, cache, registry, publish };
 }
 
 describe('DockerSnapshotService', () => {
@@ -94,6 +96,88 @@ describe('DockerSnapshotService', () => {
     expect(failed.revision).toBe(1);
     expect(failed.lastError).toBe('timeout');
     expect(service.availability('node-1', failed)).toBe('unavailable');
+  });
+
+  it('does not advance list revisions or publish events for identical successful snapshots', async () => {
+    const { service, publish } = createService();
+
+    const first = await service.replaceList('node-1', 'containers', [{ id: 'c1', state: 'running' }]);
+    await service.markListRefreshing('node-1', 'containers');
+    const second = await service.replaceList('node-1', 'containers', [{ id: 'c1', state: 'running' }]);
+
+    expect(first.revision).toBe(1);
+    expect(second.revision).toBe(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates container uptime text without publishing a material snapshot change', async () => {
+    const { service, publish } = createService();
+
+    await service.replaceList('node-1', 'containers', [
+      { id: 'c1', state: 'running', status: 'Up 5 seconds (healthy)' },
+    ]);
+    const refreshed = await service.replaceList('node-1', 'containers', [
+      { id: 'c1', state: 'running', status: 'Up 15 seconds (healthy)' },
+    ]);
+
+    expect(refreshed.revision).toBe(1);
+    expect(refreshed.data).toEqual([{ id: 'c1', state: 'running', status: 'Up 15 seconds (healthy)' }]);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish when Docker returns unordered container and port sets in another order', async () => {
+    const { service, publish } = createService();
+
+    await service.replaceList('node-1', 'containers', [
+      {
+        id: 'c2',
+        state: 'running',
+        ports: [
+          { privatePort: 80, type: 'tcp' },
+          { privatePort: 18080, publicPort: 18080, type: 'tcp', ip: '127.0.0.1' },
+        ],
+      },
+      { id: 'c1', state: 'running', ports: [] },
+    ]);
+    const refreshed = await service.replaceList('node-1', 'containers', [
+      { id: 'c1', state: 'running', ports: [] },
+      {
+        id: 'c2',
+        state: 'running',
+        ports: [
+          { privatePort: 18080, publicPort: 18080, type: 'tcp', ip: '127.0.0.1' },
+          { privatePort: 80, type: 'tcp' },
+        ],
+      },
+    ]);
+
+    expect(refreshed.revision).toBe(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes when a container health suffix changes', async () => {
+    const { service, publish } = createService();
+
+    await service.replaceList('node-1', 'containers', [
+      { id: 'c1', state: 'running', status: 'Up 5 seconds (health: starting)' },
+    ]);
+    const changed = await service.replaceList('node-1', 'containers', [
+      { id: 'c1', state: 'running', status: 'Up 15 seconds (healthy)' },
+    ]);
+
+    expect(changed.revision).toBe(2);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not advance detail revisions or publish events for identical successful snapshots', async () => {
+    const { service, publish } = createService();
+
+    const first = await service.replaceDetail('node-1', 'container-detail', 'c1', { Id: 'c1' });
+    const second = await service.replaceDetail('node-1', 'container-detail', 'c1', { Id: 'c1' });
+
+    expect(first?.revision).toBe(1);
+    expect(second?.revision).toBe(1);
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it('stays available while refreshing a previously successful snapshot', async () => {

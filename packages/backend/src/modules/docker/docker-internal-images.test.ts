@@ -12,12 +12,17 @@ describe('Gateway internal image classification', () => {
     ['wiolett/gateway/database-connector@sha256:def', 'database-connector'],
     ['gateway-secure-link-connector:dev', 'secure-link-connector'],
     ['docker.io/docker/compose-bin@sha256:123', 'compose-sidecar'],
+    ['127.0.0.1:5443/gateway/builds/source/web@sha256:456', 'build-artifact'],
+    ['gateway/builds/source/web:build-1', 'build-artifact'],
   ] as const)('recognizes %s', (reference, kind) => {
     expect(gatewayInternalImageKind({ RepoDigests: [reference] })).toBe(kind);
   });
 
   it('does not hide user images with similar words', () => {
-    const user = { Id: 'user', RepoTags: ['acme/secure-link-dashboard:latest'] };
+    const user = {
+      Id: 'user',
+      RepoTags: ['acme/secure-link-dashboard:latest', 'acme/gateway-builds-dashboard:latest'],
+    };
     const internal = {
       Id: 'internal',
       RepoDigests: ['the-square-labs/gateway/secure-link-connector@sha256:abc'],

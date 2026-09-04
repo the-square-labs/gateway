@@ -16,6 +16,9 @@ func TestRegistryRuntimeBindingsArePullOnly(t *testing.T) {
 	if _, err := validateRegistryBindingActions("builder", []string{"pull", "push"}); err != nil {
 		t.Fatalf("builder push/pull was rejected: %v", err)
 	}
+	if _, err := validateRegistryBindingActions("mirror", []string{"pull", "push"}); err != nil {
+		t.Fatalf("availability mirror push/pull was rejected: %v", err)
+	}
 	if _, err := validateRegistryBindingActions("builder", []string{"delete"}); err == nil {
 		t.Fatal("unsupported delete action was accepted")
 	}
@@ -30,6 +33,12 @@ func TestRegistryBindingRoleMatchesDaemonProfile(t *testing.T) {
 	}
 	if err := validateRegistryBindingProfile("", "runtime"); err != nil {
 		t.Fatalf("runtime binding was rejected: %v", err)
+	}
+	if err := validateRegistryBindingProfile("", "mirror"); err != nil {
+		t.Fatalf("availability mirror binding was rejected: %v", err)
+	}
+	if err := validateRegistryBindingProfile("builder", "mirror"); err == nil {
+		t.Fatal("builder profile accepted an availability mirror binding")
 	}
 	if err := validateRegistryBindingProfile("", "builder"); err == nil {
 		t.Fatal("runtime profile accepted a builder binding")

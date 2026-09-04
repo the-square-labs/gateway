@@ -47,6 +47,44 @@ function createService(dispatch: { sendDockerContainerCommand: ReturnType<typeof
 }
 
 describe('DockerManagementService.removeContainer', () => {
+  it.each([true, false])('cleans single-mode metadata only after successful Docker removal (%s)', async (success) => {
+    const dispatch = {
+      sendDockerContainerCommand: vi
+        .fn()
+        .mockImplementation(async (_node, action) =>
+          action === 'remove' ? { success, error: 'remove rejected' } : inspectResult('exited')
+        ),
+    };
+    const { service } = createService(dispatch);
+    const containerRemoved = vi.fn().mockResolvedValue(undefined);
+    service.setAvailabilityMutationCoordinator({ containerRemoved } as never);
+    if (success) {
+      await service.removeContainer('node-1', 'container-1', false, 'user-1');
+      expect(containerRemoved).toHaveBeenCalledWith('node-1', 'api');
+      expect(containerRemoved.mock.invocationCallOrder[0]).toBeGreaterThan(
+        dispatch.sendDockerContainerCommand.mock.invocationCallOrder.at(-1)!
+      );
+    } else {
+      await expect(service.removeContainer('node-1', 'container-1', false, 'user-1')).rejects.toThrow();
+      expect(containerRemoved).not.toHaveBeenCalled();
+    }
+  });
+  it('rejects deleting an HA logical resource before inspecting or removing a physical replica', async () => {
+    const dispatch = { sendDockerContainerCommand: vi.fn() };
+    const { service, accessResources } = createService(dispatch);
+    service.setWorkloadResolver({
+      resolveContainerRuntimeTarget: vi.fn().mockResolvedValue({
+        workload: { policy: { mode: 'replicated' } },
+        nodeId: 'other-node',
+        containerId: 'replica',
+      }),
+    } as never);
+    await expect(service.removeContainer('origin', 'logical-name', false, 'user')).rejects.toMatchObject({
+      code: 'AVAILABILITY_PLACEMENT_MANAGED',
+    });
+    expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+    expect(accessResources.removeContainer).not.toHaveBeenCalled();
+  });
   it.each([
     ['running', {}],
     ['exited', { Running: true }],

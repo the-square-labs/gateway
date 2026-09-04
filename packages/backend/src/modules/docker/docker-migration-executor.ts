@@ -6,6 +6,7 @@ import type { CryptoService } from '@/services/crypto.service.js';
 import type { DockerManagementService } from './docker.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import type { DockerEnvironmentService } from './docker-environment.service.js';
+import { assertMigrationAvailabilityAllowed } from './docker-migration-availability.js';
 import { sourceDeploymentSlotEnvironments } from './docker-migration-deployment-runtime.js';
 import type { DockerMigrationDispatchAdapter, MigrationArtifactMetadata } from './docker-migration-dispatch.js';
 import { mergeMigrationEnvironment, migrationEnvironmentOverlays } from './docker-migration-environment.js';
@@ -43,6 +44,7 @@ export class DockerMigrationExecutor {
     progress?: Record<string, unknown>;
     verification?: Record<string, unknown>;
   }> {
+    await assertMigrationAvailabilityAllowed(this.db, row);
     switch (row.phase) {
       case 'preparing':
         return this.prepare(row, 'image');
@@ -74,6 +76,7 @@ export class DockerMigrationExecutor {
   }
 
   async rollback(row: MigrationRow): Promise<void> {
+    await assertMigrationAvailabilityAllowed(this.db, row);
     const plan = openMigrationPlan(row, this.crypto);
     const failures: unknown[] = [];
     await this.removeTarget(row, plan).catch((error) => failures.push(error));

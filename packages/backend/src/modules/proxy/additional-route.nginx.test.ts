@@ -221,4 +221,65 @@ describe('managed Additional Route rendering', () => {
     expect(rendered).toContain('location = /api');
     expect(rendered).toContain('upstream gateway_additional_secure_link_55555555_5555_4555_8555_555555555555');
   });
+
+  it('balances an Additional Route across its placement-owned Secure Link sockets', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...baseHost,
+        additionalRoutes: [
+          {
+            id: '66666666-6666-4666-8666-666666666666',
+            path: '/api',
+            targetKind: 'docker_container',
+            forwardScheme: 'http',
+            forwardHost: '127.0.0.1',
+            forwardPort: 8080,
+            secureLinkUpstream: true,
+            secureLinkSocketPath: '/run/gateway-secure-links/original.sock',
+            secureLinkSocketPaths: [
+              '/run/gateway-secure-links/placement-a.sock',
+              '/run/gateway-secure-links/placement-b.sock',
+            ],
+            stripPrefix: false,
+            websocketSupport: false,
+            requestBuffering: true,
+            responseBuffering: true,
+            connectTimeoutSeconds: 60,
+            readTimeoutSeconds: 60,
+            sendTimeoutSeconds: 60,
+          },
+        ],
+      },
+      null
+    );
+
+    expect(rendered).toContain('least_conn;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock;');
+    expect(rendered).not.toContain('server unix:/run/gateway-secure-links/original.sock;');
+  });
+
+  it('balances an Advanced Secure Link across its placement-owned sockets', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...baseHost,
+        additionalSecureLinks: [
+          {
+            id: '77777777-7777-4777-8777-777777777777',
+            name: 'api',
+            scheme: 'http',
+            socketPath: '/run/gateway-secure-links/original.sock',
+            socketPaths: ['/run/gateway-secure-links/placement-a.sock', '/run/gateway-secure-links/placement-b.sock'],
+          },
+        ],
+      },
+      null
+    );
+
+    expect(rendered).toContain('upstream gateway_additional_secure_link_77777777_7777_4777_8777_777777777777');
+    expect(rendered).toContain('least_conn;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock;');
+    expect(rendered).not.toContain('server unix:/run/gateway-secure-links/original.sock;');
+  });
 });

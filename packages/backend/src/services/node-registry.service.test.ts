@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from 'vitest';
 import { NodeRegistryService } from './node-registry.service.js';
 
 describe('NodeRegistryService', () => {
+  it('unsubscribes only the log handler owned by that registration', () => {
+    const registry = new NodeRegistryService({} as never);
+    const oldHandler = vi.fn();
+    const newHandler = vi.fn();
+    const unsubscribeOld = registry.registerLogStreamHandler('node:container', oldHandler);
+    const unsubscribeNew = registry.registerLogStreamHandler('node:container', newHandler);
+
+    unsubscribeOld();
+    unsubscribeOld();
+    registry.handleLogStream('node:container', ['new']);
+    expect(oldHandler).not.toHaveBeenCalled();
+    expect(newHandler).toHaveBeenCalledExactlyOnceWith(['new'], undefined);
+
+    unsubscribeNew();
+    registry.handleLogStream('node:container', ['removed']);
+    expect(newHandler).toHaveBeenCalledTimes(1);
+
+    registry.registerLogStreamHandler('node:container', oldHandler);
+    registry.removeLogStreamHandler('node:container');
+    registry.handleLogStream('node:container', ['legacy removal']);
+    expect(oldHandler).not.toHaveBeenCalled();
+  });
+
   function makeDb() {
     return {
       select: vi.fn((selection?: Record<string, unknown>) => ({

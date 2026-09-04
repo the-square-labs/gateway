@@ -1,4 +1,8 @@
-export type GatewayInternalImageKind = 'secure-link-connector' | 'database-connector' | 'compose-sidecar';
+export type GatewayInternalImageKind =
+  | 'secure-link-connector'
+  | 'database-connector'
+  | 'compose-sidecar'
+  | 'build-artifact';
 
 type DockerImageLike = Record<string, any>;
 
@@ -75,6 +79,9 @@ export function gatewayInternalImageKind(image: DockerImageLike): GatewayInterna
     }
     if (repository === 'docker/compose-bin' || repository === 'docker.io/docker/compose-bin') {
       return 'compose-sidecar';
+    }
+    if (repository.startsWith('gateway/builds/') || repository.includes('/gateway/builds/')) {
+      return 'build-artifact';
     }
   }
   return null;

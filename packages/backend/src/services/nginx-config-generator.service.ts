@@ -26,12 +26,14 @@ export interface ProxyHostConfig {
   upstreamIpv6Enabled?: boolean;
   secureLinkUpstream?: boolean;
   secureLinkSocketPath?: string;
+  secureLinkSocketPaths?: string[];
   registryAuthRealm?: string;
   additionalSecureLinks?: Array<{
     id: string;
     name: string;
     scheme: 'http' | 'https';
     socketPath: string;
+    socketPaths?: string[];
   }>;
   sslEnabled: boolean;
   sslForced: boolean;
@@ -71,6 +73,7 @@ export interface ProxyAdditionalRouteConfig {
   forwardPort: number | null;
   secureLinkUpstream?: boolean;
   secureLinkSocketPath?: string;
+  secureLinkSocketPaths?: string[];
   pagesRouteIncludePath?: string;
   pagesRuntimeConfigPath?: string;
   pagesSpaFallback?: boolean;
@@ -185,7 +188,11 @@ export class NginxConfigGenerator {
 
     if (host.secureLinkUpstream) {
       lines.push(`upstream ${secureLinkUpstreamName} {`);
-      lines.push(`    server unix:${host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`};`);
+      const socketPaths = host.secureLinkSocketPaths?.length
+        ? host.secureLinkSocketPaths
+        : [host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`];
+      if (socketPaths.length > 1) lines.push('    least_conn;');
+      for (const socketPath of socketPaths) lines.push(`    server unix:${socketPath};`);
       lines.push('    keepalive 64;');
       lines.push('}');
       lines.push('');

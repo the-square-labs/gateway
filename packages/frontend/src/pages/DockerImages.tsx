@@ -144,7 +144,7 @@ export function DockerImages({
   const loadImagePageState = useCallback(async () => {
     try {
       const regs = await api.listDockerRegistries();
-      setRegistries(regs);
+      setRegistries(regs.filter((registry) => registry.id !== "gateway-internal-registry"));
     } catch {}
 
     if (embedded && !fixedNodeId) {

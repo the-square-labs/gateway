@@ -8,6 +8,8 @@ import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.m
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
+import { DockerWorkloadResolverService } from './availability/docker-workload-resolver.service.js';
 import { assertComposeChildMutationAllowed } from './compose/compose-child.guard.js';
 import { isComposeOwnedContainer } from './compose/compose-discovery.service.js';
 import {
@@ -137,7 +139,8 @@ export function compactContainerListItem(container: Record<string, any>) {
   return {
     id: container.id ?? container.Id,
     name: ((container.name ?? container.Name ?? '') as string).replace(/^\//, ''),
-    image: labels[ARCHIVE_IMAGE_REFERENCE_LABEL] || container.image || container.Image,
+    image: labels[ARCHIVE_IMAGE_REFERENCE_LABEL] || container.image || container.Image || '',
+    pendingSourceBuild: container.pendingSourceBuild === true,
     state: container.state ?? container.State,
     status: container.status ?? container.Status,
     created: container.created ?? container.Created,
@@ -187,6 +190,10 @@ export function matchesContainerSearch(container: Record<string, any>, search: s
 
 /** Resolve container name from container ID via inspect */
 async function resolveContainerName(nodeId: string, containerId: string): Promise<string> {
+  const workload = await container
+    .resolve(DockerWorkloadResolverService)
+    .resolve({ type: 'container', nodeId, containerName: containerId });
+  if (workload) return workload.managementTarget.resourceId;
   const dockerService = container.resolve(DockerManagementService);
   const inspect = await dockerService.inspectContainer(nodeId, containerId);
   const labels = inspect?.Config?.Labels ?? {};
@@ -200,6 +207,15 @@ async function resolveContainerName(nodeId: string, containerId: string): Promis
   const name = (inspect?.Name ?? '').replace(/^\//, '');
   if (!name) throw new Error('Could not resolve container name');
   return name;
+}
+
+async function resolveMonitoringRuntimeContainerId(nodeId: string, containerIdOrName: string): Promise<string> {
+  try {
+    const detail = await container.resolve(DockerSnapshotService).getContainerDetailSnapshot(nodeId, containerIdOrName);
+    return String(detail.data?.Id ?? detail.data?.id ?? containerIdOrName);
+  } catch {
+    return containerIdOrName;
+  }
 }
 
 export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
@@ -232,10 +248,28 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         nodeId,
         availability: snapshots.availability(nodeId, snapshot),
       }));
-    const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
+    const logicalStates = await container.resolve(DockerAvailabilityService).listContainerSurfaceStates(
+      nodeId,
+      compacted.map((item) => ({ name: String(item.name), deploymentId: item.deploymentId ?? null }))
+    );
+    const logical = compacted.map((item) => {
+      const key = item.deploymentId ? `deployment:${item.deploymentId}` : `container:${item.name}`;
+      const state = logicalStates[key];
+      return state
+        ? {
+            ...item,
+            image: state.sourceImageReference ?? item.image,
+            availabilityPolicyStatus: state.status,
+            availabilityHealthStatus: state.healthStatus,
+            availabilityServing: state.serving,
+            availabilityDesired: state.desired,
+          }
+        : item;
+    });
+    const truncated = logical.length > DOCKER_RESOURCE_LIST_MAX;
     return c.json({
-      data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
-      total: compacted.length,
+      data: truncated ? logical.slice(0, DOCKER_RESOURCE_LIST_MAX) : logical,
+      total: logical.length,
       limit: DOCKER_RESOURCE_LIST_MAX,
       truncated,
     });
@@ -300,27 +334,58 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const snapshots = container.resolve(DockerSnapshotService);
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
+      const requestedName = c.req.param('containerName')!;
+      const runtimeTarget = await container
+        .resolve(DockerWorkloadResolverService)
+        .resolveContainerRuntimeTarget(nodeId, requestedName);
+      const inspectNodeId = runtimeTarget?.nodeId ?? nodeId;
+      const inspectIdentifier = runtimeTarget?.containerId ?? requestedName;
+      if (runtimeTarget) {
+        const resolved = await service.inspectContainer(inspectNodeId, inspectIdentifier);
+        const data = filterContainerDatabaseLinksForScopes(
+          await service.decorateContainerDetailSnapshot(inspectNodeId, resolved),
+          c.get('effectiveScopes') ?? []
+        );
+        return c.json({
+          data: {
+            ...(data && typeof data === 'object' ? data : { value: data }),
+            Name: `/${requestedName}`,
+            nodeId: inspectNodeId,
+            logicalWorkload: {
+              policyId: runtimeTarget.workload.policy.id,
+              resourceKind: runtimeTarget.workload.policy.resourceKind,
+              mode: runtimeTarget.workload.policy.mode,
+              managementNodeId: runtimeTarget.workload.managementTarget.nodeId,
+              managementResourceId: runtimeTarget.workload.managementTarget.resourceId,
+              runtimeNodeId: runtimeTarget.nodeId,
+              runtimeContainerId: runtimeTarget.containerId,
+              placementId: runtimeTarget.placementId,
+            },
+            availability: 'available',
+          },
+        });
+      }
       if (c.req.query('_t')) {
         const reconciler = container.resolve(DockerSnapshotReconciler);
-        await reconciler.refreshNow(nodeId, 'containers');
-        await reconciler.refreshNow(nodeId, 'container-detail', c.req.param('containerName')!);
+        await reconciler.refreshNow(inspectNodeId, 'containers');
+        await reconciler.refreshNow(inspectNodeId, 'container-detail', inspectIdentifier);
       }
-      const detail = await snapshots.getContainerDetailSnapshot(nodeId, c.req.param('containerName')!);
+      const detail = await snapshots.getContainerDetailSnapshot(inspectNodeId, inspectIdentifier);
       const resolved = await resolveDockerContainerByName(
         { inspectContainer: async () => detail.data },
-        nodeId,
-        c.req.param('containerName')!
+        inspectNodeId,
+        inspectIdentifier
       );
       assertUserContainerSnapshot(resolved);
       const data = filterContainerDatabaseLinksForScopes(
-        await service.decoratePublicContainerDetailSnapshot(nodeId, resolved),
+        await service.decoratePublicContainerDetailSnapshot(inspectNodeId, resolved),
         c.get('effectiveScopes') ?? []
       );
       return c.json({
         data: {
           ...(data && typeof data === 'object' ? data : { value: data }),
-          nodeId,
-          availability: snapshots.availability(nodeId, detail),
+          nodeId: inspectNodeId,
+          availability: snapshots.availability(inspectNodeId, detail),
         },
       });
     }
@@ -344,9 +409,14 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         await reconciler.refreshNow(nodeId, 'container-detail', containerId);
       }
       const detail = await snapshots.getContainerDetailSnapshot(nodeId, containerId);
-      assertUserContainerSnapshot(detail.data);
+      const availabilityIdentity = await container
+        .resolve(DockerAvailabilityService)
+        .resolveRuntimeAccessIdentity(nodeId, containerId);
+      if (!availabilityIdentity) assertUserContainerSnapshot(detail.data);
       const data = filterContainerDatabaseLinksForScopes(
-        await service.decoratePublicContainerDetailSnapshot(nodeId, detail.data),
+        availabilityIdentity
+          ? await service.decorateContainerDetailSnapshot(nodeId, detail.data)
+          : await service.decoratePublicContainerDetailSnapshot(nodeId, detail.data),
         c.get('effectiveScopes') ?? []
       );
       return c.json({
@@ -780,7 +850,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const monitoring = container.resolve(NodeMonitoringService);
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
-      const data = monitoring.getLatestContainerStats(nodeId, containerId);
+      const runtimeContainerId = await resolveMonitoringRuntimeContainerId(nodeId, containerId);
+      const data = monitoring.getLatestContainerStats(nodeId, runtimeContainerId);
       return c.json({ data });
     }
   );
@@ -791,8 +862,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const { NodeMonitoringService } = await import('@/modules/nodes/node-monitoring.service.js');
       const monitoring = container.resolve(NodeMonitoringService);
+      const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
-      const data = await monitoring.getContainerStatsHistory(containerId);
+      const runtimeContainerId = await resolveMonitoringRuntimeContainerId(nodeId, containerId);
+      const data = await monitoring.getContainerStatsHistory(runtimeContainerId);
       return c.json({ data });
     }
   );

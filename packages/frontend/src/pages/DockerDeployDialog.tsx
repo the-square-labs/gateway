@@ -379,8 +379,6 @@ export function DockerDeployDialog({
             disabled={
               deploying ||
               !deployNodeId ||
-              (sourceMode === "repository" &&
-                (checkingSourceAdmission || sourceAdmission?.ready !== true)) ||
               (sourceMode === "image"
                 ? !deployImage.trim()
                 : !sourceConnectorId ||

@@ -4,6 +4,7 @@ import type { PortMapping } from "./PortMappingsSection";
 import type { MountEntry } from "./VolumeMountsSection";
 
 export interface RecreateBaseline {
+  imageName?: string;
   imageTag: string;
   ports: string;
   mounts: string;

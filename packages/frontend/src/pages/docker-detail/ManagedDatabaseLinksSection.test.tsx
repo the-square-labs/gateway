@@ -110,6 +110,23 @@ describe("ManagedDatabaseLinksSection", () => {
     expect(screen.getByRole("button", { name: "Save & Recreate" })).toBeEnabled();
   });
 
+  it("uses Save without recreate copy for a stopped workload", async () => {
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([]);
+
+    renderLinks({ recreatesRunningWorkload: false });
+
+    expect(await screen.findByText("No managed database links")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add link" }));
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Save & Recreate" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Private sidecar connections. Changes apply on next start.")
+    ).toBeInTheDocument();
+  });
+
   it("offers credential-variable injection", async () => {
     vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
     vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([]);

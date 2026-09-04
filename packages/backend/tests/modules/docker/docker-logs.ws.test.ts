@@ -4,6 +4,7 @@ import { container } from '@/container.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
+import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 
 const authMocks = vi.hoisted(() => ({
@@ -50,6 +51,9 @@ function createRegistry(connected = true) {
     getNode: vi.fn().mockReturnValue(connected ? { id: NODE_ID } : undefined),
     registerLogStreamHandler: vi.fn((key: string, handler: LogHandler) => {
       handlers.set(key, handler);
+      return () => {
+        registry.removeLogStreamHandler(key);
+      };
     }),
     removeLogStreamHandler: vi.fn((key: string) => {
       handlers.delete(key);
@@ -78,6 +82,9 @@ function registerDependencies(options: { inspect?: unknown; connected?: boolean 
   container.registerInstance(NodeDispatchService, dispatch as never);
   container.registerInstance(NodeRegistryService, registry as never);
   container.registerInstance(DockerManagementService, docker as never);
+  container.registerInstance(DockerAvailabilityService, {
+    resolveRuntimeAccessIdentity: vi.fn().mockResolvedValue(null),
+  } as never);
 
   return { dispatch, registry, docker };
 }
@@ -166,9 +173,9 @@ describe('Docker log WebSocket initial authorization', () => {
     await settleAsyncWork();
 
     expect(readMessages(ws)).toContainEqual({ type: 'new', lines: [FOLLOW_LINE] });
-    expect(authMocks.resolveWebSocketCredential).toHaveBeenCalledWith(
+    expect(authMocks.resolveWebSocketCredentialForScopeBase).toHaveBeenCalledWith(
       CREDENTIAL,
-      `${VIEW_SCOPE}:${NODE_ID}/${RESOURCE_ID}`
+      VIEW_SCOPE
     );
 
     handlers.onClose(new Event('close'), ws as never);
@@ -219,7 +226,7 @@ describe('Docker log WebSocket initial authorization', () => {
 describe('Docker log WebSocket stream lifecycle', () => {
   it('revokes an active stream when the resource permission is removed', async () => {
     const stream = await openStream();
-    authMocks.resolveWebSocketCredential.mockResolvedValue(null);
+    authMocks.resolveWebSocketCredentialForScopeBase.mockResolvedValue(null);
 
     stream.registry.handleLogStream(STREAM_KEY, [FOLLOW_LINE]);
     await settleAsyncWork();
@@ -244,7 +251,7 @@ describe('Docker log WebSocket stream lifecycle', () => {
 
   it('revokes an active stream during keepalive permission revalidation', async () => {
     const stream = await openStream();
-    authMocks.resolveWebSocketCredential.mockResolvedValue(null);
+    authMocks.resolveWebSocketCredentialForScopeBase.mockResolvedValue(null);
 
     await vi.advanceTimersByTimeAsync(30_000);
 
@@ -351,7 +358,7 @@ describe('Docker log WebSocket stream lifecycle', () => {
   it.each(['onClose', 'onError'] as const)('cleans the keepalive timer and follow handler on %s', async (eventName) => {
     const stream = await openStream();
     stream.registry.removeLogStreamHandler.mockClear();
-    authMocks.resolveWebSocketCredential.mockClear();
+    authMocks.resolveWebSocketCredentialForScopeBase.mockClear();
 
     if (eventName === 'onClose') {
       stream.handlers.onClose(new Event('close'), stream.ws as never);
@@ -361,7 +368,7 @@ describe('Docker log WebSocket stream lifecycle', () => {
 
     expect(stream.registry.removeLogStreamHandler).toHaveBeenCalledWith(STREAM_KEY);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(authMocks.resolveWebSocketCredential).not.toHaveBeenCalled();
+    expect(authMocks.resolveWebSocketCredentialForScopeBase).not.toHaveBeenCalled();
 
     stream.registry.handleLogStream(STREAM_KEY, [FOLLOW_LINE]);
     await settleAsyncWork();

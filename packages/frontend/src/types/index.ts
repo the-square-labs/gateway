@@ -15,6 +15,7 @@ export type * from "./dashboard";
 export type * from "./databases";
 export { DEFAULT_MANAGED_REDIS_CONFIG } from "./databases";
 export type * from "./docker";
+export type * from "./docker-availability";
 export type * from "./docker-builds";
 export type * from "./docker-migration";
 export type * from "./domains";

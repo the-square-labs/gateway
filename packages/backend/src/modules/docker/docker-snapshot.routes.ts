@@ -4,6 +4,7 @@ import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
 import {
   isComposeOwnedContainer,
   isComposeOwnedNetwork,
@@ -139,11 +140,34 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
               node.id
             )
           : normalized;
-      const rows = scoped.map((item) => ({
-        ...item,
-        nodeId: node.id,
-        availability,
-      }));
+      const logicalStates =
+        kind === 'containers'
+          ? await container.resolve(DockerAvailabilityService).listContainerSurfaceStates(
+              node.id,
+              scoped.map((item) => ({
+                name: String(item.name ?? ''),
+                deploymentId: typeof item.deploymentId === 'string' ? item.deploymentId : null,
+              }))
+            )
+          : {};
+      const rows = scoped.map((item) => {
+        const key = item.deploymentId ? `deployment:${item.deploymentId}` : `container:${String(item.name ?? '')}`;
+        const logicalState = logicalStates[key];
+        return {
+          ...item,
+          ...(logicalState
+            ? {
+                image: logicalState.sourceImageReference ?? item.image,
+                availabilityPolicyStatus: logicalState.status,
+                availabilityHealthStatus: logicalState.healthStatus,
+                availabilityServing: logicalState.serving,
+                availabilityDesired: logicalState.desired,
+              }
+            : {}),
+          nodeId: node.id,
+          availability,
+        };
+      });
       return { rows, node: snapshots.toNodeMetadata(node, snapshot) };
     })
   );

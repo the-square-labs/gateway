@@ -6,6 +6,7 @@ function createService(
   db: unknown,
   relay: {
     applySnapshot: ReturnType<typeof vi.fn>;
+    getHealth?: ReturnType<typeof vi.fn>;
     getRouteRuntime?: ReturnType<typeof vi.fn>;
   }
 ) {
@@ -100,9 +101,66 @@ describe('RelayPolicyService route runtime', () => {
     });
     expect(getRouteRuntime).toHaveBeenCalledWith('route-binding-1');
   });
+
+  it('recreates the adopted binding route when the previous owner route is already gone', async () => {
+    const tx = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
+        })),
+      })),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (writer: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = createService(db, { applySnapshot: vi.fn() });
+    vi.spyOn(service as any, 'ensureManagedDatabaseEndpoint').mockResolvedValue('endpoint-1');
+    (service as any).grantIssuer = {
+      requireNodeIdentity: vi.fn().mockResolvedValue({ certificateFingerprint: 'sha256:source' }),
+    };
+    const ensureRoute = vi.spyOn(service as any, 'ensureRoute').mockResolvedValue('route-new');
+    vi.spyOn(service, 'syncSnapshot').mockResolvedValue(9);
+    vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
+    const listener = {
+      networkName: 'gateway-db-binding',
+      listenAddress: '172.28.0.1',
+      listenPort: 5432,
+      allowedSources: ['container:api'],
+    };
+
+    await expect(
+      service.adoptBindingRoute(
+        'missing-owner',
+        'projection-owner',
+        'database-1',
+        'node-source',
+        'node-target',
+        listener
+      )
+    ).resolves.toBe('route-new');
+
+    expect(ensureRoute).toHaveBeenCalledWith(
+      'managed_database_binding',
+      'projection-owner',
+      'daemon',
+      'node-source',
+      'sha256:source',
+      'endpoint-1',
+      listener
+    );
+  });
 });
 
 describe('RelayPolicyService snapshots', () => {
+  it('does not replace a pool snapshot with legacy policy when Relay health lookup fails', async () => {
+    const applySnapshot = vi.fn();
+    const getHealth = vi.fn().mockRejectedValue(new Error('temporary Relay health failure'));
+    const service = createService({} as never, { applySnapshot, getHealth });
+
+    await expect(service.syncSnapshot()).rejects.toThrow('temporary Relay health failure');
+    expect(applySnapshot).not.toHaveBeenCalled();
+  });
+
   it('reads the complete snapshot in one read-only repeatable-read transaction', async () => {
     const rows = new Map<unknown, unknown[]>([
       [relayPolicyState, [{ revision: 7, gatewayInstanceId: 'gateway-1' }]],

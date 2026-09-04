@@ -1,5 +1,6 @@
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { DockerAvailabilityService } from '../availability/docker-availability.service.js';
 import { DockerManagementService } from '../docker.service.js';
 import { DockerSnapshotService } from '../docker-snapshot.service.js';
 import { DockerComposeService } from './compose.service.js';
@@ -16,6 +17,12 @@ function labelsFor(value: unknown): Record<string, string> {
 }
 
 export async function assertComposeChildMutationAllowed(nodeId: string, containerId: string) {
+  if (
+    container.isRegistered(DockerAvailabilityService) &&
+    (await container.resolve(DockerAvailabilityService).isContainerManaged(nodeId, containerId))
+  ) {
+    return;
+  }
   const detail = await container.resolve(DockerManagementService).inspectContainer(nodeId, containerId);
   const labels = labelsFor(detail);
   const projectName = labels['com.docker.compose.project']?.trim();

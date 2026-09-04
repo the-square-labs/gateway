@@ -1,0 +1,2 @@
+ALTER TABLE "docker_availability_operations" ADD COLUMN "retry_attempts" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "docker_availability_operations" ADD COLUMN "next_attempt_at" timestamp with time zone;

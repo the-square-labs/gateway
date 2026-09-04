@@ -1,0 +1,25 @@
+{
+  "file_name": "c49ob9tl_permission_home_regression",
+  "edges": [
+    {
+      "from_id": "c49ob9tl",
+      "to_id": "gahvf5k5",
+      "relation": "related_to",
+      "weight": 0.72,
+      "reason": "Both cover permission-driven auth state changes propagated through realtime and session-aware frontend behavior.",
+      "source": "auto",
+      "created_at": 1788516394592,
+      "updated_at": 1788516394592
+    },
+    {
+      "from_id": "c49ob9tl",
+      "to_id": "elp4yliv",
+      "relation": "related_to",
+      "weight": 0.64,
+      "reason": "Both require defensive, context-aware session identity handling for authentication state and live authorization changes.",
+      "source": "auto",
+      "created_at": 1788516394592,
+      "updated_at": 1788516394592
+    }
+  ]
+}

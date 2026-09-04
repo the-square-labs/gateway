@@ -3,10 +3,12 @@ import { useCallback, useEffect, useState } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { AvailabilitySummary } from "@/components/docker/availability/AvailabilitySummary";
 import { Badge } from "@/components/ui/badge";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
 import { api } from "@/services/api";
+import type { DockerAvailabilityPolicy } from "@/types";
 import { copyToClipboard, formatDate, type InspectData, STATUS_BADGE } from "./helpers";
 import { type ContainerDatabaseLink, LinkRuntimeTab } from "./LinkRuntimeTab";
 
@@ -14,24 +16,34 @@ export function OverviewTab({
   nodeId,
   containerId,
   data,
+  imageReferenceOverride,
   sourceIdentity,
   databaseLinks,
   onSecureLinkHealthChange,
+  logicalContainerName,
+  availabilityPolicy,
+  availabilityLoading,
 }: {
   nodeId: string;
   containerId: string;
   data: InspectData;
+  imageReferenceOverride?: string | null;
   sourceIdentity?: {
     repositoryFullPath: string;
     deployedCommitSha: string | null;
   } | null;
   databaseLinks: ContainerDatabaseLink[];
   onSecureLinkHealthChange?: (down: boolean) => void;
+  logicalContainerName?: string;
+  availabilityPolicy?: DockerAvailabilityPolicy | null;
+  availabilityLoading?: boolean;
 }) {
   const transition = data._transition as string | undefined;
   const state = transition ?? data.State?.Status ?? (data.State?.Running ? "running" : "stopped");
   const id = data.Id ?? containerId;
-  const image = formatDisplayImageRef(resolveContainerImageReference(data));
+  const image = formatDisplayImageRef(
+    imageReferenceOverride || resolveContainerImageReference(data)
+  );
   const created = data.Created ?? "";
   const restartPolicy = data.HostConfig?.RestartPolicy?.Name ?? "no";
   const platform = data.Platform ?? "";
@@ -72,7 +84,7 @@ export function OverviewTab({
   >;
 
   // Recent tasks — refresh on inspect cycle and whenever a docker.task event arrives
-  const containerName = (data.Name ?? "").replace(/^\//, "");
+  const containerName = logicalContainerName || (data.Name ?? "").replace(/^\//, "");
   const [recentTasks, setRecentTasks] = useState<any[]>([]);
   const refreshTasks = useCallback(() => {
     api
@@ -104,6 +116,11 @@ export function OverviewTab({
 
   return (
     <div className="space-y-4 pb-6">
+      <AvailabilitySummary
+        resource={{ type: "container", nodeId, containerName }}
+        policy={availabilityPolicy}
+        loading={availabilityLoading}
+      />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* General */}
         <PanelShell

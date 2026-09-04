@@ -152,7 +152,7 @@ function filterCachedContainers(items: DockerContainer[], nodeId?: string | null
     if (!query) return true;
     return (
       container.name.toLowerCase().includes(query) ||
-      container.image.toLowerCase().includes(query) ||
+      (container.image ?? "").toLowerCase().includes(query) ||
       container.id.toLowerCase().includes(query)
     );
   });

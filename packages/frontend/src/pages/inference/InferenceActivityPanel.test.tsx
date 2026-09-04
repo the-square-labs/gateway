@@ -141,6 +141,41 @@ describe("InferenceActivityPanel", () => {
     rerender(<InferenceActivityPanel refreshToken={1} />);
     expect(api.listInferenceActivity).toHaveBeenCalledTimes(2);
   });
+
+  it("opens the full activity dialog immediately with a loader", async () => {
+    let resolveFullPage:
+      | ((page: { data: InferenceActivity[]; nextPage: null }) => void)
+      | undefined;
+    vi.mocked(api.listInferenceActivity).mockImplementation((query = {}) => {
+      if (query.limit === 6) {
+        return Promise.resolve({ data: [activity("recent")], nextPage: null });
+      }
+      return new Promise((resolve) => {
+        resolveFullPage = resolve;
+      });
+    });
+
+    render(<InferenceActivityPanel />);
+    await screen.findByText("User recent");
+
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Inference activity" });
+    expect(
+      within(dialog).getByRole("status", { name: "Loading inference activity" })
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFullPage?.({ data: [activity("full")], nextPage: null });
+    });
+
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByRole("status", { name: "Loading inference activity" })
+      ).not.toBeInTheDocument()
+    );
+    expect(within(dialog).getByText("End of activity")).toBeInTheDocument();
+  });
 });
 
 function activity(id: string): InferenceActivity {

@@ -10,6 +10,10 @@ const portMappingsSectionSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn().mockResolvedValue(true) }));
 
+vi.mock("@/components/docker/availability/AvailabilitySection", () => ({
+  AvailabilitySection: () => null,
+}));
+
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: vi.fn(),
 }));

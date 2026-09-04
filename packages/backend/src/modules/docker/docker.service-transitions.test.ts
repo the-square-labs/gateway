@@ -54,21 +54,35 @@ describe('DockerManagementService container transitions', () => {
     expect(detail).toEqual({ Name: '/api', gpuAttachment: { mode: 'none', deviceIds: [] } });
   });
 
-  it('reconciles stale cached state with the latest daemon health report', async () => {
+  it.each([
+    ['running', 'exited', false],
+    ['exited', 'running', true],
+  ])('does not overwrite authoritative inspect with an older %s health report', async (reported, current, running) => {
     const service = createService({
       lastHealthReport: {
-        containerStats: [{ containerId: 'container-new', name: 'api', state: 'running' }],
+        containerStats: [{ containerId: 'container-old', name: 'api', state: reported }],
       },
     });
     const detail = {
       Id: 'container-old',
       Name: '/api',
-      State: { Status: 'exited', Running: false },
+      State: { Status: current, Running: running },
     };
 
     await service.decorateContainerDetailSnapshot('node-1', detail);
 
-    expect(detail.State).toMatchObject({ Status: 'running', Running: true });
+    expect(detail.State).toMatchObject({ Status: current, Running: running });
+  });
+
+  it('does not mix state from another runtime with the same name', async () => {
+    const service = createService({
+      lastHealthReport: {
+        containerStats: [{ containerId: 'replacement', name: 'api', state: 'running' }],
+      },
+    });
+    const detail = { Id: 'original', Name: '/api', State: { Status: 'exited', Running: false } };
+    await service.decorateContainerDetailSnapshot('node-1', detail);
+    expect(detail.State).toEqual({ Status: 'exited', Running: false });
   });
 
   it('includes non-secret direct database link state in the initial container snapshot', async () => {

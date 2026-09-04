@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 	"time"
+	"unicode"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
@@ -88,6 +91,9 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	case *pb.GatewayCommand_DockerRuntime:
 		p.handleRuntimeCommand(payload.DockerRuntime, result)
 
+	case *pb.GatewayCommand_DockerAvailability:
+		p.handleAvailabilityCommand(payload.DockerAvailability, result)
+
 	case *pb.GatewayCommand_DockerExec:
 		p.handleExecCommand(payload.DockerExec, result)
 
@@ -129,6 +135,143 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	}
 
 	return result
+}
+
+func (p *DockerPlugin) handleAvailabilityCommand(cmd *pb.DockerAvailabilityCommand, result *pb.CommandResult) {
+	if p.cfg == nil || p.cfg.Docker.Mode != "" {
+		result.Success = false
+		result.Error = "docker availability commands require generic docker mode"
+		return
+	}
+	if p.availability == nil {
+		result.Success = false
+		result.Error = "docker availability state manager is not initialized"
+		return
+	}
+	detail, err := p.availability.apply(cmd)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return
+	}
+	result.Detail = detail
+}
+
+func sanitizeAvailabilityConfig(raw string) (map[string]any, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("availability config_json must be valid JSON: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("trailing JSON value")
+		}
+		return nil, fmt.Errorf("availability config_json must contain one JSON value: %w", err)
+	}
+	if value == nil {
+		return nil, nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("availability config_json must be a JSON object")
+	}
+
+	sanitized := sanitizeAvailabilityObject(object, 0)
+	if len(sanitized) == 0 {
+		return nil, nil
+	}
+	return sanitized, nil
+}
+
+func sanitizeAvailabilityObject(object map[string]any, depth int) map[string]any {
+	if depth > 3 {
+		return nil
+	}
+	sanitized := make(map[string]any)
+	for key, value := range object {
+		if sensitiveAvailabilityMetadataKey(key) {
+			continue
+		}
+		normalized := normalizeAvailabilityMetadataKey(key)
+		if !availabilityMetadataKeyAllowed(normalized) {
+			continue
+		}
+		cleanValue, ok := sanitizeAvailabilityValue(value, depth+1)
+		if ok {
+			sanitized[key] = cleanValue
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
+func sanitizeAvailabilityValue(value any, depth int) (any, bool) {
+	switch typed := value.(type) {
+	case string, bool, json.Number:
+		return typed, true
+	case map[string]any:
+		clean := sanitizeAvailabilityObject(typed, depth)
+		return clean, len(clean) > 0
+	default:
+		return nil, false
+	}
+}
+
+func cloneAvailabilityMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	clone := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		clone[key] = cloneAvailabilityValue(value)
+	}
+	return clone
+}
+
+func cloneAvailabilityValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAvailabilityMetadata(typed)
+	default:
+		return typed
+	}
+}
+
+func normalizeAvailabilityMetadataKey(key string) string {
+	return strings.Map(func(character rune) rune {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) {
+			return character
+		}
+		return -1
+	}, strings.ToLower(key))
+}
+
+func sensitiveAvailabilityMetadataKey(key string) bool {
+	normalized := normalizeAvailabilityMetadataKey(key)
+	for _, fragment := range []string{
+		"credential", "password", "passwd", "secret", "token", "apikey", "accesskey", "privatekey", "certificate", "cookie", "authorization", "auth", "environment", "env", "mount", "volume", "bind", "header",
+	} {
+		if strings.Contains(normalized, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func availabilityMetadataKeyAllowed(key string) bool {
+	switch key {
+	case "runtime", "identity", "runtimeidentity", "status", "health", "metadata", "config", "phase",
+		"id", "runtimeid", "containerid", "containername", "deploymentid", "projectid", "projectname", "runtimeidentityid", "name", "runtimename", "image", "imageid", "digest", "imagedigest", "revision", "version", "state", "healthstatus", "ready", "serving", "draining", "restartcount", "exitcode", "architecture", "arch", "platform", "nodeid", "routername", "networkname", "slots", "blue", "green", "observedat", "startedat", "stoppedat", "createdat", "updatedat":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *DockerPlugin) emitBuildEvent(event *pb.DockerBuildEvent) error {

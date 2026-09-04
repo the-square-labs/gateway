@@ -8,6 +8,7 @@ import {
   dockerDeploymentRoutes,
   dockerDeploymentSlots,
   dockerDeployments,
+  dockerSourceBindings,
   dockerWebhooks,
   nodes,
 } from '@/db/schema/index.js';
@@ -100,6 +101,31 @@ export class DockerDeploymentService {
   private deploymentTransitions = new Map<string, DeploymentTransition>();
   private migrationGuard?: DockerMigrationGuard;
   private accessResourceService?: DockerAccessResourceService;
+  private availabilityCoordinator?: {
+    isManaged(deploymentId: string): Promise<boolean>;
+    deploy?(
+      deploymentId: string,
+      input: DockerDeploymentDeployInput & { desiredConfig?: DockerDeploymentDesiredConfig },
+      targetActiveSlot: 'blue' | 'green',
+      userId: string | null,
+      source: string,
+      releaseId: string
+    ): Promise<{ desiredConfig: DockerDeploymentDesiredConfig; shouldRun: boolean; activeSlot: 'blue' | 'green' }>;
+    updateConfiguration(
+      deploymentId: string,
+      snapshot: {
+        name: string;
+        desiredConfig: Record<string, any>;
+        health: Record<string, any>;
+        routes: Array<Record<string, any>>;
+        drainSeconds: number;
+      },
+      userId: string | null,
+      reason?: string
+    ): Promise<boolean>;
+    setRunning(deploymentId: string, running: boolean, userId: string | null, restart?: boolean): Promise<boolean>;
+    switchSlot(deploymentId: string, targetActiveSlot: 'blue' | 'green', userId: string | null): Promise<boolean>;
+  };
 
   constructor(
     private db: DrizzleClient,
@@ -133,6 +159,10 @@ export class DockerDeploymentService {
 
   setAccessResourceService(service: DockerAccessResourceService) {
     this.accessResourceService = service;
+  }
+
+  setAvailabilityCoordinator(coordinator: NonNullable<DockerDeploymentService['availabilityCoordinator']>): void {
+    this.availabilityCoordinator = coordinator;
   }
 
   private emit(action: string, deploymentId: string, nodeId: string, extra?: Record<string, unknown>) {
@@ -808,8 +838,11 @@ export class DockerDeploymentService {
     userId: string,
     actorScopes: string[] = []
   ) {
-    await this.migrationGuard?.assertDeploymentAllowed(nodeId, deploymentId);
-    await this.validateDockerNode(nodeId);
+    const availabilityManaged = (await this.availabilityCoordinator?.isManaged(deploymentId)) ?? false;
+    if (!availabilityManaged) {
+      await this.migrationGuard?.assertDeploymentAllowed(nodeId, deploymentId);
+      await this.validateDockerNode(nodeId);
+    }
     const current = await this.loadDeployment(nodeId, deploymentId);
     if (input.name && input.name !== current.name) await this.assertNameAvailable(nodeId, input.name, deploymentId);
     const routes = input.routes ? normalizeRoutes(input.routes) : undefined;
@@ -817,10 +850,19 @@ export class DockerDeploymentService {
     const desiredConfig = input.desiredConfig
       ? { ...current.desiredConfig, ...input.desiredConfig }
       : current.desiredConfig;
-    if (input.desiredConfig && Object.hasOwn(input.desiredConfig, 'gpu')) {
+    if (!availabilityManaged && input.desiredConfig && Object.hasOwn(input.desiredConfig, 'gpu')) {
       await this.assertDockerGpuCapability(nodeId);
     }
-    await this.assertRuntimeProfile(nodeId, desiredConfig, current.desiredConfig.runtimeProfile);
+    if (!availabilityManaged) {
+      await this.assertRuntimeProfile(nodeId, desiredConfig, current.desiredConfig.runtimeProfile);
+    }
+    if (availabilityManaged && (desiredConfig.mounts?.length ?? 0) > 0) {
+      throw new AppError(
+        409,
+        'AVAILABILITY_MOUNTS_UNSUPPORTED',
+        'Deployments with Availability cannot use volumes or mounts'
+      );
+    }
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -828,16 +870,18 @@ export class DockerDeploymentService {
       nextConfig: desiredConfig,
       currentDefinitions: normalizeMountDefinitionsFromConfig(current.desiredConfig),
     });
-    await assertManagedMountMutation({
-      db: this.db,
-      dispatch: this.dispatch,
-      parseResult: (result) => this.parseResult(result),
-      nodeId,
-      current: normalizeMountDefinitionsFromConfig(current.desiredConfig),
-      next: normalizeMountDefinitionsFromConfig(desiredConfig),
-    });
+    if (!availabilityManaged) {
+      await assertManagedMountMutation({
+        db: this.db,
+        dispatch: this.dispatch,
+        parseResult: (result) => this.parseResult(result),
+        nodeId,
+        current: normalizeMountDefinitionsFromConfig(current.desiredConfig),
+        next: normalizeMountDefinitionsFromConfig(desiredConfig),
+      });
+    }
 
-    if (routes && !deploymentRoutesEqual(current.routes, routes)) {
+    if (!availabilityManaged && routes && !deploymentRoutesEqual(current.routes, routes)) {
       try {
         const result = await this.dispatch.sendDockerDeploymentCommand(nodeId, 'update_router', {
           deploymentId,
@@ -892,6 +936,19 @@ export class DockerDeploymentService {
       }
     });
     await this.healthCheckService?.alignDeploymentHealthCheck(nodeId, deploymentId);
+    if (availabilityManaged) {
+      await this.availabilityCoordinator?.updateConfiguration(
+        deploymentId,
+        {
+          name: input.name ?? current.name,
+          desiredConfig,
+          health,
+          routes: routes ?? current.routes,
+          drainSeconds: input.drainSeconds ?? current.drainSeconds,
+        },
+        userId
+      );
+    }
     this.emit('updated', deploymentId, nodeId, {
       ...(input.name && input.name !== current.name ? { oldName: current.name, name: input.name } : {}),
     });
@@ -941,22 +998,28 @@ export class DockerDeploymentService {
     input: DockerDeploymentDeployInput,
     userId: string | null,
     source = 'manual',
-    actorScopes: string[] = []
+    actorScopes: string[] = [],
+    rollbackConfig?: DockerDeploymentDesiredConfig
   ) {
+    const availabilityManaged = (await this.availabilityCoordinator?.isManaged(deploymentId)) ?? false;
+    if (availabilityManaged && !this.availabilityCoordinator?.deploy) {
+      throw new AppError(503, 'AVAILABILITY_DEPLOY_UNAVAILABLE', 'Availability deployment coordinator is unavailable');
+    }
     await this.migrationGuard?.assertDeploymentAllowed(nodeId, deploymentId);
-    await this.validateDockerNode(nodeId);
+    if (!availabilityManaged) await this.validateDockerNode(nodeId);
     const deployment = await this.loadDeployment(nodeId, deploymentId);
     this.requireDeploymentIdle(deployment);
-    this.setTransition(deployment, 'deploying');
     const toSlot = inactiveSlot(deployment.activeSlot);
     const targetImage = input.image ?? imageWithTag(deployment.desiredConfig.image, input.tag);
     const desiredConfig = {
-      ...deployment.desiredConfig,
+      ...(rollbackConfig ?? deployment.desiredConfig),
       image: targetImage,
-      env: input.env ?? deployment.desiredConfig.env,
+      env: input.env ?? rollbackConfig?.env ?? deployment.desiredConfig.env,
     };
-    if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
-    await this.assertRuntimeProfile(nodeId, desiredConfig, deployment.desiredConfig.runtimeProfile);
+    if (!availabilityManaged) {
+      if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
+      await this.assertRuntimeProfile(nodeId, desiredConfig, deployment.desiredConfig.runtimeProfile);
+    }
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -966,7 +1029,10 @@ export class DockerDeploymentService {
     });
     let task: Awaited<ReturnType<DockerTaskService['create']>> | null = null;
     let release: DeploymentReleaseRow | null = null;
+    let deploymentDeferred = false;
 
+    this.requireDeploymentIdle(deployment);
+    this.setTransition(deployment, 'deploying');
     try {
       task = await this.tasks.create({
         nodeId,
@@ -995,18 +1061,63 @@ export class DockerDeploymentService {
         .where(eq(dockerDeployments.id, deploymentId));
       this.emit('deploying', deploymentId, nodeId, { toSlot });
 
-      await this.switchToSlot(nodeId, deploymentId, { slot: toSlot, force: false }, userId, {
-        releaseId: release.id,
-        image: targetImage,
-        source,
-        registryId: input.registryId,
-      });
+      if (availabilityManaged) {
+        const applied = await this.availabilityCoordinator!.deploy!(
+          deploymentId,
+          rollbackConfig ? { ...input, desiredConfig } : input,
+          toSlot,
+          userId,
+          source,
+          release.id
+        );
+        deploymentDeferred = !applied.shouldRun;
+        await this.db
+          .update(dockerDeployments)
+          .set({
+            desiredConfig: applied.desiredConfig,
+            activeSlot: applied.activeSlot,
+            status: applied.shouldRun ? 'ready' : 'stopped',
+            updatedAt: new Date(),
+          })
+          .where(eq(dockerDeployments.id, deploymentId));
+        await this.db
+          .update(dockerDeploymentReleases)
+          .set({
+            image: applied.desiredConfig.image,
+            toSlot: applied.activeSlot,
+            status: deploymentDeferred ? 'pending' : 'succeeded',
+            completedAt: deploymentDeferred ? null : new Date(),
+          })
+          .where(eq(dockerDeploymentReleases.id, release.id));
+        if (source === 'rollback' && !deploymentDeferred) {
+          // A slot snapshot does not prove the currently recorded Git commit is still running.
+          // Clear it so the next build of the desired commit is not incorrectly skipped.
+          await this.db
+            .update(dockerSourceBindings)
+            .set({ deployedCommitSha: null, updatedAt: new Date() })
+            .where(
+              and(
+                eq(dockerSourceBindings.targetKind, 'deployment'),
+                eq(dockerSourceBindings.deploymentId, deploymentId)
+              )
+            );
+        }
+        this.emit(deploymentDeferred ? 'updated' : 'deployed', deploymentId, nodeId, { deploymentDeferred });
+      } else {
+        await this.switchToSlot(nodeId, deploymentId, { slot: toSlot, force: false }, userId, {
+          releaseId: release.id,
+          image: targetImage,
+          source,
+          registryId: input.registryId,
+        });
+      }
       await this.tasks.update(task.id, {
         status: 'succeeded',
-        progress: `Deployed ${targetImage}`,
+        progress: deploymentDeferred ? 'Configuration saved; rollout deferred until Start' : `Deployed ${targetImage}`,
         completedAt: new Date(),
       });
-      this.imageCleanupService?.scheduleCleanupForDeployment(nodeId, deploymentId, targetImage).catch(() => {});
+      if (!availabilityManaged)
+        this.imageCleanupService?.scheduleCleanupForDeployment(nodeId, deploymentId, targetImage).catch(() => {});
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Deployment failed';
       await Promise.all([
@@ -1032,7 +1143,8 @@ export class DockerDeploymentService {
     } finally {
       this.clearTransition(deployment);
     }
-    return this.loadDeployment(nodeId, deploymentId);
+    const result = await this.loadDeployment(nodeId, deploymentId);
+    return deploymentDeferred ? { ...result, deploymentDeferred: true } : result;
   }
 
   async switchToSlot(
@@ -1049,6 +1161,9 @@ export class DockerDeploymentService {
     },
     actorScopes: string[] = []
   ) {
+    if (!releaseContext && (await this.availabilityCoordinator?.switchSlot(deploymentId, input.slot, userId))) {
+      return this.loadDeployment(nodeId, deploymentId);
+    }
     await this.validateDockerNode(nodeId);
     const deployment = await this.loadDeployment(nodeId, deploymentId);
     const managesTransition = !releaseContext;
@@ -1209,6 +1324,22 @@ export class DockerDeploymentService {
   ) {
     const deployment = await this.loadDeployment(nodeId, deploymentId);
     this.requireDeploymentIdle(deployment);
+    if (await this.availabilityCoordinator?.isManaged(deploymentId)) {
+      const rollbackSlot = deployment.slots.find((slot) => slot.slot === inactiveSlot(deployment.activeSlot));
+      if (!rollbackSlot?.image) {
+        throw new AppError(409, 'ROLLBACK_UNAVAILABLE', 'Rollback slot does not have a previous image');
+      }
+      const desiredConfig = rollbackSlot.desiredConfig ?? { ...deployment.desiredConfig, image: rollbackSlot.image };
+      return this.deploy(
+        nodeId,
+        deploymentId,
+        { image: desiredConfig.image, env: desiredConfig.env },
+        userId,
+        'rollback',
+        actorScopes,
+        desiredConfig
+      );
+    }
     this.setTransition(deployment, 'rolling_back');
     try {
       const rollbackSlot = deployment.slots.find((slot) => slot.slot === inactiveSlot(deployment.activeSlot));
@@ -1266,16 +1397,25 @@ export class DockerDeploymentService {
   }
 
   async start(nodeId: string, deploymentId: string, userId: string | null) {
+    if (await this.availabilityCoordinator?.setRunning(deploymentId, true, userId)) {
+      return this.loadDeployment(nodeId, deploymentId);
+    }
     await this.migrationGuard?.assertDeploymentAllowed(nodeId, deploymentId);
     return startDeployment(this.deploymentOperationContext(), nodeId, deploymentId, userId);
   }
 
   async stop(nodeId: string, deploymentId: string, userId: string | null) {
+    if (await this.availabilityCoordinator?.setRunning(deploymentId, false, userId)) {
+      return this.loadDeployment(nodeId, deploymentId);
+    }
     await this.migrationGuard?.assertDeploymentAllowed(nodeId, deploymentId);
     return stopDeployment(this.deploymentOperationContext(), nodeId, deploymentId, userId);
   }
 
   async restart(nodeId: string, deploymentId: string, userId: string | null) {
+    if (await this.availabilityCoordinator?.setRunning(deploymentId, true, userId, true)) {
+      return this.loadDeployment(nodeId, deploymentId);
+    }
     await this.migrationGuard?.assertDeploymentAllowed(nodeId, deploymentId);
     return restartDeployment(this.deploymentOperationContext(), nodeId, deploymentId, userId);
   }

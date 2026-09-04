@@ -851,6 +851,22 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
       );
     }
 
+    async getPendingDockerSourceContainer(nodeId: string, containerName: string) {
+      return this.unwrapData(
+        this.request<{
+          data: {
+            pendingSourceBuild: true;
+            nodeId: string;
+            containerName: string;
+            sourceBindingId: string;
+            scopeResourceId: string;
+            repositoryFullPath?: string;
+            latestBuild?: { id: string; status: string; errorCode: string | null } | null;
+          };
+        }>(`/docker/nodes/${nodeId}/containers/${encodeURIComponent(containerName)}/source/pending`)
+      );
+    }
+
     async upsertDockerSource(
       target: DockerSourceTarget,
       config: DockerSourceBindingConfig

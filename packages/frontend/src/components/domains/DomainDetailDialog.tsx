@@ -124,7 +124,8 @@ export function DomainDetailDialog({
     onUpdated();
   });
 
-  useRealtime(open ? "proxy.host.changed" : null, () => {
+  useRealtime(open ? "proxy.host.changed" : null, (payload) => {
+    if ((payload as { action?: string } | null)?.action === "health.sampled") return;
     void loadDomain();
     onUpdated();
   });

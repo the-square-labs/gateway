@@ -1,9 +1,13 @@
-import { and, eq, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  auditLog,
   type DockerHealthEntry,
   type DockerHealthStatus,
   dockerAccessResources,
+  dockerAvailabilityPlacements,
+  dockerAvailabilityPolicies,
+  dockerComposeProjects,
   dockerDeploymentRoutes,
   dockerDeployments,
   dockerHealthChecks,
@@ -15,6 +19,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import type { DockerWorkloadResolverService } from './availability/docker-workload-resolver.service.js';
 import type { DockerHealthCheckUpsertInput } from './docker.schemas.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { DEFAULT_CONFIG, healthAction, normalizePath, parseDispatchResult } from './docker-health-check.helpers.js';
@@ -48,18 +53,22 @@ export interface DockerHealthCheckDto {
   intervalSeconds: number;
   timeoutSeconds: number;
   slowThreshold: number;
-  healthStatus: DockerHealthStatus;
+  healthStatus: DockerHealthStatus | 'stopped';
   lastHealthCheckAt: Date | null;
   healthHistory: DockerHealthEntry[];
   routeOptions: DockerHealthRouteOption[];
 }
 
 type HealthRow = typeof dockerHealthChecks.$inferSelect;
+type HealthTarget = Pick<HealthRow, 'target' | 'nodeId' | 'containerName' | 'deploymentId'>;
+type HealthWorkloadResolver = Pick<DockerWorkloadResolverService, 'resolveContainerRuntimeTarget'> &
+  Partial<Pick<DockerWorkloadResolverService, 'findPolicy'>>;
 
 export class DockerHealthCheckService {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
   private relayUnavailable = false;
+  private workloadResolver?: HealthWorkloadResolver;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -96,7 +105,13 @@ export class DockerHealthCheckService {
     this.evaluator = evaluator;
   }
 
+  setWorkloadResolver(resolver: HealthWorkloadResolver) {
+    this.workloadResolver = resolver;
+  }
+
   async getContainer(nodeId: string, containerName: string): Promise<DockerHealthCheckDto> {
+    const identity = { target: 'container' as const, nodeId, containerName, deploymentId: null };
+    const stopped = await this.isIntentionallyStopped(identity);
     const [row, options] = await Promise.all([
       this.db.query.dockerHealthChecks.findFirst({
         where: and(
@@ -105,9 +120,10 @@ export class DockerHealthCheckService {
           eq(dockerHealthChecks.containerName, containerName)
         ),
       }),
-      this.getContainerRouteOptions(nodeId, containerName),
+      stopped ? Promise.resolve([]) : this.getContainerRouteOptions(nodeId, containerName),
     ]);
-    return this.toDto(row ?? null, { target: 'container', nodeId, containerName, deploymentId: null }, options);
+    const dto = this.toDto(row ?? null, identity, options);
+    return stopped ? { ...dto, healthStatus: 'stopped' } : dto;
   }
 
   async getDeployment(nodeId: string, deploymentId: string): Promise<DockerHealthCheckDto> {
@@ -125,7 +141,8 @@ export class DockerHealthCheckService {
       }),
       this.getDeploymentRouteOptions(deploymentId),
     ]);
-    return this.toDto(row ?? null, { target: 'deployment', nodeId, containerName: null, deploymentId }, options);
+    const dto = this.toDto(row ?? null, { target: 'deployment', nodeId, containerName: null, deploymentId }, options);
+    return (await this.isIntentionallyStopped(dto)) ? { ...dto, healthStatus: 'stopped' } : dto;
   }
 
   async upsertContainer(nodeId: string, containerName: string, input: DockerHealthCheckUpsertInput) {
@@ -224,6 +241,9 @@ export class DockerHealthCheckService {
   }
 
   async testContainer(nodeId: string, containerName: string, input?: DockerHealthCheckUpsertInput) {
+    if (await this.isIntentionallyStopped({ target: 'container', nodeId, containerName, deploymentId: null })) {
+      return { ok: true, status: 'stopped' as const, skipped: true };
+    }
     const current = await this.getContainer(nodeId, containerName);
     const config = input
       ? this.mergeDto(current, this.normalizeInput(input, current.routeOptions, 'container'))
@@ -232,6 +252,9 @@ export class DockerHealthCheckService {
   }
 
   async testDeployment(nodeId: string, deploymentId: string, input?: DockerHealthCheckUpsertInput) {
+    if (await this.isIntentionallyStopped({ target: 'deployment', nodeId, deploymentId, containerName: null })) {
+      return { ok: true, status: 'stopped' as const, skipped: true };
+    }
     const current = await this.getDeployment(nodeId, deploymentId);
     const config = input
       ? this.mergeDto(current, this.normalizeInput(input, current.routeOptions, 'deployment'))
@@ -260,7 +283,8 @@ export class DockerHealthCheckService {
           inArray(dockerHealthChecks.containerName, containerNames)
         )
       );
-    return new Map(rows.flatMap((row) => (row.containerName ? [[row.containerName, row] as const] : [])));
+    const projected = await this.projectStoppedHealth(rows);
+    return new Map(projected.flatMap((row) => (row.containerName ? [[row.containerName, row] as const] : [])));
   }
 
   async listNavigationHealth() {
@@ -270,6 +294,7 @@ export class DockerHealthCheckService {
         nodeId: dockerHealthChecks.nodeId,
         deploymentId: dockerHealthChecks.deploymentId,
         containerResourceId: dockerAccessResources.id,
+        containerName: dockerHealthChecks.containerName,
         enabled: dockerHealthChecks.enabled,
         healthStatus: dockerHealthChecks.healthStatus,
       })
@@ -284,13 +309,16 @@ export class DockerHealthCheckService {
       )
       .where(eq(dockerHealthChecks.enabled, true));
 
-    return rows.flatMap((row) => {
+    const projected = await this.projectStoppedHealth(rows);
+    return projected.flatMap((row) => {
       const resourceId = row.target === 'deployment' ? row.deploymentId : row.containerResourceId;
       return resourceId
         ? [
             {
               nodeId: row.nodeId,
               resourceId,
+              containerName: row.containerName,
+              deploymentId: row.deploymentId,
               enabled: row.enabled,
               healthStatus: row.healthStatus,
             },
@@ -314,7 +342,17 @@ export class DockerHealthCheckService {
       })
       .from(dockerHealthChecks)
       .where(and(eq(dockerHealthChecks.target, 'deployment'), inArray(dockerHealthChecks.deploymentId, deploymentIds)));
-    return new Map(rows.flatMap((row) => (row.deploymentId ? [[row.deploymentId, row] as const] : [])));
+    const projected = await this.projectStoppedHealth(rows);
+    return new Map(projected.flatMap((row) => (row.deploymentId ? [[row.deploymentId, row] as const] : [])));
+  }
+
+  private async projectStoppedHealth<T extends HealthTarget & { healthStatus: DockerHealthStatus }>(rows: T[]) {
+    return Promise.all(
+      rows.map(async (row) => ({
+        ...row,
+        healthStatus: (await this.isIntentionallyStopped(row)) ? ('stopped' as const) : row.healthStatus,
+      }))
+    );
   }
 
   async ensureDeploymentDefault(nodeId: string, deploymentId: string) {
@@ -421,7 +459,10 @@ export class DockerHealthCheckService {
   private async checkAndStore(row: HealthRow) {
     const previousStatus = row.healthStatus as DockerHealthStatus;
     const probe = await this.probeRow(row);
+    if (probe.status === 'stopped') return this.storeStopped(row);
     const dependency = await this.databaseDependencyState(row);
+    // A stop may have been requested while a probe/dependency lookup was in flight.
+    if (await this.isIntentionallyStopped(row)) return this.storeStopped(row);
     const status: DockerHealthStatus = dependency.offline ? 'offline' : probe.status;
     const entry: DockerHealthEntry = {
       ts: new Date().toISOString(),
@@ -440,6 +481,7 @@ export class DockerHealthCheckService {
     const resourceId = row.target === 'deployment' ? row.deploymentId! : row.containerName!;
     const resourceName =
       row.target === 'deployment' ? await this.getDeploymentName(row.deploymentId!) : row.containerName!;
+    if (await this.isIntentionallyStopped(row)) return this.storeStopped(row, true);
     if (dependency.cause !== 'relay_unavailable') {
       await this.evaluator?.observeStatefulEvent(
         'container',
@@ -480,6 +522,34 @@ export class DockerHealthCheckService {
         health_cause: dependency.cause,
       });
     }
+  }
+
+  private async storeStopped(row: HealthRow, discardInFlightSample = false): Promise<void> {
+    // health_status is a PostgreSQL enum. Keep its existing neutral value while
+    // exposing intentional stop separately; do not disable the configured check.
+    await this.db
+      .update(dockerHealthChecks)
+      .set({
+        healthStatus: 'disabled',
+        lastHealthCheckAt: new Date(),
+        updatedAt: new Date(),
+        ...(discardInFlightSample ? { healthHistory: row.healthHistory } : {}),
+      })
+      .where(eq(dockerHealthChecks.id, row.id));
+    if (row.healthStatus === 'disabled') return;
+    this.eventBus?.publish('docker.health.changed', {
+      action: 'health.stopped',
+      health_status: 'stopped',
+      healthStatus: 'stopped',
+      previousStatus: row.healthStatus,
+      target: row.target,
+      nodeId: row.nodeId,
+      containerName: row.containerName,
+      deploymentId: row.deploymentId,
+      id: row.deploymentId ?? row.containerName,
+      resourceType: row.target === 'deployment' ? 'docker_deployment' : 'docker_container',
+      health_cause: null,
+    });
   }
 
   private async databaseDependencyState(row: HealthRow): Promise<{
@@ -556,6 +626,9 @@ export class DockerHealthCheckService {
   }
 
   private async probeRow(row: HealthRow) {
+    const availability = await this.availabilityHealth(row);
+    if (availability) return availability;
+    const probeNodeId = await this.resolveAvailabilityProbeNodeId(row);
     const options =
       row.target === 'deployment' && row.deploymentId
         ? await this.getDeploymentRouteOptions(row.deploymentId)
@@ -572,7 +645,7 @@ export class DockerHealthCheckService {
         row,
         {
           target: row.target,
-          nodeId: row.nodeId,
+          nodeId: probeNodeId,
           containerName: row.containerName,
           deploymentId: row.deploymentId,
         },
@@ -582,7 +655,170 @@ export class DockerHealthCheckService {
     );
   }
 
+  private async findAvailabilityPolicy(row: HealthTarget) {
+    if (this.workloadResolver?.findPolicy) {
+      const resource =
+        row.target === 'deployment' && row.deploymentId
+          ? { type: 'deployment' as const, deploymentId: row.deploymentId }
+          : row.containerName
+            ? { type: 'container' as const, nodeId: row.nodeId, containerName: row.containerName }
+            : null;
+      const policy = resource ? await this.workloadResolver.findPolicy(resource) : null;
+      return policy;
+    }
+    const resourceCondition =
+      row.target === 'deployment' && row.deploymentId
+        ? and(
+            eq(dockerAvailabilityPolicies.resourceKind, 'deployment'),
+            eq(dockerAvailabilityPolicies.deploymentId, row.deploymentId)
+          )
+        : row.target === 'container' && row.containerName
+          ? and(
+              eq(dockerAvailabilityPolicies.resourceKind, 'container'),
+              eq(dockerAvailabilityPolicies.sourceNodeId, row.nodeId),
+              eq(dockerAvailabilityPolicies.containerName, row.containerName)
+            )
+          : null;
+    if (!resourceCondition || typeof (this.db as { select?: unknown }).select !== 'function') return null;
+    const [policy] = await this.db
+      .select({
+        id: dockerAvailabilityPolicies.id,
+        mode: dockerAvailabilityPolicies.mode,
+        shouldRun: dockerAvailabilityPolicies.shouldRun,
+        composeProjectId: dockerAvailabilityPolicies.composeProjectId,
+        desiredReplicaCount: dockerAvailabilityPolicies.desiredReplicaCount,
+      })
+      .from(dockerAvailabilityPolicies)
+      .where(resourceCondition)
+      .limit(1);
+    return policy ?? null;
+  }
+
+  private async isIntentionallyStopped(row: HealthTarget): Promise<boolean> {
+    const policy = await this.findAvailabilityPolicy(row);
+    if (policy && policy.mode !== 'single') return policy.shouldRun === false;
+    return this.singleWorkloadStopped(row, policy);
+  }
+
+  private async singleWorkloadStopped(
+    row: HealthTarget,
+    policy?: { composeProjectId?: string | null } | null
+  ): Promise<boolean> {
+    if (typeof (this.db as { select?: unknown }).select !== 'function') return false;
+    if (row.target === 'deployment' && row.deploymentId) {
+      const [deployment] = await this.db
+        .select({ status: dockerDeployments.status })
+        .from(dockerDeployments)
+        .where(eq(dockerDeployments.id, row.deploymentId))
+        .limit(1);
+      return deployment?.status === 'stopped';
+    }
+    if (policy?.composeProjectId) {
+      const [project] = await this.db
+        .select({ desiredState: dockerComposeProjects.desiredState })
+        .from(dockerComposeProjects)
+        .where(eq(dockerComposeProjects.id, policy.composeProjectId))
+        .limit(1);
+      return project?.desiredState === 'stopped';
+    }
+    if (!row.containerName) return false;
+    const [resource] = await this.db
+      .select({ runtimeId: dockerAccessResources.runtimeId })
+      .from(dockerAccessResources)
+      .where(
+        and(eq(dockerAccessResources.nodeId, row.nodeId), eq(dockerAccessResources.resourceKey, row.containerName))
+      )
+      .limit(1);
+    // A runtime's exited/offline state is not stop intent. Only a successful,
+    // explicit Stop after its last Start/Restart/Create/Kill/Remove qualifies.
+    const runtimeIds = [row.containerName, ...(resource?.runtimeId ? [resource.runtimeId] : [])];
+    const [lastLifecycle] = await this.db
+      .select({ action: auditLog.action })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.resourceType, 'docker-container'),
+          inArray(auditLog.resourceId, runtimeIds),
+          sql`${auditLog.details}->>'nodeId' = ${row.nodeId}`,
+          inArray(auditLog.action, [
+            'docker.container.stop',
+            'docker.container.start',
+            'docker.container.restart',
+            'docker.container.create',
+            'docker.container.recreate',
+            'docker.container.kill',
+            'docker.container.remove',
+          ])
+        )
+      )
+      .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+      .limit(1);
+    return lastLifecycle?.action === 'docker.container.stop';
+  }
+
+  private async availabilityHealth(
+    row: HealthTarget
+  ): Promise<{ ok: boolean; status: DockerHealthStatus | 'stopped'; responseMs?: number } | null> {
+    const policy = await this.findAvailabilityPolicy(row);
+    if (!policy || policy.mode === 'single') {
+      return (await this.singleWorkloadStopped(row, policy)) ? { ok: true, status: 'stopped' } : null;
+    }
+    if (policy.shouldRun === false) return { ok: true, status: 'stopped' };
+    const placements = await this.db
+      .select({
+        serving: dockerAvailabilityPlacements.serving,
+        actualState: dockerAvailabilityPlacements.actualState,
+        dependencyState: dockerAvailabilityPlacements.dependencyState,
+        applicationHealth: dockerAvailabilityPlacements.applicationHealth,
+      })
+      .from(dockerAvailabilityPlacements)
+      .where(eq(dockerAvailabilityPlacements.policyId, policy.id));
+    const desired = policy.mode === 'replicated' ? policy.desiredReplicaCount : 1;
+    const serving = placements.filter((placement) => placement.serving && placement.actualState === 'serving');
+    const healthy = serving.filter(
+      (placement) => placement.dependencyState === 'ready' && placement.applicationHealth === 'healthy'
+    );
+    const status: DockerHealthStatus =
+      healthy.length >= desired ? 'online' : healthy.length > 0 || serving.length > 0 ? 'degraded' : 'offline';
+    return { ok: status !== 'offline', status };
+  }
+
+  private async resolveAvailabilityProbeNodeId(row: HealthRow): Promise<string> {
+    const resourceCondition =
+      row.target === 'deployment' && row.deploymentId
+        ? and(
+            eq(dockerAvailabilityPolicies.resourceKind, 'deployment'),
+            eq(dockerAvailabilityPolicies.deploymentId, row.deploymentId)
+          )
+        : row.target === 'container' && row.containerName
+          ? and(
+              eq(dockerAvailabilityPolicies.resourceKind, 'container'),
+              eq(dockerAvailabilityPolicies.sourceNodeId, row.nodeId),
+              eq(dockerAvailabilityPolicies.containerName, row.containerName)
+            )
+          : null;
+    if (!resourceCondition || typeof (this.db as { select?: unknown }).select !== 'function') return row.nodeId;
+
+    const [placement] = await this.db
+      .select({ nodeId: dockerAvailabilityPlacements.nodeId })
+      .from(dockerAvailabilityPlacements)
+      .innerJoin(dockerAvailabilityPolicies, eq(dockerAvailabilityPolicies.id, dockerAvailabilityPlacements.policyId))
+      .where(
+        and(
+          resourceCondition,
+          inArray(dockerAvailabilityPolicies.mode, ['replicated', 'failover']),
+          eq(dockerAvailabilityPlacements.generation, dockerAvailabilityPolicies.desiredGeneration),
+          eq(dockerAvailabilityPlacements.serving, true),
+          eq(dockerAvailabilityPlacements.actualState, 'serving')
+        )
+      )
+      .orderBy(desc(dockerAvailabilityPlacements.updatedAt))
+      .limit(1);
+    return placement?.nodeId ?? row.nodeId;
+  }
+
   private async probeConfig(config: DockerHealthCheckDto, requireEnabledRoute: boolean) {
+    if (await this.isIntentionallyStopped(config)) return { ok: true, status: 'stopped' as const, skipped: true };
     if (!config.enabled && requireEnabledRoute) {
       throw new AppError(400, 'HEALTH_CHECK_DISABLED', 'Enable the health check before testing it');
     }
@@ -608,6 +844,7 @@ export class DockerHealthCheckService {
         },
         config.timeoutSeconds * 1000 + 5000
       );
+      if (await this.isIntentionallyStopped(config)) return { ok: true, status: 'stopped' as const, skipped: true };
       const probe = parseDispatchResult(result) as {
         ok?: boolean;
         status?: DockerHealthStatus;
@@ -622,6 +859,7 @@ export class DockerHealthCheckService {
         responseMs: probe?.responseMs,
       };
     } catch (error) {
+      if (await this.isIntentionallyStopped(config)) return { ok: true, status: 'stopped' as const, skipped: true };
       logger.debug('Docker health probe failed', {
         nodeId: config.nodeId,
         hostPort: config.hostPort,
@@ -721,7 +959,12 @@ export class DockerHealthCheckService {
   }
 
   private async getContainerRouteOptions(nodeId: string, containerName: string): Promise<DockerHealthRouteOption[]> {
-    const result = await this.dispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId: containerName });
+    const runtimeTarget = await this.workloadResolver?.resolveContainerRuntimeTarget(nodeId, containerName);
+    const inspectNodeId = runtimeTarget?.nodeId ?? nodeId;
+    const inspectContainerId = runtimeTarget?.containerId ?? containerName;
+    const result = await this.dispatch.sendDockerContainerCommand(inspectNodeId, 'inspect', {
+      containerId: inspectContainerId,
+    });
     if (!result.success) throw new AppError(502, 'DISPATCH_ERROR', result.error || 'Could not inspect container');
     const inspect = result.detail ? JSON.parse(result.detail) : null;
     const labels = inspect?.Config?.Labels ?? {};

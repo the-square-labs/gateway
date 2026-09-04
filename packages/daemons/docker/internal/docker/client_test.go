@@ -764,6 +764,24 @@ func TestMergeManagedDatabaseExtraHostsReplacesGeneratedAliases(t *testing.T) {
 	}
 }
 
+func TestMergePreferredExtraHostsKeepsAvailabilityDatabaseAliasAuthoritative(t *testing.T) {
+	merged := mergePreferredExtraHosts(
+		[]string{
+			"db-av-ceb07620d2d447cf:172.22.0.1",
+			"db-392bc8b429874281:172.22.0.9",
+		},
+		[]string{"db-392bc8b429874281:172.22.0.1"},
+	)
+
+	expected := []string{
+		"db-av-ceb07620d2d447cf:172.22.0.1",
+		"db-392bc8b429874281:172.22.0.1",
+	}
+	if !reflect.DeepEqual(merged, expected) {
+		t.Fatalf("unexpected preferred extra hosts: got %#v want %#v", merged, expected)
+	}
+}
+
 func TestManagedDatabaseHostEntryUsesDaemonListenerGateway(t *testing.T) {
 	entry, err := managedDatabaseHostEntry(
 		"gateway-db-0123456789abcdef",
@@ -919,9 +937,14 @@ func TestEnsureImageSkipsRegistryPullWhenExactReferenceExists(t *testing.T) {
 
 func TestEnsureImagePullsWhenExactReferenceIsMissing(t *testing.T) {
 	inspectCalls := 0
+	listCalls := 0
 	pullCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/images/json"):
+			listCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
 		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
 			inspectCalls++
 			http.NotFound(w, r)
@@ -947,6 +970,87 @@ func TestEnsureImagePullsWhenExactReferenceIsMissing(t *testing.T) {
 	}
 	if inspectCalls != 1 {
 		t.Fatalf("inspect calls = %d, want 1", inspectCalls)
+	}
+	if listCalls != 1 {
+		t.Fatalf("list calls = %d, want 1", listCalls)
+	}
+	if pullCalls != 1 {
+		t.Fatalf("pull calls = %d, want 1", pullCalls)
+	}
+}
+
+func TestEnsureImageUsesExactLocalTagFallbackAfterInspectMiss(t *testing.T) {
+	inspectCalls := 0
+	listCalls := 0
+	pullCalls := 0
+	imageRef := "ghcr.io/the-square-labs/gateway/secure-link-connector:v99.0.0-relay"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/images/json"):
+			listCalls++
+			if !strings.Contains(r.URL.Query().Get("filters"), imageRef) {
+				t.Fatalf("reference filter = %q, want %q", r.URL.Query().Get("filters"), imageRef)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","RepoTags":["ghcr.io/the-square-labs/gateway/secure-link-connector:v99.0.0-relay"]}]`))
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			inspectCalls++
+			http.NotFound(w, r)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pullCalls++
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	if err := c.EnsureImage(context.Background(), imageRef, ""); err != nil {
+		t.Fatalf("ensure image: %v", err)
+	}
+	if inspectCalls != 1 || listCalls != 1 {
+		t.Fatalf("inspect/list calls = %d/%d, want 1/1", inspectCalls, listCalls)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("pull calls = %d, want 0", pullCalls)
+	}
+}
+
+func TestEnsureImageDoesNotAcceptInexactLocalTagFallback(t *testing.T) {
+	pullCalls := 0
+	imageRef := "ghcr.io/the-square-labs/gateway/secure-link-connector:v99.0.0-relay"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","RepoTags":["ghcr.io/the-square-labs/gateway/secure-link-connector:v99.0.0-relay-extra"]}]`))
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			http.NotFound(w, r)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pullCalls++
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	if err := c.EnsureImage(context.Background(), imageRef, ""); err != nil {
+		t.Fatalf("ensure image: %v", err)
 	}
 	if pullCalls != 1 {
 		t.Fatalf("pull calls = %d, want 1", pullCalls)

@@ -1,5 +1,11 @@
 import type {
   ContainerCreateConfig,
+  DockerAvailabilityOperation,
+  DockerAvailabilityOperationPage,
+  DockerAvailabilityPolicy,
+  DockerAvailabilityPolicyInput,
+  DockerAvailabilityPreflight,
+  DockerAvailabilityResource,
   DockerComposeOperation,
   DockerComposeOperationAction,
   DockerComposeProject,
@@ -99,6 +105,95 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
   return class DockerApiClient extends withDockerResourceApi(
     withDockerMigrationApi(withDockerWebhookApi(Base))
   ) {
+    async getDockerAvailability(
+      resource: DockerAvailabilityResource
+    ): Promise<DockerAvailabilityPolicy | null> {
+      const query = new URLSearchParams(resource as unknown as Record<string, string>);
+      return this.unwrapData(
+        this.request<{ data: DockerAvailabilityPolicy | null }>(
+          `/docker/availability/by-resource?${query}`
+        )
+      );
+    }
+
+    async preflightDockerAvailability(
+      input: DockerAvailabilityPolicyInput
+    ): Promise<DockerAvailabilityPreflight> {
+      return this.unwrapData(
+        this.request<{ data: DockerAvailabilityPreflight }>("/docker/availability/preflight", {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async enableDockerAvailability(
+      input: DockerAvailabilityPolicyInput
+    ): Promise<DockerAvailabilityPolicy> {
+      return this.unwrapData(
+        this.request<{ data: DockerAvailabilityPolicy }>("/docker/availability", {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async updateDockerAvailability(
+      policyId: string,
+      input: Omit<Partial<DockerAvailabilityPolicyInput>, "resource">
+    ): Promise<DockerAvailabilityPolicy> {
+      return this.unwrapData(
+        this.request<{ data: DockerAvailabilityPolicy }>(`/docker/availability/${policyId}`, {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        })
+      );
+    }
+
+    async listDockerAvailabilityOperations(
+      policyId: string
+    ): Promise<DockerAvailabilityOperation[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerAvailabilityOperation[] }>(
+          `/docker/availability/${policyId}/operations`
+        )
+      );
+    }
+
+    async listDockerAvailabilityOperationsPage(
+      policyId: string,
+      query: { page?: number; limit?: number } = {}
+    ): Promise<DockerAvailabilityOperationPage> {
+      const params = new URLSearchParams();
+      if (query.page) params.set("page", String(query.page));
+      if (query.limit) params.set("limit", String(query.limit));
+      const suffix = params.size ? `?${params.toString()}` : "";
+      return this.request<DockerAvailabilityOperationPage>(
+        `/docker/availability/${policyId}/operations/page${suffix}`
+      );
+    }
+
+    async disableDockerAvailability(
+      policyId: string,
+      input: { survivingPlacementId: string; confirmation: string }
+    ): Promise<DockerAvailabilityPolicy> {
+      return this.unwrapData(
+        this.request<{ data: DockerAvailabilityPolicy }>(
+          `/docker/availability/${policyId}/disable`,
+          {
+            method: "POST",
+            body: JSON.stringify(input),
+          }
+        )
+      );
+    }
+
+    async retryDockerAvailabilityOperation(policyId: string, operationId: string): Promise<void> {
+      await this.request(`/docker/availability/${policyId}/operations/${operationId}/retry`, {
+        method: "POST",
+      });
+    }
+
     async getDockerNodeBySlug(
       slug: string
     ): Promise<

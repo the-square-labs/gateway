@@ -84,6 +84,23 @@ describe('DashboardReadModelService', () => {
     expect(databaseChanged?.matches?.({ action: 'updated' })).toBe(true);
   });
 
+  it('refreshes proxy-backed projections only for material proxy changes', () => {
+    const { definitions } = makeService();
+
+    for (const id of [
+      'dashboard-source:health',
+      'dashboard-source:proxies',
+      'dashboard-source:stats-user',
+      'dashboard-source:stats-system',
+    ]) {
+      const definition = definitions.find((item) => item.id === id);
+      const proxyChanged = definition?.events?.find((event) => event.channel === 'proxy.host.changed');
+      expect(proxyChanged?.matches?.({ action: 'health.sampled' }), id).toBe(false);
+      expect(proxyChanged?.matches?.({ action: 'health.offline' }), id).toBe(true);
+      expect(proxyChanged?.matches?.({ action: 'updated' }), id).toBe(true);
+    }
+  });
+
   it('only replaces the proxy projection after its complete source succeeds', async () => {
     const { definitions, snapshots, proxies } = makeService();
     const definition = definitions.find((item) => item.id === 'dashboard-source:proxies');

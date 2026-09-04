@@ -8,6 +8,7 @@ import {
   SettingsHelpTitle,
   SettingsInlineControl,
 } from "@/components/common/SettingsControlRow";
+import { AvailabilitySection } from "@/components/docker/availability/AvailabilitySection";
 import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckSection";
 import { GpuSettingsSection, normalizeGpuDeviceIds } from "@/components/docker/GpuSettingsSection";
 import { Button } from "@/components/ui/button";
@@ -84,6 +85,7 @@ function sameRuntimeBaseline(a: RuntimeFormValues, b: RuntimeFormValues) {
 
 function sameRecreateBaseline(a: RecreateBaseline, b: RecreateBaseline) {
   return (
+    a.imageName === b.imageName &&
     a.imageTag === b.imageTag &&
     a.ports === b.ports &&
     a.mounts === b.mounts &&
@@ -150,6 +152,10 @@ export function SettingsTab({
   onHealthCheckSaved,
   transition,
   readOnly,
+  availabilityManaged = false,
+  logicalContainerName,
+  imageReferenceOverride,
+  onAvailabilityDisableQueued,
 }: {
   nodeId: string;
   containerId: string;
@@ -162,6 +168,10 @@ export function SettingsTab({
   onHealthCheckSaved?: (healthCheck: DockerHealthCheck) => void;
   transition?: string;
   readOnly?: boolean;
+  availabilityManaged?: boolean;
+  logicalContainerName?: string;
+  imageReferenceOverride?: string | null;
+  onAvailabilityDisableQueued?: (survivor: { nodeId: string; nodeSlug: string }) => void;
 }) {
   const { hasScope } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
@@ -295,11 +305,11 @@ export function SettingsTab({
 
   const config = data.Config ?? {};
   const containerName = useMemo(
-    () => ((data.Name ?? "") as string).replace(/^\//, ""),
-    [data.Name]
+    () => logicalContainerName || ((data.Name ?? "") as string).replace(/^\//, ""),
+    [data.Name, logicalContainerName]
   );
   const configLabels = (config.Labels ?? {}) as Record<string, string>;
-  const currentImage = resolveContainerImageReference(data);
+  const currentImage = imageReferenceOverride || resolveContainerImageReference(data);
   const { imageName: parsedImageName, tag: parsedTag } = useMemo(() => {
     if (currentImage.includes("@")) {
       return { imageName: currentImage, tag: "" };
@@ -312,9 +322,11 @@ export function SettingsTab({
     return { imageName: currentImage.slice(0, lastColon), tag: currentImage.slice(lastColon + 1) };
   }, [currentImage]);
 
+  const [imageName, setImageName] = useState(parsedImageName);
   const [imageTag, setImageTag] = useState(parsedTag);
+  const imageNameChanged = imageName !== parsedImageName;
   const imageTagChanged = imageTag !== parsedTag;
-  const imageTagLocked = parsedImageName.includes("@");
+  const imageTagLocked = imageName.includes("@");
 
   const initialEntrypoint = (config.Entrypoint ?? []) as string[];
   const initialCmd = (config.Cmd ?? []) as string[];
@@ -330,7 +342,8 @@ export function SettingsTab({
       ([key]) =>
         key !== GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL &&
         key !== GATEWAY_GPU_GROUP_IDS_LABEL &&
-        key !== GATEWAY_GPU_GROUP_IDS_VERSION_LABEL
+        key !== GATEWAY_GPU_GROUP_IDS_VERSION_LABEL &&
+        !key.startsWith("wiolett.gateway.availability.")
     )
   );
 
@@ -356,6 +369,7 @@ export function SettingsTab({
 
   const recreateBaseline = useMemo(
     () => ({
+      imageName: parsedImageName,
       imageTag: parsedTag,
       ports: JSON.stringify(initialPorts),
       mounts: JSON.stringify(initialMounts),
@@ -381,6 +395,7 @@ export function SettingsTab({
       initialWorkdir,
       initialGpuDeviceIds,
       savedRuntimeProfile,
+      parsedImageName,
       parsedTag,
     ]
   );
@@ -427,6 +442,7 @@ export function SettingsTab({
     const previous = previousRecreateBaselineRef.current;
     const baselineChanged = !sameRecreateBaseline(previous, recreateBaseline);
     const nonGpuFormMatchesPrevious =
+      imageName === previous.imageName &&
       imageTag === previous.imageTag &&
       JSON.stringify(ports) === previous.ports &&
       JSON.stringify(mounts) === previous.mounts &&
@@ -443,6 +459,7 @@ export function SettingsTab({
     previousRecreateBaselineRef.current = recreateBaseline;
 
     if (!baselineChanged || !nonGpuFormMatchesPrevious) return;
+    setImageName(parsedImageName);
     setImageTag(parsedTag);
     setPorts(initialPorts);
     setMounts(initialMounts);
@@ -463,7 +480,9 @@ export function SettingsTab({
     gpuDeviceIds,
     hostname,
     initialGpuDeviceIds,
+    parsedImageName,
     imageTag,
+    imageName,
     initialCmd,
     initialEntrypoint,
     initialHostname,
@@ -736,6 +755,7 @@ export function SettingsTab({
     mountsChanged ||
     execChanged ||
     labelsChanged ||
+    imageNameChanged ||
     imageTagChanged ||
     effectiveGpuChanged ||
     runtimeProfileChanged;
@@ -834,9 +854,9 @@ export function SettingsTab({
       }
 
       const payload = buildRecreatePayloadFromForm({
-        parsedImageName,
+        parsedImageName: imageName,
         imageTag,
-        imageTagChanged,
+        imageTagChanged: imageNameChanged || imageTagChanged,
         portsChanged,
         ports,
         mountsChanged,
@@ -884,6 +904,8 @@ export function SettingsTab({
     hostname,
     imageTag,
     imageTagChanged,
+    imageName,
+    imageNameChanged,
     applyNetworkChanges,
     invalidate,
     labels,
@@ -900,7 +922,6 @@ export function SettingsTab({
     networksChanged,
     onRecreating,
     onRefresh,
-    parsedImageName,
     ports,
     portsChanged,
     buildRuntimePayload,
@@ -964,7 +985,13 @@ export function SettingsTab({
             />
           }
           description="Requires container recreation"
-          dirty={execChanged || imageTagChanged || effectiveGpuChanged || runtimeProfileChanged}
+          dirty={
+            execChanged ||
+            imageNameChanged ||
+            imageTagChanged ||
+            effectiveGpuChanged ||
+            runtimeProfileChanged
+          }
           bodyClassName="divide-y divide-border"
           actions={
             canEdit ? (
@@ -992,7 +1019,12 @@ export function SettingsTab({
           >
             <div className="grid w-full gap-2 sm:grid-cols-2">
               <SettingsInlineControl label="Image">
-                <Input value={parsedImageName} disabled />
+                <Input
+                  value={imageName}
+                  onChange={(event) => setImageName(event.target.value)}
+                  disabled={!availabilityManaged}
+                  style={imageNameChanged ? { borderColor: "var(--color-warning)" } : undefined}
+                />
               </SettingsInlineControl>
               <SettingsInlineControl label="Tag">
                 <Input
@@ -1135,6 +1167,12 @@ export function SettingsTab({
         </PanelShell>
       </div>
 
+      <AvailabilitySection
+        resource={{ type: "container", nodeId, containerName }}
+        canManage={canEdit}
+        onDisableQueued={onAvailabilityDisableQueued}
+      />
+
       {savedRuntimeProfile !== "secure" && (
         <GpuSettingsSection
           nodeId={nodeId}
@@ -1160,14 +1198,16 @@ export function SettingsTab({
       />
 
       {/* ─── Volume Mounts ────────────────────────────────────────── */}
-      <VolumeMountsSection
-        nodeId={nodeId}
-        canEdit={canEdit && canEditMounts}
-        mounts={mounts}
-        setMounts={setMounts}
-        mountsChanged={mountsChanged}
-        inputCell={inputCell}
-      />
+      {!availabilityManaged && (
+        <VolumeMountsSection
+          nodeId={nodeId}
+          canEdit={canEdit && canEditMounts}
+          mounts={mounts}
+          setMounts={setMounts}
+          mountsChanged={mountsChanged}
+          inputCell={inputCell}
+        />
+      )}
 
       {/* ─── Networks ─────────────────────────────────────────────── */}
       <NetworksSection

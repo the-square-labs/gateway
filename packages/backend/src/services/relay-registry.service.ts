@@ -11,8 +11,8 @@ const REGISTRY_PROXY_PORT = 5443;
 const TOKEN_REFRESH_MS = 15_000;
 const REPOSITORY_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 
-type RegistryBindingRole = 'builder' | 'runtime';
-type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_project';
+type RegistryBindingRole = 'builder' | 'runtime' | 'mirror';
+type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_project' | 'availability';
 
 export class RelayRegistryService {
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -134,7 +134,7 @@ export class RelayRegistryService {
         this.relayPolicy.revokeOwner('registry_secure_link', binding.id, { allowDeferredSnapshot: true })
       )
     );
-    await Promise.all([...new Set(bindings.map(({ nodeId }) => nodeId))].map((nodeId) => this.syncNode(nodeId)));
+    await Promise.allSettled([...new Set(bindings.map(({ nodeId }) => nodeId))].map((nodeId) => this.syncNode(nodeId)));
   }
 
   async moveRuntimeContextBinding(input: {
@@ -252,8 +252,31 @@ export class RelayRegistryService {
       .select()
       .from(dockerRegistryNodeBindings)
       .where(and(eq(dockerRegistryNodeBindings.nodeId, nodeId), eq(dockerRegistryNodeBindings.status, 'active')));
-    const desired = [];
+    // Context rows are independently revocable grants, not daemon transport rows.
+    // Git releases and HA can legitimately share a repository on the same node.
+    const repositories = new Map<string, typeof bindings>();
     for (const binding of bindings) {
+      this.validate({ ...binding, actions: binding.actions as Array<'pull' | 'push'> });
+      const group = repositories.get(binding.repository) ?? [];
+      group.push(binding);
+      repositories.set(binding.repository, group);
+    }
+    const transportBindings = [...repositories.values()].map((group) => {
+      // Never hide a builder/runtime profile conflict or synthesize broader grants.
+      const builder = group.some((binding) => binding.role === 'builder');
+      const mixedProfiles = builder && group.some((binding) => binding.role !== 'builder');
+      const representative = [...group]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .find((candidate) =>
+          group.every((binding) => binding.actions.every((action) => candidate.actions.includes(action)))
+        );
+      if (mixedProfiles || !representative) {
+        throw new AppError(409, 'REGISTRY_BINDING_CONFLICT', 'Registry repository has incompatible active grants');
+      }
+      return representative;
+    });
+    const desired = [];
+    for (const binding of transportBindings) {
       await this.relayPolicy.ensureInternalRegistryRoute(binding.id, nodeId, 'registry_secure_link');
       const requested = [{ repository: binding.repository, actions: binding.actions as Array<'pull' | 'push'> }];
       const issued = await this.registry.issueToken({
@@ -298,6 +321,14 @@ export class RelayRegistryService {
           );
       }
       throw new Error(message);
+    }
+    // Replace the daemon snapshot before retiring old transport routes. Keep the
+    // context grants active so revoking one owner cannot revoke another's access.
+    const transportIds = new Set(transportBindings.map(({ id }) => id));
+    for (const binding of bindings) {
+      if (!transportIds.has(binding.id)) {
+        await this.relayPolicy.revokeOwner('registry_secure_link', binding.id, { allowDeferredSnapshot: true });
+      }
     }
     if (bindings.length) {
       await this.db

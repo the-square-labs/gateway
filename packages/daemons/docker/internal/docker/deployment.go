@@ -4,20 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
 const (
-	deploymentManagedLabel = "wiolett.gateway.deployment.managed"
-	deploymentIDLabel      = "wiolett.gateway.deployment.id"
-	deploymentRoleLabel    = "wiolett.gateway.deployment.role"
-	deploymentSlotLabel    = "wiolett.gateway.deployment.slot"
+	deploymentManagedLabel           = "wiolett.gateway.deployment.managed"
+	deploymentIDLabel                = "wiolett.gateway.deployment.id"
+	deploymentRoleLabel              = "wiolett.gateway.deployment.role"
+	deploymentSlotLabel              = "wiolett.gateway.deployment.slot"
+	availabilityPolicyLabel          = "wiolett.gateway.availability.policy"
+	availabilityPlacementLabel       = "wiolett.gateway.availability.placement"
+	availabilityGenerationLabel      = "wiolett.gateway.availability.generation"
+	availabilitySpecFingerprintLabel = "wiolett.gateway.availability.spec-fingerprint"
 )
 
 type deploymentRouteConfig struct {
 	HostPort      uint16 `json:"hostPort"`
+	HostIP        string `json:"hostIp"`
 	ContainerPort uint16 `json:"containerPort"`
 	IsPrimary     bool   `json:"isPrimary"`
 }
@@ -43,6 +49,7 @@ type deploymentDesiredConfig struct {
 	User           string            `json:"user"`
 	Labels         map[string]string `json:"labels"`
 	Networks       []string          `json:"networks"`
+	ExtraHosts     []string          `json:"extraHosts"`
 	RestartPolicy  string            `json:"restartPolicy"`
 	RuntimeProfile string            `json:"runtimeProfile"`
 	Runtime        map[string]any    `json:"runtime"`
@@ -193,7 +200,7 @@ func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, 
 	case "kill":
 		err = p.client.KillDeployment(ctx, payload)
 	case "inspect":
-		detail, err = p.client.InspectDeployment(ctx, cmd.DeploymentId)
+		detail, err = p.client.InspectDeployment(ctx, cmd.DeploymentId, payload.Deployment)
 	case "stop_slot":
 		err = p.client.StopDeploymentSlot(ctx, payload)
 	case "remove":
@@ -514,14 +521,42 @@ func (c *Client) stopInactiveDeploymentSlots(ctx context.Context, dep deployment
 
 func (c *Client) RemoveDeployment(ctx context.Context, payload deploymentCommandPayload) error {
 	dep := payload.Deployment
-	for _, slot := range []string{"blue", "green"} {
-		if name := dep.slotName(slot); name != "" {
-			_ = c.removeContainerByName(ctx, name, true)
+	containers, err := c.ListContainers(ctx)
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]ContainerInfo, len(containers))
+	for _, container := range containers {
+		byName[container.Name] = container
+	}
+	targets := []struct {
+		name string
+		role string
+		slot string
+	}{
+		{name: dep.slotName("blue"), role: "app", slot: "blue"},
+		{name: dep.slotName("green"), role: "app", slot: "green"},
+		{name: dep.RouterName, role: "router"},
+	}
+	for _, target := range targets {
+		if target.name == "" {
+			continue
+		}
+		container, exists := byName[target.name]
+		if !exists {
+			continue
+		}
+		if !deploymentRemovalContainerMatches(container, dep, target.role, target.slot, payload.Force) {
+			return fmt.Errorf("deployment container %q ownership does not match removal payload", target.name)
 		}
 	}
-	_ = c.removeContainerByName(ctx, dep.RouterName, true)
+	for _, target := range targets {
+		if err := c.removeContainerByName(ctx, target.name, true); err != nil {
+			return err
+		}
+	}
 	if dep.NetworkName != "" {
-		err := c.RemoveNetwork(ctx, dep.NetworkName)
+		err = c.RemoveNetwork(ctx, dep.NetworkName)
 		if err != nil && !isNotFoundErr(err) {
 			return err
 		}
@@ -529,18 +564,78 @@ func (c *Client) RemoveDeployment(ctx context.Context, payload deploymentCommand
 	return nil
 }
 
-func (c *Client) InspectDeployment(ctx context.Context, deploymentID string) (map[string]any, error) {
+func (c *Client) InspectDeployment(ctx context.Context, deploymentID string, expected deploymentSnapshot) (map[string]any, error) {
 	result := map[string]any{"deploymentId": deploymentID, "containers": []ContainerInfo{}}
 	containers, err := c.ListContainers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var matched []ContainerInfo
+	expectedNames := map[string]struct{}{}
+	if expected.RouterName != "" {
+		expectedNames[expected.RouterName] = struct{}{}
+	}
+	for _, slot := range expected.Slots {
+		if slot.ContainerName != "" {
+			expectedNames[slot.ContainerName] = struct{}{}
+		}
+	}
 	for _, ctr := range containers {
-		if ctr.Labels[deploymentIDLabel] == deploymentID {
+		_, exactNameMatch := expectedNames[ctr.Name]
+		if ctr.Labels[deploymentIDLabel] == deploymentID || exactNameMatch {
 			matched = append(matched, ctr)
 		}
 	}
 	result["containers"] = matched
 	return result, nil
+}
+
+func deploymentRemovalContainerMatches(container ContainerInfo, dep deploymentSnapshot, role, slot string, force bool) bool {
+	labels := container.Labels
+	if labels[deploymentIDLabel] != dep.ID || labels[deploymentManagedLabel] != "true" || labels[deploymentRoleLabel] != role {
+		return false
+	}
+	if role == "app" && labels[deploymentSlotLabel] != slot {
+		return false
+	}
+	if force {
+		return true
+	}
+	expectedLabels := dep.DesiredConfig.Labels
+	actualAvailability := []string{
+		labels[availabilityPolicyLabel],
+		labels[availabilityPlacementLabel],
+		labels[availabilityGenerationLabel],
+		labels[availabilitySpecFingerprintLabel],
+	}
+	hasAvailabilityIdentity := false
+	for _, value := range actualAvailability {
+		if value != "" {
+			hasAvailabilityIdentity = true
+			break
+		}
+	}
+	if !hasAvailabilityIdentity {
+		expectedImage := dep.RouterImage
+		if role == "app" {
+			expectedImage = dep.DesiredConfig.Image
+		}
+		return expectedImage == "" || container.Image == expectedImage
+	}
+	if role != "app" {
+		return false
+	}
+	if expectedLabels[availabilityPolicyLabel] == "" && expectedLabels[availabilityPlacementLabel] == "" {
+		return true
+	}
+	if expectedLabels[availabilityPolicyLabel] == "" || expectedLabels[availabilityPlacementLabel] == "" {
+		return false
+	}
+	if labels[availabilityPolicyLabel] != expectedLabels[availabilityPolicyLabel] ||
+		labels[availabilityPlacementLabel] != expectedLabels[availabilityPlacementLabel] {
+		return false
+	}
+	actualGeneration, actualErr := strconv.ParseUint(labels[availabilityGenerationLabel], 10, 64)
+	expectedGeneration, expectedErr := strconv.ParseUint(expectedLabels[availabilityGenerationLabel], 10, 64)
+	return actualErr == nil && expectedErr == nil && actualGeneration > 0 && actualGeneration <= expectedGeneration
 }

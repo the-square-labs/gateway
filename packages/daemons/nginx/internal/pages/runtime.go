@@ -356,8 +356,12 @@ func (r *Runtime) ActivateTagRoute(routeID, deploymentID string) error {
 	if err := r.ensureRuntimeConfigPublicDirs(RuntimeConfigBindingRoute, routeID); err != nil {
 		return err
 	}
-	fragment := fmt.Sprintf("# gateway-pages route %s\nroot %s;\nindex index.html;\nset $gateway_pages_runtime_config_path %s;\n", routeID, r.releaseContentDir(deploymentID), runtimeConfigPath)
+	fragment := r.routeConfig(routeID, deploymentID, runtimeConfigPath)
 	return r.applyConfig(r.routeIncludePath(routeID), []byte(fragment))
+}
+
+func (r *Runtime) routeConfig(routeID, deploymentID, runtimeConfigPath string) string {
+	return fmt.Sprintf("# gateway-pages route %s\nroot %s;\nindex index.html;\nset $gateway_pages_runtime_config_path %s;\n", routeID, r.releaseContentDir(deploymentID), runtimeConfigPath)
 }
 
 func (r *Runtime) DeactivateTagRoute(routeID string) error {

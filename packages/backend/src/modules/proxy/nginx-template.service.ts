@@ -308,7 +308,9 @@ limit_conn_zone $binary_remote_addr zone=connlimit_{{id}}:10m;
 {{/if}}
 {{#if secureLinkUpstream}}
 upstream {{secureLinkUpstreamName}} {
-    server unix:{{secureLinkSocketPath}};
+{{#if secureLinkUsesLoadBalancing}}    least_conn;
+{{/if}}{{#each secureLinkSocketPaths}}    server unix:{{this}};
+{{/each}}
     keepalive 64;
 }
 
@@ -1126,19 +1128,29 @@ export class NginxTemplateService {
       const upstreamName = `gateway_additional_secure_link_${binding.id.replace(/-/g, '_')}`;
       const declaration = new RegExp(`(^|\\n)[\\t ]*upstream[\\t ]+${upstreamName}[\\t ]*\\{`, 'm');
       if (declaration.test(rendered)) return [];
-      return [`upstream ${upstreamName} {\n    server unix:${binding.socketPath};\n    keepalive 64;\n}`];
+      const socketPaths = binding.socketPaths?.length ? binding.socketPaths : [binding.socketPath];
+      return [
+        `upstream ${upstreamName} {\n${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths.map((socketPath) => `    server unix:${socketPath};`).join('\n')}\n    keepalive 64;\n}`,
+      ];
     });
     return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
   }
 
   private ensureManagedAdditionalRouteUpstreams(rendered: string, host: ProxyHostConfig): string {
     const declarations = (host.additionalRoutes ?? [])
-      .filter((route) => route.secureLinkUpstream && route.secureLinkSocketPath)
+      .filter(
+        (route) => route.secureLinkUpstream && (route.secureLinkSocketPath || route.secureLinkSocketPaths?.length)
+      )
       .flatMap((route) => {
         const upstreamName = `gateway_additional_secure_link_${route.id.replace(/-/g, '_')}`;
         const declaration = new RegExp(`(^|\\n)[\\t ]*upstream[\\t ]+${upstreamName}[\\t ]*\\{`, 'm');
         if (declaration.test(rendered)) return [];
-        return [`upstream ${upstreamName} {\n    server unix:${route.secureLinkSocketPath};\n    keepalive 64;\n}`];
+        const socketPaths = route.secureLinkSocketPaths?.length
+          ? route.secureLinkSocketPaths
+          : [route.secureLinkSocketPath!];
+        return [
+          `upstream ${upstreamName} {\n${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths.map((socketPath) => `    server unix:${socketPath};`).join('\n')}\n    keepalive 64;\n}`,
+        ];
       });
     return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
   }
@@ -1148,13 +1160,17 @@ export class NginxTemplateService {
 
     const upstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
     const upstreamDeclaration = new RegExp(`(^|\\n)[\\t ]*upstream[\\t ]+${upstreamName}[\\t ]*\\{`, 'm');
-    if (upstreamDeclaration.test(rendered)) return rendered;
-
-    const socketPath = host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`;
-    return `upstream ${upstreamName} {
-    server unix:${socketPath};
+    const socketPaths = host.secureLinkSocketPaths?.length
+      ? host.secureLinkSocketPaths
+      : [host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`];
+    const declaration = `upstream ${upstreamName} {
+${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths.map((socketPath) => `    server unix:${socketPath};`).join('\n')}
     keepalive 64;
-}
+}`;
+    if (upstreamDeclaration.test(rendered)) {
+      return rendered.replace(new RegExp(`upstream[\\t ]+${upstreamName}[\\t ]*\\{[^}]*\\}`, 'm'), declaration);
+    }
+    return `${declaration}
 
 ${rendered}`;
   }
@@ -1282,6 +1298,9 @@ ${rendered}`;
     const sanitizedHost = host.forwardHost ? host.forwardHost.replace(DANGEROUS_CHARS, '') : '';
     const secureLinkUpstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
     const secureLinkSocketPath = host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`;
+    const secureLinkSocketPaths = host.secureLinkSocketPaths?.length
+      ? host.secureLinkSocketPaths
+      : [secureLinkSocketPath];
     const registryAuthRealm = host.registryAuthRealm?.replace(DANGEROUS_CHARS, '');
     const upstream = host.secureLinkUpstream
       ? `${host.forwardScheme}://${secureLinkUpstreamName}`
@@ -1339,6 +1358,8 @@ ${rendered}`;
       secureLinkUpstream: host.secureLinkUpstream === true,
       secureLinkUpstreamName,
       secureLinkSocketPath,
+      secureLinkSocketPaths,
+      secureLinkUsesLoadBalancing: secureLinkSocketPaths.length > 1,
       registryAuthRealm,
       registryAuthVariableName: `gateway_registry_challenge_${host.id.replace(/-/g, '_')}`,
       sslCertPath: host.sslCertPath,

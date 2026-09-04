@@ -555,23 +555,26 @@ export function SettingsTab({
           description="Certificate used for HTTPS"
           help="Selects the certificate distributed to proxy replicas for TLS termination. Its Subject Alternative Names must cover the Route domains."
         >
-          <Select
-            value={sslCertificateId || "__none__"}
-            onValueChange={(value) => setSslCertificateId(value === "__none__" ? "" : value)}
+          <Combobox
+            value={sslCertificateId}
+            options={[
+              { value: "", label: "None" },
+              ...sslCerts.map((certificate) => ({
+                value: certificate.id,
+                label: `${certificate.name} (${certificate.type})`,
+                keywords: certificate.domainNames?.join(" ") ?? "",
+              })),
+            ]}
+            onValueChange={setSslCertificateId}
+            placeholder="Select certificate..."
+            searchPlaceholder="Search certificates..."
+            emptyMessage="No matching certificates."
+            ariaLabel="SSL Certificate"
+            inputClassName="font-sans"
+            contentClassName="font-sans sm:w-72"
+            className="sm:w-72"
             disabled={!canManage}
-          >
-            <SelectTrigger className="w-full font-sans sm:w-72" aria-label="SSL Certificate">
-              <SelectValue placeholder="Select certificate..." />
-            </SelectTrigger>
-            <SelectContent className="font-sans">
-              <SelectItem value="__none__">None</SelectItem>
-              {sslCerts.map((certificate) => (
-                <SelectItem key={certificate.id} value={certificate.id}>
-                  {certificate.name} ({certificate.type})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          />
         </SettingsControlRow>
       </PanelShell>
 

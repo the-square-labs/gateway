@@ -1,5 +1,5 @@
 import { Download, ExternalLink, ScrollText } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { AnsiText } from "@/components/ui/ansi-text";
@@ -10,12 +10,23 @@ import { DockerLogViewport } from "./DockerLogViewport";
 const CHANNEL_PREFIX = "docker-logs:";
 const MAX_LOG_LINES = 10000;
 
-function capNewestLogs(logs: string[]): string[] {
-  return logs.length > MAX_LOG_LINES ? logs.slice(-MAX_LOG_LINES) : logs;
+function capNewestLogs(logs: string[], limit = MAX_LOG_LINES): string[] {
+  return logs.length > limit ? logs.slice(-limit) : logs;
 }
 
-export function mergeReconnectLogLines(existing: string[], incoming: string[]): string[] {
-  if (existing.length === 0) return capNewestLogs(incoming);
+interface AggregatedLogLine {
+  key: string;
+  channelId: string;
+  source: string;
+  text: string;
+}
+
+export function mergeReconnectLogLines(
+  existing: string[],
+  incoming: string[],
+  limit = MAX_LOG_LINES
+): string[] {
+  if (existing.length === 0) return capNewestLogs(incoming, limit);
   if (incoming.length === 0) return existing;
 
   const maxOverlap = Math.min(existing.length, incoming.length);
@@ -30,12 +41,12 @@ export function mergeReconnectLogLines(existing: string[], incoming: string[]): 
         }
       }
       if (matches) {
-        return capNewestLogs([...existing, ...incoming.slice(incomingStart + overlap)]);
+        return capNewestLogs([...existing, ...incoming.slice(incomingStart + overlap)], limit);
       }
     }
   }
 
-  return capNewestLogs([...existing, ...incoming]);
+  return capNewestLogs([...existing, ...incoming], limit);
 }
 
 function isTerminalLogError(message: string): boolean {
@@ -54,6 +65,7 @@ function hasTimestamp(line: string): boolean {
 
 export interface LogsTabSource {
   channelId: string;
+  runtimeKey?: string;
   title: string;
   description: string;
   state?: string;
@@ -63,13 +75,14 @@ export interface LogsTabSource {
   popoutUrl?: string;
 }
 
-type LogsTabProps =
+type SingleLogsTabProps =
   | {
       source: LogsTabSource;
       nodeId?: never;
       containerId?: never;
       containerState?: never;
       inspectData?: never;
+      headerActions?: ReactNode;
     }
   | {
       source?: never;
@@ -77,13 +90,251 @@ type LogsTabProps =
       containerId: string;
       containerState?: string;
       inspectData?: Record<string, any>;
+      headerActions?: ReactNode;
+    };
+
+type LogsTabProps =
+  | SingleLogsTabProps
+  | {
+      sources: LogsTabSource[];
+      source?: never;
+      nodeId?: never;
+      containerId?: never;
+      containerState?: never;
+      inspectData?: never;
+      headerActions?: ReactNode;
     };
 
 export function LogsTab(props: LogsTabProps) {
+  if ("sources" in props) {
+    return <AggregatedLogsTab sources={props.sources} headerActions={props.headerActions} />;
+  }
+  return (
+    <SingleLogsTab
+      key={
+        props.source?.runtimeKey ??
+        props.source?.channelId ??
+        `${props.nodeId}:${props.containerId}`
+      }
+      {...props}
+    />
+  );
+}
+
+function AggregatedLogsTab({
+  sources,
+  headerActions,
+}: {
+  sources: LogsTabSource[];
+  headerActions?: ReactNode;
+}) {
+  const [lines, setLines] = useState<AggregatedLogLine[]>([]);
+  const [connecting, setConnecting] = useState(true);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
+  const sourceIdentity = JSON.stringify(
+    sources.map(({ channelId, runtimeKey, state }) => [channelId, runtimeKey, state])
+  );
+
+  useEffect(() => {
+    // Identity changes deliberately replace all active log subscriptions.
+    void sourceIdentity;
+    const sources = sourcesRef.current;
+    let active = true;
+    const disposeSources: Array<() => void> = [];
+    let batchId = 0;
+    setLines([]);
+    setConnecting(true);
+    let pending = sources.length;
+    const ready = () => {
+      pending -= 1;
+      if (active && pending <= 0) setConnecting(false);
+    };
+    if (sources.length === 0) {
+      setConnecting(false);
+      return undefined;
+    }
+    for (const source of sources) {
+      const currentSource = () =>
+        sourcesRef.current.find(
+          (candidate) =>
+            candidate.channelId === source.channelId && candidate.runtimeKey === source.runtimeKey
+        ) ?? source;
+      let initialized = false;
+      const readyOnce = () => {
+        if (initialized) return;
+        initialized = true;
+        ready();
+      };
+      const append = (incoming: unknown[], reconnectTail = false) => {
+        if (!active || incoming.length === 0) return;
+        const batch = batchId++;
+        const texts = incoming.map(String);
+        setLines((current) => {
+          if (!active) return current;
+          const existing = reconnectTail
+            ? current.filter((line) => line.channelId === source.channelId).map((line) => line.text)
+            : [];
+          // Apply the viewport's global cap after finding the new tail. Capping
+          // this source first would hide appended lines when history is full.
+          const additions = reconnectTail
+            ? mergeReconnectLogLines(existing, texts, Infinity).slice(existing.length)
+            : texts;
+          const next = [
+            ...current,
+            ...additions.map((text, index) => ({
+              key: `${source.channelId}:${batch}:${index}`,
+              channelId: source.channelId,
+              source: currentSource().title,
+              text,
+            })),
+          ];
+          return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
+        });
+      };
+      if (source.state !== "running") {
+        void source
+          .getLogs({ tail: 500, timestamps: true })
+          .then((result) => append(result ?? []))
+          .catch((error) => {
+            if (active) toast.error(error instanceof Error ? error.message : "Log stream error");
+          })
+          .finally(readyOnce);
+        continue;
+      }
+      let socket: WebSocket | null = null;
+      let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+      let terminalError = false;
+      const scheduleReconnect = () => {
+        if (!active || terminalError || reconnectTimer !== null) return;
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, 3000);
+      };
+      const closeSocket = (ws: WebSocket) => {
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+      };
+      const finishSocket = (ws: WebSocket) => {
+        if (!active || socket !== ws) return;
+        socket = null;
+        closeSocket(ws);
+        readyOnce();
+        scheduleReconnect();
+      };
+      const terminalMessage = (message: string) =>
+        isTerminalLogError(message) || /\b(forbidden|unauthori[sz]ed)\b/i.test(message);
+      const connect = () => {
+        if (!active || terminalError) return;
+        let ws: WebSocket;
+        try {
+          ws = currentSource().createWebSocket(200);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Log stream error";
+          terminalError = terminalMessage(message);
+          toast.error(message);
+          readyOnce();
+          scheduleReconnect();
+          return;
+        }
+        socket = ws;
+        ws.onmessage = (event) => {
+          if (!active || socket !== ws || terminalError) return;
+          try {
+            const message = JSON.parse(event.data);
+            if (message.type === "initial" || message.type === "new") {
+              append(message.lines ?? [], message.type === "initial");
+              readyOnce();
+            } else if (message.type === "logs_ended") {
+              finishSocket(ws);
+            } else if (message.type === "error" || message.type === "auth_error") {
+              const detail = message.message || "Log stream error";
+              terminalError = message.type === "auth_error" || terminalMessage(detail);
+              toast.error(detail);
+              finishSocket(ws);
+            }
+          } catch {
+            // Ignore non-JSON stream frames.
+          }
+        };
+        ws.onclose = (event) => {
+          if (!active || socket !== ws) return;
+          terminalError = event?.code === 1008;
+          finishSocket(ws);
+        };
+        ws.onerror = () => finishSocket(ws);
+      };
+      connect();
+      disposeSources.push(() => {
+        if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+        const ws = socket;
+        socket = null;
+        if (ws) closeSocket(ws);
+      });
+    }
+    return () => {
+      active = false;
+      for (const dispose of disposeSources) dispose();
+    };
+  }, [sourceIdentity]);
+
+  const downloadLogs = () => {
+    const blob = new Blob([lines.map((line) => `[${line.source}] ${line.text}`).join("\n")], {
+      type: "text/plain",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "availability-all-instances-logs.txt";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <PanelShell
+      title="Container Logs"
+      description={`stdout and stderr from ${sources.length} serving instances`}
+      className="flex min-h-0 flex-1 flex-col"
+      bodyClassName="flex min-h-0 flex-1 flex-col"
+      actions={
+        <>
+          {lines.length > 0 && (
+            <Button variant="ghost" size="icon" onClick={downloadLogs} title="Download">
+              <Download className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {headerActions}
+        </>
+      }
+    >
+      <DockerLogViewport
+        lines={lines}
+        keyFn={(line) => line.key}
+        renderContent={(line) => (
+          <>
+            <span className="mr-2 text-muted-foreground">[{line.source}]</span>
+            <AnsiText text={line.text} />
+          </>
+        )}
+        emptyState={
+          <div className="px-4 font-mono text-xs text-muted-foreground">
+            {connecting ? "Connecting to serving instances..." : "No logs available"}
+          </div>
+        }
+        className="flex-1"
+      />
+    </PanelShell>
+  );
+}
+
+function SingleLogsTab(props: SingleLogsTabProps) {
   const source = useMemo<LogsTabSource>(() => {
     if (props.source) return props.source;
     return {
-      channelId: props.containerId,
+      channelId: `${props.nodeId}:${props.containerId}`,
       title: "Container Logs",
       description:
         props.containerState === "running"
@@ -225,7 +476,7 @@ export function LogsTab(props: LogsTabProps) {
       wsRef.current = ws;
 
       ws.onmessage = (evt) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(evt.data);
           if (msg.type === "initial") {
@@ -290,7 +541,7 @@ export function LogsTab(props: LogsTabProps) {
       };
 
       ws.onerror = () => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || wsRef.current !== ws) return;
         setWsConnected(false);
         setIsConnecting(false);
       };
@@ -302,9 +553,11 @@ export function LogsTab(props: LogsTabProps) {
 
   // Fetch static logs for stopped/exited containers
   const fetchStaticLogs = useCallback(async () => {
+    const requestedSource = sourceRef.current;
     setIsConnecting(true);
     try {
-      const data = await sourceRef.current.getLogs({ tail: 500, timestamps: true });
+      const data = await requestedSource.getLogs({ tail: 500, timestamps: true });
+      if (!mountedRef.current || sourceRef.current.channelId !== requestedSource.channelId) return;
       setLines(capNewestLogs(processLogs(data ?? [])));
       setHasMore(false);
     } catch {
@@ -318,10 +571,16 @@ export function LogsTab(props: LogsTabProps) {
   useEffect(() => {
     const channelId = source.channelId;
     mountedRef.current = true;
+    setLines([]);
+    setHistoryPrependVersion(0);
+    setHasMore(true);
+    setLoadingMore(false);
+    isPopoutRef.current = false;
+    setIsPopout(false);
     const connectTimeout = setTimeout(() => {
       if (mountedRef.current && !isPopoutRef.current && sourceRef.current.channelId === channelId) {
         if (isRunning) {
-          connectWs(false);
+          connectWs(true);
         } else {
           fetchStaticLogs();
         }
@@ -435,6 +694,7 @@ export function LogsTab(props: LogsTabProps) {
               <ExternalLink className="h-3.5 w-3.5" />
             </Button>
           )}
+          {props.headerActions}
         </>
       }
     >

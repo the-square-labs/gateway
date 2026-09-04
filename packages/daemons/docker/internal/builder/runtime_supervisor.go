@@ -13,6 +13,7 @@ import (
 
 const (
 	DefaultRuntimeConfigDir     = "/etc/gateway-builder"
+	DefaultRuntimeBinDir        = "/opt/gateway-builder/bin"
 	DefaultContainerdConfigPath = "/etc/gateway-builder/containerd.toml"
 	DefaultBuildkitConfigPath   = "/etc/gateway-builder/buildkitd.toml"
 	DefaultContainerdUnitPath   = "/etc/systemd/system/gateway-builder-containerd.service"
@@ -27,6 +28,45 @@ const (
 	buildkitServiceName         = "gateway-builder-buildkit.service"
 	egressServiceName           = "gateway-builder-egress.service"
 )
+
+var bundledRuntimeBinaries = []string{
+	"containerd",
+	"ctr",
+	"containerd-shim-runc-v2",
+	"buildkitd",
+	"buildctl",
+	"runc",
+	"syft",
+	"grype",
+}
+
+func bundledRuntimeBinaryPath(name string) string {
+	return filepath.Join(DefaultRuntimeBinDir, name)
+}
+
+func requireExecutableFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return fmt.Errorf("%s is not a regular executable", path)
+	}
+	return nil
+}
+
+func resolveBuilderExecutable(name string) (string, error) {
+	for _, bundled := range bundledRuntimeBinaries {
+		if name == bundled {
+			path := bundledRuntimeBinaryPath(name)
+			if err := requireExecutableFile(path); err != nil {
+				return "", err
+			}
+			return path, nil
+		}
+	}
+	return exec.LookPath(name)
+}
 
 type RuntimeSupervisor struct {
 	Config   RuntimeConfig
@@ -56,7 +96,13 @@ func (s *RuntimeSupervisor) InstallConfiguration() error {
 	if err := s.Config.Validate(); err != nil {
 		return err
 	}
-	for _, binary := range []string{"containerd", "buildkitd", "buildctl", "runc", "containerd-shim-runc-v2", "git", "syft", "grype", "iptables", "getent"} {
+	for _, binary := range bundledRuntimeBinaries {
+		path := bundledRuntimeBinaryPath(binary)
+		if err := requireExecutableFile(path); err != nil {
+			return fmt.Errorf("required builder runtime binary %s is unavailable: %w", path, err)
+		}
+	}
+	for _, binary := range []string{"git", "iptables", "getent"} {
 		if _, err := s.lookPath(binary); err != nil {
 			return fmt.Errorf("required builder runtime binary %s is unavailable", binary)
 		}
@@ -239,7 +285,8 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/env containerd --config /etc/gateway-builder/containerd.toml
+Environment="PATH=/opt/gateway-builder/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/opt/gateway-builder/bin/containerd --config /etc/gateway-builder/containerd.toml
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
@@ -264,7 +311,8 @@ Requires=gateway-builder-containerd.service
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/env buildkitd --config /etc/gateway-builder/buildkitd.toml
+Environment="PATH=/opt/gateway-builder/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/opt/gateway-builder/bin/buildkitd --config /etc/gateway-builder/buildkitd.toml
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576

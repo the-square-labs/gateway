@@ -37,6 +37,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Docker: Containers",
   },
   {
+    value: "docker:availability:manage",
+    label: "Manage Availability",
+    desc: "Enable, scale, heal, and disable multi-node workload Availability",
+    group: "Docker: Containers",
+  },
+  {
     value: "docker:containers:environment",
     label: "Container Environment",
     desc: "Modify container environment variables",

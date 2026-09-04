@@ -86,7 +86,7 @@ export class DockerService {
     if (inspected.statusCode !== 200) throw new Error(`Registry inspect failed (${inspected.statusCode})`);
     const registry = JSON.parse(inspected.body) as {
       Config?: { Image?: string; Env?: string[]; Entrypoint?: string[] | string | null };
-      HostConfig?: { Binds?: string[] };
+      HostConfig?: { Binds?: string[]; Mounts?: Array<Record<string, unknown>> };
     };
     const image = registry.Config?.Image;
     if (!image) throw new Error('Managed registry image is unavailable');
@@ -115,7 +115,11 @@ export class DockerService {
           Env: registry.Config?.Env ?? [],
           Entrypoint: registry.Config?.Entrypoint ?? undefined,
           Cmd: args,
-          HostConfig: { Binds: registry.HostConfig?.Binds ?? [], NetworkMode: 'none' },
+          HostConfig: {
+            Binds: registry.HostConfig?.Binds ?? [],
+            Mounts: registry.HostConfig?.Mounts ?? [],
+            NetworkMode: 'none',
+          },
         }
       );
       if (created.statusCode !== 201) {

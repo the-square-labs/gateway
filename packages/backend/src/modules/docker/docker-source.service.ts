@@ -1,7 +1,9 @@
-import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  dockerAccessResources,
   dockerBuildSecrets,
+  dockerBuilds,
   dockerComposeProjects,
   dockerDeployments,
   dockerSourceBindings,
@@ -15,12 +17,14 @@ import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/mod
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { User } from '@/types.js';
 import { prepareComposeGitBuild } from './compose/compose-policy.js';
+import { DockerAccessResourceService } from './docker-access-resource.service.js';
 import type {
   DockerBuildCreateInput,
   DockerSourceBindingUpsertInput,
   DockerSourceTarget,
   PagesBuildDiscoveryInput,
 } from './docker-build.schemas.js';
+import { DockerSourceResourceCreateSchema } from './docker-build.schemas.js';
 import type { DockerBuildService } from './docker-build.service.js';
 import {
   dockerSourceTargetColumns,
@@ -32,6 +36,101 @@ import {
 import { type DockerSourceWebhookResult, DockerSourceWebhookService } from './docker-source-webhook.service.js';
 
 export type { DockerSourceWebhookResult } from './docker-source-webhook.service.js';
+
+export interface PendingDockerSourceContainer {
+  pendingSourceBuild: true;
+  Id: string;
+  Name: string;
+  nodeId: string;
+  containerName: string;
+  sourceId: string;
+  sourceBindingId: string;
+  repositoryFullPath: string;
+  created: number;
+  latestBuild: { id: string; status: string; errorCode: string | null } | null;
+  scopeResourceId: string;
+  initialConfig: {
+    name: string;
+    restartPolicy: 'no' | 'always' | 'unless-stopped' | 'on-failure';
+    runtimeProfile: 'default' | 'secure';
+  };
+}
+
+export async function readPendingDockerSourceContainers(
+  db: DrizzleClient,
+  nodeId: string,
+  containerName?: string
+): Promise<PendingDockerSourceContainer[]> {
+  const rows = await db
+    .select({
+      source: dockerSourceBindings,
+      scopeResourceId: dockerAccessResources.id,
+      runtimeId: dockerAccessResources.runtimeId,
+    })
+    .from(dockerSourceBindings)
+    .innerJoin(
+      dockerAccessResources,
+      and(
+        eq(dockerAccessResources.nodeId, dockerSourceBindings.nodeId),
+        eq(dockerAccessResources.resourceType, 'container'),
+        eq(dockerAccessResources.resourceKey, dockerSourceBindings.containerName)
+      )
+    )
+    .where(
+      and(
+        eq(dockerSourceBindings.targetKind, 'container'),
+        eq(dockerSourceBindings.nodeId, nodeId),
+        isNull(dockerSourceBindings.deployedCommitSha),
+        or(isNull(dockerAccessResources.runtimeId), eq(dockerAccessResources.runtimeId, '')),
+        containerName === undefined ? undefined : eq(dockerSourceBindings.containerName, containerName)
+      )
+    );
+  const pending = rows.flatMap(({ source, scopeResourceId, runtimeId }) => {
+    if (
+      source.targetKind !== 'container' ||
+      source.nodeId !== nodeId ||
+      !source.containerName ||
+      source.deployedCommitSha ||
+      runtimeId ||
+      !scopeResourceId ||
+      !source.initialConfig ||
+      (containerName !== undefined && source.containerName !== containerName)
+    )
+      return [];
+    const parsed = DockerSourceResourceCreateSchema.shape.resource.safeParse({
+      ...source.initialConfig,
+      kind: 'container',
+    });
+    if (!parsed.success || parsed.data.kind !== 'container' || parsed.data.name !== source.containerName) return [];
+    const { kind: _kind, ...initialConfig } = parsed.data;
+    return [
+      {
+        pendingSourceBuild: true as const,
+        Id: source.id,
+        Name: `/${source.containerName}`,
+        nodeId,
+        containerName: source.containerName,
+        sourceId: source.id,
+        sourceBindingId: source.id,
+        repositoryFullPath: source.repositoryFullPath,
+        created: Math.floor(source.createdAt.getTime() / 1000),
+        scopeResourceId,
+        initialConfig,
+      },
+    ];
+  });
+  return Promise.all(
+    pending.map(async (item) => {
+      const [latestBuild] = await db
+        .select({ id: dockerBuilds.id, status: dockerBuilds.status, errorCode: dockerBuilds.errorCode })
+        .from(dockerBuilds)
+        .where(eq(dockerBuilds.sourceBindingId, item.sourceId))
+        .orderBy(desc(dockerBuilds.createdAt), desc(dockerBuilds.id))
+        .limit(1);
+      return { ...item, latestBuild: latestBuild ?? null };
+    })
+  );
+}
 
 const AUTOMATION_ACTOR: User = {
   id: '00000000-0000-4000-8000-000000000001',
@@ -86,19 +185,30 @@ export class DockerSourceService {
     return row ? toPublicDockerSource(row, await this.sourceProvider(row.connectorId)) : null;
   }
 
+  async getPendingContainer(nodeId: string, containerName: string): Promise<PendingDockerSourceContainer | null> {
+    return (await readPendingDockerSourceContainers(this.db, nodeId, containerName))[0] ?? null;
+  }
+
+  async listPendingContainers(nodeId: string): Promise<PendingDockerSourceContainer[]> {
+    return readPendingDockerSourceContainers(this.db, nodeId);
+  }
+
   async upsert(
     input: DockerSourceBindingUpsertInput,
     user: User,
-    options: { allowMissingTarget?: boolean; initialConfig?: Record<string, unknown> | null } = {}
+    options: { allowMissingTarget?: boolean; initialConfig?: Record<string, unknown> | null; createOnly?: boolean } = {}
   ) {
     await this.requireTargetFeatures(input.target);
     if (!options.allowMissingTarget) await this.assertTargetExists(input.target);
+    const existing = await this.findByTarget(input.target);
+    if (options.createOnly && existing) {
+      throw new AppError(409, 'SOURCE_RESOURCE_ALREADY_EXISTS', 'A source resource with this identity already exists');
+    }
     const resolved = await this.integrations.resolveDockerBuildSource(user, {
       connectorId: input.connectorId,
       projectId: input.projectId,
       branch: input.branch,
     });
-    const existing = await this.findByTarget(input.target);
     const prepared = await this.prepareSourceCommit(
       {
         ...(existing ?? {}),
@@ -172,44 +282,87 @@ export class DockerSourceService {
       updatedById: user.id,
       updatedAt: now,
     };
-    const [row] = existing
+    const [row] = options.createOnly
       ? await this.db.transaction(async (tx) => {
-          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${existing.id}`}))`);
-          return tx
-            .update(dockerSourceBindings)
-            .set(values)
-            .where(eq(dockerSourceBindings.id, existing.id))
+          const inserted = await tx
+            .insert(dockerSourceBindings)
+            .values({ ...values, createdById: user.id })
+            .onConflictDoNothing()
             .returning();
+          if (!inserted[0]) {
+            throw new AppError(
+              409,
+              'SOURCE_RESOURCE_ALREADY_EXISTS',
+              'A source resource with this identity already exists'
+            );
+          }
+          if (input.target.kind === 'container' && options.initialConfig) {
+            await new DockerAccessResourceService(this.db).ensureContainer(
+              input.target.nodeId,
+              input.target.containerName,
+              '',
+              false,
+              tx
+            );
+          }
+          return inserted;
         })
-      : await this.db
-          .insert(dockerSourceBindings)
-          .values({ ...values, createdById: user.id })
-          .returning();
+      : existing
+        ? await this.db.transaction(async (tx) => {
+            await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${existing.id}`}))`);
+            return tx
+              .update(dockerSourceBindings)
+              .set(values)
+              .where(eq(dockerSourceBindings.id, existing.id))
+              .returning();
+          })
+        : await this.db
+            .insert(dockerSourceBindings)
+            .values({ ...values, createdById: user.id })
+            .returning();
 
-    await this.auditService.log({
-      action: existing ? 'docker.source.updated' : 'docker.source.created',
-      userId: user.id,
-      resourceType: this.targetResourceType(input.target),
-      resourceId: this.targetResourceId(input.target),
-      details: {
-        target: input.target,
-        connectorId: resolved.connectorId,
-        projectId: resolved.projectId,
-        repository: resolved.fullPath,
-        branch: resolved.branch,
-        commitSha: resolved.commitSha,
-        autoBuild: input.autoBuild,
-        autoDeploy: input.autoDeploy,
-      },
-    });
-    await this.webhooks.reconcileWebhook(row).catch(async (error) => {
-      await this.db
-        .update(dockerSourceBindings)
-        .set({ lastWebhookError: (error as Error).message.slice(0, 2048), updatedAt: new Date() })
-        .where(eq(dockerSourceBindings.id, row.id));
-    });
-    const refreshed = await this.findByTarget(input.target);
-    return toPublicDockerSource(refreshed ?? row, resolved.provider);
+    try {
+      await this.auditService.log({
+        action: existing ? 'docker.source.updated' : 'docker.source.created',
+        userId: user.id,
+        resourceType: this.targetResourceType(input.target),
+        resourceId: this.targetResourceId(input.target),
+        details: {
+          target: input.target,
+          connectorId: resolved.connectorId,
+          projectId: resolved.projectId,
+          repository: resolved.fullPath,
+          branch: resolved.branch,
+          commitSha: resolved.commitSha,
+          autoBuild: input.autoBuild,
+          autoDeploy: input.autoDeploy,
+        },
+      });
+      await this.webhooks.reconcileWebhook(row).catch(async (error) => {
+        await this.db
+          .update(dockerSourceBindings)
+          .set({ lastWebhookError: (error as Error).message.slice(0, 2048), updatedAt: new Date() })
+          .where(eq(dockerSourceBindings.id, row.id));
+      });
+      const refreshed = await this.findByTarget(input.target);
+      return toPublicDockerSource(refreshed ?? row, resolved.provider);
+    } catch (error) {
+      // Only the source inserted by this creation request may be rolled back.
+      // In particular, a duplicate insert must never delete a prior reservation.
+      if (options.createOnly) {
+        await this.db.transaction(async (tx) => {
+          await tx.delete(dockerSourceBindings).where(eq(dockerSourceBindings.id, row.id));
+          if (input.target.kind === 'container' && options.initialConfig) {
+            await new DockerAccessResourceService(this.db).removePendingContainer(
+              input.target.nodeId,
+              input.target.containerName,
+              tx
+            );
+          }
+        });
+      }
+      throw error;
+    }
   }
 
   async remove(target: DockerSourceTarget, userId: string): Promise<boolean> {
@@ -231,7 +384,14 @@ export class DockerSourceService {
       }
       webhookCleanup = 'removed';
     }
-    await this.db.delete(dockerSourceBindings).where(eq(dockerSourceBindings.id, existing.id));
+    if (target.kind === 'container' && existing.initialConfig && !existing.deployedCommitSha) {
+      await this.db.transaction(async (tx) => {
+        await tx.delete(dockerSourceBindings).where(eq(dockerSourceBindings.id, existing.id));
+        await new DockerAccessResourceService(this.db).removePendingContainer(target.nodeId, target.containerName, tx);
+      });
+    } else {
+      await this.db.delete(dockerSourceBindings).where(eq(dockerSourceBindings.id, existing.id));
+    }
     await this.auditService.log({
       action: 'docker.source.deleted',
       userId,

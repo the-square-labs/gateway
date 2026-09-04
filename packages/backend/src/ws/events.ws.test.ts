@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const resolveWebSocketCredentialContext = vi.fn();
 
@@ -9,6 +9,22 @@ const { authenticateEventsConnection, createEventsWSHandlers } = await import('.
 describe('Events WebSocket authentication', () => {
   beforeEach(() => {
     resolveWebSocketCredentialContext.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends keepalive traffic before a ten-second idle timeout can close the socket', async () => {
+    vi.useFakeTimers();
+    const ws = { send: vi.fn(), close: vi.fn() };
+    const handlers = createEventsWSHandlers();
+    handlers.onOpen(new Event('open'), ws as never);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'pong' }));
+    handlers.onClose(new Event('close'), ws as never);
   });
 
   it('routes session authentication through the shared WebSocket policy', async () => {

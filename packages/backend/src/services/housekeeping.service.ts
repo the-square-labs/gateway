@@ -27,7 +27,7 @@ const logger = createChildLogger('HousekeepingService');
 const VOLUME_CLEANUP_PROTECTED_LABEL = 'gateway.housekeeping.protected';
 const SYSTEM_CERTIFICATE_KEY_RETENTION_DAYS = 30;
 const LOGGING_SETTINGS_KEY = 'logging:clickhouse';
-const DEFAULT_INTERNAL_REGISTRY_RETENTION_COUNT = 3;
+const DEFAULT_INTERNAL_REGISTRY_RETENTION_COUNT = 1;
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -230,10 +230,7 @@ export class HousekeepingService {
       },
       internalRegistry: {
         enabled: true,
-        retentionSuccessfulArtifacts: get(
-          KEYS.internalRegistryRetention,
-          DEFAULTS[KEYS.internalRegistryRetention] as number
-        ),
+        retentionSuccessfulArtifacts: DEFAULT_INTERNAL_REGISTRY_RETENTION_COUNT,
       },
       orphanedVolumes: {
         enabled: get(KEYS.orphanedVolumesEnabled, DEFAULTS[KEYS.orphanedVolumesEnabled] as boolean),
@@ -283,7 +280,7 @@ export class HousekeepingService {
     if (partial.orphanedAIArtifacts?.enabled !== undefined)
       updates.push([KEYS.orphanedAIArtifactsEnabled, partial.orphanedAIArtifacts.enabled]);
     if (partial.internalRegistry?.retentionSuccessfulArtifacts !== undefined)
-      updates.push([KEYS.internalRegistryRetention, partial.internalRegistry.retentionSuccessfulArtifacts]);
+      updates.push([KEYS.internalRegistryRetention, DEFAULT_INTERNAL_REGISTRY_RETENTION_COUNT]);
     if (partial.orphanedVolumes?.enabled !== undefined)
       updates.push([KEYS.orphanedVolumesEnabled, partial.orphanedVolumes.enabled]);
     if (partial.orphanedVolumes?.retentionDays !== undefined)

@@ -113,7 +113,7 @@ func TestAppendUploadRejectsSymlinkedArchive(t *testing.T) {
 	}
 }
 
-func TestStoragePreflightRejectsSymlinkedUploadArchive(t *testing.T) {
+func TestRepairStorageRejectsSymlinkedUploadArchive(t *testing.T) {
 	runtime, _ := newRuntime(t)
 	archive := archiveBytes(t, []tarEntry{{name: "index.html", body: "ok"}})
 	if err := runtime.InitUpload(uploadID, deploymentID, int64(len(archive)), digestOf(archive)); err != nil {
@@ -126,7 +126,7 @@ func TestStoragePreflightRejectsSymlinkedUploadArchive(t *testing.T) {
 	if err := os.Symlink(outside, runtime.uploadArchivePath(uploadID)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.StoragePreflight(1); err == nil {
+	if err := runtime.RepairStorage(); err == nil {
 		t.Fatal("preflight accepted symlinked upload archive")
 	}
 	content, err := os.ReadFile(outside)

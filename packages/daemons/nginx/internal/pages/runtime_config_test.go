@@ -220,7 +220,7 @@ func TestRuntimeConfigRejectsSymlinkedGenerationAndCurrentTarget(t *testing.T) {
 	})
 }
 
-func TestStoragePreflightRejectsUnsafeRuntimeConfigPointers(t *testing.T) {
+func TestRepairStorageRejectsUnsafeRuntimeConfigPointers(t *testing.T) {
 	t.Run("generation symlink", func(t *testing.T) {
 		runtime, _ := newRuntime(t)
 		if err := runtime.StageRuntimeConfig(RuntimeConfigBindingRoute, routeID, 1, []byte(`{"route":true}`)); err != nil {
@@ -240,7 +240,7 @@ func TestStoragePreflightRejectsUnsafeRuntimeConfigPointers(t *testing.T) {
 		if err := os.Symlink(outside, versionPath); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runtime.StoragePreflight(1); err == nil {
+		if err := runtime.RepairStorage(); err == nil {
 			t.Fatal("preflight accepted symlinked runtime config generation")
 		}
 	})
@@ -261,7 +261,7 @@ func TestStoragePreflightRejectsUnsafeRuntimeConfigPointers(t *testing.T) {
 		if err := os.Symlink(outside, currentPath); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runtime.StoragePreflight(1); err == nil {
+		if err := runtime.RepairStorage(); err == nil {
 			t.Fatal("preflight accepted unsafe current.js target")
 		}
 	})

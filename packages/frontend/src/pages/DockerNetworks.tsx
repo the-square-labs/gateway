@@ -48,6 +48,23 @@ interface DockerNetworkListItem extends DockerNetwork {
   _nodeColor?: NodeAppearanceColor | null;
 }
 
+const CONTROLLER_NETWORK_PREFIXES = ["gwav-", "gwdep-", "gateway-db-", "gateway-db-av-"];
+
+function isControllerOwnedNetwork(network: DockerNetwork): boolean {
+  const name = String(network.name ?? "").toLowerCase();
+  const labels = ((network as any).labels ?? (network as any).Labels ?? {}) as Record<
+    string,
+    string
+  >;
+  return (
+    CONTROLLER_NETWORK_PREFIXES.some((prefix) => name.startsWith(prefix)) ||
+    labels["wiolett.gateway.internal"] === "true" ||
+    labels["wiolett.gateway.availability.policy-id"] !== undefined ||
+    labels["wiolett.gateway.deployment-id"] !== undefined ||
+    labels["wiolett.gateway.managed-database-binding-id"] !== undefined
+  );
+}
+
 interface NetworkContainerRow {
   id: string;
   name: string;
@@ -214,7 +231,9 @@ export function DockerNetworks({
   });
 
   const filteredNetworks = useMemo(() => {
-    const sorted = [...networks].sort((a, b) => a.name.localeCompare(b.name));
+    const sorted = networks
+      .filter((network) => !isControllerOwnedNetwork(network))
+      .sort((a, b) => a.name.localeCompare(b.name));
     if (!search) return sorted;
     const q = search.toLowerCase();
     return sorted.filter(

@@ -61,6 +61,7 @@ func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, network
 		return "", err
 	}
 	hostCfg.ExtraHosts = mergeManagedDatabaseExtraHosts(hostCfg.ExtraHosts, managedDatabaseHosts)
+	hostCfg.ExtraHosts = mergePreferredExtraHosts(hostCfg.ExtraHosts, desired.ExtraHosts)
 	applyUserWorkloadBaseline(hostCfg)
 	if err := c.applyRuntimeProfile(hostCfg, desired.RuntimeProfile, desired.GPU); err != nil {
 		return "", err

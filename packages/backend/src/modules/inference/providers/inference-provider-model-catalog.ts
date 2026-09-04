@@ -33,6 +33,18 @@ const GPT_5_6_PRICING = {
 };
 
 const OPENAI_MODELS: Record<string, KnownInferenceProviderModel> = {
+  'gpt-6-astra': openAiModel(
+    'GPT-6 Astra',
+    'gpt-6-astra',
+    1_050_000,
+    128_000,
+    10,
+    50,
+    1,
+    ['low', 'medium', 'high', 'xhigh', 'max'],
+    true,
+    { version: 'openai-api-2026-09-05', cacheWriteInputMultiplier: 1.25, longContextThresholdTokens: 272_000 }
+  ),
   'chat-latest': openAiModel('Chat Latest', 'chat-latest', 400_000, 128_000, 5, 30, 0.5),
   'gpt-5.6': openAiModel(
     'GPT-5.6 Sol',

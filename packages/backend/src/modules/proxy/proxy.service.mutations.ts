@@ -153,7 +153,8 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
       );
       if (isDockerUpstream(host.upstreamKind)) {
         await this.secureLinks?.activate(host.id);
-        this.queueSecureLinkRuntimeSample(host);
+        const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
+        if (!availabilityManaged) this.queueSecureLinkRuntimeSample(host);
       }
     } catch (error) {
       // 4. If nginx fails, delete the DB row and throw
@@ -161,6 +162,10 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         hostId: host.id,
         error,
       });
+      // Fence the failed row before any network cleanup. Docker upstream
+      // reconciliation runs concurrently and must not be able to re-apply a
+      // config after removeConfigFromNode but before the row is deleted.
+      await this.db.update(proxyHosts).set({ enabled: false, updatedAt: new Date() }).where(eq(proxyHosts.id, host.id));
       // Applying a config can fail after nginx-daemon has already persisted the
       // file (for example while the relay policy is being committed). Remove
       // that partial deployment before deleting the row or a stale server_name

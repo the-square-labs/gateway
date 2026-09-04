@@ -441,10 +441,12 @@ export class InferenceProviderService {
       if (definition.liveModels !== undefined && connection.authType !== 'oauth') {
         await client.patchCoreProvider(providerRef, { liveModels: definition.liveModels });
       }
-      const [providers, modelsBody, liveModelIds, quotasBody] = await Promise.all([
+      // Discovery refreshes the core catalog. Read model metadata only after it
+      // completes so a newly discovered id is included in this same sync.
+      const liveModelIds = await client.coreProviderLiveModelIds(providerRef);
+      const [providers, modelsBody, quotasBody] = await Promise.all([
         client.listCoreProviders(),
         client.listCoreModels(),
-        client.coreProviderLiveModelIds(providerRef),
         client.coreProviderQuotas(),
       ]);
       const coreProvider = providers?.find((candidate) => candidate.name === providerRef);

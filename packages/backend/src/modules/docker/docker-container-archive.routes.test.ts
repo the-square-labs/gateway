@@ -6,6 +6,7 @@ import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
 import { DockerManagementService } from './docker.service.js';
 import { registerContainerRoutes } from './docker-container.routes.js';
 import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
@@ -47,6 +48,9 @@ function setup(scopes: string[]) {
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const licensePolicy = { requireFeature: vi.fn().mockResolvedValue(undefined) };
   container.registerInstance(DockerManagementService, docker as never);
+  container.registerInstance(DockerAvailabilityService, {
+    resolveRuntimeAccessIdentity: vi.fn().mockResolvedValue(null),
+  } as never);
   container.registerInstance(DockerMigrationDispatchAdapter, dispatch as never);
   container.registerInstance(AuditService, audit as never);
   container.registerInstance(LicensePolicyService, licensePolicy as never);

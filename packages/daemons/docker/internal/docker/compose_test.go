@@ -139,6 +139,19 @@ func TestComposePolicyRejectsBuildAndInjectsOwnershipLabels(t *testing.T) {
 	}
 }
 
+func TestComposePolicyAcceptsManagedDatabaseExtraHosts(t *testing.T) {
+	command := validComposeCommand("apply", "operation-managed-database")
+	command.ComposeYaml = []byte(`services:
+  web:
+    image: nginx:alpine
+    extra_hosts:
+      db-internal: 172.28.0.1
+`)
+	if _, err := validateComposeCommand(command); err != nil {
+		t.Fatalf("managed database extra_hosts validation error = %v", err)
+	}
+}
+
 func TestComposePolicyRejectsVariableInterpolationInVolumeSources(t *testing.T) {
 	for _, composeYAML := range []string{
 		`services:

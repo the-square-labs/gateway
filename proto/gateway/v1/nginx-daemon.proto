@@ -308,6 +308,10 @@ message GatewayCommand {
     // Confirms durable processing of one attempt-scoped Docker build terminal
     // event. Accepted only by docker-daemon running with docker.mode=builder.
     DockerBuildEventAck docker_build_event_ack = 68;
+    // Generation-fenced placement lifecycle for Gateway-owned multi-node
+    // Availability. Accepted only by a general Docker daemon advertising
+    // docker_availability_v1; nodes never form a peer cluster.
+    DockerAvailabilityCommand docker_availability = 69;
   }
 }
 
@@ -442,7 +446,11 @@ message PagesCleanupDeploymentCommand {
   string deployment_id = 1;
 }
 
-message PagesInventoryCommand {}
+message PagesInventoryCommand {
+  // Optional expected bindings for nginx_pages_reconcile_v1. The JSON result
+  // contains positional matches; legacy inventory remains unchanged.
+  bytes expectations_json = 1;
+}
 
 message PagesStoragePreflightCommand {
   int64 required_bytes = 1;
@@ -765,6 +773,7 @@ message DockerImageCommand {
   string image_ref = 2;
   string registry_auth_json = 3;
   bool force = 4;
+  string target_image_ref = 5;
 }
 
 message DockerVolumeCommand {
@@ -812,6 +821,18 @@ message DockerComposeCommand {
   map<string, string> secrets = 10;
   bool remove_orphans = 11;
   repeated string volume_names = 12;
+}
+
+message DockerAvailabilityCommand {
+  string action = 1; // inspect, pre_pull, create, start, health, drain, stop, remove
+  string policy_id = 2;
+  string placement_id = 3;
+  uint64 generation = 4;
+  string operation_id = 5;
+  string idempotency_key = 6;
+  string resource_kind = 7; // container, deployment, compose
+  string resource_id = 8;
+  string config_json = 9;
 }
 
 message DockerRuntimeCommand {

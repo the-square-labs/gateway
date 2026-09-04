@@ -1,0 +1,2 @@
+ALTER TABLE "proxy_additional_secure_links" ADD COLUMN "availability_owner_key" text;--> statement-breakpoint
+CREATE INDEX "proxy_additional_secure_links_availability_owner_idx" ON "proxy_additional_secure_links" USING btree ("availability_owner_key","reference_id");

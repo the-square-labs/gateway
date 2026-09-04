@@ -27,6 +27,7 @@ const logger = createChildLogger('Events-WebSocket');
 const MAX_EVENT_MESSAGE_BYTES = 64 * 1024;
 const MAX_PENDING_MESSAGES = 32;
 const MAX_PENDING_MESSAGE_BYTES = 64 * 1024;
+const KEEPALIVE_INTERVAL_MS = 5_000;
 
 interface ConnState {
   user: User | null;
@@ -461,7 +462,7 @@ export function createEventsWSHandlers() {
         } catch {
           if (state.keepalive) clearInterval(state.keepalive);
         }
-      }, 30_000);
+      }, KEEPALIVE_INTERVAL_MS);
     },
 
     async onMessage(event: MessageEvent, ws: WSContext) {

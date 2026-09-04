@@ -56,6 +56,7 @@ type DockerPlugin struct {
 	runtimeManager    *runtimemanager.Manager
 	runtimeStatusMu   sync.RWMutex
 	runtimeStatus     runtimemanager.Status
+	availability      *availabilityManager
 
 	// Log stream follow support
 	writer           *stream.Writer
@@ -102,6 +103,7 @@ func (p *DockerPlugin) SetLogger(logger *slog.Logger) {
 // Init initializes the Docker client, pings the engine, and stores its version.
 func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) error {
 	p.logger = logger
+	p.availability = nil
 	ctx := context.Background()
 
 	if p.cfg.Docker.Mode == "builder" {
@@ -133,6 +135,15 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		)
 		p.logger.Info("builder profile initialized without Docker Engine access")
 		return nil
+	}
+
+	var availability *availabilityManager
+	if p.cfg.Docker.Mode == "" {
+		var availabilityErr error
+		availability, availabilityErr = newAvailabilityManager(p.cfg.StateDir)
+		if availabilityErr != nil {
+			return fmt.Errorf("initialize docker availability state: %w", availabilityErr)
+		}
 	}
 
 	c, err := NewClient(p.cfg.Docker.Socket, p.cfg.StateDir, logger)
@@ -261,6 +272,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	}
 	p.setRuntimeStatus(p.runtimeManager.Preflight(preflightCtx))
 	cancelPreflight()
+	p.availability = availability
 
 	return nil
 }
@@ -343,6 +355,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 			}
 		}
 		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
+		if p.cfg.Docker.Mode == "" && p.availability != nil {
+			values = append(values, dockerAvailabilityCapability)
+		}
 		values = append(values, "managed_database_binding_listener_v1")
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")

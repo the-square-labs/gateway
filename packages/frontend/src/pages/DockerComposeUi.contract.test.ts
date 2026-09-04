@@ -7,6 +7,21 @@ import { describe, expect, it } from "vitest";
 const source = (path: string) => readFileSync(resolve(process.cwd(), "src", path), "utf8");
 
 describe("Compose UI contract", () => {
+  it("keeps runtime lifecycle disabled before the initial Git revision exists", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain(
+      'const awaitingInitialBuild = project.managementState === "managed" && !project.activeRevisionId'
+    );
+    expect(detail.match(/disabled:\s+awaitingInitialBuild\s+\|\|/g)).toHaveLength(2);
+    expect(detail).toContain("Build and deploy the first revision from Source");
+  });
+  it("creates repository resources independently of worker admission", () => {
+    const editor = source("pages/compose/ComposeProjectEditor.tsx");
+    expect(editor).not.toContain("const admission = await api.getDockerBuildAdmission(nodeId)");
+    expect(editor).toContain("created.initialBuildError");
+    expect(editor).toContain('dockerComposeProjectRoute(created.project.id, "source")');
+    expect(editor).not.toContain("if (sourceAdmission?.ready === false)");
+  });
   it("does not expose a standalone configure route", () => {
     const app = source("App.tsx");
     expect(app).not.toContain("/docker/compose/:projectId/configure");
@@ -22,6 +37,15 @@ describe("Compose UI contract", () => {
     expect(detail).toContain("<ComposeProjectEditor");
   });
 
+  it("uses the shared multi-instance logs contract for Availability placements", () => {
+    const detail = source("pages/DockerComposeProjectDetail.tsx");
+    expect(detail).toContain("AvailabilityInstanceSelect");
+    expect(detail).toContain("ALL_AVAILABILITY_INSTANCES");
+    expect(detail).toContain("availabilityLogSources");
+    expect(detail).toContain("api.createLogStreamWebSocket(placement.nodeId, containerId, tail)");
+    expect(detail).toContain("includeAll");
+  });
+
   it("leaves ordinary list and detail tabs to the shared page scroll owner", () => {
     const list = source("pages/DockerComposeProjects.tsx");
     const detail = source("pages/DockerComposeProjectDetail.tsx");
@@ -32,8 +56,8 @@ describe("Compose UI contract", () => {
 
   it("opens a Compose service through the canonical container name", () => {
     const detail = source("pages/DockerComposeProjectDetail.tsx");
-    expect(detail).toContain("api.inspectContainer(project.nodeId, containerId, true)");
-    expect(detail).toContain("dockerContainerRoute(node.slug, canonicalName, tab)");
+    expect(detail).toContain("api.inspectContainer(targetNodeId, containerId, true)");
+    expect(detail).toContain("dockerContainerRoute(targetNode.slug, canonicalName, tab)");
     expect(detail).not.toContain("dockerContainerRoute(node.slug, containerId, tab)");
   });
 
@@ -62,6 +86,11 @@ describe("Compose UI contract", () => {
     expect(list).toContain("void fetchProjects(fixedNodeId)");
   });
 
+  it("renders the logical online Availability state as a success badge", () => {
+    const list = source("pages/DockerComposeProjects.tsx");
+    expect(list).toContain('status === "healthy" || status === "online"');
+  });
+
   it("creates Compose projects from repositories with the shared repository controls", () => {
     const editor = source("pages/compose/ComposeProjectEditor.tsx");
     const repositoryFields = source("pages/docker-deploy/RepositorySourceFields.tsx");
@@ -72,7 +101,7 @@ describe("Compose UI contract", () => {
     expect(editor).toContain('import { AnimatedHeight } from "@/components/common/AnimatedHeight"');
     expect(editor).toContain('title="Compose YAML"');
     expect(editor).toContain('bodyClassName="h-[min(48dvh,440px)] min-h-72 overflow-hidden"');
-    expect(editor).toContain("<AnimatePresence initial={false}>");
+    expect(editor).toContain('<AnimatePresence initial={false} mode="popLayout">');
     expect(editor).not.toContain('mode="wait"');
     expect(editor).toContain(
       'className="grid gap-4 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]"'
@@ -86,8 +115,8 @@ describe("Compose UI contract", () => {
     expect(editor).not.toContain("Compose runtime is unavailable on this node.");
     expect(editor).not.toContain('className="mt-3 text-xs text-destructive"');
     expect(editor).toContain("nodes.filter((node) => nodeSupportsCompose(node))");
-    expect(editor).toContain(
-      'throw new Error(sourceAdmission.message || "Build capacity is unavailable")'
+    expect(editor).not.toContain(
+      'throw new Error(admission.message || "Build capacity is unavailable")'
     );
     expect(editor).not.toContain("sourceAdmission?.ready === false))");
     const list = source("pages/DockerComposeProjects.tsx");
@@ -126,7 +155,7 @@ describe("Compose UI contract", () => {
     expect(detail).toContain('setActiveTab("overview")');
     expect(detail).toContain('disabled={project.desiredState === "stopped"}');
     expect(detail).toContain('service.state === "running" && Boolean(service.containerIds[0])');
-    expect(detail).toContain("<ComposeProcessesTable services={monitoredServices}");
+    expect(detail).toContain("<MultiContainerMonitoring instances={composeMonitoringInstances}");
     expect(detail).not.toContain("No runtime container is available for this service.");
   });
 
@@ -164,11 +193,11 @@ describe("Compose UI contract", () => {
   });
 
   it("uses one explicit column sizing contract for Compose process headers and rows", () => {
-    const detail = source("pages/DockerComposeProjectDetail.tsx");
-    expect(detail).toContain("const PROCESS_COLUMN_WIDTHS");
-    expect(detail.match(/processColumnStyle\(title, columnIndex, titles\)/g)).toHaveLength(2);
-    expect(detail).toContain('PID: "88px"');
-    expect(detail).toContain('USER: "140px"');
+    const monitoring = source("pages/docker-detail/MultiContainerMonitoring.tsx");
+    expect(monitoring).toContain("const PROCESS_COLUMN_WIDTHS");
+    expect(monitoring).toContain("processColumnStyle(title, columnIndex, processTitles)");
+    expect(monitoring).toContain('PID: "88px"');
+    expect(monitoring).toContain('USER: "140px"');
   });
 
   it("edits source Compose YAML while runtime overlays remain internal", () => {

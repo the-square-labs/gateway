@@ -75,6 +75,7 @@ type ContainerInfo struct {
 	ID      string            `json:"id"`
 	Name    string            `json:"name"`
 	Image   string            `json:"image"`
+	ImageID string            `json:"imageId,omitempty"`
 	State   string            `json:"state"`
 	Status  string            `json:"status"`
 	Created int64             `json:"created"`
@@ -178,6 +179,7 @@ func (c *Client) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 			ID:      ctr.ID,
 			Name:    name,
 			Image:   ctr.Image,
+			ImageID: ctr.ImageID,
 			State:   string(ctr.State),
 			Status:  ctr.Status,
 			Created: ctr.Created,

@@ -45,7 +45,11 @@ describe('Gateway internal container filtering', () => {
   });
 
   it('keeps the full inventory internally while filtering the public read model', async () => {
-    const service = new DockerManagementService({} as never, {} as never, {} as never, {} as never);
+    const where = vi.fn().mockResolvedValue([]);
+    const innerJoin = vi.fn(() => ({ where }));
+    const from = vi.fn(() => ({ innerJoin }));
+    const db = { select: vi.fn(() => ({ from })) };
+    const service = new DockerManagementService(db as never, {} as never, {} as never, {} as never);
     const user = { Id: 'user', Name: '/api', Labels: { app: 'api' } };
     const connector = {
       Id: 'connector',

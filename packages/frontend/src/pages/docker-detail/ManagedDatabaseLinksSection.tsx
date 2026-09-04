@@ -1,6 +1,14 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Link2, Plus, RotateCcw, Trash2, Undo2 } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -173,6 +181,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart?: (transition: "updating" | "recreating") => void;
     onMutationEnd?: () => void;
     onRecreating?: () => void | Promise<void>;
+    recreatesRunningWorkload?: boolean;
     composeServices?: Array<{ name: string; existingVariableNames: string[] }>;
   }
 >(function ManagedDatabaseLinksSection(
@@ -189,6 +198,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onMutationStart,
     onMutationEnd,
     onRecreating,
+    recreatesRunningWorkload = true,
     composeServices = [],
   },
   ref
@@ -211,6 +221,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [noAvailableDatabasesOpen, setNoAvailableDatabasesOpen] = useState(false);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -248,6 +259,43 @@ export const ManagedDatabaseLinksSection = forwardRef<
   useEffect(() => {
     void load();
   }, [load]);
+
+  const scheduleLoad = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      void load();
+    }, 250);
+  }, [load]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    },
+    []
+  );
+
+  useRealtime(
+    "database.changed",
+    (rawPayload) => {
+      const payload = rawPayload as
+        | {
+            resourceKind?: string;
+            targetNodeId?: string;
+            targetType?: ManagedDatabaseBindingTargetType;
+            targetResourceId?: string;
+          }
+        | undefined;
+      if (payload?.resourceKind !== "managed_database_binding") return;
+      if (payload.targetNodeId !== nodeId || payload.targetType !== targetType) return;
+      const matchesTarget =
+        targetType === "compose_service"
+          ? payload.targetResourceId?.startsWith(`${targetResourceId}:`)
+          : payload.targetResourceId === targetResourceId;
+      if (matchesTarget) scheduleLoad();
+    },
+    { onReconnect: scheduleLoad }
+  );
 
   useEffect(() => {
     onInitialLoadingChange?.(initialLoading);
@@ -634,24 +682,27 @@ export const ManagedDatabaseLinksSection = forwardRef<
   const save = async () => {
     if (!hasChanges) return;
     const ok = await confirm({
-      title: "Save & Recreate",
-      description:
-        targetType === "compose_service"
+      title: recreatesRunningWorkload ? "Save & Recreate" : "Save",
+      description: recreatesRunningWorkload
+        ? targetType === "compose_service"
           ? `Apply managed database link changes to “${containerName}”? A new immutable Compose revision will be applied and the service will be recreated.`
-          : `Apply managed database link changes to “${containerName}”? The container will be recreated and experience downtime.`,
-      confirmLabel: "Recreate",
+          : `Apply managed database link changes to “${containerName}”? The container will be recreated and experience downtime.`
+        : `Save managed database link changes for “${containerName}”? They will apply when the workload is started.`,
+      confirmLabel: recreatesRunningWorkload ? "Recreate" : "Save",
       variant: "default",
     });
     if (!ok) return;
 
     setSaving(true);
-    onMutationStart?.("recreating");
+    onMutationStart?.(recreatesRunningWorkload ? "recreating" : "updating");
     try {
       await applyChanges();
       toast.success(
-        targetType === "compose_service"
-          ? "Managed database links updated — applying Compose revision"
-          : "Managed database links updated — recreating container"
+        !recreatesRunningWorkload
+          ? "Managed database links updated"
+          : targetType === "compose_service"
+            ? "Managed database links updated — applying Compose revision"
+            : "Managed database links updated — recreating container"
       );
       void Promise.resolve(onRecreating?.());
     } catch (error) {
@@ -695,7 +746,9 @@ export const ManagedDatabaseLinksSection = forwardRef<
         description={
           targetType === "compose_service"
             ? "Private sidecar connections stored in each selected service's Compose revision."
-            : "Private sidecar connections. Changes apply with Save & Recreate."
+            : recreatesRunningWorkload
+              ? "Private sidecar connections. Changes apply with Save & Recreate."
+              : "Private sidecar connections. Changes apply on next start."
         }
         dirty={hasChanges}
         bodyClassName={displayBindings.length > 0 ? "divide-y divide-border" : undefined}
@@ -708,7 +761,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
               onClick={() => (onSaveRequested ? onSaveRequested() : void save())}
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Save & Recreate
+              {recreatesRunningWorkload ? "Save & Recreate" : "Save"}
             </Button>
             <Button type="button" disabled={disabled || loading || saving} onClick={openAddDialog}>
               <Plus className="h-3.5 w-3.5" />

@@ -59,6 +59,7 @@ interface VolumeMountsSectionProps {
   mountsChanged: boolean;
   inputCell: string;
   nodeId: string;
+  disabledReason?: string;
 }
 
 export function VolumeMountsSection({
@@ -68,6 +69,7 @@ export function VolumeMountsSection({
   mountsChanged,
   inputCell,
   nodeId,
+  disabledReason,
 }: VolumeMountsSectionProps) {
   const [managedVolumeNames, setManagedVolumeNames] = useState<string[]>([]);
   const [volumeOptionsLoaded, setVolumeOptionsLoaded] = useState(false);
@@ -110,7 +112,7 @@ export function VolumeMountsSection({
           help="Mounts persistent named volumes or host paths into the container. Data outside the container writable layer survives container recreation."
         />
       }
-      description="Requires container recreation"
+      description={disabledReason ?? "Requires container recreation"}
       dirty={mountsChanged}
       actions={
         canEdit ? (

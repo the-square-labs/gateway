@@ -180,6 +180,14 @@ export class NodeRegistryService {
     this.eventBus?.publish('docker.runtime.changed', { nodeId, status });
   }
 
+  publishRelayRuntimeChanged(nodeId: string, relayInstanceId: string) {
+    this.eventBus?.publish('system.relay.health.changed', {
+      nodeId,
+      instanceId: relayInstanceId,
+      action: 'runtime_status_changed',
+    });
+  }
+
   publishDockerContainerChanged(
     nodeId: string,
     id: string,
@@ -233,6 +241,11 @@ export class NodeRegistryService {
 
   registerLogStreamHandler(key: string, handler: (lines: string[], ended?: boolean) => void) {
     this.logStreamHandlers.set(key, handler);
+    return () => {
+      if (this.logStreamHandlers.get(key) === handler) {
+        this.logStreamHandlers.delete(key);
+      }
+    };
   }
 
   removeLogStreamHandler(key: string) {

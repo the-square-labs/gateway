@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"strings"
 )
 
 func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb.CommandResult) {
@@ -54,6 +55,47 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 			return
 		}
 		result.Detail = imageRef
+
+	case "mirror":
+		if cmd.ImageRef == "" || cmd.TargetImageRef == "" {
+			result.Success = false
+			result.Error = "image_ref and target_image_ref are required for mirror"
+			return
+		}
+		if !strings.HasPrefix(cmd.TargetImageRef, "127.0.0.1:5443/") {
+			result.Success = false
+			result.Error = "target_image_ref must use the internal registry proxy"
+			return
+		}
+		p.registryMu.RLock()
+		sourceRegistryAuth := resolveRegistryAuth(cmd.ImageRef, p.registryCreds)
+		p.registryMu.RUnlock()
+		mirrored, err := p.client.MirrorImage(ctx, cmd.ImageRef, cmd.TargetImageRef, sourceRegistryAuth)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		data, err := json.Marshal(mirrored)
+		if err != nil {
+			result.Success = false
+			result.Error = "marshal mirrored image metadata: " + err.Error()
+			return
+		}
+		result.Detail = string(data)
+
+	case "tag":
+		if cmd.ImageRef == "" || cmd.TargetImageRef == "" {
+			result.Success = false
+			result.Error = "image_ref and target_image_ref are required for tag"
+			return
+		}
+		if err := p.client.TagImage(ctx, cmd.ImageRef, cmd.TargetImageRef); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		result.Detail = cmd.TargetImageRef
 
 	case "remove":
 		if cmd.ImageRef == "" {

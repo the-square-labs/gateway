@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { type ReactNode, useCallback } from "react";
 import { ConsolePanel } from "@/components/terminal/ConsolePanel";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -7,14 +7,18 @@ export function ConsoleTab({
   nodeId,
   containerId,
   scopeResourceId,
+  scopeNodeId = nodeId,
+  headerActions,
 }: {
   nodeId: string;
   containerId: string;
   scopeResourceId?: string;
+  scopeNodeId?: string;
+  headerActions?: ReactNode;
 }) {
   const { hasScope } = useAuthStore();
   const canUseConsole = hasScope(
-    `docker:containers:console:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
+    `docker:containers:console:${scopeNodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
   );
 
   const wsFactory = useCallback(
@@ -38,6 +42,7 @@ export function ConsoleTab({
       channelKey={`docker-console:${containerId}`}
       popoutUrl={`/docker/console/${nodeId}/${containerId}?shell=auto`}
       connectLabel={containerId.slice(0, 12)}
+      headerActions={headerActions}
     />
   );
 }

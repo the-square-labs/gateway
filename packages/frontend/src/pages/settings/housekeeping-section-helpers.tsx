@@ -36,48 +36,13 @@ export function normalizeHousekeepingConfig(config: HousekeepingConfig): Houseke
     ...config,
     internalRegistry: {
       enabled: true,
-      retentionSuccessfulArtifacts: config.internalRegistry?.retentionSuccessfulArtifacts ?? 3,
+      retentionSuccessfulArtifacts: 1,
     },
     clickHouseInternals: {
       enabled: config.clickHouseInternals?.enabled ?? false,
       maxSizeBytes: config.clickHouseInternals?.maxSizeBytes ?? 512 * 1024 ** 2,
     },
   };
-}
-
-export function RegistryRetentionControl({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: number;
-  disabled: boolean;
-  onChange: (value: number) => void;
-}) {
-  const [localValue, setLocalValue] = useState(String(value));
-
-  useEffect(() => setLocalValue(String(value)), [value]);
-
-  const commit = () => {
-    const parsed = Number.parseInt(localValue, 10);
-    const normalized = Math.max(1, Math.min(100, Number.isFinite(parsed) ? parsed : value));
-    setLocalValue(String(normalized));
-    if (normalized !== value) onChange(normalized);
-  };
-
-  return (
-    <input
-      type="number"
-      aria-label="Retained successful registry artifacts"
-      className="w-10 border border-input bg-background px-1 text-center text-xs text-foreground tabular-nums outline-none focus:border-primary disabled:opacity-50"
-      min={1}
-      max={100}
-      value={localValue}
-      disabled={disabled}
-      onChange={(event) => setLocalValue(event.target.value)}
-      onBlur={commit}
-    />
-  );
 }
 
 export function HousekeepingCard({

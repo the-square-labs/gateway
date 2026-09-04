@@ -56,6 +56,7 @@ export interface DockerComposeNormalizedService {
   workingDir?: string;
   user?: string;
   hostname?: string;
+  extraHosts?: Record<string, string>;
   ports?: DockerComposeNormalizedPort[];
   healthcheck?: Record<string, unknown>;
   dependsOn?: Record<string, { condition?: string }>;

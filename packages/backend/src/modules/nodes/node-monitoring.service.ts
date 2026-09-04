@@ -64,6 +64,7 @@ export function compactMonitoringHistorySnapshot(snapshot: any): MonitoringSnaps
       networkTxBytes: health.networkTxBytes,
       networkInterfaces: health.networkInterfaces,
       gpuDevices: Array.isArray(health.gpuDevices) ? health.gpuDevices : undefined,
+      containerStats: Array.isArray(health.containerStats) ? health.containerStats : undefined,
     },
     stats: {
       activeConnections: stats.activeConnections,

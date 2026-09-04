@@ -33,6 +33,13 @@ interface ExecuteDockerDeployOptions {
   sourceProjectId: string;
 }
 
+const INTERNAL_DOCKER_REGISTRY_ID = "gateway-internal-registry";
+
+export function deployCredentialRegistryId(registryId: string): string | undefined {
+  const value = registryId.trim();
+  return value && value !== INTERNAL_DOCKER_REGISTRY_ID ? value : undefined;
+}
+
 function getNodeSlug(nodeId: string, availableNodes: Node[]) {
   return (
     useDockerStore.getState().dockerNodes.find((node) => node.id === nodeId)?.slug ||
@@ -66,6 +73,8 @@ export async function executeDockerDeploy({
   sourceMode,
   sourceProjectId,
 }: ExecuteDockerDeployOptions) {
+  const credentialRegistryId = deployCredentialRegistryId(deployRegistryId);
+
   if (sourceMode === "repository") {
     const result = await api.createDockerSourceResource(deployNodeId, {
       source: {
@@ -113,12 +122,20 @@ export async function executeDockerDeploy({
               runtimeProfile: deployRuntimeProfile,
             },
     });
-    toast.success("Resource created and build queued");
+    toast.success(result.build ? "Resource created and build queued" : "Resource created");
+    if (result.initialBuildError)
+      toast.warning(
+        `${result.initialBuildError.message} You can adjust Source settings and retry Build now.`
+      );
     closeDeploy();
     onDeployed?.(result.target.kind === "deployment" ? result.target.deploymentId : undefined);
-    if (result.target.kind === "deployment") {
-      const nodeSlug = getNodeSlug(deployNodeId, availableNodes);
-      if (nodeSlug) navigate(dockerDeploymentRoute(nodeSlug, deployName.trim()));
+    const nodeSlug = getNodeSlug(deployNodeId, availableNodes);
+    if (nodeSlug) {
+      navigate(
+        result.target.kind === "deployment"
+          ? dockerDeploymentRoute(nodeSlug, deployName.trim(), "source")
+          : dockerContainerRoute(nodeSlug, deployName.trim(), "source")
+      );
     }
     return;
   }
@@ -126,11 +143,7 @@ export async function executeDockerDeploy({
   let imageRef = deployImage.trim();
   if (!deployLocalImages.includes(imageRef)) {
     toast.info(`Pulling "${imageRef}"...`);
-    const pullResult = await api.pullImageSync(
-      deployNodeId,
-      imageRef,
-      deployRegistryId || undefined
-    );
+    const pullResult = await api.pullImageSync(deployNodeId, imageRef, credentialRegistryId);
     imageRef = pullResult.imageRef;
   }
 
@@ -138,7 +151,7 @@ export async function executeDockerDeploy({
     const deployment = await api.createDockerDeployment(deployNodeId, {
       name: deployName.trim(),
       image: imageRef,
-      registryId: deployRegistryId || undefined,
+      registryId: credentialRegistryId,
       restartPolicy: deployRestart === "no" ? "unless-stopped" : deployRestart,
       routes: [
         {
@@ -170,7 +183,7 @@ export async function executeDockerDeploy({
 
   const config: ContainerCreateConfig = {
     image: imageRef,
-    registryId: deployRegistryId || undefined,
+    registryId: credentialRegistryId,
     restartPolicy: deployRestart,
     runtimeProfile: deployRuntimeProfile,
   };

@@ -68,6 +68,7 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  'docker:availability:manage',
   // Docker Compose Projects
   'docker:compose:view',
   'docker:compose:create',
@@ -170,6 +171,7 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  'docker:availability:manage',
   // Docker Compose Projects
   'docker:compose:view',
   'docker:compose:manage',

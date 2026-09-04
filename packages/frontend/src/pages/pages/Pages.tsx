@@ -1,5 +1,5 @@
 import { FolderPlus, Globe2, Plus, Settings } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { api } from "@/services/api";
@@ -217,26 +218,31 @@ export function Pages() {
     const cached = api.getCached<{ data: PageProject[] }>("pages:projects");
     return cached?.data ?? [];
   });
-  const [loading, setLoading] = useState(projects.length === 0);
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+  const [loading, setLoading] = useState(canView);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const load = useCallback(async () => {
-    if (!canView) return;
-    setLoading((current) => current || projects.length === 0);
+    if (!canView) {
+      setLoading(false);
+      return;
+    }
+    setLoading((current) => current || projectsRef.current.length === 0);
     try {
       const response = await api.listPageProjects({ page: 1, limit: 100 });
       setProjects(response.data ?? []);
       api.setCache("pages:projects", response);
     } catch (error) {
-      if (projects.length === 0) {
+      if (projectsRef.current.length === 0) {
         toast.error(error instanceof Error ? error.message : "Failed to load Pages");
       }
     } finally {
       setLoading(false);
     }
-  }, [canView, projects.length]);
+  }, [canView]);
 
   useEffect(() => {
     void load();
@@ -260,6 +266,7 @@ export function Pages() {
 
   return (
     <PageTransition>
+      {loading && <Skeleton />}
       <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">

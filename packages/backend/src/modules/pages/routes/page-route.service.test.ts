@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleClient } from '@/db/client.js';
+import { bindingInspectionKey } from '../runtime/page-binding-inspection.js';
 import { PageRouteService } from './page-route.service.js';
 
 const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
@@ -102,6 +103,87 @@ function runtimeConfigService() {
 }
 
 describe('PageRouteService cutover safety', () => {
+  it('leaves verified unchanged routes and runtime generations untouched across cycles', async () => {
+    const route = target(ROUTE_1, SOURCE_NODE);
+    const db = database([[route], [route.target], [route], [route.target]], []);
+    const expectation = {
+      kind: 'route' as const,
+      id: ROUTE_1,
+      deploymentId: OLD_DEPLOYMENT,
+      sha256: 'a'.repeat(64),
+      size: 100,
+      generation: 1,
+      stateGeneration: 1,
+      runtimeConfig: {},
+    };
+    const runtime = {
+      supportsInspection: vi.fn().mockResolvedValue(true),
+      routeExpectation: vi.fn().mockResolvedValue(expectation),
+      inspectBindings: vi
+        .fn()
+        .mockResolvedValue(new Map([[bindingInspectionKey(SOURCE_NODE, expectation), { expectation, matches: true }]])),
+      publishRuntimeConfig: vi.fn(),
+      activateRoute: vi.fn(),
+    };
+    const service = new PageRouteService(
+      db,
+      runtime as never,
+      { log: vi.fn() } as never,
+      runtimeConfigService() as never
+    );
+    await service.reconcile();
+    await service.reconcile();
+    expect(runtime.inspectBindings).toHaveBeenCalledTimes(2);
+    expect(runtime.routeExpectation).toHaveBeenCalledTimes(4);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(runtime.publishRuntimeConfig).not.toHaveBeenCalled();
+    expect(runtime.activateRoute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'disk drift',
+    'concurrent publication',
+    'legacy daemon',
+  ])('repairs instead of skipping on %s', async (reason) => {
+    const route = target(ROUTE_1, SOURCE_NODE);
+    const current = { ...route.target, generation: reason === 'concurrent publication' ? 3 : 1 };
+    const db = database([[route], [current]], [[{ generation: current.generation + 1 }], [{ id: current.id }]]);
+    const expectation = {
+      kind: 'route' as const,
+      id: ROUTE_1,
+      deploymentId: OLD_DEPLOYMENT,
+      sha256: 'a'.repeat(64),
+      size: 100,
+      generation: 1,
+      stateGeneration: 1,
+      runtimeConfig: {},
+    };
+    const runtime = {
+      supportsInspection: vi.fn().mockResolvedValue(reason !== 'legacy daemon'),
+      routeExpectation: vi
+        .fn()
+        .mockImplementation(async (input) => ({ ...expectation, stateGeneration: input.stateGeneration })),
+      inspectBindings: vi
+        .fn()
+        .mockResolvedValue(
+          new Map([[bindingInspectionKey(SOURCE_NODE, expectation), { expectation, matches: reason !== 'disk drift' }]])
+        ),
+      publishRuntimeConfig: vi.fn().mockResolvedValue('/config'),
+      activateRoute: vi.fn().mockResolvedValue(`/source/pages/routes/${ROUTE_1}.inc`),
+    };
+    const service = new PageRouteService(
+      db,
+      runtime as never,
+      { log: vi.fn() } as never,
+      runtimeConfigService() as never
+    );
+    await service.reconcile();
+    expect(runtime.activateRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.publishRuntimeConfig).toHaveBeenCalledWith(SOURCE_NODE, 'route', ROUTE_1, 2, {});
+    expect(db.update).toHaveBeenCalled();
+    if (reason === 'legacy daemon') expect(runtime.inspectBindings).not.toHaveBeenCalled();
+  });
+
   it('rejects a Pages Route before daemon preflight when the node lacks runtime-config capability', async () => {
     const db = database(
       [

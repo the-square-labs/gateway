@@ -153,10 +153,22 @@ dockerWebhookTriggerRoutes.openapi(triggerDockerWebhookRoute, async (c) => {
     return c.json({ data });
   }
 
-  // We need the container ID to trigger the update.
-  // List containers on the node and find by name.
+  // Logical HA containers may have no runtime on the original source node.
   const { DockerManagementService } = await import('./docker.service.js');
   const docker = container.resolve(DockerManagementService);
+  const managed = await docker.getManagedContainerConfiguration(webhook.nodeId, webhook.containerName);
+  if (managed) {
+    const data = await service.triggerUpdate({
+      nodeId: managed.nodeId,
+      containerName: managed.containerName,
+      containerId: managed.containerName,
+      tag,
+      webhookId: webhook.id,
+    });
+    return c.json({ data });
+  }
+
+  // Ordinary single-node containers retain physical ID lookup.
   const containers = await docker.listContainers(webhook.nodeId);
   const match = Array.isArray(containers)
     ? containers.find((ct: any) => {

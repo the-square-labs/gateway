@@ -8,6 +8,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { DockerManagementService } from './docker.service.js';
 import type { DockerMigrationCreateInput, DockerMigrationPreflightInput } from './docker-migration.schemas.js';
+import { assertMigrationAvailabilityAllowed, MIGRATION_AVAILABILITY_ENABLED } from './docker-migration-availability.js';
 import type { DockerMigrationCoordinator } from './docker-migration-coordinator.js';
 import type { DockerMigrationExecutor } from './docker-migration-executor.js';
 import { DOCKER_MIGRATION_LEASE_HEARTBEAT_MS, DockerMigrationLease } from './docker-migration-lease.js';
@@ -339,6 +340,7 @@ export class DockerMigrationService {
 
   private async executePhase(row: typeof dockerMigrations.$inferSelect): Promise<void> {
     await this.lease.assertOwnership(row.id);
+    await assertMigrationAvailabilityAllowed(this.db, row);
     if (row.phase === 'locking') {
       await this.recheckPreflight(row);
     } else if (row.phase === 'maintenance') {
@@ -416,6 +418,19 @@ export class DockerMigrationService {
   private async handleFailure(row: typeof dockerMigrations.$inferSelect, error: unknown) {
     const code = error instanceof AppError ? error.code : 'MIGRATION_FAILED';
     const message = error instanceof AppError ? error.message : 'Migration phase failed';
+    if (code === MIGRATION_AVAILABILITY_ENABLED) {
+      // Availability now owns the runtime. Automatic rollback could restart or
+      // delete one of its placements, so leave reconciliation to the operator.
+      const updated = await this.update(row.id, {
+        status: 'needs_attention',
+        errorCode: code,
+        errorMessage: message,
+        completedAt: new Date(),
+      });
+      await this.lease.release(row.id);
+      await this.log(updated, 'docker_migration.failed', row.createdById);
+      return;
+    }
     if (code === 'MIGRATION_NODE_UNAVAILABLE' || code === 'MIGRATION_NODE_BUSY') {
       const updated = await this.update(row.id, {
         status: 'waiting',

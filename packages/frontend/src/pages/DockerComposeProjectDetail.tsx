@@ -1,8 +1,6 @@
 import {
   Activity,
   Boxes,
-  ChevronDown,
-  Code2,
   EllipsisVertical,
   ExternalLink,
   FilePenLine,
@@ -11,9 +9,6 @@ import {
   Hammer,
   HardDrive,
   History,
-  KeyRound,
-  LayoutDashboard,
-  Loader2,
   Network,
   Pin,
   Play,
@@ -30,6 +25,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -38,6 +34,17 @@ import {
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import {
+  ALL_AVAILABILITY_INSTANCES,
+  AvailabilityInstanceSelect,
+} from "@/components/docker/availability/AvailabilityInstanceSelect";
+import {
+  AvailabilityProgress,
+  isAvailabilityReplacing,
+} from "@/components/docker/availability/AvailabilityProgress";
+import { AvailabilitySection } from "@/components/docker/availability/AvailabilitySection";
+import { AvailabilitySummary } from "@/components/docker/availability/AvailabilitySummary";
+import { resolveAvailabilitySurfaceStatus } from "@/components/docker/availability/availability-status";
 import { ExternalComposeBadge } from "@/components/docker/ExternalComposeBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,6 +72,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { createClientUuid } from "@/lib/client-id";
 import { canAdoptComposeProject, hasComposeProjectScope } from "@/lib/compose-access";
+import { composeServiceRows } from "@/lib/compose-service-availability";
 import {
   dockerComposeProjectRoute,
   dockerComposeRootRoute,
@@ -73,9 +81,11 @@ import {
 import { getReturnNavigationTarget } from "@/lib/return-navigation";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useDockerStore } from "@/stores/docker";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import type {
+  DockerAvailabilityPolicy,
   DockerComposeOperation,
   DockerComposeOperationAction,
   DockerComposeProject,
@@ -86,7 +96,7 @@ import { ComposeProjectEditor } from "./compose/ComposeProjectEditor";
 import { ComposeVariablesTab } from "./compose/ComposeVariablesTab";
 import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
-import { StatsTab } from "./docker-detail/StatsTab";
+import { MultiContainerMonitoring } from "./docker-detail/MultiContainerMonitoring";
 
 const ACTIVE_STATUSES = new Set(["pending", "running", "cancelling"]);
 
@@ -151,161 +161,24 @@ function operationIcon(action: DockerComposeOperationAction) {
   return RefreshCw;
 }
 
-type ServiceProcesses = Record<string, { titles: string[]; rows: string[][] }>;
-
-const PROCESS_COLUMN_WIDTHS: Record<string, string> = {
-  PID: "88px",
-  USER: "140px",
-  "%CPU": "88px",
-  "%MEM": "88px",
-  VSZ: "100px",
-  RSS: "100px",
-  TT: "72px",
-  STAT: "88px",
-  STARTED: "140px",
-  TIME: "120px",
-};
-
-function processColumnStyle(title: string, index: number, titles: string[]) {
-  const flexibleIndex = titles.findIndex((item) => item.toUpperCase() === "COMMAND");
-  if (index === (flexibleIndex >= 0 ? flexibleIndex : titles.length - 1)) return undefined;
-  return { width: PROCESS_COLUMN_WIDTHS[title.toUpperCase()] ?? "120px" };
-}
-
-function ComposeProcessesTable({
-  services,
-  processes,
-}: {
-  services: ComposeService[];
-  processes: ServiceProcesses;
-}) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const titles = services.map((service) => processes[service.name]?.titles).find(Boolean) ?? [
-    "Command",
-    "CPU",
-    "Memory",
-  ];
-  const visibleServices = services.filter(
-    (service) => (processes[service.name]?.rows.length ?? 0) > 0
-  );
-  if (visibleServices.length === 0) return null;
-
-  return (
-    <PanelShell
-      title="Processes"
-      description="Top processes grouped by Compose service."
-      bodyClassName="overflow-x-auto"
-    >
-      <table className="w-full min-w-[1120px] table-fixed">
-        <colgroup>
-          {titles.map((title, columnIndex) => (
-            <col key={title} style={processColumnStyle(title, columnIndex, titles)} />
-          ))}
-        </colgroup>
-        <thead className="bg-muted">
-          <tr className="border-b border-border text-left">
-            {titles.map((title) => (
-              <th
-                key={title}
-                className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
-              >
-                {title}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        {visibleServices.map((service, serviceIndex) => {
-          const rows = processes[service.name]?.rows ?? [];
-          const isExpanded = expanded[service.name] ?? true;
-          const isLastService = serviceIndex === visibleServices.length - 1;
-          return (
-            <tbody key={service.name}>
-              <tr className="bg-muted/60">
-                <td colSpan={titles.length} className="p-0">
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-foreground transition-colors hover:bg-muted/80"
-                    aria-expanded={isExpanded}
-                    onClick={() =>
-                      setExpanded((current) => ({
-                        ...current,
-                        [service.name]: !isExpanded,
-                      }))
-                    }
-                  >
-                    <span>{service.name}</span>
-                    <ChevronDown
-                      className={`h-4 w-4 transition-transform duration-200 motion-reduce:transition-none ${
-                        isExpanded ? "rotate-180" : ""
-                      }`}
-                    />
-                  </button>
-                </td>
-              </tr>
-              <tr className={isLastService ? undefined : "border-b border-border"}>
-                <td colSpan={titles.length} className="p-0">
-                  <div
-                    aria-hidden={!isExpanded}
-                    inert={isExpanded ? undefined : true}
-                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
-                      isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-                    }`}
-                  >
-                    <div
-                      className={`min-h-0 overflow-hidden ${
-                        isExpanded ? "border-t border-border" : ""
-                      }`}
-                    >
-                      <table className="w-full table-fixed">
-                        <colgroup>
-                          {titles.map((title, columnIndex) => (
-                            <col
-                              key={title}
-                              style={processColumnStyle(title, columnIndex, titles)}
-                            />
-                          ))}
-                        </colgroup>
-                        <tbody>
-                          {rows.map((row, rowIndex) => (
-                            <tr
-                              key={`${service.name}-${rowIndex}`}
-                              className="border-b border-border last:border-b-0"
-                            >
-                              {titles.map((title, columnIndex) => (
-                                <td
-                                  key={`${title}-${columnIndex}`}
-                                  className="px-4 py-2 font-mono text-xs"
-                                >
-                                  {row[columnIndex] ?? "—"}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          );
-        })}
-      </table>
-    </PanelShell>
-  );
-}
-
 export function DockerComposeProjectDetail() {
   const { projectId = "" } = useParams<{ projectId: string; tab?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { hasScopedAccess, user } = useAuthStore();
+  const dockerNodes = useDockerStore((state) => state.dockerNodes);
   const [project, setProject] = useState<DockerComposeProject | null>(null);
+  const [availabilityPolicy, setAvailabilityPolicy] = useState<DockerAvailabilityPolicy | null>(
+    null
+  );
   const [node, setNode] = useState<NodeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState<DockerComposeOperationAction | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [selectedServiceName, setSelectedServiceName] = useState<string | null>(null);
+  const [selectedLogsPlacementId, setSelectedLogsPlacementId] = useState(
+    ALL_AVAILABILITY_INSTANCES
+  );
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [adoptOpen, setAdoptOpen] = useState(false);
@@ -325,7 +198,6 @@ export function DockerComposeProjectDetail() {
   const activitySentinelRef = useRef<HTMLDivElement>(null);
   const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
     usePinnedContainersStore();
-  const [serviceProcesses, setServiceProcesses] = useState<ServiceProcesses>({});
   const [activeTab, setActiveTab] = useUrlTab(
     [
       "overview",
@@ -336,6 +208,7 @@ export function DockerComposeProjectDetail() {
       "configuration",
       "variables",
       "logs",
+      "settings",
     ],
     "overview",
     (tab) => dockerComposeProjectRoute(projectId, tab)
@@ -367,36 +240,23 @@ export function DockerComposeProjectDetail() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    if (activeTab !== "monitoring" || !project || project.status === "stopped") return;
-    let cancelled = false;
-    const loadProcesses = async () => {
-      const snapshots = await Promise.all(
-        project.services
-          .filter((service) => service.state === "running" && service.containerIds[0])
-          .map(async (service) => {
-            const containerId = service.containerIds[0];
-            if (!containerId) return [service.name, { titles: [], rows: [] }] as const;
-            try {
-              const result = await api.getContainerTop(project.nodeId, containerId);
-              return [
-                service.name,
-                { titles: result.Titles ?? [], rows: result.Processes ?? [] },
-              ] as const;
-            } catch {
-              return [service.name, { titles: [], rows: [] }] as const;
-            }
-          })
+  const loadAvailability = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      setAvailabilityPolicy(
+        await api.getDockerAvailability({ type: "compose", composeProjectId: projectId })
       );
-      if (!cancelled) setServiceProcesses(Object.fromEntries(snapshots));
-    };
-    void loadProcesses();
-    const interval = window.setInterval(() => void loadProcesses(), 10_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [activeTab, project]);
+    } catch {
+      setAvailabilityPolicy(null);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadAvailability();
+  }, [loadAvailability]);
+  useRealtime("docker.availability.changed", loadAvailability);
+  useRealtime("docker.availability.operation.changed", loadAvailability);
+
   useRealtime("docker.compose.changed", (payload) => {
     const event = payload as { projectId?: string } | undefined;
     if (event?.projectId && event.projectId !== projectId) return;
@@ -584,14 +444,17 @@ export function DockerComposeProjectDetail() {
     );
   }
 
+  const displayedServices = composeServiceRows(project, availabilityPolicy);
   const selectedService =
-    project.services.find((service) => service.name === selectedServiceName) ?? project.services[0];
-  const monitoredServices = project.services.filter(
+    displayedServices.find((service) => service.name === selectedServiceName) ??
+    displayedServices[0];
+  const monitoredServices = displayedServices.filter(
     (service) => service.state === "running" && Boolean(service.containerIds[0])
   );
   const inactiveRevisions = (project.revisions ?? []).filter(
     (revision) => revision.id !== project.activeRevisionId
   );
+  const awaitingInitialBuild = project.managementState === "managed" && !project.activeRevisionId;
   const pinAction: ResponsiveHeaderAction = {
     label: "Pin",
     icon: <Pin className="h-4 w-4" />,
@@ -633,13 +496,27 @@ export function DockerComposeProjectDetail() {
                       <Play className="h-4 w-4" />
                     ),
                   onClick: () => void runAction(project.status === "running" ? "stop" : "start"),
-                  disabled: !!currentOperation || !!action || project.status === "deleting",
+                  disabled:
+                    awaitingInitialBuild ||
+                    !!currentOperation ||
+                    !!action ||
+                    project.status === "deleting",
+                  disabledReason: awaitingInitialBuild
+                    ? "Build and deploy the first revision from Source"
+                    : undefined,
                 },
                 {
                   label: "Pull & Apply",
                   icon: <UploadCloud className="h-4 w-4" />,
                   onClick: () => void runAction("pull_apply"),
-                  disabled: !!currentOperation || !!action || project.status === "deleting",
+                  disabled:
+                    awaitingInitialBuild ||
+                    !!currentOperation ||
+                    !!action ||
+                    project.status === "deleting",
+                  disabledReason: awaitingInitialBuild
+                    ? "Build and deploy the first revision from Source"
+                    : undefined,
                 },
                 {
                   label: "Change revision",
@@ -687,22 +564,57 @@ export function DockerComposeProjectDetail() {
         ];
 
   const openContainerTarget = async (service: ComposeService, tab?: string) => {
-    const containerId = service.containerIds[0];
-    if (!containerId) return;
+    if (isAvailabilityReplacing(availabilityPolicy) || currentOperation) return;
     setSelectedServiceName(service.name);
-    if (node?.slug) {
-      try {
-        const container = await api.inspectContainer(project.nodeId, containerId, true);
-        const canonicalName = String(container.Name ?? container.name ?? "").replace(/^\/+/, "");
-        if (!canonicalName) throw new Error("Container identity is missing");
-        navigate(dockerContainerRoute(node.slug, canonicalName, tab), {
-          state: { returnTo: location.pathname },
+    try {
+      let targetNodeId = project.nodeId;
+      let containerId = service.containerIds[0];
+      if (availabilityPolicy && availabilityPolicy.mode !== "single") {
+        const latestPolicy = await api.getDockerAvailability({
+          type: "compose",
+          composeProjectId: project.id,
         });
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Failed to open the service container"
-        );
+        setAvailabilityPolicy(latestPolicy);
+        if (!latestPolicy || isAvailabilityReplacing(latestPolicy)) {
+          toast.info("The workload is being replaced. Wait for the operation to finish.");
+          return;
+        }
+        const target = latestPolicy.placements
+          .flatMap((placement) => {
+            if (!placement.serving || placement.actualState !== "serving") return [];
+            const containers = Array.isArray(placement.runtimeIdentity.containers)
+              ? (placement.runtimeIdentity.containers as Array<Record<string, unknown>>)
+              : [];
+            return containers
+              .filter((container) => container.serviceName === service.name)
+              .map((container) => ({
+                nodeId: placement.nodeId,
+                containerId: String(container.containerId ?? container.containerName ?? ""),
+              }));
+          })
+          .find((candidate) => candidate.containerId);
+        if (!target) {
+          toast.info("No serving instance is available for this service yet.");
+          return;
+        }
+        targetNodeId = target.nodeId;
+        containerId = target.containerId;
       }
+      if (!containerId) return;
+      const targetNode =
+        targetNodeId === node?.id
+          ? node
+          : (dockerNodes.find((candidate) => candidate.id === targetNodeId) ??
+            (await api.getNode(targetNodeId)));
+      if (!targetNode?.slug) return;
+      const container = await api.inspectContainer(targetNodeId, containerId, true);
+      const canonicalName = String(container.Name ?? container.name ?? "").replace(/^\/+/, "");
+      if (!canonicalName) throw new Error("Container identity is missing");
+      navigate(dockerContainerRoute(targetNode.slug, canonicalName, tab), {
+        state: { returnTo: location.pathname },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to open the service container");
     }
   };
 
@@ -725,22 +637,38 @@ export function DockerComposeProjectDetail() {
       header: "Image",
       width: "minmax(260px, 1.6fr)",
       truncate: true,
-      render: (service) => <span className="font-mono text-xs">{service.image || "—"}</span>,
+      render: (service) => (
+        <span className="font-mono text-xs">
+          {serviceDisplayImage(service.name, service.image) || "—"}
+        </span>
+      ),
     },
     {
       key: "state",
       header: "State",
-      width: "110px",
+      width: "140px",
       render: (service) => (
-        <Badge variant={service.state === "running" ? "success" : "secondary"}>
-          {service.state}
+        <Badge
+          variant={
+            isAvailabilityReplacing(availabilityPolicy) || currentOperation
+              ? "warning"
+              : service.state === "running"
+                ? "success"
+                : "secondary"
+          }
+        >
+          {isAvailabilityReplacing(availabilityPolicy)
+            ? availabilityStatus?.replaceAll("_", " ") || "Replacing"
+            : currentOperation
+              ? currentOperation.action.replaceAll("_", " ")
+              : service.state}
         </Badge>
       ),
     },
     {
       key: "health",
       header: "Health",
-      width: "110px",
+      width: "130px",
       render: (service) => (
         <Badge variant={service.health === "healthy" ? "success" : "secondary"}>
           {service.health}
@@ -765,7 +693,11 @@ export function DockerComposeProjectDetail() {
             <Button
               variant="ghost"
               size="icon"
-              disabled={service.containerIds.length === 0}
+              disabled={
+                service.containerIds.length === 0 ||
+                isAvailabilityReplacing(availabilityPolicy) ||
+                Boolean(currentOperation)
+              }
               aria-label={`Actions for ${service.name}`}
               title={`Actions for ${service.name}`}
               onClick={(event) => event.stopPropagation()}
@@ -1003,7 +935,7 @@ export function DockerComposeProjectDetail() {
   const openActivity = () => {
     setActivityOperations([]);
     setActivityNextCursor(null);
-    setActivityLoading(false);
+    setActivityLoading(true);
     setActivityLoadingMore(false);
     setActivityOpen(true);
   };
@@ -1027,6 +959,128 @@ export function DockerComposeProjectDetail() {
   };
 
   const usesInternalScroll = new Set(["services", "configuration", "logs"]).has(activeTab);
+  const availabilityActive =
+    availabilityPolicy?.mode !== undefined && availabilityPolicy.mode !== "single";
+  const availabilityLogSources = availabilityActive
+    ? (availabilityPolicy?.placements ?? []).flatMap((placement) => {
+        if (!placement.serving || placement.actualState !== "serving") return [];
+        const runtimeContainers = Array.isArray(placement.runtimeIdentity?.containers)
+          ? (placement.runtimeIdentity.containers as Array<Record<string, unknown>>)
+          : [];
+        const runtimeContainer = runtimeContainers.find(
+          (candidate) => String(candidate.serviceName ?? "") === selectedService?.name
+        );
+        const containerId = String(
+          runtimeContainer?.containerId ?? runtimeContainer?.containerName ?? ""
+        );
+        if (!containerId) return [];
+        const runtimeNode = dockerNodes.find((candidate) => candidate.id === placement.nodeId);
+        const nodeTitle =
+          runtimeNode?.displayName ||
+          runtimeNode?.hostname ||
+          runtimeNode?.slug ||
+          placement.nodeId.slice(0, 8);
+        return [
+          {
+            channelId: placement.id,
+            runtimeKey: `${placement.nodeId}:${containerId}`,
+            title: nodeTitle,
+            description: `${selectedService?.name ?? "Service"} output from ${nodeTitle}`,
+            state: "running",
+            downloadFileName: `compose-${project.name}-${selectedService?.name ?? "service"}-${nodeTitle}-logs.txt`,
+            createWebSocket: (tail: number) =>
+              api.createLogStreamWebSocket(placement.nodeId, containerId, tail),
+            getLogs: (params: { tail?: number; timestamps?: boolean }) =>
+              api.getContainerLogs(placement.nodeId, containerId, params),
+            popoutUrl: `/docker/logs/${placement.nodeId}/${containerId}`,
+          },
+        ];
+      })
+    : [];
+  const serviceDisplayImage = (serviceName: string, runtimeImage?: string) =>
+    availabilityActive
+      ? project.activeRevision?.normalizedModel.services[serviceName]?.image || runtimeImage
+      : runtimeImage;
+  const availabilityMonitoringInstances = availabilityActive
+    ? (availabilityPolicy?.placements ?? []).flatMap((placement) => {
+        if (!placement.serving || placement.actualState !== "serving") return [];
+        const runtimeContainers = Array.isArray(placement.runtimeIdentity?.containers)
+          ? (placement.runtimeIdentity.containers as Array<Record<string, unknown>>)
+          : [];
+        const runtimeNode = dockerNodes.find((candidate) => candidate.id === placement.nodeId);
+        const nodeTitle =
+          runtimeNode?.displayName ||
+          runtimeNode?.hostname ||
+          runtimeNode?.slug ||
+          placement.nodeId.slice(0, 8);
+        return runtimeContainers.flatMap((runtimeContainer, index) => {
+          const containerId = String(
+            runtimeContainer.containerId ?? runtimeContainer.containerName ?? ""
+          );
+          if (!containerId) return [];
+          const serviceName = String(runtimeContainer.serviceName ?? `Service ${index + 1}`);
+          return [
+            {
+              id: `${placement.id}:${containerId}`,
+              groupTitle: nodeTitle,
+              title: serviceName,
+              description:
+                serviceDisplayImage(serviceName, String(runtimeContainer.image ?? "")) ||
+                project.name,
+              nodeId: placement.nodeId,
+              containerId,
+            },
+          ];
+        });
+      })
+    : [];
+  const composeMonitoringInstances =
+    availabilityMonitoringInstances.length > 0
+      ? availabilityMonitoringInstances
+      : monitoredServices.map((service) => ({
+          id: `${project.nodeId}:${service.name}:${service.containerIds[0]}`,
+          groupTitle: availabilityActive
+            ? node?.displayName || node?.hostname || project.nodeId
+            : undefined,
+          title: service.name,
+          description: serviceDisplayImage(service.name, service.image),
+          nodeId: project.nodeId,
+          containerId: service.containerIds[0]!,
+        }));
+  const availabilityServing =
+    availabilityPolicy?.placements.filter(
+      (placement) => placement.serving && placement.actualState === "serving"
+    ).length ?? 0;
+  const availabilityDesired =
+    availabilityPolicy?.mode === "replicated" ? availabilityPolicy.desiredReplicaCount : 1;
+  const availabilityStatus =
+    availabilityActive && availabilityPolicy
+      ? resolveAvailabilitySurfaceStatus({
+          policyStatus: availabilityPolicy.status,
+          operation: availabilityPolicy.latestOperation,
+          shouldRun: availabilityPolicy.shouldRun,
+          serving: availabilityServing,
+          desired: availabilityDesired,
+        })
+      : null;
+  const displayedDrift = availabilityActive ? false : project.drifted;
+  const logicalServiceCount = availabilityActive
+    ? (availabilityPolicy.serviceCount ??
+      Object.keys(project.activeRevision?.normalizedModel.services ?? {}).length)
+    : project.serviceCount;
+  const availabilityBadgeVariant =
+    availabilityStatus === "online"
+      ? ("success" as const)
+      : availabilityStatus === "offline" || availabilityStatus === "failed"
+        ? ("destructive" as const)
+        : availabilityStatus &&
+            ["degraded", "rolling_out", "starting", "stopping", "restarting"].includes(
+              availabilityStatus
+            )
+          ? ("warning" as const)
+          : availabilityStatus === "stopped"
+            ? ("secondary" as const)
+            : null;
 
   return (
     <PageTransition>
@@ -1042,13 +1096,24 @@ export function DockerComposeProjectDetail() {
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="truncate text-2xl font-bold">{project.name}</h1>
                 {project.managementState === "external" && <ExternalComposeBadge />}
-                <Badge variant={project.drifted ? "warning" : projectStatusVariant(project.status)}>
-                  {project.drifted ? "Drift" : project.status}
+                <Badge
+                  size="inline"
+                  className="shrink-0"
+                  variant={
+                    availabilityBadgeVariant ??
+                    (project.drifted ? "warning" : projectStatusVariant(project.status))
+                  }
+                >
+                  {String(
+                    availabilityStatus ?? (project.drifted ? "Drift" : project.status)
+                  ).replaceAll("_", " ")}
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
-                {node?.displayName || node?.hostname || project.nodeId} · {project.serviceCount}{" "}
-                services
+                {availabilityActive
+                  ? "Availability"
+                  : node?.displayName || node?.hostname || project.nodeId}{" "}
+                · {logicalServiceCount} {logicalServiceCount === 1 ? "service" : "services"}
               </p>
             </div>
           </div>
@@ -1075,16 +1140,7 @@ export function DockerComposeProjectDetail() {
             The node snapshot is unavailable. Last known Compose metadata is shown.
           </div>
         )}
-        {currentOperation && (
-          <div className="flex shrink-0 items-center gap-2 border border-primary/20 bg-primary/5 p-3 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="font-medium">{currentOperation.action.replaceAll("_", " ")}</span>
-            <span className="text-muted-foreground">
-              {currentOperation.progress || "Operation in progress"}
-            </span>
-          </div>
-        )}
-
+        <AvailabilityProgress policy={availabilityPolicy} fallbackOperation={currentOperation} />
         <Tabs
           value={activeTab}
           onValueChange={setActiveTab}
@@ -1092,7 +1148,7 @@ export function DockerComposeProjectDetail() {
         >
           <TabsList className="shrink-0">
             <TabsTrigger value="overview" className="gap-1.5">
-              <LayoutDashboard className="h-3.5 w-3.5" /> Overview
+              Overview
             </TabsTrigger>
             <TabsTrigger value="services" className="gap-1.5">
               <Boxes className="h-3.5 w-3.5" /> Services
@@ -1108,31 +1164,33 @@ export function DockerComposeProjectDetail() {
               className="gap-1.5"
               disabled={project.desiredState === "stopped"}
             >
-              <Activity className="h-3.5 w-3.5" /> Monitoring
+              Monitoring
             </TabsTrigger>
             <TabsTrigger value="configuration" className="gap-1.5">
-              <Code2 className="h-3.5 w-3.5" /> Configuration
+              Configuration
             </TabsTrigger>
             <TabsTrigger value="variables" className="gap-1.5">
-              <KeyRound className="h-3.5 w-3.5" /> Variables
+              Variables
             </TabsTrigger>
             <TabsTrigger value="logs" className="gap-1.5">
-              <ScrollText className="h-3.5 w-3.5" /> Logs
+              Logs
             </TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="pb-6">
             <div className="space-y-4">
+              <AvailabilitySummary resource={{ type: "compose", composeProjectId: project.id }} />
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <StatCard
                   label="Services"
-                  value={`${project.runningServiceCount}/${project.serviceCount}`}
+                  value={`${displayedServices.filter((service) => service.state === "running").length}/${displayedServices.length}`}
                   icon={Boxes}
                   subtitle="running"
                 />
                 <StatCard
                   label="Healthy"
-                  value={`${project.healthyServiceCount}/${project.serviceCount}`}
+                  value={`${displayedServices.filter((service) => service.health === "healthy").length}/${displayedServices.length}`}
                   icon={Activity}
                   subtitle="service health"
                 />
@@ -1189,8 +1247,8 @@ export function DockerComposeProjectDetail() {
                   <DetailRow
                     label="Drift"
                     value={
-                      <Badge variant={project.drifted ? "warning" : "success"}>
-                        {project.drifted ? "Detected" : "None"}
+                      <Badge variant={displayedDrift ? "warning" : "success"}>
+                        {displayedDrift ? "Detected" : "None"}
                       </Badge>
                     }
                   />
@@ -1236,9 +1294,13 @@ export function DockerComposeProjectDetail() {
             >
               <DataTable
                 columns={serviceColumns}
-                data={project.services}
+                data={displayedServices}
                 keyFn={(service) => service.name}
-                onRowClick={(service) => void openContainerTarget(service)}
+                onRowClick={
+                  isAvailabilityReplacing(availabilityPolicy) || currentOperation
+                    ? undefined
+                    : (service) => void openContainerTarget(service)
+                }
                 emptyMessage="No runtime services observed."
                 horizontalScroll
                 minWidth="900px"
@@ -1273,33 +1335,7 @@ export function DockerComposeProjectDetail() {
           </TabsContent>
 
           <TabsContent value="monitoring" className="pb-0">
-            <div className="space-y-4 pb-6">
-              {monitoredServices.map((service) => {
-                const containerId = service.containerIds[0]!;
-                return (
-                  <section key={service.name}>
-                    <div className="mb-2">
-                      <h3 className="text-sm font-semibold text-muted-foreground">
-                        {service.name}
-                      </h3>
-                      <p className="font-mono text-xs text-muted-foreground">{service.image}</p>
-                    </div>
-                    <StatsTab
-                      nodeId={project.nodeId}
-                      containerId={containerId}
-                      showProcesses={false}
-                      data={{
-                        State: {
-                          Running: true,
-                          Status: "running",
-                        },
-                      }}
-                    />
-                  </section>
-                );
-              })}
-              <ComposeProcessesTable services={monitoredServices} processes={serviceProcesses} />
-            </div>
+            <MultiContainerMonitoring instances={composeMonitoringInstances} />
           </TabsContent>
 
           <TabsContent value="configuration" className="flex min-h-0 flex-1 flex-col pb-0">
@@ -1338,9 +1374,39 @@ export function DockerComposeProjectDetail() {
           <TabsContent value="variables" className="pb-0">
             <ComposeVariablesTab project={project} canManage={canManage} onApplied={load} />
           </TabsContent>
+          <TabsContent value="settings" className="pb-6">
+            <AvailabilitySection
+              resource={{ type: "compose", composeProjectId: project.id }}
+              canManage={canManage}
+            />
+          </TabsContent>
 
           <TabsContent value="logs" className="flex min-h-0 flex-1 flex-col pb-0">
-            <LogsTab source={logsSource} />
+            {availabilityActive && availabilityLogSources.length > 0 ? (
+              <LogsTab
+                {...(selectedLogsPlacementId === ALL_AVAILABILITY_INSTANCES
+                  ? { sources: availabilityLogSources }
+                  : {
+                      source:
+                        availabilityLogSources.find(
+                          (source) => source.channelId === selectedLogsPlacementId
+                        ) ?? availabilityLogSources[0]!,
+                    })}
+                headerActions={
+                  <AvailabilityInstanceSelect
+                    placements={availabilityPolicy!.placements.filter(
+                      (placement) => placement.serving && placement.actualState === "serving"
+                    )}
+                    nodes={dockerNodes}
+                    value={selectedLogsPlacementId}
+                    onValueChange={setSelectedLogsPlacementId}
+                    includeAll
+                  />
+                }
+              />
+            ) : (
+              <LogsTab source={logsSource} />
+            )}
           </TabsContent>
         </Tabs>
       </div>
@@ -1421,38 +1487,41 @@ export function DockerComposeProjectDetail() {
               Lifecycle operation history. Scroll the table to load older operations.
             </DialogDescription>
           </DialogHeader>
-          <div
-            className="max-h-[min(70dvh,44rem)] overflow-hidden"
-            style={activityTableHeight ? { height: activityTableHeight } : undefined}
-          >
-            <DataTable
-              columns={activityColumns}
-              data={activityOperations}
-              keyFn={(operation) => operation.id}
-              loading={activityLoading && activityOperations.length === 0}
-              emptyMessage="No operations yet."
-              horizontalScroll
-              minWidth="900px"
-              className="h-full w-full"
-              scrollRef={activityScrollRef}
-              footer={
-                activityNextCursor ? (
-                  <div
-                    ref={activitySentinelRef}
-                    className="p-3 text-center text-xs text-muted-foreground"
-                  >
-                    {activityLoadingMore
-                      ? "Loading older activity..."
-                      : "Scroll to load older activity"}
-                  </div>
-                ) : null
-              }
-              onRowClick={(operation) => {
-                setSelectedOperation(operation);
-                setActivityDetailsOpen(true);
-              }}
-            />
-          </div>
+          {activityLoading && activityOperations.length === 0 ? (
+            <LoadingSpinner className="min-h-48" label="Loading Compose activity" />
+          ) : (
+            <div
+              className="max-h-[min(70dvh,44rem)] overflow-hidden"
+              style={activityTableHeight ? { height: activityTableHeight } : undefined}
+            >
+              <DataTable
+                columns={activityColumns}
+                data={activityOperations}
+                keyFn={(operation) => operation.id}
+                emptyMessage="No operations yet."
+                horizontalScroll
+                minWidth="900px"
+                className="h-full w-full"
+                scrollRef={activityScrollRef}
+                footer={
+                  activityNextCursor ? (
+                    <div
+                      ref={activitySentinelRef}
+                      className="p-3 text-center text-xs text-muted-foreground"
+                    >
+                      {activityLoadingMore
+                        ? "Loading older activity..."
+                        : "Scroll to load older activity"}
+                    </div>
+                  ) : null
+                }
+                onRowClick={(operation) => {
+                  setSelectedOperation(operation);
+                  setActivityDetailsOpen(true);
+                }}
+              />
+            </div>
+          )}
         </DialogContent>
       </Dialog>
       <Dialog open={activityDetailsOpen} onOpenChange={setActivityDetailsOpen}>

@@ -126,3 +126,80 @@ func TestSwitchDeploymentValidatesGPUBeforeReplacingTarget(t *testing.T) {
 		t.Fatalf("switch error = %v, want GPU validation error", err)
 	}
 }
+
+func TestDeploymentRemovalContainerMatchesAvailabilityOwnership(t *testing.T) {
+	dep := deploymentSnapshot{
+		ID:          "deployment-1",
+		RouterImage: "nginx:alpine",
+		DesiredConfig: deploymentDesiredConfig{
+			Image: "registry/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Labels: map[string]string{
+				availabilityPolicyLabel:          "policy-1",
+				availabilityPlacementLabel:       "placement-1",
+				availabilityGenerationLabel:      "9",
+				availabilitySpecFingerprintLabel: "fingerprint",
+			},
+		},
+	}
+	app := ContainerInfo{
+		Name:  "deployment-blue",
+		Image: dep.DesiredConfig.Image,
+		Labels: map[string]string{
+			deploymentIDLabel:                dep.ID,
+			deploymentManagedLabel:           "true",
+			deploymentRoleLabel:              "app",
+			deploymentSlotLabel:              "blue",
+			availabilityPolicyLabel:          "policy-1",
+			availabilityPlacementLabel:       "placement-1",
+			availabilityGenerationLabel:      "8",
+			availabilitySpecFingerprintLabel: "fingerprint",
+		},
+	}
+	if !deploymentRemovalContainerMatches(app, dep, "app", "blue", false) {
+		t.Fatal("owned stale-generation app container should be removable")
+	}
+	changed := app
+	changed.Image = "registry/app@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	changed.Labels = map[string]string{}
+	for key, value := range app.Labels {
+		changed.Labels[key] = value
+	}
+	changed.Labels[availabilitySpecFingerprintLabel] = "old-fingerprint"
+	if !deploymentRemovalContainerMatches(changed, dep, "app", "blue", false) {
+		t.Fatal("owned stale Availability runtime should remain removable after an image rollout")
+	}
+	foreign := app
+	foreign.Labels = map[string]string{}
+	for key, value := range app.Labels {
+		foreign.Labels[key] = value
+	}
+	foreign.Labels[availabilityPolicyLabel] = "foreign-policy"
+	if deploymentRemovalContainerMatches(foreign, dep, "app", "blue", false) {
+		t.Fatal("foreign Availability container must not be removable")
+	}
+	if !deploymentRemovalContainerMatches(foreign, dep, "app", "blue", true) {
+		t.Fatal("forced cleanup should recover an exact managed deployment identity after Availability adoption")
+	}
+	single := dep
+	single.DesiredConfig.Labels = map[string]string{}
+	if !deploymentRemovalContainerMatches(app, single, "app", "blue", false) {
+		t.Fatal("single-node cleanup should accept residual Availability identity for the same managed deployment")
+	}
+	legacy := app
+	legacy.Labels = map[string]string{
+		deploymentIDLabel:      dep.ID,
+		deploymentManagedLabel: "true",
+		deploymentRoleLabel:    "app",
+		deploymentSlotLabel:    "blue",
+	}
+	if !deploymentRemovalContainerMatches(legacy, dep, "app", "blue", false) {
+		t.Fatal("fully matched legacy managed deployment container should be removable")
+	}
+	legacy.Image = "registry/app@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if deploymentRemovalContainerMatches(legacy, dep, "app", "blue", false) {
+		t.Fatal("legacy image mismatch should require an explicitly forced owned-runtime cleanup")
+	}
+	if !deploymentRemovalContainerMatches(legacy, dep, "app", "blue", true) {
+		t.Fatal("forced cleanup should recover an exact managed deployment identity after a partial rollout")
+	}
+}

@@ -11,6 +11,7 @@ import { authMiddleware, requireScopeForResource } from '@/modules/auth/auth.mid
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
+import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
@@ -409,9 +410,37 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     ? container
         .resolve(DockerHealthCheckService)
         .listNavigationHealth()
-        .then((rows) =>
-          rows.filter((row) => hasDockerResourceScope(scopes, 'docker:containers:view', row.nodeId, row.resourceId))
-        )
+        .then(async (rows) => {
+          const visible = rows.filter((row) =>
+            hasDockerResourceScope(scopes, 'docker:containers:view', row.nodeId, row.resourceId)
+          );
+          if (visible.length === 0) return visible;
+          const availability = container.resolve(DockerAvailabilityService);
+          const states = new Map(
+            await Promise.all(
+              [...new Set(visible.map((row) => row.nodeId))].map(
+                async (nodeId) =>
+                  [
+                    nodeId,
+                    await availability.listContainerSurfaceStates(
+                      nodeId,
+                      visible
+                        .filter((row) => row.nodeId === nodeId)
+                        .map((row) => ({
+                          name: row.containerName ?? '',
+                          deploymentId: row.deploymentId,
+                        }))
+                    ),
+                  ] as const
+              )
+            )
+          );
+          return visible.map((row) => {
+            const key = row.deploymentId ? `deployment:${row.deploymentId}` : `container:${row.containerName}`;
+            const logical = states.get(row.nodeId)?.[key];
+            return logical ? { ...row, healthStatus: logical.healthStatus } : row;
+          });
+        })
     : Promise.resolve([]);
   const authMethodsPromise = container
     .resolve(AuthSettingsService)

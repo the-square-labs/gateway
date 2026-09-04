@@ -8,6 +8,7 @@ import {
   diffDockerContainerStateReports,
   mapDockerRuntimeStatus,
   mapGpuHealthDevices,
+  preserveDockerContainerStateReport,
 } from './control.js';
 
 vi.mock('@/config/env.js', () => ({
@@ -236,6 +237,7 @@ function makeDeps(db: any) {
       }),
       getNode: vi.fn(() => connectedNode),
       publishNodeChanged: vi.fn(),
+      publishRelayRuntimeChanged: vi.fn(),
       sendCommandNoWait: vi.fn(),
       handleCommandResult: vi.fn(),
       handleLogStream: vi.fn(),
@@ -339,6 +341,14 @@ describe('diffDockerContainerStateReports', () => {
     );
 
     expect(changes).toEqual([{ containerId: 'same-id', name: 'api', state: 'exited' }]);
+  });
+
+  it('preserves the previous state snapshot when a non-empty runtime report omits container stats', () => {
+    const previous = [{ containerId: 'same-id', name: 'api', state: 'running' }];
+
+    expect(preserveDockerContainerStateReport(previous, [], 1)).toBe(previous);
+    expect(preserveDockerContainerStateReport(previous, [], undefined)).toBe(previous);
+    expect(preserveDockerContainerStateReport(previous, [], 0)).toEqual([]);
   });
 });
 
@@ -1101,7 +1111,14 @@ describe('CommandStream daemon certificate identity', () => {
             limit: vi.fn(() => {
               selectCount += 1;
               if (selectCount === 1) return nodeRows;
-              return Promise.resolve([{ id: '22222222-2222-4222-8222-222222222222', faultDomainId: 'host-relay-1' }]);
+              return Promise.resolve([
+                {
+                  id: '22222222-2222-4222-8222-222222222222',
+                  faultDomainId: 'host-relay-1',
+                  state: 'ready',
+                  appliedPolicyRevision: 0,
+                },
+              ]);
             }),
           })),
         })),
@@ -1144,6 +1161,15 @@ describe('CommandStream daemon certificate identity', () => {
     ]);
 
     await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(1));
+    stream.emit('data', {
+      relayRuntimeStatus: {
+        relayInstanceId: '22222222-2222-4222-8222-222222222222',
+        state: 'ready',
+      },
+    });
+    await vi.waitFor(() => expect(db.update).toHaveBeenCalledTimes(2));
+    expect(deps.registry.publishNodeChanged).toHaveBeenCalledTimes(1);
+    expect(deps.registry.publishRelayRuntimeChanged).not.toHaveBeenCalled();
     expect(stream.end).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  dockerAvailabilityPolicies,
+  managedDatabaseBindingPlacements,
   managedDatabaseBindings,
   managedDatabaseInstances,
   nodes,
@@ -10,6 +12,193 @@ import {
 import { reconcileManagedDatabaseRelayPolicy } from './relay-policy-reconciler.js';
 
 describe('reconcileManagedDatabaseRelayPolicy', () => {
+  it('keeps placement-owned database routes and removes the superseded logical parent route', async () => {
+    const fingerprint = `sha256:${'a'.repeat(64)}`;
+    const endpoint = {
+      id: 'endpoint-1',
+      ownerId: 'database-1',
+      subjectId: 'database-node',
+      certificateSha256: fingerprint,
+      status: 'active',
+    };
+    const parentRoute = { id: 'route-parent', ownerId: 'binding-1' };
+    const placementRoute = {
+      id: 'route-placement',
+      ownerId: 'projection-1',
+      sourceId: 'workload-node',
+      sourceCertificateSha256: fingerprint,
+      targetEndpointId: endpoint.id,
+    };
+    const canonical = new Map<unknown, unknown[]>([
+      [managedDatabaseInstances, [{ id: 'database-1', nodeId: 'database-node', status: 'ready' }]],
+      [
+        managedDatabaseBindings,
+        [
+          {
+            id: 'binding-1',
+            managedDatabaseId: 'database-1',
+            sourceNodeId: 'origin-node',
+            targetType: 'container',
+            targetResourceId: 'api',
+            status: 'ready',
+          },
+        ],
+      ],
+      [
+        managedDatabaseBindingPlacements,
+        [
+          {
+            id: 'projection-1',
+            bindingId: 'binding-1',
+            availabilityPlacementId: 'placement-1',
+            sourceNodeId: 'workload-node',
+            status: 'ready',
+          },
+        ],
+      ],
+      [
+        dockerAvailabilityPolicies,
+        [
+          {
+            mode: 'replicated',
+            resourceKind: 'container',
+            sourceNodeId: 'origin-node',
+            containerName: 'api',
+          },
+        ],
+      ],
+      [
+        nodes,
+        [
+          { id: 'database-node', certificateFingerprint: fingerprint },
+          { id: 'workload-node', certificateFingerprint: fingerprint },
+        ],
+      ],
+    ]);
+    const deletedTables: unknown[] = [];
+    const tx = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () =>
+            Promise.resolve(
+              table === relayEndpoints ? [endpoint] : table === relayRoutes ? [parentRoute, placementRoute] : []
+            ),
+        }),
+      })),
+      delete: vi.fn((table: unknown) => {
+        deletedTables.push(table);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      }),
+      update: vi.fn((_table: unknown) => ({
+        set: () => ({ where: vi.fn().mockResolvedValue(undefined) }),
+      })),
+      insert: vi.fn(),
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: (table: unknown) => Promise.resolve(canonical.get(table) ?? []),
+      })),
+      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await reconcileManagedDatabaseRelayPolicy(db as never);
+
+    expect(deletedTables.filter((table) => table === relayRoutes)).toHaveLength(1);
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
+  it('keeps the adopted parent route while Availability is disabling', async () => {
+    const fingerprint = `sha256:${'a'.repeat(64)}`;
+    const endpoint = {
+      id: 'endpoint-1',
+      ownerId: 'database-1',
+      subjectId: 'database-node',
+      certificateSha256: fingerprint,
+      status: 'active',
+    };
+    const parentRoute = {
+      id: 'route-parent',
+      ownerId: 'binding-1',
+      sourceId: 'survivor-node',
+      sourceCertificateSha256: fingerprint,
+      targetEndpointId: endpoint.id,
+    };
+    const canonical = new Map<unknown, unknown[]>([
+      [managedDatabaseInstances, [{ id: 'database-1', nodeId: 'database-node', status: 'ready' }]],
+      [
+        managedDatabaseBindings,
+        [
+          {
+            id: 'binding-1',
+            managedDatabaseId: 'database-1',
+            sourceNodeId: 'survivor-node',
+            targetType: 'deployment',
+            targetResourceId: 'deployment-1',
+            status: 'ready',
+          },
+        ],
+      ],
+      [
+        managedDatabaseBindingPlacements,
+        [
+          {
+            id: 'projection-1',
+            bindingId: 'binding-1',
+            availabilityPlacementId: null,
+            sourceNodeId: 'survivor-node',
+            status: 'ready',
+          },
+        ],
+      ],
+      [
+        dockerAvailabilityPolicies,
+        [
+          {
+            mode: 'failover',
+            status: 'disabling',
+            resourceKind: 'deployment',
+            deploymentId: 'deployment-1',
+          },
+        ],
+      ],
+      [
+        nodes,
+        [
+          { id: 'database-node', certificateFingerprint: fingerprint },
+          { id: 'survivor-node', certificateFingerprint: fingerprint },
+        ],
+      ],
+    ]);
+    const deletedTables: unknown[] = [];
+    const tx = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () =>
+            Promise.resolve(table === relayEndpoints ? [endpoint] : table === relayRoutes ? [parentRoute] : []),
+        }),
+      })),
+      delete: vi.fn((table: unknown) => {
+        deletedTables.push(table);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      }),
+      update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
+      insert: vi.fn(),
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: (table: unknown) => Promise.resolve(canonical.get(table) ?? []),
+      })),
+      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await reconcileManagedDatabaseRelayPolicy(db as never);
+
+    expect(deletedTables).not.toContain(relayRoutes);
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
   it('removes an orphaned binding route after direct revocation failed and canonical deletion committed', async () => {
     const endpoint = {
       id: 'endpoint-1',

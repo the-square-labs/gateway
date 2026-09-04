@@ -80,6 +80,50 @@ describe('DockerManagementService read and file operations', () => {
     });
   });
 
+  it('resolves logical Availability containers before runtime reads', async () => {
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn().mockResolvedValue({
+        success: true,
+        detail: JSON.stringify({ cpu: 21 }),
+      }),
+      sendDockerLogsCommand: vi.fn().mockResolvedValue({
+        success: true,
+        detail: JSON.stringify(['line-1']),
+      }),
+      sendDockerFileCommand: vi.fn().mockResolvedValue({
+        success: true,
+        detail: JSON.stringify([{ name: 'app.log' }]),
+      }),
+    };
+    const { service } = createService(dispatch);
+    service.setWorkloadResolver({
+      resolveContainerRuntimeTarget: vi.fn().mockResolvedValue({
+        nodeId: 'runtime-node',
+        containerId: 'runtime-container',
+      }),
+    } as never);
+
+    await expect(service.getContainerStats('source-node', 'availability-container')).resolves.toEqual({ cpu: 21 });
+    await expect(service.getContainerLogs('source-node', 'availability-container', 20, false)).resolves.toEqual([
+      'line-1',
+    ]);
+    await expect(service.listDirectory('source-node', 'availability-container', '/var/log')).resolves.toEqual([
+      { name: 'app.log' },
+    ]);
+
+    expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith('runtime-node', 'stats', {
+      containerId: 'runtime-container',
+    });
+    expect(dispatch.sendDockerLogsCommand).toHaveBeenCalledWith('runtime-node', 'runtime-container', {
+      tailLines: 20,
+      timestamps: false,
+    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith('runtime-node', 'list', {
+      containerId: 'runtime-container',
+      path: '/var/log',
+    });
+  });
+
   it('routes file browse reads with the existing max read size', async () => {
     const dispatch = {
       sendDockerFileCommand: vi

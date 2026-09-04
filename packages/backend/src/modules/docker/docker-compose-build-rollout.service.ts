@@ -255,15 +255,22 @@ export class DockerComposeBuildRolloutService {
       if (!current) throw new AppError(404, 'BUILD_ARTIFACT_NOT_FOUND', 'Approved build artifact was not found');
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${current.source.id}`}))`);
       if (current.batch.status === 'superseded') return { disposition: 'superseded' as const };
-      if (current.batch.status === 'succeeded') return { disposition: 'deployed' as const };
-      if (current.batch.status === 'failed' || current.batch.status === 'cancelled') {
-        return { disposition: 'pending' as const };
-      }
       if (current.source.desiredCommitSha?.toLowerCase() !== current.build.commitSha.toLowerCase()) {
         return { disposition: 'superseded' as const };
       }
-      if (current.source.deployedCommitSha?.toLowerCase() === current.build.commitSha.toLowerCase()) {
-        return { disposition: 'deployed' as const };
+      // Success can also mean a revision was built without auto-deploy. A replay
+      // is deployed only if this batch's revision is the project's active one.
+      // A different batch must still apply, even when its commit is unchanged.
+      if (current.batch.status === 'succeeded') {
+        return {
+          disposition:
+            current.batch.candidateRevisionId && current.project.activeRevisionId === current.batch.candidateRevisionId
+              ? ('deployed' as const)
+              : ('pending' as const),
+        };
+      }
+      if (current.batch.status === 'failed' || current.batch.status === 'cancelled') {
+        return { disposition: 'pending' as const };
       }
       const expected = current.batch.composeBuildPlan.services;
       if (expected.length === 0) {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
@@ -17,7 +18,7 @@ import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service
 type ProxyHostRow = typeof proxyHosts.$inferSelect;
 export type ProxyAdditionalSecureLinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
 
-export type ProxyAdditionalSecureLinkPurpose = 'user_managed' | 'additional_route';
+export type ProxyAdditionalSecureLinkPurpose = 'user_managed' | 'additional_route' | 'availability_member';
 
 export interface CreateProxyAdditionalSecureLinkInput {
   name: string;
@@ -36,6 +37,22 @@ interface BindingDetail {
   generation: number;
   port: number;
   targetNetwork?: string;
+}
+
+export interface AvailabilitySecureLinkMemberInput {
+  placementId: string;
+  ingressOwnerKey: string;
+  dockerNodeId: string;
+  upstreamKind: 'docker_container' | 'docker_deployment';
+  forwardScheme: 'http' | 'https';
+  dockerContainerName?: string | null;
+  dockerComposeProjectId?: string | null;
+  dockerComposeServiceName?: string | null;
+  dockerDeploymentId?: string | null;
+  dockerContainerPort: number;
+  dockerHostPort: number;
+  targetNetwork: string;
+  targetContainer: string;
 }
 
 const PROXY_SECURE_LINK_PROBE_ATTEMPTS = 6;
@@ -145,6 +162,169 @@ export class ProxySecureLinkService {
         eq(proxyAdditionalSecureLinks.status, 'active')
       ),
       orderBy: (binding, { asc }) => [asc(binding.name)],
+    });
+  }
+
+  async getActiveAvailabilityMembers(
+    proxyHostId: string,
+    ingressOwnerKey: string
+  ): Promise<ProxyAdditionalSecureLinkRow[]> {
+    return this.db.query.proxyAdditionalSecureLinks.findMany({
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, proxyHostId),
+        eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+        eq(proxyAdditionalSecureLinks.availabilityOwnerKey, ingressOwnerKey),
+        eq(proxyAdditionalSecureLinks.status, 'active')
+      ),
+      orderBy: (binding, { asc }) => [asc(binding.name)],
+    });
+  }
+
+  async ensureAvailabilityMember(
+    host: ProxyHostRow,
+    input: AvailabilitySecureLinkMemberInput
+  ): Promise<ProxyAdditionalSecureLinkRow> {
+    if (!host.nodeId || host.type !== 'proxy' || host.rawConfigEnabled) {
+      throw new AppError(409, 'AVAILABILITY_INGRESS_UNAVAILABLE', 'Availability requires a managed Proxy Host');
+    }
+    if (!(await this.nodesSupportSecureLinks([host.nodeId, input.dockerNodeId], host.nodeId))) {
+      throw new AppError(
+        409,
+        'PROXY_SECURE_LINK_UPDATE_REQUIRED',
+        'Update both Nginx and Docker daemons before activating this Availability placement'
+      );
+    }
+    const existing = await this.db.query.proxyAdditionalSecureLinks.findFirst({
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+        eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+        eq(proxyAdditionalSecureLinks.availabilityOwnerKey, input.ingressOwnerKey),
+        eq(proxyAdditionalSecureLinks.referenceId, input.placementId)
+      ),
+    });
+    const unchanged =
+      existing?.status === 'active' &&
+      !existing.lastError &&
+      existing.dockerNodeId === input.dockerNodeId &&
+      existing.targetNetwork === input.targetNetwork &&
+      existing.targetContainer === input.targetContainer &&
+      existing.dockerHostPort === input.dockerHostPort;
+    if (unchanged) return existing;
+    if (existing) {
+      const [reprovisioning] = await this.db
+        .update(proxyAdditionalSecureLinks)
+        .set({
+          dockerNodeId: input.dockerNodeId,
+          upstreamKind: input.upstreamKind,
+          forwardScheme: input.forwardScheme,
+          dockerContainerName: input.dockerContainerName ?? null,
+          dockerComposeProjectId: input.dockerComposeProjectId ?? null,
+          dockerComposeServiceName: input.dockerComposeServiceName ?? null,
+          dockerDeploymentId: input.dockerDeploymentId ?? null,
+          dockerContainerPort: input.dockerContainerPort,
+          dockerHostPort: input.dockerHostPort,
+          targetNetwork: input.targetNetwork,
+          targetContainer: input.targetContainer,
+          status: 'provisioning',
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(proxyAdditionalSecureLinks.id, existing.id))
+        .returning();
+      if (reprovisioning) {
+        const ready = await this.createAdditionalFromExisting(host, existing.id);
+        if (ready.status !== 'active') {
+          throw new AppError(
+            409,
+            'AVAILABILITY_INGRESS_MEMBER_NOT_READY',
+            ready.lastError ?? 'Availability Secure Link member did not become ready',
+            { retryable: true, placementId: input.placementId }
+          );
+        }
+        return ready;
+      }
+    }
+    const [created] = await this.db
+      .insert(proxyAdditionalSecureLinks)
+      .values({
+        proxyHostId: host.id,
+        name: `availability_${createHash('sha256').update(input.ingressOwnerKey).digest('hex').slice(0, 12)}_${input.placementId.replaceAll('-', '')}`.slice(
+          0,
+          64
+        ),
+        purpose: 'availability_member',
+        referenceId: input.placementId,
+        availabilityOwnerKey: input.ingressOwnerKey,
+        upstreamKind: input.upstreamKind,
+        forwardScheme: input.forwardScheme,
+        sourceNodeId: host.nodeId,
+        dockerNodeId: input.dockerNodeId,
+        dockerContainerName: input.dockerContainerName ?? null,
+        dockerComposeProjectId: input.dockerComposeProjectId ?? null,
+        dockerComposeServiceName: input.dockerComposeServiceName ?? null,
+        dockerDeploymentId: input.dockerDeploymentId ?? null,
+        dockerContainerPort: input.dockerContainerPort,
+        dockerHostPort: input.dockerHostPort,
+        targetNetwork: input.targetNetwork,
+        targetContainer: input.targetContainer,
+        status: 'provisioning',
+      })
+      .returning();
+    if (!created) throw new AppError(500, 'SECURE_LINK_CREATE_FAILED', 'Availability member was not created');
+    const ready = await this.createAdditionalFromExisting(host, created.id);
+    if (ready.status !== 'active') {
+      throw new AppError(
+        409,
+        'AVAILABILITY_INGRESS_MEMBER_NOT_READY',
+        ready.lastError ?? 'Availability Secure Link member did not become ready',
+        { retryable: true, placementId: input.placementId }
+      );
+    }
+    return ready;
+  }
+
+  async deleteAvailabilityMember(
+    host: ProxyHostRow,
+    placementId: string,
+    ingressOwnerKey: string,
+    beforeRuntimeCleanup?: () => Promise<void>
+  ): Promise<void> {
+    const binding = await this.db.query.proxyAdditionalSecureLinks.findFirst({
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+        eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+        eq(proxyAdditionalSecureLinks.availabilityOwnerKey, ingressOwnerKey),
+        eq(proxyAdditionalSecureLinks.referenceId, placementId)
+      ),
+    });
+    if (!binding) return;
+    await this.withLinkOperation(binding.id, async () => {
+      const current = await this.db.query.proxyAdditionalSecureLinks.findFirst({
+        where: and(eq(proxyAdditionalSecureLinks.id, binding.id), eq(proxyAdditionalSecureLinks.proxyHostId, host.id)),
+      });
+      if (!current) return;
+      try {
+        await this.db
+          .update(proxyAdditionalSecureLinks)
+          .set({ status: 'cleanup_pending', lastError: null, updatedAt: new Date() })
+          .where(eq(proxyAdditionalSecureLinks.id, current.id));
+        await beforeRuntimeCleanup?.();
+        await this.deprovisionAdditionalRuntime(current);
+        await this.db.delete(proxyAdditionalSecureLinks).where(eq(proxyAdditionalSecureLinks.id, current.id));
+        this.emitAdditionalState(host, current, 'deleted');
+      } catch (error) {
+        const [pending] = await this.db
+          .update(proxyAdditionalSecureLinks)
+          .set({
+            status: 'cleanup_pending',
+            lastError: error instanceof Error ? error.message : String(error),
+            updatedAt: new Date(),
+          })
+          .where(eq(proxyAdditionalSecureLinks.id, current.id))
+          .returning();
+        this.emitAdditionalState(host, pending ?? current, 'cleanup_failed');
+        throw error;
+      }
     });
   }
 
@@ -541,6 +721,11 @@ export class ProxySecureLinkService {
     let retryNeeded = false;
     for (let binding of pending) {
       if (binding.status === 'active') {
+        // Placement-owned members are reconciled by Docker Availability using
+        // the placement-local target identity. Re-resolving them through the
+        // logical Compose/Deployment target would incorrectly move them back
+        // to the origin node.
+        if (binding.purpose === 'availability_member') continue;
         if (!binding.dockerComposeProjectId || !binding.dockerComposeServiceName) continue;
         try {
           if (!isDockerUpstream(binding.upstreamKind)) continue;
@@ -774,8 +959,8 @@ export class ProxySecureLinkService {
   }
 
   private async deprovisionAdditionalRuntime(binding: ProxyAdditionalSecureLinkRow): Promise<void> {
-    await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id);
-    await Promise.all([this.syncSourceNode(binding.sourceNodeId), this.syncTargetNode(binding.dockerNodeId)]);
+    await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id, { allowDeferredSnapshot: true });
+    await Promise.allSettled([this.syncSourceNode(binding.sourceNodeId), this.syncTargetNode(binding.dockerNodeId)]);
   }
 
   private async requireAdditional(

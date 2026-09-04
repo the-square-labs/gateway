@@ -6,6 +6,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
+import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
@@ -85,6 +86,9 @@ function registerSession(scopes: string[]) {
 }
 
 function registerMinimalDashboardDependencies() {
+  container.registerInstance(DockerAvailabilityService, {
+    listContainerSurfaceStates: vi.fn(async () => ({})),
+  } as never);
   container.registerInstance(DashboardReadModelService, {
     get: vi.fn(async (name: string) => ({ data: name === 'stats-user' ? STATS : [], revision: 1 })),
   } as never);
@@ -119,6 +123,38 @@ afterEach(() => {
 });
 
 describe('dashboard bootstrap route', () => {
+  it.each([
+    ['stopped', null],
+    ['online', null],
+    ['degraded', 'warning'],
+    ['offline', 'critical'],
+  ])('uses the same HA %s health as workload badges instead of a stale probe result', async (healthStatus, expected) => {
+    registerSession(['docker:containers:view']);
+    registerMinimalDashboardDependencies();
+    container.registerInstance(DockerHealthCheckService, {
+      listNavigationHealth: vi.fn(async () => [
+        {
+          nodeId: 'node-1',
+          resourceId: 'deployment-1',
+          deploymentId: 'deployment-1',
+          containerName: null,
+          enabled: true,
+          healthStatus: 'offline',
+        },
+      ]),
+    } as never);
+    container.registerInstance(DockerAvailabilityService, {
+      listContainerSurfaceStates: vi.fn(async () => ({ 'deployment:deployment-1': { healthStatus } })),
+    } as never);
+    const response = await createApp().request('/api/monitoring/dashboard/bootstrap', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: { navigationAttention: { docker: expected } } });
+  });
+
   it('returns scope-aware navigation attention with critical taking priority', async () => {
     registerSession(['nodes:details', 'admin:update', 'proxy:view', 'docker:containers:view']);
     registerMinimalDashboardDependencies();

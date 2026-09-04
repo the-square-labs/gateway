@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
+import { AvailabilitySection } from "@/components/docker/availability/AvailabilitySection";
 import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -104,8 +105,11 @@ export function DeploymentSettings({
   setWebhook,
   onHealthCheckSaved,
   canEditMounts,
+  availabilityManaged = false,
   canManageWebhooks,
   runAction,
+  onAvailabilityDisableQueued,
+  availabilitySourceImageReference,
 }: {
   deployment: DockerDeployment;
   nodeId: string;
@@ -114,8 +118,11 @@ export function DeploymentSettings({
   setWebhook: (webhook: DockerWebhook | null) => void;
   onHealthCheckSaved: (healthCheck: DockerHealthCheck) => void;
   canEditMounts: boolean;
+  availabilityManaged?: boolean;
   canManageWebhooks: boolean;
   runAction: (name: string, fn: () => Promise<void>) => Promise<void>;
+  onAvailabilityDisableQueued?: (survivor: { nodeId: string; nodeSlug: string }) => void;
+  availabilitySourceImageReference?: string | null;
 }) {
   const initialEntrypoint = useMemo(
     () => ((deployment.desiredConfig as any).entrypoint ?? []).join(" "),
@@ -155,9 +162,37 @@ export function DeploymentSettings({
     () => normalizeGpuDeviceIds(desiredGpuDeviceIds),
     [desiredGpuDeviceIds]
   );
+  const editableImageReference = useMemo(() => {
+    const configuredImage = deployment.desiredConfig.image;
+    const sourceImage = availabilitySourceImageReference?.trim();
+    if (
+      sourceImage &&
+      !/^sha256:[0-9a-f]{64}$/i.test(sourceImage) &&
+      !/^127\.0\.0\.1:5443\//i.test(sourceImage)
+    ) {
+      return sourceImage;
+    }
+    const activeImage = deployment.slots
+      .find((slot) => slot.slot === deployment.activeSlot)
+      ?.image?.trim();
+    if (
+      /^sha256:[0-9a-f]{64}$/i.test(configuredImage) &&
+      activeImage &&
+      !/^sha256:/i.test(activeImage)
+    ) {
+      return activeImage;
+    }
+    return availabilityManaged && activeImage ? activeImage : configuredImage;
+  }, [
+    availabilityManaged,
+    availabilitySourceImageReference,
+    deployment.activeSlot,
+    deployment.desiredConfig.image,
+    deployment.slots,
+  ]);
   const desiredImageParts = useMemo(
-    () => splitImageRef(deployment.desiredConfig.image),
-    [deployment.desiredConfig.image]
+    () => splitImageRef(editableImageReference),
+    [editableImageReference]
   );
   const deploymentBaseline = useMemo(
     () => ({
@@ -352,7 +387,7 @@ export function DeploymentSettings({
   const nextImage = joinImageRef(deploymentBaseline.imageName, imageTag);
   const imageTagLocked = deploymentBaseline.imageName.includes("@");
   const executionChanged =
-    nextImage !== deployment.desiredConfig.image ||
+    nextImage !== editableImageReference ||
     entrypoint !== initialEntrypoint ||
     command !== initialCommand ||
     workingDir !== initialWorkingDir ||
@@ -611,7 +646,7 @@ export function DeploymentSettings({
                   placeholder={imageTagLocked ? "digest" : "latest"}
                   disabled={imageTagLocked}
                   style={
-                    nextImage !== deployment.desiredConfig.image
+                    nextImage !== editableImageReference
                       ? { borderColor: "var(--color-warning)" }
                       : undefined
                   }
@@ -699,6 +734,12 @@ export function DeploymentSettings({
         </PanelShell>
       </div>
 
+      <AvailabilitySection
+        resource={{ type: "deployment", deploymentId: deployment.id }}
+        canManage={!action}
+        onDisableQueued={onAvailabilityDisableQueued}
+      />
+
       {savedRuntimeProfile !== "secure" &&
         (!gpuInventoryLoaded || gpuDevices.length > 0 || gpuDeviceIds.length > 0) && (
           <PanelShell title="GPU" description="Applies to both blue/green slots" dirty={gpuChanged}>
@@ -766,14 +807,16 @@ export function DeploymentSettings({
         showBindAddress={false}
       />
 
-      <VolumeMountsSection
-        nodeId={nodeId}
-        canEdit={canEditMounts}
-        mounts={mounts}
-        setMounts={setMounts}
-        mountsChanged={mountsChanged}
-        inputCell={inputCell}
-      />
+      {!availabilityManaged && (
+        <VolumeMountsSection
+          nodeId={nodeId}
+          canEdit={canEditMounts}
+          mounts={mounts}
+          setMounts={setMounts}
+          mountsChanged={mountsChanged}
+          inputCell={inputCell}
+        />
+      )}
 
       <LabelsSection
         canEdit

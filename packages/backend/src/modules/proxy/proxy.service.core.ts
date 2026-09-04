@@ -143,6 +143,7 @@ export abstract class ProxyServiceCore {
   protected notificationEvaluator?: NotificationEvaluatorService;
   protected pageRoutes?: PageRouteService;
   protected additionalRoutes?: AdditionalRouteService;
+  protected availabilityIngressReconciler?: (hostId: string) => Promise<boolean>;
   protected dockerReconcileRunning = false;
   protected dockerReconcileDirty = false;
   protected dockerReconcileForce = false;
@@ -210,6 +211,10 @@ export abstract class ProxyServiceCore {
   setAdditionalRoutes(additionalRoutes: AdditionalRouteService) {
     this.additionalRoutes = additionalRoutes;
     additionalRoutes.setHostRuntime(this);
+  }
+  setAvailabilityIngressReconciler(reconciler: (hostId: string) => Promise<boolean>) {
+    this.availabilityIngressReconciler = reconciler;
+    this.queueDockerReconciliation(true);
   }
 
   /** Re-render a host after an Additional Route lifecycle transition. */
@@ -613,6 +618,11 @@ export abstract class ProxyServiceCore {
       isDockerUpstream(host.upstreamKind) && host.secureLinkGeneration > 0 && host.secureLinkMigratedAt != null;
     const usesRegistryIngress = host.isSystem && host.systemKind === 'docker_registry';
     const additionalSecureLinks = this.secureLinks ? await this.secureLinks.getActiveAdditional(host.id) : [];
+    const availabilityMembers =
+      isDockerUpstream(host.upstreamKind) && this.secureLinks?.getActiveAvailabilityMembers
+        ? await this.secureLinks.getActiveAvailabilityMembers(host.id, `proxy-host:${host.id}`)
+        : [];
+    const usesAvailabilityMembers = availabilityMembers.length > 0;
     const additionalRoutes = this.additionalRoutes ? await this.additionalRoutes.getRenderConfig(host.id) : [];
     await this.secureLinks?.assertAdditionalReferences(host.id, host.advancedConfig);
     if (host.upstreamKind === 'pages' && !this.pageRoutes) {
@@ -630,23 +640,37 @@ export abstract class ProxyServiceCore {
       type: host.type,
       domainNames: host.domainNames,
       enabled: host.enabled,
-      forwardHost: usesSecureLink || usesRegistryIngress ? '127.0.0.1' : host.forwardHost,
+      forwardHost: usesSecureLink || usesAvailabilityMembers || usesRegistryIngress ? '127.0.0.1' : host.forwardHost,
       forwardPort: usesSecureLink ? (host.secureLinkListenerPort ?? host.forwardPort) : host.forwardPort,
       forwardScheme: host.forwardScheme ?? 'http',
       upstreamIpv6Enabled: host.upstreamIpv6Enabled,
-      secureLinkUpstream: usesSecureLink || usesRegistryIngress,
+      secureLinkUpstream: usesSecureLink || usesAvailabilityMembers || usesRegistryIngress,
       secureLinkSocketPath: usesSecureLink
         ? `/run/gateway-secure-links/${host.id}.sock`
-        : usesRegistryIngress
-          ? `/run/gateway-registry-links/${host.id}.sock`
-          : undefined,
+        : usesAvailabilityMembers
+          ? `/run/gateway-secure-links/${availabilityMembers[0]!.id}.sock`
+          : usesRegistryIngress
+            ? `/run/gateway-registry-links/${host.id}.sock`
+            : undefined,
+      secureLinkSocketPaths: usesAvailabilityMembers
+        ? availabilityMembers.map((binding) => `/run/gateway-secure-links/${binding.id}.sock`)
+        : undefined,
       registryAuthRealm,
-      additionalSecureLinks: additionalSecureLinks.map((binding) => ({
-        id: binding.id,
-        name: binding.name,
-        scheme: binding.forwardScheme,
-        socketPath: `/run/gateway-secure-links/${binding.id}.sock`,
-      })),
+      additionalSecureLinks: await Promise.all(
+        additionalSecureLinks.map(async (binding) => {
+          const members = this.secureLinks?.getActiveAvailabilityMembers
+            ? await this.secureLinks.getActiveAvailabilityMembers(host.id, `additional-secure-link:${binding.id}`)
+            : [];
+          return {
+            id: binding.id,
+            name: binding.name,
+            scheme: binding.forwardScheme,
+            socketPath: `/run/gateway-secure-links/${binding.id}.sock`,
+            socketPaths:
+              members.length > 0 ? members.map((member) => `/run/gateway-secure-links/${member.id}.sock`) : undefined,
+          };
+        })
+      ),
       sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
       sslForced: host.sslForced,
       http2Support: host.http2Support,

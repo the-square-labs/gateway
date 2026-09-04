@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { prepareComposeGitBuild, validateComposeYaml } from './compose-policy.js';
 
 describe('validateComposeYaml', () => {
+  it('distinguishes variable-only revisions and ignores variable key ordering', () => {
+    const input = { projectName: 'demo', yaml: 'services:\n  web:\n    image: nginx:alpine\n', secretKeys: [] };
+    const digest = (variables: Record<string, string>) => validateComposeYaml({ ...input, variables }).configDigest;
+    expect(digest({ A: '1' })).not.toBe(digest({ A: '2' }));
+    expect(digest({ A: '1', B: '2' })).toBe(digest({ B: '2', A: '1' }));
+    expect(digest({})).not.toBe(digest({ A: '1' }));
+  });
   it('accepts the image-only safe subset and reports normalized resources', () => {
     const result = validateComposeYaml({
       projectName: 'demo',
@@ -23,6 +30,8 @@ describe('validateComposeYaml', () => {
     volumes:
       - data:/var/lib/app
     networks: [frontend]
+    extra_hosts:
+      db.internal: 172.28.0.1
 volumes:
   data: {}
 networks:
@@ -41,6 +50,7 @@ networks:
       memorySwapLimit: '1G',
       pidsLimit: 128,
       ports: [{ published: 8080, target: 80, protocol: 'tcp' }],
+      extraHosts: { 'db.internal': '172.28.0.1' },
       volumes: [{ source: 'data', target: '/var/lib/app', readOnly: false, external: false }],
     });
   });

@@ -1,0 +1,2 @@
+ALTER TABLE "proxy_additional_secure_links" DROP CONSTRAINT "proxy_additional_secure_links_purpose_check";--> statement-breakpoint
+ALTER TABLE "proxy_additional_secure_links" ADD CONSTRAINT "proxy_additional_secure_links_purpose_check" CHECK ("proxy_additional_secure_links"."purpose" in ('user_managed', 'additional_route', 'availability_member'));

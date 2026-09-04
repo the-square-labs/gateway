@@ -48,6 +48,7 @@ export type DockerBuildBatchStatus =
 export type DockerArtifactStatus = 'pending' | 'ready' | 'rejected' | 'deleting' | 'deleted';
 export type DockerArtifactPolicyDecision = 'pending' | 'approved' | 'rejected' | 'error';
 export type DockerArtifactPinKind = 'active' | 'rollback' | 'build_in_progress' | 'manual';
+export type DockerArtifactOwnerKind = 'build' | 'availability';
 export type DockerInternalRegistryStatus =
   | 'starting'
   | 'ready'
@@ -358,12 +359,11 @@ export const dockerBuildArtifacts = pgTable(
   'docker_build_artifacts',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    buildId: uuid('build_id')
-      .notNull()
-      .references(() => dockerBuilds.id, { onDelete: 'cascade' }),
-    sourceBindingId: uuid('source_binding_id')
-      .notNull()
-      .references(() => dockerSourceBindings.id, { onDelete: 'cascade' }),
+    buildId: uuid('build_id').references(() => dockerBuilds.id, { onDelete: 'cascade' }),
+    sourceBindingId: uuid('source_binding_id').references(() => dockerSourceBindings.id, { onDelete: 'cascade' }),
+    ownerKind: varchar('owner_kind', { length: 32 }).$type<DockerArtifactOwnerKind>().notNull().default('build'),
+    ownerKey: text('owner_key'),
+    sourceImageReference: text('source_image_reference'),
     registryRepository: text('registry_repository').notNull(),
     digest: varchar('digest', { length: 128 }).notNull(),
     platform: varchar('platform', { length: 64 }).notNull(),
@@ -382,7 +382,10 @@ export const dockerBuildArtifacts = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex('docker_build_artifacts_build_unique').on(table.buildId),
+    uniqueIndex('docker_build_artifacts_build_unique').on(table.buildId).where(sql`${table.buildId} IS NOT NULL`),
+    uniqueIndex('docker_build_artifacts_availability_unique')
+      .on(table.ownerKind, table.ownerKey, table.registryRepository)
+      .where(sql`${table.ownerKind} = 'availability'`),
     index('docker_build_artifacts_repository_digest_platform_idx').on(
       table.registryRepository,
       table.digest,
@@ -391,6 +394,22 @@ export const dockerBuildArtifacts = pgTable(
     index('docker_build_artifacts_binding_created_idx').on(table.sourceBindingId, table.createdAt),
     index('docker_build_artifacts_status_idx').on(table.status, table.policyDecision),
     check('docker_build_artifacts_digest_check', sql`${table.digest} ~ '^sha256:[0-9a-f]{64}$'`),
+    check(
+      'docker_build_artifacts_owner_check',
+      sql`(
+        ${table.ownerKind} = 'build'
+        AND ${table.buildId} IS NOT NULL
+        AND ${table.sourceBindingId} IS NOT NULL
+        AND ${table.ownerKey} IS NULL
+        AND ${table.sourceImageReference} IS NULL
+      ) OR (
+        ${table.ownerKind} = 'availability'
+        AND ${table.buildId} IS NULL
+        AND ${table.sourceBindingId} IS NULL
+        AND ${table.ownerKey} IS NOT NULL
+        AND ${table.sourceImageReference} IS NOT NULL
+      )`
+    ),
   ]
 );
 

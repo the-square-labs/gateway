@@ -27,6 +27,50 @@ vi.mock('@/db/schema/index.js', () => ({
 }));
 
 describe('ProxyService Nginx template reconciliation', () => {
+  it('renders Availability member sockets after the temporary primary Secure Link is retired', async () => {
+    const renderForHost = vi.fn().mockResolvedValue('rendered');
+    const secureLinks = {
+      getActiveAdditional: vi.fn().mockResolvedValue([]),
+      getActiveAvailabilityMembers: vi
+        .fn()
+        .mockResolvedValue([
+          { id: '22222222-2222-4222-8222-222222222222' },
+          { id: '33333333-3333-4333-8333-333333333333' },
+        ]),
+      assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new ProxyService(
+      {} as any,
+      { renderForHost } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      secureLinks as any
+    );
+    const host = makeActiveSecureHost({
+      secureLinkGeneration: 0,
+      secureLinkStatus: 'legacy',
+      secureLinkListenerPort: null,
+    });
+
+    await (service as any).buildNginxConfig(host, {}, null);
+
+    expect(renderForHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secureLinkUpstream: true,
+        secureLinkSocketPath: '/run/gateway-secure-links/22222222-2222-4222-8222-222222222222.sock',
+        secureLinkSocketPaths: [
+          '/run/gateway-secure-links/22222222-2222-4222-8222-222222222222.sock',
+          '/run/gateway-secure-links/33333333-3333-4333-8333-333333333333.sock',
+        ],
+      }),
+      null,
+      false
+    );
+  });
+
   it('regenerates every enabled route using an updated template and isolates failures', async () => {
     const db = {
       query: {

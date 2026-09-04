@@ -206,6 +206,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:webhooks` | Yes |
 | `docker:containers:mounts` | Yes |
 | `docker:containers:migrate` | Yes |
+| `docker:availability:manage` | Yes |
 | `docker:containers:folders:manage` |  |
 | `docker:compose:view` | Yes |
 | `docker:compose:create` | Yes |

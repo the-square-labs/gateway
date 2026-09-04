@@ -117,11 +117,30 @@ describe('HousekeepingService system certificate cleanup', () => {
       structuredLogs: { enabled: true },
       clickHouseInternals: { enabled: true },
       orphanedAIArtifacts: { enabled: true },
-      internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 3 },
+      internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 1 },
       orphanedVolumes: { enabled: true },
       dockerPrune: { enabled: true },
       orphanedCerts: { enabled: true },
       acmeCleanup: { enabled: true },
+    });
+  });
+
+  it('normalizes persisted registry history retention to one artifact per source', async () => {
+    const where = vi.fn().mockResolvedValue([
+      { key: 'logging:clickhouse', value: { mode: 'local' } },
+      { key: 'housekeeping:internal_registry:retention_successful_artifacts', value: 10 },
+    ]);
+    const service = new HousekeepingService(
+      {
+        select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
+      } as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+
+    await expect(service.getConfig()).resolves.toMatchObject({
+      internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 1 },
     });
   });
 

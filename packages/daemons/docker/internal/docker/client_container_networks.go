@@ -56,6 +56,27 @@ func mergeManagedDatabaseExtraHosts(existing []string, managed []string) []strin
 	return append(merged, managed...)
 }
 
+func mergePreferredExtraHosts(existing []string, preferred []string) []string {
+	preferredHosts := make(map[string]struct{}, len(preferred))
+	for _, entry := range preferred {
+		host, _, found := strings.Cut(entry, ":")
+		if found && host != "" {
+			preferredHosts[host] = struct{}{}
+		}
+	}
+	merged := make([]string, 0, len(existing)+len(preferred))
+	for _, entry := range existing {
+		host, _, found := strings.Cut(entry, ":")
+		if found {
+			if _, replaced := preferredHosts[host]; replaced {
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	return append(merged, preferred...)
+}
+
 func isManagedDatabaseAlias(host string) bool {
 	suffix, ok := strings.CutPrefix(host, "db-")
 	if !ok || len(suffix) != 16 {

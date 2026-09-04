@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { AIToolAccessModal } from "@/components/ai/AIToolAccessModal";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -424,6 +425,15 @@ function SandboxArtifactsPanel() {
     }
   };
 
+  const openAll = () => {
+    allRequestId.current += 1;
+    loadingMore.current = false;
+    setAllArtifacts([]);
+    setNextPage(null);
+    setAllLoading(true);
+    setAllOpen(true);
+  };
+
   const deleteArtifact = async (artifact: AISandboxArtifact) => {
     setDeletingId(artifact.id);
     try {
@@ -645,7 +655,7 @@ function SandboxArtifactsPanel() {
             <Button
               variant="ghost"
               className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-              onClick={() => setAllOpen(true)}
+              onClick={openAll}
             >
               View all
             </Button>
@@ -672,34 +682,40 @@ function SandboxArtifactsPanel() {
               All retained assistant sandbox files. Scroll to load older artifacts.
             </DialogDescription>
           </DialogHeader>
-          <div
-            className="max-h-[min(65dvh,40rem)]"
-            style={modalTableHeight ? { height: modalTableHeight } : undefined}
-          >
-            <DataTable
-              columns={modalColumns}
-              data={allArtifacts}
-              keyFn={(artifact) => artifact.id}
-              onRowClick={openArtifactPreview}
-              horizontalScroll
-              minWidth="56rem"
-              className="h-full"
-              scrollRef={tableScrollRef}
-              loading={allLoading && allArtifacts.length === 0}
-              emptyMessage="No stored artifacts"
-              footer={
-                nextPage ? (
-                  <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">
-                    {allLoading ? "Loading more…" : "Scroll to load older artifacts"}
-                  </div>
-                ) : allArtifacts.length > 0 ? (
-                  <div className="py-3 text-center text-xs text-muted-foreground">
-                    End of artifacts
-                  </div>
-                ) : null
-              }
-            />
-          </div>
+          {allLoading && allArtifacts.length === 0 ? (
+            <LoadingSpinner className="min-h-48" label="Loading stored artifacts" />
+          ) : (
+            <div
+              className="max-h-[min(65dvh,40rem)]"
+              style={modalTableHeight ? { height: modalTableHeight } : undefined}
+            >
+              <DataTable
+                columns={modalColumns}
+                data={allArtifacts}
+                keyFn={(artifact) => artifact.id}
+                onRowClick={openArtifactPreview}
+                horizontalScroll
+                minWidth="56rem"
+                className="h-full"
+                scrollRef={tableScrollRef}
+                emptyMessage="No stored artifacts"
+                footer={
+                  nextPage ? (
+                    <div
+                      ref={sentinelRef}
+                      className="py-3 text-center text-xs text-muted-foreground"
+                    >
+                      {allLoading ? "Loading more…" : "Scroll to load older artifacts"}
+                    </div>
+                  ) : allArtifacts.length > 0 ? (
+                    <div className="py-3 text-center text-xs text-muted-foreground">
+                      End of artifacts
+                    </div>
+                  ) : null
+                }
+              />
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

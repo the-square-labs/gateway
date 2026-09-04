@@ -303,7 +303,7 @@ func TestStoragePreflightAndInventory(t *testing.T) {
 	}
 }
 
-func TestStoragePreflightRepairsLegacyPublicModesWithoutExposingUploads(t *testing.T) {
+func TestRepairStorageRepairsLegacyPublicModesWithoutExposingUploads(t *testing.T) {
 	runtime, _ := newRuntime(t)
 	stageRelease(t, runtime)
 	if err := runtime.StageRuntimeConfig(RuntimeConfigBindingRoute, routeID, 1, []byte(`{"route":true}`)); err != nil {
@@ -371,9 +371,8 @@ func TestStoragePreflightRepairsLegacyPublicModesWithoutExposingUploads(t *testi
 		t.Fatal(err)
 	}
 
-	preflight, err := runtime.StoragePreflight(1)
-	if err != nil || !preflight.Available {
-		t.Fatalf("unexpected preflight: %#v, %v", preflight, err)
+	if err := runtime.RepairStorage(); err != nil {
+		t.Fatal(err)
 	}
 	for _, path := range []string{
 		runtime.root,

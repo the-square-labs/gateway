@@ -50,6 +50,11 @@ DOCKER_SYSTEMD_UNIT=""
 DOCKER_SOCKET="unix:///var/run/docker.sock"
 DOCKER_MODE="${GATEWAY_DOCKER_MODE:-}"
 BUILDER_EGRESS_PROFILE="${GATEWAY_BUILDER_EGRESS_PROFILE:-internet}"
+BUILDER_RUNTIME_ROOT="/opt/gateway-builder"
+BUILDER_RUNTIME_BIN_DIR="${BUILDER_RUNTIME_ROOT}/bin"
+BUILDER_RUNTIME_LEGACY_BIN_DIR="${BUILDER_RUNTIME_ROOT}/legacy-bin"
+BUILDER_RUNTIME_MANIFEST="${BUILDER_RUNTIME_ROOT}/runtime-manifest"
+BUILDER_RUNTIME_PATH="${BUILDER_RUNTIME_BIN_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DATABASE_STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RESOLVED_DAEMON_VERSION=""
 EXISTING_INSTALL=0
@@ -321,9 +326,14 @@ preflight_database_docker() {
 preflight_builder_runtime() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
     has_systemd || die "Builder nodes require systemd to supervise the isolated containerd and BuildKit services."
-    local required=(containerd buildkitd buildctl runc containerd-shim-runc-v2 git syft grype iptables getent)
+    local bundled=(containerd ctr buildkitd buildctl runc containerd-shim-runc-v2 syft grype)
+    local system=(git iptables getent)
     local missing=() binary
-    for binary in "${required[@]}"; do
+    for binary in "${bundled[@]}"; do
+        [[ -f "${BUILDER_RUNTIME_BIN_DIR}/${binary}" && ! -L "${BUILDER_RUNTIME_BIN_DIR}/${binary}" && -x "${BUILDER_RUNTIME_BIN_DIR}/${binary}" ]] || \
+            missing+=("${BUILDER_RUNTIME_BIN_DIR}/${binary}")
+    done
+    for binary in "${system[@]}"; do
         command_exists "$binary" || missing+=("$binary")
     done
     if [[ "${#missing[@]}" -gt 0 ]]; then
@@ -725,7 +735,18 @@ remove_conflicting_docker_packages() {
     local repo_family="$1"
     case "$repo_family" in
         ubuntu|debian)
-            run_privileged_quiet apt remove -y docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc || true
+            # A package name absent from this distro's indexes makes apt remove
+            # fail even on a clean host. Remove only installed conflicts.
+            local package
+            local installed_conflicts=()
+            for package in docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc; do
+                if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+                    installed_conflicts+=("$package")
+                fi
+            done
+            if (( ${#installed_conflicts[@]} > 0 )); then
+                run_privileged_quiet apt-get remove -y "${installed_conflicts[@]}"
+            fi
             APT_UPDATED=0
             ;;
         fedora|centos|rhel)
@@ -795,9 +816,38 @@ ensure_docker_running() {
     die "Docker is installed but the daemon is not reachable. Check ${LOG_FILE} for details."
 }
 
+quarantine_legacy_builder_runtime_conflicts() {
+    [[ "$DOCKER_MODE" != "builder" ]] || return 0
+    local legacy_containerd="/usr/local/bin/containerd"
+    local legacy_shim="/usr/local/bin/containerd-shim-runc-v2"
+    local legacy_runc="/usr/local/bin/runc"
+    [[ -x "$legacy_containerd" && -x "$legacy_shim" && -x "$legacy_runc" ]] || return 0
+    "$legacy_containerd" --version 2>/dev/null | grep -Fq " v2.3.4 " || return 0
+    "$legacy_shim" -v 2>/dev/null | grep -Fq "v2.3.4" || return 0
+    "$legacy_runc" --version 2>/dev/null | grep -Fq "runc version 1.5.1" || return 0
+
+    local archive_dir="${BUILDER_RUNTIME_LEGACY_BIN_DIR}/$(date +%Y%m%d_%H%M%S)"
+    install -d -m 0755 "$archive_dir"
+    local binary source
+    for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
+        source="/usr/local/bin/${binary}"
+        [[ -f "$source" && ! -L "$source" ]] || continue
+        mv "$source" "${archive_dir}/${binary}"
+    done
+    warn "Moved a legacy Gateway builder runtime out of /usr/local/bin to ${archive_dir}."
+    if has_systemd; then
+        systemctl try-restart containerd >>"$LOG_FILE" 2>&1 || true
+        systemctl try-restart docker >>"$LOG_FILE" 2>&1 || true
+    elif has_openrc; then
+        rc-service containerd restart >>"$LOG_FILE" 2>&1 || true
+        rc-service docker restart >>"$LOG_FILE" 2>&1 || true
+    fi
+}
+
 ensure_docker_installed() {
     [[ "$DOCKER_MODE" != "builder" ]] || return 0
     ensure_curl_installed
+    quarantine_legacy_builder_runtime_conflicts
     if ! command_exists docker; then
         log "Docker not found, installing it..."
         install_docker_engine
@@ -1291,10 +1341,11 @@ install_builder_runtime() {
     esac
 
     local staging_dir download_dir
-    local installed_manifest="/opt/gateway-builder/runtime-manifest"
+    local installed_manifest="$BUILDER_RUNTIME_MANIFEST"
 
     if [[ -f "$installed_manifest" ]] \
-        && grep -Fqx "format=2" "$installed_manifest" \
+        && grep -Fqx "format=3" "$installed_manifest" \
+        && grep -Fqx "bin_dir=${BUILDER_RUNTIME_BIN_DIR}" "$installed_manifest" \
         && grep -Fqx "architecture=${ARCH}" "$installed_manifest" \
         && grep -Fqx "containerd=${containerd_version}" "$installed_manifest" \
         && grep -Fqx "buildkit=${buildkit_version}" "$installed_manifest" \
@@ -1304,7 +1355,7 @@ install_builder_runtime() {
         && grep -Fqx "grype=${grype_version}" "$installed_manifest"; then
         local complete=1 binary plugin
         for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
-            command_exists "$binary" || complete=0
+            [[ -f "${BUILDER_RUNTIME_BIN_DIR}/${binary}" && ! -L "${BUILDER_RUNTIME_BIN_DIR}/${binary}" && -x "${BUILDER_RUNTIME_BIN_DIR}/${binary}" ]] || complete=0
         done
         for plugin in bridge host-local firewall loopback; do
             [[ -x "/opt/gateway-builder/cni/bin/${plugin}" ]] || complete=0
@@ -1370,7 +1421,8 @@ install_builder_runtime() {
     done
 
     printf '%s\n' \
-        "format=2" \
+        "format=3" \
+        "bin_dir=${BUILDER_RUNTIME_BIN_DIR}" \
         "architecture=${ARCH}" \
         "containerd=${containerd_version}" \
         "buildkit=${buildkit_version}" \
@@ -1390,14 +1442,41 @@ install_builder_runtime() {
     done
     [[ -f "${staging_dir}/runtime-manifest" && ! -L "${staging_dir}/runtime-manifest" ]] || die "Builder runtime staging has no regular manifest."
 
-    install -d -m 0755 /usr/local/bin /opt/gateway-builder/cni/bin
+    local legacy_manifest="${installed_manifest}.previous"
+    rm -f "$legacy_manifest"
+    if [[ -f "$installed_manifest" ]] && grep -Fqx "format=2" "$installed_manifest"; then
+        cp -p "$installed_manifest" "$legacy_manifest"
+    fi
+
+    install -d -m 0755 "$BUILDER_RUNTIME_BIN_DIR" /opt/gateway-builder/cni/bin
     for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
-        install -m 0755 "${staging_dir}/bin/${binary}" "/usr/local/bin/${binary}"
+        install -m 0755 "${staging_dir}/bin/${binary}" "${BUILDER_RUNTIME_BIN_DIR}/${binary}"
     done
     for plugin in bridge host-local firewall loopback; do
         install -m 0755 "${staging_dir}/cni/bin/${plugin}" "/opt/gateway-builder/cni/bin/${plugin}"
     done
     install -m 0644 "${staging_dir}/runtime-manifest" "$installed_manifest"
+
+    if [[ -f "$installed_manifest" ]] && grep -Fqx "format=3" "$installed_manifest"; then
+        if [[ -f "$legacy_manifest" ]] && grep -Fqx "format=2" "$legacy_manifest"; then
+            install -d -m 0755 "$BUILDER_RUNTIME_LEGACY_BIN_DIR"
+            for binary in containerd ctr containerd-shim-runc-v2 buildkitd buildctl runc syft grype; do
+                local legacy_path="/usr/local/bin/${binary}"
+                local archived_path="${BUILDER_RUNTIME_LEGACY_BIN_DIR}/${binary}.format-2"
+                [[ -f "$legacy_path" && ! -L "$legacy_path" ]] || continue
+                if [[ "$(sha256sum "$legacy_path" | awk '{print $1}')" == "$(sha256sum "${BUILDER_RUNTIME_BIN_DIR}/${binary}" | awk '{print $1}')" ]]; then
+                    if [[ -e "$archived_path" ]]; then
+                        archived_path="${archived_path}.$(date +%Y%m%d_%H%M%S)"
+                    fi
+                    mv -f "$legacy_path" "$archived_path"
+                    warn "Moved legacy Gateway builder binary ${legacy_path} to ${archived_path}."
+                else
+                    warn "Left modified legacy builder path ${legacy_path} untouched; remove it manually if it shadows a system binary."
+                fi
+            done
+        fi
+        rm -f "$legacy_manifest"
+    fi
     rm -rf "$staging_dir" "$download_dir"
     trap - RETURN
     ok "Builder runtime installed for ${RESOLVED_DAEMON_VERSION}"
@@ -1557,6 +1636,7 @@ start_daemon() {
         local docker_after="network-online.target"
         local docker_wants="network-online.target"
         local supplementary_groups=""
+        local service_environment=""
         if [[ "$DOCKER_MODE" != "builder" && -n "$DOCKER_SYSTEMD_UNIT" ]]; then
             docker_after="${docker_after} ${DOCKER_SYSTEMD_UNIT}"
             docker_wants="${docker_wants} ${DOCKER_SYSTEMD_UNIT}"
@@ -1567,6 +1647,8 @@ start_daemon() {
         fi
         if [[ "$DOCKER_MODE" != "builder" ]] && docker_group_exists; then
             supplementary_groups="SupplementaryGroups=docker"
+        elif [[ "$DOCKER_MODE" == "builder" ]]; then
+            service_environment="Environment=\"PATH=${BUILDER_RUNTIME_PATH}\""
         fi
 
         cat > /etc/systemd/system/docker-daemon.service <<UNIT
@@ -1584,6 +1666,7 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65536
 ${supplementary_groups}
+${service_environment}
 
 [Install]
 WantedBy=multi-user.target

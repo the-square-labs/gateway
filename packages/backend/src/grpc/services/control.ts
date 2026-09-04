@@ -265,6 +265,17 @@ export function diffDockerContainerStateReports(
   return changes;
 }
 
+export function preserveDockerContainerStateReport(
+  previousContainerStats: DockerContainerStateSnapshot[],
+  nextContainerStats: DockerContainerStateSnapshot[],
+  containersTotal: number | undefined
+): DockerContainerStateSnapshot[] {
+  if (nextContainerStats.length === 0 && previousContainerStats.length > 0 && containersTotal !== 0) {
+    return previousContainerStats;
+  }
+  return nextContainerStats;
+}
+
 export function createControlHandlers(deps: GrpcServerDeps) {
   type DockerBuildEventDisposition = 'accepted' | 'obsolete' | null;
   const dockerBuildEventTails = new Map<string, Promise<DockerBuildEventDisposition>>();
@@ -753,7 +764,11 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             if (msg.relayRuntimeStatus) {
               const runtime = msg.relayRuntimeStatus;
               const [instance] = await deps.db
-                .select({ id: relayInstances.id })
+                .select({
+                  id: relayInstances.id,
+                  state: relayInstances.state,
+                  appliedPolicyRevision: relayInstances.appliedPolicyRevision,
+                })
                 .from(relayInstances)
                 .where(eq(relayInstances.nodeId, activeNodeId))
                 .limit(1);
@@ -766,6 +781,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               )
                 ? (runtime.state as 'joining' | 'synchronizing' | 'ready' | 'draining' | 'offline' | 'error')
                 : 'error';
+              const appliedPolicyRevision = Number(runtime.appliedPolicyRevision || 0);
+              const runtimeStateChanged =
+                instance.state !== nextState || Number(instance.appliedPolicyRevision || 0) !== appliedPolicyRevision;
               await deps.db
                 .update(relayInstances)
                 .set({
@@ -776,7 +794,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     protocolMajor: runtime.protocolMajor || 0,
                     features: runtime.capabilities ?? [],
                   },
-                  appliedPolicyRevision: Number(runtime.appliedPolicyRevision || 0),
+                  appliedPolicyRevision,
                   policyExpiresAt: Number(runtime.policyExpiresAtUnix || 0)
                     ? new Date(Number(runtime.policyExpiresAtUnix) * 1000)
                     : null,
@@ -796,7 +814,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   updatedAt: new Date(),
                 })
                 .where(eq(relayInstances.id, instance.id));
-              deps.registry.publishNodeChanged(activeNodeId, 'online');
+              if (runtimeStateChanged) {
+                deps.registry.publishRelayRuntimeChanged(activeNodeId, instance.id);
+              }
             } else if (msg.dockerBuildEvent) {
               const disposition = await dispatchDockerBuildEvent(activeNodeId, msg.dockerBuildEvent);
               const attempt = Number(msg.dockerBuildEvent.attempt ?? 0);
@@ -969,9 +989,16 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               const previousContainerStats = Array.isArray((connectedNode?.lastHealthReport as any)?.containerStats)
                 ? (((connectedNode?.lastHealthReport as any)?.containerStats as any[]) ?? [])
                 : [];
-              const nextContainerStats = Array.isArray((healthData as any).containerStats)
-                ? (((healthData as any).containerStats as any[]) ?? [])
-                : [];
+              const nextContainerStats = preserveDockerContainerStateReport(
+                previousContainerStats,
+                Array.isArray((healthData as any).containerStats)
+                  ? (((healthData as any).containerStats as any[]) ?? [])
+                  : [],
+                healthData.containersTotal
+              );
+              if (nextContainerStats.length > 0 && !Array.isArray((healthData as any).containerStats)) {
+                (healthData as any).containerStats = nextContainerStats;
+              }
 
               if (connectedNode?.type === 'docker') {
                 const nextContainerIds = new Set(

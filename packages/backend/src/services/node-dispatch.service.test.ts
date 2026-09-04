@@ -158,6 +158,74 @@ describe('NodeDispatchService', () => {
     );
   });
 
+  it('generation-normalizes and capability-gates Docker Availability commands', async () => {
+    const unsupported = createService();
+    unsupported.registry.hasCapability.mockReturnValue(false);
+    await expect(
+      unsupported.service.sendDockerAvailabilityCommand('node-1', {
+        action: 'prepare',
+        policyId: 'policy-1',
+        placementId: 'placement-1',
+        generation: 3,
+        operationId: 'operation-1',
+        idempotencyKey: 'key-1',
+        resourceKind: 'container',
+        resourceId: 'api',
+        configJson: '{}',
+      })
+    ).rejects.toMatchObject({ code: 'AVAILABILITY_CAPABILITY_UNAVAILABLE' });
+
+    const supported = createService();
+    await supported.service.sendDockerAvailabilityCommand('node-1', {
+      action: 'activate',
+      policyId: 'policy-1',
+      placementId: 'placement-1',
+      generation: 4,
+      operationId: 'operation-1',
+      idempotencyKey: 'key-2',
+      resourceKind: 'container',
+      resourceId: 'api',
+      configJson: '{"containerId":"container-1"}',
+    });
+    expect(supported.registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      {
+        dockerAvailability: {
+          action: 'activate',
+          policyId: 'policy-1',
+          placementId: 'placement-1',
+          generation: '4',
+          operationId: 'operation-1',
+          idempotencyKey: 'key-2',
+          resourceKind: 'container',
+          resourceId: 'api',
+          configJson: '{"containerId":"container-1"}',
+        },
+      },
+      undefined
+    );
+  });
+
+  it.each(['before', 'during'])('keeps an Availability disconnect %s dispatch retryable', async (when) => {
+    const { service, registry } = createService();
+    if (when === 'before') registry.getNode.mockReturnValue(undefined as never);
+    else registry.sendCommand.mockRejectedValue(new Error('Node disconnected'));
+    await expect(
+      service.sendDockerAvailabilityCommand('node-1', {
+        action: 'inspect',
+        policyId: 'policy',
+        placementId: 'placement',
+        generation: 3,
+        operationId: 'operation',
+        idempotencyKey: 'inspect',
+        resourceKind: 'container',
+        resourceId: 'app',
+        configJson: '{}',
+      })
+    ).rejects.toMatchObject({ code: 'AVAILABILITY_NODE_DISCONNECTED', details: { retryable: true } });
+    if (when === 'before') expect(registry.sendCommand).not.toHaveBeenCalled();
+  });
+
   it('sends managed database logs through the restricted database command', async () => {
     const { registry, service } = createService('databases');
 
@@ -191,6 +259,15 @@ describe('NodeDispatchService', () => {
     await expect(service.sendPagesCommand('node-1', { pagesInventory: {} })).rejects.toMatchObject({
       code: 'PAGES_DAEMON_UPDATE_REQUIRED',
     });
+    expect(registry.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('gates Pages reconciliation on its advertised capability (%s)', async (supported) => {
+    const { service, registry } = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: supported ? ['nginx_pages_v1', 'nginx_pages_reconcile_v1'] : ['nginx_pages_v1'] },
+    });
+    expect(await service.supportsPagesReconciliation('node-1')).toBe(supported);
     expect(registry.sendCommand).not.toHaveBeenCalled();
   });
 

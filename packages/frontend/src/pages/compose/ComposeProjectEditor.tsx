@@ -28,7 +28,7 @@ import { dockerComposeProjectRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
-import type { DockerBuildAdmissionStatus, DockerComposeProject, Node } from "@/types";
+import type { DockerComposeProject, Node } from "@/types";
 import { RepositorySourceFields } from "../docker-deploy/RepositorySourceFields";
 import { useDockerSourceRepositories } from "../docker-deploy/useDockerSourceRepositories";
 import { composeRevisionResumeSignature } from "./compose-adoption-resume";
@@ -92,7 +92,6 @@ export function ComposeProjectEditor({
   const [sourceComposeFilePath, setSourceComposeFilePath] = useState("compose.yaml");
   const [sourceAutoBuild, setSourceAutoBuild] = useState(true);
   const [sourceAutoDeploy, setSourceAutoDeploy] = useState(true);
-  const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
   const [adoptionResume, setAdoptionResume] = useState<{
     revisionId: string;
     idempotencyKey: string;
@@ -135,33 +134,6 @@ export function ComposeProjectEditor({
       })
       .catch(() => toast.error("Failed to load Docker nodes"));
   }, [hasScopedAccess, nodeId, projectId, user?.scopes]);
-
-  useEffect(() => {
-    if (!repositoryCreation || !nodeId) {
-      setSourceAdmission(null);
-      return;
-    }
-    let cancelled = false;
-    setSourceAdmission(null);
-    void api
-      .getDockerBuildAdmission(nodeId)
-      .then((status) => {
-        if (!cancelled) setSourceAdmission(status);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setSourceAdmission({
-            ready: false,
-            code: "BUILD_ADMISSION_CHECK_FAILED",
-            message:
-              error instanceof Error ? error.message : "Build capacity could not be verified",
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [nodeId, repositoryCreation]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -267,9 +239,6 @@ export function ComposeProjectEditor({
           throw new Error("Project name, repository, and branch are required");
         }
         if (!sourceComposeFilePath.trim()) throw new Error("Compose file path is required");
-        if (sourceAdmission?.ready === false) {
-          throw new Error(sourceAdmission.message || "Build capacity is unavailable");
-        }
         const created = await api.createDockerComposeSourceProject(nodeId, {
           projectName: name.trim(),
           source: {
@@ -288,8 +257,12 @@ export function ComposeProjectEditor({
             policy: { vulnerabilityThreshold: "critical" },
           },
         });
-        toast.success("Compose build queued");
-        navigate(dockerComposeProjectRoute(created.project.id), { replace: true });
+        toast.success(created.build ? "Compose created and build queued" : "Compose created");
+        if (created.initialBuildError)
+          toast.warning(
+            `${created.initialBuildError.message} You can adjust Source settings and retry Build now.`
+          );
+        navigate(dockerComposeProjectRoute(created.project.id, "source"), { replace: true });
         return;
       }
       const values = input();
@@ -467,7 +440,7 @@ export function ComposeProjectEditor({
             </div>
 
             <AnimatedHeight>
-              <AnimatePresence initial={false}>
+              <AnimatePresence initial={false} mode="popLayout">
                 <motion.div key={sourceMode} {...SOURCE_MODE_ANIMATION} className="overflow-hidden">
                   {sourceMode === "yaml" ? (
                     yamlPanel

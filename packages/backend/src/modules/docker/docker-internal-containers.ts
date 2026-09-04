@@ -4,6 +4,7 @@ const LOCAL_SERVICE_MANAGED_LABEL = 'net.wiolett.gateway.managed';
 const LOCAL_SERVICE_OWNER_LABEL = 'net.wiolett.gateway.owner';
 const FOUNDATION_SERVICE_LABEL = 'com.wiolett.gateway.managed-service';
 const SANDBOX_LABEL = 'gateway.sandbox';
+const AVAILABILITY_PLACEMENT_LABEL = 'wiolett.gateway.availability.managed';
 
 function containerLabels(container: Record<string, any>): Record<string, unknown> {
   return container?.Config?.Labels ?? container?.Labels ?? container?.labels ?? {};
@@ -20,7 +21,8 @@ export function isGatewayInternalContainer(container: Record<string, any>): bool
     labels[MANAGED_DATABASE_CONNECTOR_LABEL] === 'true' ||
     (labels[LOCAL_SERVICE_MANAGED_LABEL] === 'clickhouse' && labels[LOCAL_SERVICE_OWNER_LABEL] === 'gateway') ||
     (typeof labels[FOUNDATION_SERVICE_LABEL] === 'string' && labels[FOUNDATION_SERVICE_LABEL] !== '') ||
-    labels[SANDBOX_LABEL] === 'true'
+    labels[SANDBOX_LABEL] === 'true' ||
+    labels[AVAILABILITY_PLACEMENT_LABEL] === 'true'
   );
 }
 

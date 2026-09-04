@@ -363,6 +363,51 @@ export class NodeDispatchService {
     );
   }
 
+  async sendDockerAvailabilityCommand(
+    nodeId: string,
+    command: Omit<NonNullable<GatewayCommand['dockerAvailability']>, 'generation'> & {
+      generation: number | string;
+    },
+    timeoutMs?: number
+  ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    const disconnected = () =>
+      new AppError(503, 'AVAILABILITY_NODE_DISCONNECTED', 'Waiting for the Docker daemon to reconnect', {
+        retryable: true,
+      });
+    if (!this.registry.getNode(nodeId)) throw disconnected();
+    if (!this.registry.hasCapability(nodeId, 'docker_availability_v1')) {
+      if (!this.registry.getNode(nodeId)) throw disconnected();
+      throw new AppError(
+        409,
+        'AVAILABILITY_CAPABILITY_UNAVAILABLE',
+        'The connected Docker daemon does not support workload Availability operations'
+      );
+    }
+    try {
+      return await this.registry.sendCommand(
+        nodeId,
+        {
+          dockerAvailability: {
+            ...command,
+            generation: String(command.generation),
+          },
+        },
+        timeoutMs
+      );
+    } catch (error) {
+      if (
+        !this.registry.getNode(nodeId) ||
+        (error instanceof Error &&
+          (error.message === 'Node disconnected' || error.message === `Node ${nodeId} is not connected`))
+      ) {
+        throw disconnected();
+      }
+      throw error;
+    }
+  }
+
   /**
    * Send a restricted managed-database lifecycle command. This is a separate
    * proto command so a database node never receives arbitrary Docker commands.
@@ -536,7 +581,7 @@ export class NodeDispatchService {
     nodeId: string,
     bindings: Array<{
       bindingId: string;
-      role: 'builder' | 'runtime';
+      role: 'builder' | 'runtime' | 'mirror';
       generation: number;
       repository: string;
       actions: Array<'pull' | 'push'>;
@@ -780,6 +825,21 @@ export class NodeDispatchService {
     }
   }
 
+  async supportsPagesReconciliation(nodeId: string): Promise<boolean> {
+    const [node] = await this.db
+      .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    const reported = (node?.capabilities as Record<string, unknown> | null)?.capabilities;
+    return (
+      node?.type === 'nginx' &&
+      node.status === 'online' &&
+      Array.isArray(reported) &&
+      reported.includes('nginx_pages_reconcile_v1')
+    );
+  }
+
   private async assertPagesNode(nodeId: string, requiredCapability = 'nginx_pages_v1'): Promise<void> {
     const [node] = await this.db
       .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })
@@ -871,6 +931,7 @@ export class NodeDispatchService {
     action: string,
     options: {
       imageRef?: string;
+      targetImageRef?: string;
       registryAuthJson?: string;
       force?: boolean;
     } = {},

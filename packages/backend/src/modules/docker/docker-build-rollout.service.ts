@@ -88,7 +88,25 @@ export class DockerBuildRolloutService {
       if (joined.source.desiredCommitSha?.toLowerCase() !== joined.build.commitSha.toLowerCase()) {
         return 'superseded';
       }
-      if (joined.source.deployedCommitSha?.toLowerCase() === joined.build.commitSha.toLowerCase()) {
+      // A forced rebuild can produce another artifact from the same commit.
+      // Only the artifact already active on this target is a duplicate rollout.
+      // A cleared deployed SHA is an explicit redeploy signal after HA rollback.
+      const targetOwnerKey =
+        joined.source.targetKind === 'deployment'
+          ? `deployment:${joined.source.deploymentId}`
+          : `container:${joined.source.nodeId}:${joined.source.containerName}`;
+      const [activePin] = await tx
+        .select({ artifactId: dockerArtifactPins.artifactId })
+        .from(dockerArtifactPins)
+        .where(
+          and(
+            eq(dockerArtifactPins.ownerKey, targetOwnerKey),
+            eq(dockerArtifactPins.kind, 'active'),
+            eq(dockerArtifactPins.artifactId, joined.artifact.id)
+          )
+        )
+        .limit(1);
+      if (activePin && joined.source.deployedCommitSha?.toLowerCase() === joined.build.commitSha.toLowerCase()) {
         return 'deployed';
       }
 
@@ -156,7 +174,17 @@ export class DockerBuildRolloutService {
       return `deployment:${deployment.id}`;
     }
 
-    const containers = await this.docker.listContainers(source.nodeId!);
+    const managed = await this.docker.getManagedContainerConfiguration?.(source.nodeId!, source.containerName!);
+    if (managed) {
+      // HA owns artifact distribution, runtime selection and readiness. The
+      // original node may be offline or no longer host the logical workload.
+      await this.docker.recreateWithConfig(managed.nodeId, managed.containerName, { image }, actorId, {
+        waitForAvailability: true,
+      });
+      return `container:${source.nodeId}:${source.containerName}`;
+    }
+
+    const containers = await this.docker.listAllContainers(source.nodeId!);
     const container = Array.isArray(containers)
       ? containers.find((candidate: any) => {
           const name = String(candidate.name ?? candidate.Name ?? '').replace(/^\//, '');
@@ -187,17 +215,18 @@ export class DockerBuildRolloutService {
       if (!createdId) {
         throw new AppError(502, 'CONTAINER_ID_UNAVAILABLE', 'Created source container did not return an identity');
       }
-      try {
-        await this.docker.startContainer(source.nodeId!, createdId, actorId);
-        await this.waitForContainerReady(source.nodeId!, source.containerName!, image, 60_000);
-      } catch (error) {
-        await this.docker.removeContainer(source.nodeId!, createdId, true, actorId).catch(() => undefined);
-        throw error;
-      }
+      // Keep the created resource and its stable access identity if activation
+      // fails. Users must still be able to inspect, edit Source and retry.
+      await this.docker.startContainer(source.nodeId!, createdId, actorId);
+      await this.waitForContainerReady(source.nodeId!, source.containerName!, image, 60_000);
       return `container:${source.nodeId}:${source.containerName}`;
     }
     const previousInspect = await this.docker.inspectContainer(source.nodeId!, containerId);
     const previousArtifact = await this.previousArtifactImage(source.id);
+    const firstActivation = source.initialConfig && !source.deployedCommitSha && !previousArtifact;
+    if (firstActivation && !actorId) {
+      throw new AppError(403, 'BUILD_ACTOR_REQUIRED', 'First container activation requires a source owner');
+    }
     const previousImage = previousArtifact || String(previousInspect?.Image ?? '').trim();
     if (!previousImage) {
       throw new AppError(
@@ -210,6 +239,18 @@ export class DockerBuildRolloutService {
       await this.docker.recreateWithConfig(source.nodeId!, containerId, { image }, actorId, {
         backgroundImagePull: false,
       });
+      if (firstActivation && actorId) {
+        // Recover the first activation without starting intentionally stopped
+        // resources which already had a successful deployment.
+        const currentId = await this.waitForReplacement(
+          source.nodeId!,
+          source.containerName!,
+          containerId,
+          image,
+          60_000
+        );
+        await this.docker.startContainer(source.nodeId!, currentId, actorId);
+      }
       await this.waitForContainerReady(source.nodeId!, source.containerName!, image, 60_000);
     } catch (error) {
       if (!previousImage) throw error;
@@ -243,12 +284,36 @@ export class DockerBuildRolloutService {
   }
 
   private async findContainer(nodeId: string, name: string): Promise<any | null> {
-    const containers = await this.docker.listContainers(nodeId);
+    const containers = await this.docker.listAllContainers(nodeId);
     if (!Array.isArray(containers)) return null;
     return (
       containers.find((candidate: any) => String(candidate.name ?? candidate.Name ?? '').replace(/^\//, '') === name) ??
       null
     );
+  }
+
+  private async waitForReplacement(
+    nodeId: string,
+    name: string,
+    previousId: string,
+    expectedImage: string,
+    timeoutMs: number
+  ): Promise<string> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      // Recreate acknowledges before the daemon task and its watcher finish.
+      // Even a same-image retry must target the replacement, never the old ID.
+      if (!this.docker.getContainerTransition(nodeId, name)) {
+        const container = await this.findContainer(nodeId, name);
+        const id = String(container?.id ?? container?.Id ?? '');
+        if (id && id !== previousId) {
+          const inspect = await this.docker.inspectContainer(nodeId, id);
+          if (String(inspect?.Config?.Image ?? '').trim() === expectedImage) return id;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new AppError(409, 'CONTAINER_READINESS_FAILED', 'Container replacement did not finish before activation');
   }
 
   private async waitForContainerReady(
@@ -260,19 +325,34 @@ export class DockerBuildRolloutService {
     const deadline = Date.now() + timeoutMs;
     let lastState = 'container not found';
     while (Date.now() < deadline) {
-      const container = await this.findContainer(nodeId, name);
-      const id = String(container?.id ?? container?.Id ?? '');
-      if (id) {
-        const inspect = await this.docker.inspectContainer(nodeId, id);
-        const image = String(inspect?.Config?.Image ?? '').trim();
-        const running = inspect?.State?.Running === true;
-        const health = String(inspect?.State?.Health?.Status ?? '').toLowerCase();
-        lastState =
-          image !== expectedImage
-            ? `waiting for image ${expectedImage}`
-            : health || (running ? 'running' : String(inspect?.State?.Status ?? 'not running'));
-        if (image === expectedImage && running && (!health || health === 'healthy')) return;
-        if (health === 'unhealthy' || inspect?.State?.Dead === true) break;
+      if (this.docker.getContainerTransition(nodeId, name)) {
+        lastState = 'waiting for container transition';
+      } else {
+        try {
+          const container = await this.findContainer(nodeId, name);
+          const id = String(container?.id ?? container?.Id ?? '');
+          if (id) {
+            const inspect = await this.docker.inspectContainer(nodeId, id);
+            const image = String(inspect?.Config?.Image ?? '').trim();
+            const running = inspect?.State?.Running === true;
+            const health = String(inspect?.State?.Health?.Status ?? '').toLowerCase();
+            lastState =
+              image !== expectedImage
+                ? `waiting for image ${expectedImage}`
+                : health || (running ? 'running' : String(inspect?.State?.Status ?? 'not running'));
+            if (image === expectedImage && running && (!health || health === 'healthy')) return;
+            if (image === expectedImage && (health === 'unhealthy' || inspect?.State?.Dead === true)) break;
+          }
+        } catch (error) {
+          // Inventory can briefly retain the removed ID while a replacement is
+          // being observed. This is not a readiness failure or a rollback signal.
+          if (
+            !(error instanceof AppError && error.code === 'CONTAINER_NOT_FOUND') &&
+            !(error instanceof Error && /no such container/i.test(error.message))
+          )
+            throw error;
+          lastState = 'waiting for replacement container';
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }

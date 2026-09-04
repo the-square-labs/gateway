@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -48,7 +49,11 @@ func registryScanEnvironment(base []string, caPath string) []string {
 }
 
 func (m *Manager) runCommand(ctx context.Context, buildID, dir string, env []string, name string, args ...string) error {
-	command := exec.CommandContext(ctx, name, args...)
+	executable, err := m.executable(name)
+	if err != nil {
+		return fmt.Errorf("resolve builder executable %s: %w", name, err)
+	}
+	command := exec.CommandContext(ctx, executable, args...)
 	command.Cancel = func() error {
 		if command.Process == nil {
 			return os.ErrProcessDone
@@ -142,7 +147,7 @@ func directoryUsage(paths ...string) (int64, error) {
 	for _, root := range paths {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
-				if os.IsNotExist(walkErr) {
+				if storageEntryDisappeared(root, path, walkErr) {
 					return nil
 				}
 				return walkErr
@@ -152,6 +157,9 @@ func directoryUsage(paths ...string) (int64, error) {
 			}
 			info, err := entry.Info()
 			if err != nil {
+				if storageEntryDisappeared(root, path, err) {
+					return nil
+				}
 				return err
 			}
 			total += info.Size()
@@ -162,6 +170,12 @@ func directoryUsage(paths ...string) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+// BuildKit can remove or replace a child directory between WalkDir's stat and
+// open. Resample on the next tick; never hide root configuration or I/O errors.
+func storageEntryDisappeared(root, path string, err error) bool {
+	return os.IsNotExist(err) || (path != root && errors.Is(err, syscall.ENOTDIR))
 }
 
 func (m *Manager) failForContext(command *pb.DockerBuildCommand, ctx context.Context, fallbackCode string, err error) {

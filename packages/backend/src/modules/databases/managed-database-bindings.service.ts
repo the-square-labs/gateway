@@ -1,10 +1,20 @@
 import crypto from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, like } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
+import {
+  managedDatabaseBindingPlacements,
+  managedDatabaseBindings,
+  managedDatabaseInstances,
+  nodes,
+} from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type {
+  DockerAvailabilityAdapterContext,
+  DockerAvailabilityResolvedResource,
+} from '@/modules/docker/availability/docker-availability.types.js';
 import type { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import type { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
@@ -46,10 +56,32 @@ interface ManagedDatabaseIdentityManager {
   runBindingLifecycleOperation<T>(managedDatabaseId: string, operation: () => Promise<T>): Promise<T>;
 }
 
+interface ManagedDatabaseAvailabilityCoordinator {
+  resolvePolicyId(target: {
+    targetNodeId: string;
+    targetType: ManagedDatabaseBindingRow['targetType'];
+    targetResourceId: string;
+  }): Promise<string | null>;
+  queueDependencyRollout(policyId: string, userId: string | null): Promise<void>;
+  removeBinding(policyId: string, userId: string | null): Promise<void>;
+}
+
 const BINDING_PRINCIPAL_MODEL_VERSION = 2;
 
 const logger = createChildLogger('ManagedDatabaseBindings');
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+
+function availabilityContainerName(context: DockerAvailabilityAdapterContext): string {
+  return context.nodeId === context.resource.currentNodeId
+    ? context.resource.displayName
+    : `gwav-container-${context.policyId.slice(0, 8)}-${context.placementId.slice(0, 8)}`;
+}
+
+export function availabilityComposeProjectName(context: DockerAvailabilityAdapterContext): string {
+  return context.nodeId === context.resource.currentNodeId
+    ? context.resource.displayName
+    : `gwav-compose-${context.policyId.slice(0, 8)}-${context.placementId.slice(0, 8)}`;
+}
 
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
@@ -57,6 +89,7 @@ export class ManagedDatabaseBindingService {
   private readonly targetRuntime: ManagedDatabaseBindingTargetRuntime;
   private readonly identityRuntime: ManagedDatabaseBindingIdentityRuntime;
   private readonly admission: ManagedDatabaseBindingAdmission;
+  private availabilityCoordinator?: ManagedDatabaseAvailabilityCoordinator;
   private targetRuntimeReconciler?: {
     reconcileTargetNode(nodeId: string): Promise<void>;
     releaseTargetNetwork(nodeId: string, networkName: string): Promise<void>;
@@ -73,7 +106,11 @@ export class ManagedDatabaseBindingService {
     dockerSecrets: DockerSecretService,
     private readonly relayPolicy?: Pick<
       RelayPolicyService,
-      'ensureBindingRoute' | 'syncNodeGrantBundle' | 'probeManagedDatabaseBindingRoute' | 'revokeOwner'
+      | 'ensureBindingRoute'
+      | 'adoptBindingRoute'
+      | 'syncNodeGrantBundle'
+      | 'probeManagedDatabaseBindingRoute'
+      | 'revokeOwner'
     > &
       Partial<Pick<RelayPolicyService, 'getManagedDatabaseBindingRouteRuntime'>>,
     dockerCompose?: DockerComposeService,
@@ -172,6 +209,10 @@ export class ManagedDatabaseBindingService {
     this.targetRuntime.setReconciler(reconciler);
   }
 
+  setAvailabilityCoordinator(coordinator: ManagedDatabaseAvailabilityCoordinator): void {
+    this.availabilityCoordinator = coordinator;
+  }
+
   async list(managedDatabaseId: string) {
     await this.getReadyDatabase(managedDatabaseId);
     const rows = await this.db
@@ -200,6 +241,380 @@ export class ManagedDatabaseBindingService {
       binding: managedDatabaseBindingView(binding),
       runtime: await this.relayPolicy.getManagedDatabaseBindingRouteRuntime(binding.id),
     };
+  }
+
+  async availabilityPreflight(resource: DockerAvailabilityResolvedResource, scopes: string[]) {
+    const bindings = await this.availabilityBindings(resource);
+    return bindings.flatMap((binding) => {
+      const blockers: Array<{ code: string; message: string; resource: string }> = [];
+      if (!hasScope(scopes, `databases:edit:${binding.managedDatabaseId}`)) {
+        blockers.push({
+          code: 'AVAILABILITY_DATABASE_PERMISSION_REQUIRED',
+          message: 'Managed database edit permission is required before Availability can project its Secure Link',
+          resource: binding.managedDatabaseId,
+        });
+      }
+      if (binding.status !== 'ready' || binding.desiredState !== 'active') {
+        blockers.push({
+          code: 'AVAILABILITY_DATABASE_BINDING_NOT_READY',
+          message: `Managed database binding ${binding.id} must be ready before Availability can be enabled`,
+          resource: binding.id,
+        });
+      }
+      return blockers;
+    });
+  }
+
+  async prepareAvailabilityPlacement(context: DockerAvailabilityAdapterContext): Promise<
+    Array<{
+      bindingId: string;
+      projectionId: string;
+      networkName: string;
+      connectorAlias: string;
+      connectorAddress: string;
+      logicalNetworkName: string;
+      logicalConnectorAddress?: string;
+      environment: Record<string, string>;
+      composeServiceName?: string;
+    }>
+  > {
+    const bindings = await this.availabilityBindings(context.resource);
+    const prepared = [] as Array<{
+      bindingId: string;
+      projectionId: string;
+      networkName: string;
+      connectorAlias: string;
+      connectorAddress: string;
+      logicalNetworkName: string;
+      logicalConnectorAddress?: string;
+      environment: Record<string, string>;
+      composeServiceName?: string;
+    }>;
+    for (const binding of bindings) {
+      if (binding.status !== 'ready' || binding.desiredState !== 'active') {
+        throw new AppError(
+          409,
+          'AVAILABILITY_DATABASE_BINDING_NOT_READY',
+          'Every managed database Secure Link must be ready before workload startup',
+          { retryable: true, bindingId: binding.id }
+        );
+      }
+      const [existingProjection] = await this.db
+        .select()
+        .from(managedDatabaseBindingPlacements)
+        .where(
+          and(
+            eq(managedDatabaseBindingPlacements.bindingId, binding.id),
+            eq(managedDatabaseBindingPlacements.nodeId, context.nodeId)
+          )
+        )
+        .limit(1);
+      const reuseExistingProjection = Boolean(
+        existingProjection &&
+          existingProjection.availabilityPlacementId === context.placementId &&
+          (await this.targetRuntime.bindingNetworkExists({
+            ...binding,
+            targetNodeId: context.nodeId,
+            networkName: existingProjection.networkName,
+          }))
+      );
+      const projectionId = reuseExistingProjection ? existingProjection!.id : crypto.randomUUID();
+      const suffix = projectionId.replaceAll('-', '').slice(0, 16);
+      const reuseParentRuntime =
+        !reuseExistingProjection &&
+        binding.targetNodeId === context.nodeId &&
+        (await this.targetRuntime.bindingNetworkExists(binding));
+      const projectedNetworkName = reuseExistingProjection
+        ? existingProjection!.networkName
+        : reuseParentRuntime
+          ? binding.networkName
+          : `gateway-db-av-${suffix}`;
+      const projectedConnectorName = reuseExistingProjection
+        ? existingProjection!.connectorName
+        : reuseParentRuntime
+          ? binding.connectorName
+          : `gateway-db-av-connector-${suffix}`;
+      const [projection] = await this.db
+        .insert(managedDatabaseBindingPlacements)
+        .values({
+          id: projectionId,
+          bindingId: binding.id,
+          availabilityPlacementId: context.placementId,
+          nodeId: context.nodeId,
+          generation: context.generation,
+          networkName: projectedNetworkName,
+          connectorName: projectedConnectorName,
+          connectorAlias: binding.connectorAlias,
+          desiredState: 'active',
+          observedState: 'preparing',
+          status: 'creating',
+        })
+        .onConflictDoUpdate({
+          target: [managedDatabaseBindingPlacements.bindingId, managedDatabaseBindingPlacements.nodeId],
+          set: {
+            availabilityPlacementId: context.placementId,
+            generation: context.generation,
+            networkName: projectedNetworkName,
+            connectorName: projectedConnectorName,
+            connectorAlias: binding.connectorAlias,
+            connectorAddress: reuseExistingProjection
+              ? existingProjection!.connectorAddress
+              : reuseParentRuntime
+                ? binding.connectorAddress
+                : null,
+            desiredState: 'active',
+            observedState: 'preparing',
+            status: 'creating',
+            lastError: null,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      if (!projection) throw new Error('Managed database placement projection was not persisted');
+      const database = await this.getDatabase(binding.managedDatabaseId);
+      const composeServiceName =
+        binding.targetType === 'compose_service'
+          ? decodeURIComponent(binding.targetResourceId.slice(binding.targetResourceId.indexOf(':') + 1))
+          : undefined;
+      const allowedSources =
+        binding.targetType === 'compose_service'
+          ? [`compose:${availabilityComposeProjectName(context)}:${composeServiceName}`]
+          : binding.targetType === 'deployment'
+            ? [`deployment:${context.resource.resourceId}`]
+            : [`container:${availabilityContainerName(context)}`];
+      const synthetic = {
+        ...binding,
+        id: projection.id,
+        targetNodeId: context.nodeId,
+        targetResourceId:
+          binding.targetType === 'deployment'
+            ? context.resource.resourceId
+            : binding.targetType === 'compose_service'
+              ? `${context.resource.resourceId}:${encodeURIComponent(composeServiceName!)}`
+              : availabilityContainerName(context),
+        networkName: projection.networkName,
+        connectorName: projection.connectorName,
+        connectorAlias: projection.connectorAlias,
+        connectorAddress: projection.connectorAddress,
+      };
+      try {
+        const runtime = reuseParentRuntime
+          ? await this.targetRuntime.projectParentBindingToAvailabilityPlacement(
+              database,
+              binding,
+              projection.id,
+              this.bindingCredentials(binding),
+              allowedSources
+            )
+          : await this.targetRuntime.prepareAvailabilityPlacement(
+              database,
+              synthetic,
+              this.bindingCredentials(binding),
+              allowedSources
+            );
+        await this.db
+          .update(managedDatabaseBindingPlacements)
+          .set({
+            connectorAddress: runtime.connectorAddress,
+            observedState: 'active',
+            status: 'ready',
+            lastObservedAt: new Date(),
+            lastError: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(managedDatabaseBindingPlacements.id, projection.id));
+        prepared.push({
+          bindingId: binding.id,
+          projectionId: projection.id,
+          ...runtime,
+          logicalNetworkName: binding.networkName,
+          logicalConnectorAddress: binding.connectorAddress ?? undefined,
+          composeServiceName,
+        });
+      } catch (error) {
+        await this.db
+          .update(managedDatabaseBindingPlacements)
+          .set({
+            observedState: 'error',
+            status: 'error',
+            lastError: error instanceof Error ? error.message.slice(0, 1_000) : String(error).slice(0, 1_000),
+            updatedAt: new Date(),
+          })
+          .where(eq(managedDatabaseBindingPlacements.id, projection.id));
+        throw error;
+      }
+    }
+    return prepared;
+  }
+
+  async cleanupAvailabilityPlacement(availabilityPlacementId: string): Promise<void> {
+    const projections = await this.db
+      .select()
+      .from(managedDatabaseBindingPlacements)
+      .where(eq(managedDatabaseBindingPlacements.availabilityPlacementId, availabilityPlacementId));
+    for (const projection of projections) {
+      const [binding] = await this.db
+        .select()
+        .from(managedDatabaseBindings)
+        .where(eq(managedDatabaseBindings.id, projection.bindingId))
+        .limit(1);
+      const sharesParentRuntime =
+        binding?.targetNodeId === projection.nodeId && binding.networkName === projection.networkName;
+      await this.db
+        .update(managedDatabaseBindingPlacements)
+        .set({ desiredState: 'deleted', status: 'deleting', lastError: null, updatedAt: new Date() })
+        .where(eq(managedDatabaseBindingPlacements.id, projection.id));
+      try {
+        if (!this.relayPolicy) throw new Error('Managed database relay policy is unavailable');
+        await this.relayPolicy.revokeOwner('managed_database_binding', projection.id);
+        await this.targetRuntimeReconciler?.releaseTargetNetwork(projection.nodeId, projection.networkName);
+        await this.targetRuntimeReconciler?.reconcileTargetNode(projection.nodeId);
+        this.requireSuccess(await this.relayPolicy.syncNodeGrantBundle(projection.nodeId));
+        if (!sharesParentRuntime) {
+          this.requireSuccessOrMissing(
+            await this.nodeDispatch.sendDockerNetworkCommand(projection.nodeId, 'remove', {
+              networkId: projection.networkName,
+            })
+          );
+        }
+        await this.db
+          .delete(managedDatabaseBindingPlacements)
+          .where(eq(managedDatabaseBindingPlacements.id, projection.id));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.db
+          .update(managedDatabaseBindingPlacements)
+          .set({ observedState: 'error', status: 'error', lastError: message.slice(0, 1_000), updatedAt: new Date() })
+          .where(eq(managedDatabaseBindingPlacements.id, projection.id));
+        throw new AppError(503, 'AVAILABILITY_DATABASE_CLEANUP_PENDING', message, {
+          retryable: true,
+          projectionId: projection.id,
+        });
+      }
+    }
+  }
+
+  async adoptAvailabilityPlacementAsSingle(context: DockerAvailabilityAdapterContext): Promise<void> {
+    const projections = await this.db
+      .select()
+      .from(managedDatabaseBindingPlacements)
+      .where(eq(managedDatabaseBindingPlacements.availabilityPlacementId, context.placementId));
+    for (const projection of projections) {
+      const [binding] = await this.db
+        .select()
+        .from(managedDatabaseBindings)
+        .where(eq(managedDatabaseBindings.id, projection.bindingId))
+        .limit(1);
+      if (!binding) continue;
+      const composeServiceName =
+        binding.targetType === 'compose_service'
+          ? decodeURIComponent(binding.targetResourceId.slice(binding.targetResourceId.indexOf(':') + 1))
+          : undefined;
+      const targetResourceId =
+        binding.targetType === 'compose_service'
+          ? `${context.resource.resourceId}:${encodeURIComponent(composeServiceName!)}`
+          : binding.targetType === 'deployment'
+            ? context.resource.resourceId
+            : context.resource.displayName;
+      const allowedSources =
+        binding.targetType === 'compose_service'
+          ? [`compose:${context.resource.displayName}:${composeServiceName}`]
+          : binding.targetType === 'deployment'
+            ? [`deployment:${context.resource.resourceId}`]
+            : [`container:${context.resource.displayName}`];
+      const database = await this.getDatabase(binding.managedDatabaseId);
+      const adopted = {
+        ...binding,
+        targetNodeId: context.nodeId,
+        targetResourceId,
+        networkName: projection.networkName,
+        connectorName: projection.connectorName,
+        connectorAlias: projection.connectorAlias,
+        connectorAddress: projection.connectorAddress,
+      };
+      const runtime = await this.targetRuntime.adoptAvailabilityPlacement(
+        database,
+        adopted,
+        projection.id,
+        this.bindingCredentials(binding),
+        allowedSources
+      );
+      if (binding.targetNodeId !== adopted.targetNodeId || binding.networkName !== adopted.networkName) {
+        const [projectedParentRuntime] = await this.db
+          .select({ id: managedDatabaseBindingPlacements.id })
+          .from(managedDatabaseBindingPlacements)
+          .where(
+            and(
+              eq(managedDatabaseBindingPlacements.bindingId, binding.id),
+              eq(managedDatabaseBindingPlacements.nodeId, binding.targetNodeId),
+              eq(managedDatabaseBindingPlacements.networkName, binding.networkName)
+            )
+          )
+          .limit(1);
+        if (!projectedParentRuntime) await this.targetRuntime.cleanupSupersededRuntime(binding);
+      }
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(managedDatabaseBindings)
+          .set({
+            targetNodeId: context.nodeId,
+            targetResourceId,
+            networkName: projection.networkName,
+            connectorName: projection.connectorName,
+            connectorAlias: projection.connectorAlias,
+            connectorAddress: runtime.connectorAddress,
+            desiredState: 'active',
+            observedState: 'active',
+            status: 'ready',
+            lastError: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(managedDatabaseBindings.id, binding.id));
+        await tx
+          .update(managedDatabaseBindingPlacements)
+          .set({
+            availabilityPlacementId: null,
+            generation: context.generation,
+            connectorAddress: runtime.connectorAddress,
+            desiredState: 'active',
+            observedState: 'active',
+            status: 'ready',
+            lastError: null,
+            lastObservedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(managedDatabaseBindingPlacements.id, projection.id));
+      });
+    }
+  }
+
+  private async availabilityBindings(resource: DockerAvailabilityResolvedResource) {
+    const resourceCondition =
+      resource.kind === 'container'
+        ? and(
+            eq(managedDatabaseBindings.targetType, 'container'),
+            eq(managedDatabaseBindings.targetResourceId, resource.displayName)
+          )
+        : resource.kind === 'deployment'
+          ? and(
+              eq(managedDatabaseBindings.targetType, 'deployment'),
+              eq(managedDatabaseBindings.targetResourceId, resource.resourceId)
+            )
+          : and(
+              eq(managedDatabaseBindings.targetType, 'compose_service'),
+              like(managedDatabaseBindings.targetResourceId, `${resource.resourceId}:%`)
+            );
+    return this.db
+      .select()
+      .from(managedDatabaseBindings)
+      .where(
+        and(
+          eq(managedDatabaseBindings.targetNodeId, resource.currentNodeId),
+          eq(managedDatabaseBindings.desiredState, 'active'),
+          inArray(managedDatabaseBindings.status, ['creating', 'ready', 'error']),
+          resourceCondition
+        )
+      );
   }
 
   /** Reapply idempotent binding principals after a database daemon reconnect. */
@@ -241,7 +656,17 @@ export class ManagedDatabaseBindingService {
     options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {},
     source: 'request' | 'reconciliation' = 'request'
   ) {
-    return reconcileManagedDatabaseBindingLifecycle(binding, binding, {
+    const availabilityPolicyId = await this.availabilityCoordinator?.resolvePolicyId(binding);
+    const availabilityComposeRemoval =
+      binding.desiredState === 'deleted' && Boolean(availabilityPolicyId) && binding.targetType === 'compose_service';
+    if (availabilityComposeRemoval) {
+      await this.removeTargetBinding(database, binding, userId, options);
+    } else if (binding.desiredState === 'deleted' && availabilityPolicyId) {
+      await this.availabilityCoordinator?.removeBinding(availabilityPolicyId, userId);
+    }
+    const requiresDependencyRollout =
+      availabilityPolicyId !== null && (binding.status !== 'ready' || binding.observedState !== 'active');
+    const result = await reconcileManagedDatabaseBindingLifecycle(binding, binding, {
       markDeleting: async () => {
         const [row] = await this.db
           .update(managedDatabaseBindings)
@@ -251,7 +676,11 @@ export class ManagedDatabaseBindingService {
         return row ?? binding;
       },
       revokeAccess: async (row) => this.relayPolicy?.revokeOwner('managed_database_binding', row.id),
-      deprovision: async (row) => this.deprovisionBinding(database, row, userId, options),
+      deprovision: async (row) =>
+        this.deprovisionBinding(database, row, userId, {
+          ...options,
+          skipTargetMutation: Boolean(availabilityPolicyId),
+        }),
       deleteRecord: async (row) => {
         await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, row.id));
         await this.auditService.log({
@@ -280,7 +709,10 @@ export class ManagedDatabaseBindingService {
           .returning();
         return updated ?? row;
       },
-      ensureRuntime: async (row) => this.reconcileBindingRuntime(database, row),
+      ensureRuntime: async (row) => {
+        if (availabilityPolicyId) return;
+        await this.reconcileBindingRuntime(database, row);
+      },
       markReady: async (row) => {
         const [ready] = await this.db
           .update(managedDatabaseBindings)
@@ -293,6 +725,13 @@ export class ManagedDatabaseBindingService {
         return ready!;
       },
     });
+    if (!result.deleted && availabilityPolicyId && requiresDependencyRollout) {
+      await this.availabilityCoordinator?.queueDependencyRollout(
+        availabilityPolicyId,
+        source === 'request' ? userId : null
+      );
+    }
+    return result;
   }
 
   private async reconcileBindingRuntime(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
@@ -456,7 +895,7 @@ export class ManagedDatabaseBindingService {
           return { success: true };
         } catch (error) {
           await this.markBindingReconciliationError(database, deleting!, error);
-          return managedDatabaseBindingView(await this.getBinding(database.id, deleting!.id));
+          throw error;
         }
       });
     };
@@ -513,13 +952,13 @@ export class ManagedDatabaseBindingService {
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
     userId: string,
-    options: { targetEnvironment?: Record<string, string> } = {}
+    options: { targetEnvironment?: Record<string, string>; skipTargetMutation?: boolean } = {}
   ) {
     const credentials = this.bindingCredentials(binding);
     const principalCredentials = this.pendingBindingCredentials(binding) ?? credentials;
     const owner = this.ownerCredentials(database);
     await this.prepareTargetNetworkRemoval(binding);
-    await this.removeTargetBinding(database, binding, userId, options);
+    if (!options.skipTargetMutation) await this.removeTargetBinding(database, binding, userId, options);
     await this.targetRuntimeReconciler?.reconcileTargetNode(binding.targetNodeId);
     if (this.relayPolicy) {
       this.requireSuccess(await this.relayPolicy.syncNodeGrantBundle(binding.targetNodeId));

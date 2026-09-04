@@ -35,6 +35,25 @@ import { DockerSourceService } from './docker-source.service.js';
 const SourceBindingIdSchema = z.string().uuid();
 const SOURCE_WEBHOOK_BODY_MAX_BYTES = 1_048_576;
 const PENDING_SOURCE_IMAGE = 'gateway.invalid/pending-source-build:latest';
+
+export function initialDockerSourceBuildError(error: unknown): { code: string; message: string } {
+  // Never expose provider errors, credential-bearing URLs, SQL or raw build input.
+  const messages: Record<string, string> = {
+    BUILD_WORKER_REQUIRED: 'A Build Worker is required. The resource was saved; retry from Source.',
+    BUILD_CAPACITY_UNAVAILABLE: 'Build capacity is unavailable. The resource was saved; retry from Source.',
+    BUILD_SCHEDULER_UNAVAILABLE: 'The build scheduler is unavailable. The resource was saved; retry from Source.',
+    BUILD_ARTIFACT_POLICY_REJECTED: 'The build was rejected by security policy. Review the policy in Source and retry.',
+    SOURCE_COMMIT_STALE: 'The source branch changed. The resource was saved; retry from Source.',
+    COMPOSE_BUILD_PLAN_MISSING: 'The Compose build plan is unavailable. Review Source configuration and retry.',
+  };
+  if (error instanceof AppError && Object.hasOwn(messages, error.code)) {
+    return { code: error.code, message: messages[error.code]! };
+  }
+  return {
+    code: 'INITIAL_BUILD_ENQUEUE_FAILED',
+    message: 'The resource was saved, but its initial build could not be queued. Review Source and retry.',
+  };
+}
 const ComposeSourceProjectCreateSchema = z
   .object({
     projectName: ComposeProjectNameSchema,
@@ -184,31 +203,51 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
         initialConfig = config;
       }
 
+      let source: Awaited<ReturnType<DockerSourceService['upsert']>>;
       try {
-        const source = await sourceService.upsert({ ...input.source, target }, actor, {
+        source = await sourceService.upsert({ ...input.source, target }, actor, {
           allowMissingTarget: input.resource.kind === 'container',
           initialConfig,
+          createOnly: true,
         });
-        const queued = await sourceService.createBuild(target, { force: false }, actor);
-        return c.json({ data: { source, build: queued.build, target } }, 201);
       } catch (error) {
-        await sourceService.remove(target, actor.id).catch(() => false);
         if (pendingDeploymentId) {
           await deploymentService.discardPending(nodeId, pendingDeploymentId).catch(() => false);
         }
         throw error;
       }
+      try {
+        const queued = await sourceService.createBuild(target, { force: false }, actor);
+        return c.json({ data: { source, build: queued.build, target } }, 201);
+      } catch (error) {
+        return c.json(
+          { data: { source, target, build: null, initialBuildError: initialDockerSourceBuildError(error) } },
+          201
+        );
+      }
+    }
+  );
+
+  router.get(
+    '/nodes/:nodeId/containers/:containerName/source/pending',
+    requireDockerContainerScope('docker:containers:view', 'containerName', { allowPendingSource: true }),
+    async (c) => {
+      const pending = await container
+        .resolve(DockerSourceService)
+        .getPendingContainer(c.req.param('nodeId'), decodeURIComponent(c.req.param('containerName')));
+      if (!pending) throw new AppError(404, 'PENDING_SOURCE_NOT_FOUND', 'Pending source container not found');
+      return c.json({ data: pending });
     }
   );
 
   router.get(
     '/nodes/:nodeId/containers/:containerName/source',
-    requireDockerContainerScope('docker:containers:view', 'containerName'),
+    requireDockerContainerScope('docker:containers:view', 'containerName', { allowPendingSource: true }),
     async (c) => c.json({ data: await container.resolve(DockerSourceService).get(containerTarget(c)) })
   );
   router.put(
     '/nodes/:nodeId/containers/:containerName/source',
-    requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    requireDockerContainerScope('docker:containers:edit', 'containerName', { allowPendingSource: true }),
     async (c) => {
       const config = DockerSourceBindingConfigSchema.parse(await c.req.json());
       const data = await container
@@ -219,13 +258,13 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.post(
     '/nodes/:nodeId/containers/:containerName/source/resolve',
-    requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    requireDockerContainerScope('docker:containers:edit', 'containerName', { allowPendingSource: true }),
     async (c) =>
       c.json({ data: await container.resolve(DockerSourceService).resolveCurrent(containerTarget(c), actorFor(c)) })
   );
   router.post(
     '/nodes/:nodeId/containers/:containerName/source/builds',
-    requireDockerContainerScope('docker:containers:manage', 'containerName'),
+    requireDockerContainerScope('docker:containers:manage', 'containerName', { allowPendingSource: true }),
     async (c) => {
       const input = DockerBuildCreateSchema.parse(await c.req.json().catch(() => ({})));
       const data = await container.resolve(DockerSourceService).createBuild(containerTarget(c), input, actorFor(c));
@@ -234,12 +273,12 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.get(
     '/nodes/:nodeId/containers/:containerName/source/build-secrets',
-    requireDockerContainerScope('docker:containers:view', 'containerName'),
+    requireDockerContainerScope('docker:containers:view', 'containerName', { allowPendingSource: true }),
     async (c) => c.json({ data: await container.resolve(DockerSourceService).listBuildSecrets(containerTarget(c)) })
   );
   router.put(
     '/nodes/:nodeId/containers/:containerName/source/build-secrets/:secretName',
-    requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    requireDockerContainerScope('docker:containers:edit', 'containerName', { allowPendingSource: true }),
     async (c) => {
       const name = DockerBuildSecretNameSchema.parse(decodeURIComponent(c.req.param('secretName')));
       const { value } = DockerBuildSecretValueSchema.parse(await c.req.json());
@@ -251,7 +290,7 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.delete(
     '/nodes/:nodeId/containers/:containerName/source/build-secrets/:secretName',
-    requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    requireDockerContainerScope('docker:containers:edit', 'containerName', { allowPendingSource: true }),
     async (c) => {
       const name = DockerBuildSecretNameSchema.parse(decodeURIComponent(c.req.param('secretName')));
       const removed = await container
@@ -262,7 +301,7 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   );
   router.delete(
     '/nodes/:nodeId/containers/:containerName/source',
-    requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    requireDockerContainerScope('docker:containers:edit', 'containerName', { allowPendingSource: true }),
     async (c) => {
       const removed = await container.resolve(DockerSourceService).remove(containerTarget(c), actorFor(c).id);
       return c.json({ success: true, removed });
@@ -349,14 +388,31 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
       const sourceService = container.resolve(DockerSourceService);
       const project = await composeService.createPendingGitProject(nodeId, input.projectName, actor.id);
       const target = { kind: 'compose_project' as const, composeProjectId: project.id };
+      let source: Awaited<ReturnType<DockerSourceService['upsert']>>;
       try {
-        const source = await sourceService.upsert({ ...input.source, target }, actor);
-        const queued = await sourceService.createBuild(target, { force: false }, actor);
-        return c.json({ data: { project, source, ...queued } }, 201);
+        source = await sourceService.upsert({ ...input.source, target }, actor, { createOnly: true });
       } catch (error) {
-        await sourceService.remove(target, actor.id).catch(() => false);
         await composeService.discardPendingGitProject(project.id).catch(() => false);
         throw error;
+      }
+      try {
+        const queued = await sourceService.createBuild(target, { force: false }, actor);
+        return c.json({ data: { project, source, target, ...queued } }, 201);
+      } catch (error) {
+        return c.json(
+          {
+            data: {
+              project,
+              source,
+              target,
+              build: null,
+              builds: [],
+              created: false,
+              initialBuildError: initialDockerSourceBuildError(error),
+            },
+          },
+          201
+        );
       }
     }
   );

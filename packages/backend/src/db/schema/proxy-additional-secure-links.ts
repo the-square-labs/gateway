@@ -1,5 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, pgTable, text, timestamp, unique, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
 import { nodes } from './nodes.js';
@@ -16,13 +27,14 @@ export const proxyAdditionalSecureLinks = pgTable(
     // User-created Advanced bindings and Additional Route bindings share the
     // same relay/listener projection.  The purpose/reference pair is an
     // internal ownership boundary: user-facing Advanced surfaces must only
-    // read `user_managed` rows, while the Additional Route runtime reads
-    // `additional_route` rows by reference id.
+    // read `user_managed` rows, while route and Availability runtimes read
+    // their hidden purpose rows by reference id.
     purpose: varchar('purpose', { length: 32 })
-      .$type<'user_managed' | 'additional_route'>()
+      .$type<'user_managed' | 'additional_route' | 'availability_member'>()
       .notNull()
       .default('user_managed'),
     referenceId: uuid('reference_id'),
+    availabilityOwnerKey: text('availability_owner_key'),
     upstreamKind: proxyUpstreamKindEnum('upstream_kind').notNull(),
     forwardScheme: forwardSchemeEnum('forward_scheme').notNull().default('http'),
     sourceNodeId: uuid('source_node_id')
@@ -54,7 +66,12 @@ export const proxyAdditionalSecureLinks = pgTable(
   (table) => ({
     purposeCheck: check(
       'proxy_additional_secure_links_purpose_check',
-      sql`${table.purpose} in ('user_managed', 'additional_route')`
+      sql`${table.purpose} in ('user_managed', 'additional_route', 'availability_member')`
+    ),
+    availabilityOwnerCheck: check(
+      'proxy_additional_secure_links_availability_owner_check',
+      sql`(${table.purpose} = 'availability_member' AND ${table.availabilityOwnerKey} IS NOT NULL AND ${table.referenceId} IS NOT NULL)
+        OR (${table.purpose} <> 'availability_member' AND ${table.availabilityOwnerKey} IS NULL)`
     ),
     hostNameUnique: unique('proxy_additional_secure_links_host_name_unique').on(table.proxyHostId, table.name),
     hostIdx: index('proxy_additional_secure_links_host_idx').on(table.proxyHostId),
@@ -62,6 +79,13 @@ export const proxyAdditionalSecureLinks = pgTable(
       table.purpose,
       table.referenceId
     ),
+    availabilityOwnerIdx: index('proxy_additional_secure_links_availability_owner_idx').on(
+      table.availabilityOwnerKey,
+      table.referenceId
+    ),
+    availabilityOwnerUnique: uniqueIndex('proxy_additional_secure_links_availability_owner_unique')
+      .on(table.proxyHostId, table.availabilityOwnerKey, table.referenceId)
+      .where(sql`${table.purpose} = 'availability_member'`),
     sourceNodeIdx: index('proxy_additional_secure_links_source_node_idx').on(table.sourceNodeId),
     targetNodeIdx: index('proxy_additional_secure_links_target_node_idx').on(table.dockerNodeId),
     dockerComposeProjectIdx: index('proxy_additional_secure_links_docker_compose_project_idx').on(

@@ -58,6 +58,8 @@ NGINX_WORKER_NOFILE_MIN=65535
 NGINX_SERVICE_NOFILE_MIN=65536
 NGINX_WORKER_CONNECTIONS_MIN=8192
 NGINX_SERVICE_RESTART_REQUIRED=0
+APT_LOCK_RETRY_ATTEMPTS="${GATEWAY_NODE_APT_LOCK_RETRY_ATTEMPTS:-12}"
+APT_LOCK_RETRY_DELAY_SECONDS="${GATEWAY_NODE_APT_LOCK_RETRY_DELAY_SECONDS:-5}"
 RESOLVED_DAEMON_VERSION=""
 EXISTING_INSTALL=0
 EXISTING_VERSION=""
@@ -700,15 +702,49 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 # ── Step 1: Install nginx ────────────────────────────────────────────
+run_apt_with_lock_retry() {
+    local attempt=1
+    local status=0
+    local attempt_log
+
+    while (( attempt <= APT_LOCK_RETRY_ATTEMPTS )); do
+        attempt_log=$(mktemp /tmp/gateway-node-apt.XXXXXX) || die "Could not create apt log file"
+        if apt-get "$@" > "$attempt_log" 2>&1; then
+            cat "$attempt_log" >> "$LOG_FILE"
+            rm -f "$attempt_log"
+            return 0
+        else
+            status=$?
+        fi
+
+        cat "$attempt_log" >> "$LOG_FILE"
+        if ! grep -Eqi 'Could not get lock|Unable to acquire the dpkg frontend lock|is another process using it' "$attempt_log"; then
+            rm -f "$attempt_log"
+            return "$status"
+        fi
+        rm -f "$attempt_log"
+
+        if (( attempt == APT_LOCK_RETRY_ATTEMPTS )); then
+            return "$status"
+        fi
+
+        warn "Package manager is busy; retrying in ${APT_LOCK_RETRY_DELAY_SECONDS}s (${attempt}/${APT_LOCK_RETRY_ATTEMPTS})..."
+        sleep "$APT_LOCK_RETRY_DELAY_SECONDS"
+        ((attempt += 1))
+    done
+
+    return "$status"
+}
+
 install_nginx_stable_repo() {
     log "Adding nginx.org stable repository..."
     case "$OS_LIKE" in
         *debian*|*ubuntu*)
-            apt-get install -y -qq gnupg2 ca-certificates lsb-release >> "$LOG_FILE" 2>&1
+            run_apt_with_lock_retry install -y -qq gnupg2 ca-certificates lsb-release
             curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>> "$LOG_FILE"
             echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/$(. /etc/os-release && echo "$ID") $(lsb_release -cs) nginx" \
                 > /etc/apt/sources.list.d/nginx.list
-            apt-get update -qq >> "$LOG_FILE" 2>&1
+            run_apt_with_lock_retry update -qq
             ;;
         *rhel*|*fedora*|*centos*)
             cat > /etc/yum.repos.d/nginx.repo <<'REPO'
@@ -748,8 +784,8 @@ install_nginx_package() {
     log "$([[ "$upgrade_existing" -eq 1 ]] && echo "Upgrading nginx..." || echo "Installing nginx...")"
     case "$OS_LIKE" in
         *debian*|*ubuntu*)
-            apt-get update -qq >> "$LOG_FILE" 2>&1
-            apt-get install -y -qq nginx >> "$LOG_FILE" 2>&1
+            run_apt_with_lock_retry update -qq
+            run_apt_with_lock_retry install -y -qq nginx
             ;;
         *rhel*|*fedora*|*centos*)
             if command_exists dnf; then
@@ -1249,14 +1285,18 @@ configure_nginx() {
     if nginx -t >> "$LOG_FILE" 2>&1; then
         verify_nginx_server_tokens
         if has_systemd; then
-            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then
+            if ! systemctl is-active --quiet nginx; then
+                systemctl start nginx >> "$LOG_FILE" 2>&1 || die "Failed to start nginx"
+            elif [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then
                 systemctl restart nginx >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
             else
                 systemctl reload nginx >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \
                     die "Failed to reload nginx"
             fi
         elif has_openrc; then
-            if [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then
+            if ! rc-service nginx status >> "$LOG_FILE" 2>&1; then
+                rc-service nginx start >> "$LOG_FILE" 2>&1 || die "Failed to start nginx"
+            elif [[ "$NGINX_SERVICE_RESTART_REQUIRED" -eq 1 ]] || nginx_worker_requires_restart; then
                 rc-service nginx restart >> "$LOG_FILE" 2>&1 || die "Failed to restart nginx with the updated service limit"
             else
                 rc-service nginx reload >> "$LOG_FILE" 2>&1 || nginx -s reload >> "$LOG_FILE" 2>&1 || \

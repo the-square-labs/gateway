@@ -261,15 +261,49 @@ export class RelayPolicyService {
   }
 
   async syncSnapshot(): Promise<number> {
-    const health = await this.relay.getHealth?.().catch(() => null);
+    // A transient health RPC failure must not downgrade a pool-capable Relay
+    // to the legacy snapshot shape. Doing so removes assignment generations
+    // from the live policy and revokes otherwise healthy endpoint streams.
+    // Absence of getHealth still identifies a genuinely legacy client.
+    const health = this.relay.getHealth ? await this.relay.getHealth() : null;
     if (health?.poolId === 'system' && health.capabilities?.includes('relay_pool_v1')) {
       const [local] = await this.db
-        .select({ id: relayInstances.id })
+        .select({
+          id: relayInstances.id,
+          buildVersion: relayInstances.buildVersion,
+          protocolMajor: relayInstances.protocolMajor,
+          capabilities: relayInstances.capabilities,
+        })
         .from(relayInstances)
         .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.kind, 'local')))
         .limit(1);
       if (!local || health.relayInstanceId !== local.id) {
         throw new Error('Local Relay Pool identity does not match persisted instance identity');
+      }
+      const liveFeatures = [...new Set(health.capabilities)].sort();
+      const persistedFeatures = Array.isArray(local.capabilities?.features)
+        ? [...local.capabilities.features].sort()
+        : [];
+      if (
+        local.buildVersion !== health.buildVersion ||
+        local.protocolMajor !== health.protocolMajor ||
+        local.capabilities?.protocolMajor !== health.protocolMajor ||
+        liveFeatures.length !== persistedFeatures.length ||
+        liveFeatures.some((feature, index) => feature !== persistedFeatures[index])
+      ) {
+        await this.db
+          .update(relayInstances)
+          .set({
+            buildVersion: health.buildVersion,
+            protocolMajor: health.protocolMajor,
+            capabilities: {
+              ...local.capabilities,
+              protocolMajor: health.protocolMajor,
+              features: liveFeatures,
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(relayInstances.id, local.id));
       }
       const trust = await this.policyKeys.getEnrollmentTrust();
       await this.relay.bootstrapPolicyTrust(trust.keyId, trust.publicKey, trust.fingerprint);
@@ -448,6 +482,58 @@ export class RelayPolicyService {
       endpointId,
       managedDatabaseListener
     );
+    await this.syncSnapshot();
+    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    return routeId;
+  }
+
+  async adoptBindingRoute(
+    placementBindingId: string,
+    bindingId: string,
+    managedDatabaseId: string,
+    sourceNodeId: string,
+    targetNodeId: string,
+    managedDatabaseListener: RelayManagedDatabaseListenerConfig
+  ): Promise<string> {
+    const endpointId = await this.ensureManagedDatabaseEndpoint(managedDatabaseId, targetNodeId);
+    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
+    const adoptedRouteId = await this.db.transaction(async (tx) => {
+      const [placementRoute] = await tx
+        .select()
+        .from(relayRoutes)
+        .where(and(eq(relayRoutes.ownerKind, 'managed_database_binding'), eq(relayRoutes.ownerId, placementBindingId)))
+        .limit(1);
+      if (!placementRoute) return null;
+      await tx
+        .delete(relayRoutes)
+        .where(and(eq(relayRoutes.ownerKind, 'managed_database_binding'), eq(relayRoutes.ownerId, bindingId)));
+      await tx
+        .update(relayRoutes)
+        .set({
+          ownerId: bindingId,
+          sourceKind: 'daemon',
+          sourceId: sourceNodeId,
+          sourceCertificateSha256: source.certificateFingerprint,
+          targetEndpointId: endpointId,
+          managedDatabaseListener,
+          generation: placementRoute.generation + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(relayRoutes.id, placementRoute.id));
+      await bumpRelayPolicyRevision(tx);
+      return placementRoute.id;
+    });
+    const routeId =
+      adoptedRouteId ??
+      (await this.ensureRoute(
+        'managed_database_binding',
+        bindingId,
+        'daemon',
+        sourceNodeId,
+        source.certificateFingerprint,
+        endpointId,
+        managedDatabaseListener
+      ));
     await this.syncSnapshot();
     await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
     return routeId;

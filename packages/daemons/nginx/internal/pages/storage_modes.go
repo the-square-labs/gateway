@@ -18,8 +18,12 @@ func (r *Runtime) StoragePreflight(required int64) (StoragePreflight, error) {
 	if err := ensureDirectory(r.root, publicDirectoryMode); err != nil {
 		return StoragePreflight{}, err
 	}
-	if err := r.repairPublicStorage(); err != nil {
-		return StoragePreflight{}, fmt.Errorf("repair Pages storage modes: %w", err)
+	// Capacity checks must not walk every stored release for each binding.
+	if err := ensureDirectory(r.releasesDir(), publicDirectoryMode); err != nil {
+		return StoragePreflight{}, err
+	}
+	if err := ensureDirectory(r.uploadsDir(), privateDirectoryMode); err != nil {
+		return StoragePreflight{}, err
 	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(r.root, &stat); err != nil {
@@ -29,7 +33,9 @@ func (r *Runtime) StoragePreflight(required int64) (StoragePreflight, error) {
 	return StoragePreflight{RequiredBytes: required, FreeBytes: free, Available: free >= required}, nil
 }
 
-func (r *Runtime) repairPublicStorage() error {
+// RepairStorage migrates legacy permissions at startup, independently of
+// capacity checks. Normal publication/inspection repairs only its own release.
+func (r *Runtime) RepairStorage() error {
 	if err := ensureDirectory(r.root, publicDirectoryMode); err != nil {
 		return err
 	}
@@ -84,39 +90,8 @@ func (r *Runtime) repairPublicReleases() error {
 	if err := ensureDirectory(r.releasesDir(), publicDirectoryMode); err != nil {
 		return err
 	}
-	if err := ensurePublicTree(r.releasesDir()); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(r.releasesDir())
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		entryPath := filepath.Join(r.releasesDir(), entry.Name())
-		entryInfo, err := os.Lstat(entryPath)
-		if err != nil {
-			return err
-		}
-		if entryInfo.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%w: symlink in Pages releases at %s", errUnsafePagesPath, entryPath)
-		}
-		deploymentID := entry.Name()
-		if !entryInfo.IsDir() || !uuidPattern.MatchString(deploymentID) {
-			continue
-		}
-		manifest, err := r.readManifest(deploymentID)
-		if err != nil || manifest.DeploymentID != deploymentID {
-			continue
-		}
-		content, err := os.Lstat(r.releaseContentDir(deploymentID))
-		if err != nil || !content.IsDir() || content.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		if err := r.ensurePublicRelease(deploymentID); err != nil {
-			return err
-		}
-	}
-	return nil
+	// A single walk covers every release, including legacy/unreferenced trees.
+	return ensurePublicTree(r.releasesDir())
 }
 
 func (r *Runtime) repairRuntimeConfigBindings() error {

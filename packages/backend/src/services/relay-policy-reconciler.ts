@@ -3,6 +3,8 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   certificates,
+  dockerAvailabilityPolicies,
+  managedDatabaseBindingPlacements,
   managedDatabaseBindings,
   managedDatabaseInstances,
   nodes,
@@ -69,7 +71,7 @@ export async function updateManagedDatabaseRelayStatus(
 }
 
 export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Promise<void> {
-  const [databases, bindings, identities] = await Promise.all([
+  const [databases, bindings, bindingPlacements, availabilityPolicies, identities] = await Promise.all([
     db
       .select({
         id: managedDatabaseInstances.id,
@@ -82,9 +84,31 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
         id: managedDatabaseBindings.id,
         managedDatabaseId: managedDatabaseBindings.managedDatabaseId,
         sourceNodeId: managedDatabaseBindings.targetNodeId,
+        targetType: managedDatabaseBindings.targetType,
+        targetResourceId: managedDatabaseBindings.targetResourceId,
         status: managedDatabaseBindings.status,
       })
       .from(managedDatabaseBindings),
+    db
+      .select({
+        id: managedDatabaseBindingPlacements.id,
+        bindingId: managedDatabaseBindingPlacements.bindingId,
+        availabilityPlacementId: managedDatabaseBindingPlacements.availabilityPlacementId,
+        sourceNodeId: managedDatabaseBindingPlacements.nodeId,
+        status: managedDatabaseBindingPlacements.status,
+      })
+      .from(managedDatabaseBindingPlacements),
+    db
+      .select({
+        mode: dockerAvailabilityPolicies.mode,
+        status: dockerAvailabilityPolicies.status,
+        resourceKind: dockerAvailabilityPolicies.resourceKind,
+        sourceNodeId: dockerAvailabilityPolicies.sourceNodeId,
+        containerName: dockerAvailabilityPolicies.containerName,
+        deploymentId: dockerAvailabilityPolicies.deploymentId,
+        composeProjectId: dockerAvailabilityPolicies.composeProjectId,
+      })
+      .from(dockerAvailabilityPolicies),
     db.select({ id: nodes.id, certificateFingerprint: nodes.certificateFingerprint }).from(nodes),
   ]);
   const fingerprints = new Map(
@@ -92,6 +116,48 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
       .filter(({ certificateFingerprint }) => Boolean(certificateFingerprint))
       .map(({ id, certificateFingerprint }) => [id, certificateFingerprint!])
   );
+  const activeAvailabilityPolicies = availabilityPolicies.filter(
+    ({ mode, status }) => mode !== 'single' && status !== 'disabling'
+  );
+  const availabilityManagedBindingIds = new Set(
+    bindings
+      .filter((binding) =>
+        activeAvailabilityPolicies.some((policy) => {
+          if (binding.targetType === 'container') {
+            return (
+              policy.resourceKind === 'container' &&
+              policy.sourceNodeId === binding.sourceNodeId &&
+              policy.containerName === binding.targetResourceId
+            );
+          }
+          if (binding.targetType === 'deployment') {
+            return policy.resourceKind === 'deployment' && policy.deploymentId === binding.targetResourceId;
+          }
+          return (
+            policy.resourceKind === 'compose' && policy.composeProjectId === binding.targetResourceId.split(':', 1)[0]
+          );
+        })
+      )
+      .map(({ id }) => id)
+  );
+  const parentBindings = new Map(bindings.map((binding) => [binding.id, binding]));
+  const relayBindings = [
+    ...bindings.filter(({ id }) => !availabilityManagedBindingIds.has(id)),
+    ...bindingPlacements.flatMap((placement) => {
+      if (!placement.availabilityPlacementId) return [];
+      const parent = parentBindings.get(placement.bindingId);
+      return parent
+        ? [
+            {
+              id: placement.id,
+              managedDatabaseId: parent.managedDatabaseId,
+              sourceNodeId: placement.sourceNodeId,
+              status: placement.status,
+            },
+          ]
+        : [];
+    }),
+  ];
 
   await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-reconciliation'))`);
@@ -146,7 +212,7 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
       .select()
       .from(relayRoutes)
       .where(eq(relayRoutes.ownerKind, 'managed_database_binding'));
-    const desiredBindings = bindings.filter(
+    const desiredBindings = relayBindings.filter(
       ({ status, managedDatabaseId, sourceNodeId }) =>
         status === 'ready' && endpointByDatabase.has(managedDatabaseId) && fingerprints.has(sourceNodeId)
     );

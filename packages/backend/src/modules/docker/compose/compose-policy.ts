@@ -37,6 +37,7 @@ const SERVICE_KEYS = new Set([
   'working_dir',
   'user',
   'hostname',
+  'extra_hosts',
   'ports',
   'healthcheck',
   'depends_on',
@@ -334,6 +335,30 @@ function normalizeLabels(value: unknown, path: string, diagnostics: ComposeValid
     }
   }
   return labels;
+}
+
+function normalizeExtraHosts(
+  value: unknown,
+  path: string,
+  diagnostics: ComposeValidationDiagnostic[]
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return normalizeStringMap(value, path, diagnostics);
+
+  const result: Record<string, string> = {};
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== 'string') {
+      diagnostic(diagnostics, 'INVALID_EXTRA_HOST', 'Expected HOST=ADDRESS or HOST:ADDRESS', `${path}[${index}]`);
+      continue;
+    }
+    const separator = entry.includes('=') ? entry.indexOf('=') : entry.indexOf(':');
+    if (separator <= 0 || separator === entry.length - 1) {
+      diagnostic(diagnostics, 'INVALID_EXTRA_HOST', 'Expected HOST=ADDRESS or HOST:ADDRESS', `${path}[${index}]`);
+      continue;
+    }
+    result[entry.slice(0, separator)] = entry.slice(separator + 1);
+  }
+  return result;
 }
 
 function normalizePorts(value: unknown, path: string, diagnostics: ComposeValidationDiagnostic[]) {
@@ -750,6 +775,9 @@ export function validateComposeYaml(input: ComposeYamlInput): ComposeValidationR
         ...(typeof rawService.working_dir === 'string' ? { workingDir: rawService.working_dir } : {}),
         ...(typeof rawService.user === 'string' ? { user: rawService.user } : {}),
         ...(typeof rawService.hostname === 'string' ? { hostname: rawService.hostname } : {}),
+        ...(rawService.extra_hosts !== undefined
+          ? { extraHosts: normalizeExtraHosts(rawService.extra_hosts, `${path}.extra_hosts`, diagnostics) }
+          : {}),
         ...(rawService.ports !== undefined
           ? { ports: normalizePorts(rawService.ports, `${path}.ports`, diagnostics) }
           : {}),
@@ -782,7 +810,19 @@ export function validateComposeYaml(input: ComposeYamlInput): ComposeValidationR
     ...(networks ? { networks } : {}),
   };
   const configDigest = createHash('sha256')
-    .update(JSON.stringify(stableValue(parsed)))
+    .update(
+      JSON.stringify(
+        stableValue(
+          Object.keys(input.variables).length || input.secretKeys.length
+            ? {
+                compose: parsed,
+                variables: input.variables,
+                secretKeys: [...new Set(input.secretKeys)].sort(),
+              }
+            : parsed
+        )
+      )
+    )
     .digest('hex');
   return {
     valid,

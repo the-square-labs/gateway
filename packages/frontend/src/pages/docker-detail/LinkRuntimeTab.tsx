@@ -179,6 +179,33 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
   );
 }
 
+function emptyRuntimeCards() {
+  const cards = [
+    ["Active streams", Activity],
+    ["New streams", Zap],
+    ["Source → target", ArrowUpFromLine],
+    ["Target → source", ArrowDownToLine],
+    ["Open success", ShieldCheck],
+    ["Setup p95", Timer],
+    ["Average duration", Clock3],
+    ["Admission rejects", Ban],
+  ] as const;
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {cards.map(([label, icon]) => (
+        <StatCard
+          key={label}
+          label={label}
+          value="—"
+          icon={icon}
+          history={[]}
+          subtitle="Waiting for runtime telemetry"
+        />
+      ))}
+    </div>
+  );
+}
+
 export function LinkRuntimeTab({
   links,
   onHealthChange,
@@ -316,10 +343,12 @@ export function LinkRuntimeTab({
                 )}
               </>
             ) : state.telemetryUnavailable ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Runtime telemetry is temporarily unavailable.
               </p>
-            ) : null}
+            ) : (
+              emptyRuntimeCards()
+            )}
           </section>
         );
       })}

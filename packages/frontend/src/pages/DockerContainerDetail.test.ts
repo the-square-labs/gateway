@@ -4,7 +4,11 @@ import {
   buildContainerMutationSnapshot,
   hasContainerRuntimeIdentityChanged,
   inspectContainerAfterMutation,
+  resolveComposeOwnerName,
+  resolveContainerNameFromPathname,
+  resolveContainerRouteName,
   shouldSettleMutationTransition,
+  splitContainerAvailabilityPolicy,
 } from "./DockerContainerDetail";
 import {
   containerArchiveCapabilities,
@@ -43,6 +47,31 @@ function makeContainer(overrides: Record<string, unknown> = {}) {
 }
 
 describe("DockerContainerDetail mutation snapshot helpers", () => {
+  it("keeps the canonical Compose owner name when switching to a replica", () => {
+    const policy = { resourceKind: "compose", displayName: "customer-app" } as any;
+    expect(
+      resolveComposeOwnerName(policy, {
+        "com.docker.compose.project": "gwav-compose-policy-placement",
+      })
+    ).toBe("customer-app");
+    expect(
+      resolveComposeOwnerName(null, {
+        "com.docker.compose.project": "ordinary-compose",
+      })
+    ).toBe("ordinary-compose");
+  });
+  it("never uses Compose or deployment placements as a standalone container runtime", () => {
+    for (const resourceKind of ["compose", "deployment"] as const) {
+      const policy = {
+        resourceKind,
+        mode: "replicated",
+        placements: [{ nodeId: "other-node", runtimeIdentity: { containers: [] } }],
+      } as any;
+      expect(splitContainerAvailabilityPolicy(policy)).toEqual({ own: null, parent: policy });
+    }
+    const own = { resourceKind: "container" } as any;
+    expect(splitContainerAvailabilityPolicy(own)).toEqual({ own, parent: null });
+  });
   it("does not settle when the inspected container payload is unchanged", () => {
     const before = makeContainer();
     const signature = buildContainerMutationSnapshot(before);
@@ -92,6 +121,31 @@ describe("DockerContainerDetail mutation snapshot helpers", () => {
 });
 
 describe("DockerContainerDetail post-mutation identity recovery", () => {
+  it("keeps the logical URL name when the resolved runtime has an internal Availability name", () => {
+    expect(
+      resolveContainerRouteName(
+        "gwav-container-policy-placement",
+        "availability-container",
+        undefined
+      )
+    ).toBe("availability-container");
+  });
+
+  it("keeps the logical pathname name when route params remount with an internal runtime", () => {
+    const pathnameName = resolveContainerNameFromPathname(
+      "/docker/containers/e2e-docker-132/availability-container/overview"
+    );
+
+    expect(
+      resolveContainerRouteName(
+        "gwav-container-policy-placement",
+        undefined,
+        undefined,
+        pathnameName
+      )
+    ).toBe("availability-container");
+  });
+
   it("requires an immediate inspect refresh after adopting a replacement runtime id", () => {
     expect(hasContainerRuntimeIdentityChanged("container-2", makeContainer())).toBe(true);
     expect(

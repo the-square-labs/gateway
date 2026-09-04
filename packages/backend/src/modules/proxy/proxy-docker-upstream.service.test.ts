@@ -256,6 +256,52 @@ describe('ProxyDockerUpstreamService', () => {
     });
   });
 
+  it('resolves a Compose service through its serving Availability placement', async () => {
+    const service = new ProxyDockerUpstreamService(
+      queuedDb([
+        [{ id: 'origin-node', type: 'docker', status: 'online', serviceAddress: null, lastHealthReport: null }],
+        [{ id: 'project-1', name: 'storefront' }],
+        [{ id: 'policy-1' }],
+        [
+          {
+            nodeId: 'serving-node',
+            runtimeIdentity: {
+              containers: [
+                {
+                  containerName: 'gwav-compose-policy-placement-api-1',
+                  serviceName: 'api',
+                },
+              ],
+            },
+          },
+        ],
+        [{ id: 'serving-node', type: 'docker', status: 'online', serviceAddress: null, lastHealthReport: null }],
+      ]) as never,
+      snapshots([]) as never,
+      connectedRegistry as never
+    );
+
+    await expect(
+      service.resolve(
+        {
+          upstreamKind: 'docker_container',
+          dockerNodeId: 'origin-node',
+          dockerComposeProjectId: 'project-1',
+          dockerComposeServiceName: 'api',
+          dockerContainerPort: 8080,
+          dockerProtocol: 'tcp',
+        },
+        { actorScopes: ['docker:compose:view:origin-node/project-1'], requireAvailable: true }
+      )
+    ).resolves.toMatchObject({
+      dockerNodeId: 'serving-node',
+      dockerContainerName: 'gwav-compose-policy-placement-api-1',
+      dockerComposeProjectId: 'project-1',
+      dockerComposeServiceName: 'api',
+      dockerContainerPort: 8080,
+    });
+  });
+
   it('rejects an ambiguous Compose service target', async () => {
     const service = new ProxyDockerUpstreamService(
       queuedDb([

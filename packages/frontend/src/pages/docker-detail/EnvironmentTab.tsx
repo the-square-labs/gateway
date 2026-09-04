@@ -11,7 +11,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import type { DockerSecret } from "@/types";
+import type { DockerSecret, ManagedDatabaseBindingTargetType } from "@/types";
 import {
   type ManagedDatabaseLinkDraft,
   ManagedDatabaseLinksSection,
@@ -45,6 +45,9 @@ export function EnvironmentTab({
   secretsDescription,
   serviceSaveLabel,
   serviceSaveDescription,
+  databaseTargetType = "container",
+  databaseTargetResourceId,
+  flushBottom = false,
 }: {
   nodeId: string;
   containerId: string;
@@ -69,6 +72,9 @@ export function EnvironmentTab({
   secretsDescription?: string;
   serviceSaveLabel?: string;
   serviceSaveDescription?: string;
+  databaseTargetType?: ManagedDatabaseBindingTargetType;
+  databaseTargetResourceId?: string;
+  flushBottom?: boolean;
 }) {
   const { hasScope } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
@@ -97,7 +103,11 @@ export function EnvironmentTab({
   const canManageSecrets =
     canManageSecretsOverride ?? hasScope(`docker:containers:secrets:${scopeSuffix}`);
   const recreatesRunningContainer = containerState === "running";
+  const resolvedServiceSaveLabel =
+    serviceSaveLabel ?? (recreatesRunningContainer ? "Save & Recreate" : "Save");
   const isServiceEnv = !!onSaveServiceEnv;
+  const managedDatabaseLinksEnabled = !isServiceEnv || Boolean(databaseTargetResourceId);
+  const resolvedDatabaseTargetResourceId = databaseTargetResourceId ?? containerName ?? "";
   const serviceEnvSignature = useMemo(() => JSON.stringify(serviceEnv ?? {}), [serviceEnv]);
   const managedDatabaseVariableNames = useMemo(
     () => new Set(databaseLinkDraft.managedVariableNames),
@@ -120,6 +130,38 @@ export function EnvironmentTab({
       ),
     [databaseLinkDraft.managedVariableNames, pendingDatabaseVariableNames]
   );
+
+  // Runtime inspection includes values injected by Managed Database Links.
+  // Those values are projections owned by the link editor, not user-authored
+  // environment variables. Remove them from the editable draft as soon as the
+  // binding metadata arrives so credentials are not exposed or accidentally
+  // deleted by an unrelated environment save.
+  useEffect(() => {
+    if (activeManagedDatabaseVariableNames.size === 0) return;
+    const isManagedEntry = (entry: string) => {
+      const separator = entry.indexOf("=");
+      const key = (separator >= 0 ? entry.slice(0, separator) : entry).trim();
+      return activeManagedDatabaseVariableNames.has(key);
+    };
+
+    setEnvVars((current) => {
+      const next = current.filter(
+        (entry) => !activeManagedDatabaseVariableNames.has(entry.key.trim())
+      );
+      return next.length === current.length ? current : next;
+    });
+    setOriginalEnv((current) => {
+      const next = current.filter((entry) => !isManagedEntry(entry));
+      return next.length === current.length ? current : next;
+    });
+    setRawText((current) => {
+      const next = current
+        .split("\n")
+        .filter((entry) => !isManagedEntry(entry))
+        .join("\n");
+      return next === current ? current : next;
+    });
+  }, [activeManagedDatabaseVariableNames]);
 
   const fetchEnv = useCallback(async () => {
     const targetContainerId = envContainerIdRef.current;
@@ -258,7 +300,13 @@ export function EnvironmentTab({
   );
 
   useEffect(() => {
-    if (!canEdit || !canManageSecrets || isServiceEnv || !containerName) {
+    if (
+      !managedDatabaseLinksEnabled ||
+      !canEdit ||
+      !canManageSecrets ||
+      !containerName ||
+      !resolvedDatabaseTargetResourceId
+    ) {
       setHasDatabaseNode(false);
       setDatabaseNodeLoading(false);
       setDatabaseLinksLoading(false);
@@ -289,7 +337,13 @@ export function EnvironmentTab({
     return () => {
       cancelled = true;
     };
-  }, [canEdit, canManageSecrets, containerName, isServiceEnv]);
+  }, [
+    canEdit,
+    canManageSecrets,
+    containerName,
+    managedDatabaseLinksEnabled,
+    resolvedDatabaseTargetResourceId,
+  ]);
 
   useEffect(() => {
     if (activeManagedDatabaseVariableNames.size === 0) return;
@@ -403,7 +457,7 @@ export function EnvironmentTab({
     const savingDatabaseLinks = databaseLinkDraft.hasChanges;
     const ok = await confirm({
       title: onSaveServiceEnv
-        ? (serviceSaveLabel ?? "Save Environment")
+        ? resolvedServiceSaveLabel
         : savingDatabaseLinks || recreatesRunningContainer
           ? "Save & Recreate"
           : canEdit
@@ -411,7 +465,9 @@ export function EnvironmentTab({
             : "Save Secrets",
       description: onSaveServiceEnv
         ? (serviceSaveDescription ??
-          "Environment changes will be saved to the deployment and apply on the next deploy.")
+          (recreatesRunningContainer
+            ? "Environment changes will recreate the running workload and may cause brief downtime. Continue?"
+            : "Environment changes will be saved and apply when the workload is started."))
         : savingDatabaseLinks
           ? "Managed database links and environment changes will be applied together. The container will be recreated and experience brief downtime. Continue?"
           : canEdit
@@ -420,7 +476,9 @@ export function EnvironmentTab({
               : "Updating environment variables will save the new container configuration. The container will remain stopped. Continue?"
             : "Secret changes will be stored, but without environment permission they will only apply after the container is recreated. Continue?",
       confirmLabel: onSaveServiceEnv
-        ? (serviceSaveLabel ?? "Save")
+        ? resolvedServiceSaveLabel === "Save & Recreate"
+          ? "Recreate"
+          : "Save"
         : savingDatabaseLinks || recreatesRunningContainer
           ? "Recreate"
           : "Save",
@@ -428,7 +486,7 @@ export function EnvironmentTab({
     if (!ok) return;
 
     setIsSaving(true);
-    onMutationStart?.(savingDatabaseLinks ? "recreating" : "updating");
+    onMutationStart?.(savingDatabaseLinks || recreatesRunningContainer ? "recreating" : "updating");
     try {
       // 1. Flush secret changes to DB
       if (hasSecretsChanges) {
@@ -500,6 +558,21 @@ export function EnvironmentTab({
       for (const entry of vars) {
         const key = entry.key.trim();
         if (key && !managedDatabaseVariableNames.has(key)) newEnv[key] = entry.value;
+      }
+
+      if (onSaveServiceEnv && savingDatabaseLinks) {
+        const replaceExistingEnvironment = databaseLinkDraft.replacementVariableNames.length > 0;
+        await databaseLinksRef.current?.applyChanges({
+          replaceExistingEnvironment,
+          targetEnvironment: newEnv,
+        });
+        const entries = Object.entries(newEnv).map(([key, value]) => `${key}=${value}`);
+        setOriginalEnv(entries);
+        setRawText(entries.join("\n"));
+        toast.success("Environment and database links updated");
+        invalidate("containers", "tasks");
+        void Promise.resolve(onRecreating?.()).catch(() => undefined);
+        return;
       }
 
       if (onSaveServiceEnv) {
@@ -686,22 +759,27 @@ export function EnvironmentTab({
       aria-busy={initialLoading}
       animate={{ opacity: initialLoading ? 0 : 1 }}
       initial={false}
-      className={`${rawMode ? "flex flex-col flex-1 min-h-0 gap-4" : "pb-6 space-y-4"} ${initialLoading ? "invisible" : "visible"}`}
+      className={`${rawMode ? "flex flex-col flex-1 min-h-0 gap-4" : `${flushBottom ? "" : "pb-6 "}space-y-4`} ${initialLoading ? "invisible" : "visible"}`}
     >
-      {canEdit && canManageSecrets && !isServiceEnv && containerName && hasDatabaseNode && (
-        <ManagedDatabaseLinksSection
-          ref={databaseLinksRef}
-          nodeId={nodeId}
-          targetType="container"
-          targetResourceId={containerName}
-          containerName={containerName}
-          disabled={disabled || isSaving || hasErrors}
-          existingVariableNames={existingVariableNames}
-          onInitialLoadingChange={setDatabaseLinksLoading}
-          onDraftChange={handleDatabaseLinkDraftChange}
-          onSaveRequested={() => void handleSave()}
-        />
-      )}
+      {managedDatabaseLinksEnabled &&
+        canEdit &&
+        canManageSecrets &&
+        containerName &&
+        hasDatabaseNode && (
+          <ManagedDatabaseLinksSection
+            ref={databaseLinksRef}
+            nodeId={nodeId}
+            targetType={databaseTargetType}
+            targetResourceId={resolvedDatabaseTargetResourceId}
+            containerName={containerName}
+            disabled={disabled || isSaving || hasErrors}
+            existingVariableNames={existingVariableNames}
+            onInitialLoadingChange={setDatabaseLinksLoading}
+            onDraftChange={handleDatabaseLinkDraftChange}
+            onSaveRequested={() => void handleSave()}
+            recreatesRunningWorkload={recreatesRunningContainer}
+          />
+        )}
 
       <div
         className={`${rawMode ? "flex min-h-0 flex-1 flex-col" : "space-y-4"} ${disabled || isSaving ? "pointer-events-none opacity-60" : ""}`}
@@ -748,7 +826,7 @@ export function EnvironmentTab({
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
                     {onSaveServiceEnv
-                      ? (serviceSaveLabel ?? "Save")
+                      ? resolvedServiceSaveLabel
                       : databaseLinkDraft.hasChanges || recreatesRunningContainer
                         ? "Save & Recreate"
                         : "Save"}

@@ -1,0 +1,25 @@
+{
+  "file_name": "lct3cijz_gateway_availability_decision",
+  "edges": [
+    {
+      "from_id": "lct3cijz",
+      "to_id": "j6oni2tm",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Availability explicitly includes first-class Compose Projects in the same product contract and release.",
+      "source": "auto",
+      "created_at": 1788310927559,
+      "updated_at": 1788310927559
+    },
+    {
+      "from_id": "lct3cijz",
+      "to_id": "3ta908aa",
+      "relation": "uses_service",
+      "weight": 0.56,
+      "reason": "Availability relies on the existing authenticated daemon and relay communication architecture.",
+      "source": "auto",
+      "created_at": 1788310927559,
+      "updated_at": 1788310927559
+    }
+  ]
+}

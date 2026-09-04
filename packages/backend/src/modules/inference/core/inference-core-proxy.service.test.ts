@@ -173,6 +173,24 @@ function createService(
 afterEach(() => vi.unstubAllGlobals());
 
 describe('inference core proxy', () => {
+  it.each(['max', 'ultra'])('records the requested %s effort before provider mapping over HTTP', async (effort) => {
+    const model = { ...MODEL, reasoningEfforts: ['max', 'ultra'] };
+    const source = { ...SOURCE, reasoningEffortMap: { max: 'max', ultra: 'max' } };
+    const { service, models, fetchStub, coreAccounting } = createService({
+      sources: [{ model, source, connection: CONNECTION }],
+    });
+    models.resolveForUser.mockResolvedValue({ model, sources: [source] } as never);
+    const c = createContext(JSON.stringify({ model: MODEL.publicId, input: 'hi', reasoning: { effort } }), {
+      'content-type': 'application/json',
+    });
+
+    const response = await service.proxy(c, 'responses');
+
+    expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: effort }));
+    expect(JSON.parse(fetchStub.mock.calls[0]![1].body).reasoning.effort).toBe('max');
+    await response.text();
+  });
+
   it('rewrites the model to the core reference and injects signed context headers', async () => {
     const { service, fetchStub, coreAccounting } = createService();
     const c = createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi', reasoning: { effort: 'low' } }), {

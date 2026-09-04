@@ -59,7 +59,9 @@ describe('DockerBuildRolloutService', () => {
   it('recreates an existing container from the immutable internal registry digest', async () => {
     const image = `127.0.0.1:5443/gateway/builds/source@sha256:${'a'.repeat(64)}`;
     const docker = {
-      listContainers: vi.fn().mockResolvedValue([{ id: 'runtime-id', name: 'api' }]),
+      getManagedContainerConfiguration: vi.fn().mockResolvedValue(null),
+      getContainerTransition: vi.fn(),
+      listAllContainers: vi.fn().mockResolvedValue([{ id: 'runtime-id', name: 'api' }]),
       inspectContainer: vi
         .fn()
         .mockResolvedValueOnce({
@@ -105,7 +107,8 @@ describe('DockerBuildRolloutService', () => {
     try {
       const image = `127.0.0.1:5443/gateway/builds/source@sha256:${'a'.repeat(64)}`;
       const docker = {
-        listContainers: vi
+        getContainerTransition: vi.fn(),
+        listAllContainers: vi
           .fn()
           .mockResolvedValueOnce([{ id: 'old-runtime-id', name: 'api' }])
           .mockResolvedValue([{ id: 'new-runtime-id', name: 'api' }]),
@@ -125,12 +128,51 @@ describe('DockerBuildRolloutService', () => {
     }
   });
 
+  it('waits through asynchronous recreation and a briefly stale removed runtime ID', async () => {
+    vi.useFakeTimers();
+    try {
+      const docker = {
+        getContainerTransition: vi.fn().mockReturnValueOnce('recreating').mockReturnValue(undefined),
+        listAllContainers: vi
+          .fn()
+          .mockResolvedValueOnce([{ id: 'removed', name: 'api' }])
+          .mockResolvedValue([{ id: 'replacement', name: 'api' }]),
+        inspectContainer: vi
+          .fn()
+          .mockRejectedValueOnce(new Error('Error response from daemon: No such container: removed'))
+          .mockResolvedValue({ Config: { Image: 'new-image' }, State: { Running: true } }),
+      };
+      const service = new DockerBuildRolloutService({} as never, docker as never, {} as never, {} as never);
+      const ready = (service as any).waitForContainerReady('node', 'api', 'new-image', 5000);
+      expect(docker.inspectContainer).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(ready).resolves.toBeUndefined();
+      expect(docker.inspectContainer).toHaveBeenLastCalledWith('node', 'replacement');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not swallow permanent inspection errors while waiting for readiness', async () => {
+    const docker = {
+      getContainerTransition: vi.fn(),
+      listAllContainers: vi.fn().mockResolvedValue([{ id: 'runtime', name: 'api' }]),
+      inspectContainer: vi.fn().mockRejectedValue(new Error('Access denied')),
+    };
+    const service = new DockerBuildRolloutService({} as never, docker as never, {} as never, {} as never);
+    await expect((service as any).waitForContainerReady('node', 'api', 'new-image', 5000)).rejects.toThrow(
+      'Access denied'
+    );
+    expect(docker.inspectContainer).toHaveBeenCalledOnce();
+  });
+
   it('restores the previous image when the new container fails readiness', async () => {
     let recreateCount = 0;
     const newImage = `127.0.0.1:5443/gateway/builds/source@sha256:${'a'.repeat(64)}`;
     const previousImage = `127.0.0.1:5443/gateway/builds/source@sha256:${'b'.repeat(64)}`;
     const docker = {
-      listContainers: vi.fn().mockResolvedValue([{ id: 'runtime-id', name: 'api' }]),
+      getContainerTransition: vi.fn(),
+      listAllContainers: vi.fn().mockResolvedValue([{ id: 'runtime-id', name: 'api' }]),
       inspectContainer: vi
         .fn()
         .mockResolvedValueOnce({ Config: { Image: 'nginx:stable' }, State: { Running: true } })
@@ -157,6 +199,74 @@ describe('DockerBuildRolloutService', () => {
       backgroundImagePull: false,
       skipImagePull: false,
     });
+  });
+
+  it.each([
+    true,
+    false,
+  ])('deploys HA container artifacts logically when shouldRun=%s without querying the origin node', async (shouldRun) => {
+    const image = `127.0.0.1:5443/gateway/builds/source@sha256:${'a'.repeat(64)}`;
+    let complete!: () => void;
+    const docker = {
+      getManagedContainerConfiguration: vi.fn().mockResolvedValue({
+        nodeId: 'origin-offline',
+        containerName: 'api',
+        image: 'old',
+        runtimeProfile: 'secure',
+        shouldRun,
+      }),
+      recreateWithConfig: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            complete = resolve;
+          })
+      ),
+      listAllContainers: vi.fn(),
+      inspectContainer: vi.fn(),
+      createContainer: vi.fn(),
+      startContainer: vi.fn(),
+    };
+    const registry = { ensureBinding: vi.fn() };
+    const service = new DockerBuildRolloutService({} as never, docker as never, {} as never, registry as never);
+    let settled = false;
+    const result = (service as any)
+      .deployTarget({ targetKind: 'container', nodeId: 'origin-offline', containerName: 'api' }, image, 'actor')
+      .then((value: string) => {
+        settled = true;
+        return value;
+      });
+    await vi.waitFor(() => expect(docker.recreateWithConfig).toHaveBeenCalled());
+    expect(settled).toBe(false);
+    expect(docker.recreateWithConfig).toHaveBeenCalledWith('origin-offline', 'api', { image }, 'actor', {
+      waitForAvailability: true,
+    });
+    expect(docker.listAllContainers).not.toHaveBeenCalled();
+    expect(docker.inspectContainer).not.toHaveBeenCalled();
+    expect(docker.createContainer).not.toHaveBeenCalled();
+    expect(docker.startContainer).not.toHaveBeenCalled();
+    expect(registry.ensureBinding).not.toHaveBeenCalled();
+    complete();
+    await expect(result).resolves.toBe('container:origin-offline:api');
+  });
+
+  it('propagates HA build rollout failure without recreating or rolling back a physical source container', async () => {
+    const docker = {
+      getManagedContainerConfiguration: vi.fn().mockResolvedValue({ nodeId: 'origin', containerName: 'api' }),
+      recreateWithConfig: vi.fn().mockRejectedValue(new Error('HA readiness failed')),
+      listAllContainers: vi.fn(),
+      createContainer: vi.fn(),
+    };
+    const service = new DockerBuildRolloutService({} as never, docker as never, {} as never, {} as never);
+    await expect(
+      (service as any).deployTarget(
+        { targetKind: 'container', nodeId: 'origin', containerName: 'api' },
+        '127.0.0.1:5443/build@sha256:abc',
+        null
+      )
+    ).rejects.toThrow('HA readiness failed');
+    expect(docker.recreateWithConfig).toHaveBeenCalledOnce();
+    expect(docker.listAllContainers).not.toHaveBeenCalled();
+    expect(docker.createContainer).not.toHaveBeenCalled();
   });
 
   it('uses the existing blue-green deployment state machine for repository artifacts', async () => {
@@ -206,7 +316,8 @@ describe('DockerBuildRolloutService', () => {
 
   it('creates a missing source container from the stored initial configuration', async () => {
     const docker = {
-      listContainers: vi.fn().mockResolvedValue([]),
+      listAllContainers: vi.fn().mockResolvedValue([]),
+      listContainers: vi.fn().mockResolvedValue([{ id: 'source-reservation', name: 'api', pendingSourceBuild: true }]),
       pullImageImmediate: vi.fn().mockResolvedValue({ status: 'pulled' }),
       createContainer: vi.fn().mockResolvedValue({ id: 'runtime-id' }),
       startContainer: vi.fn().mockResolvedValue(undefined),
@@ -235,6 +346,7 @@ describe('DockerBuildRolloutService', () => {
       'user-1',
       []
     );
+    expect(docker.listContainers).not.toHaveBeenCalled();
     expect(docker.pullImageImmediate).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', image);
     expect(docker.pullImageImmediate.mock.invocationCallOrder[0]).toBeLessThan(
       docker.createContainer.mock.invocationCallOrder[0]!
@@ -245,9 +357,9 @@ describe('DockerBuildRolloutService', () => {
     expect(docker.recreateWithConfig).not.toHaveBeenCalled();
   });
 
-  it('removes a newly created source container when its first start fails', async () => {
+  it('retains a newly created source container and identity when its first start fails', async () => {
     const docker = {
-      listContainers: vi.fn().mockResolvedValue([]),
+      listAllContainers: vi.fn().mockResolvedValue([]),
       pullImageImmediate: vi.fn().mockResolvedValue({ status: 'pulled' }),
       createContainer: vi.fn().mockResolvedValue({ id: 'runtime-id' }),
       startContainer: vi.fn().mockRejectedValue(new Error('start failed')),
@@ -268,12 +380,95 @@ describe('DockerBuildRolloutService', () => {
         'user-1'
       )
     ).rejects.toThrow('start failed');
-    expect(docker.removeContainer).toHaveBeenCalledWith(
-      '11111111-1111-4111-8111-111111111111',
-      'runtime-id',
-      true,
-      'user-1'
+    expect(docker.removeContainer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    false,
+    true,
+  ])('starts a retained first-activation runtime only before any successful deployment (%s)', async (wasDeployed) => {
+    const docker = {
+      listAllContainers: vi.fn().mockResolvedValue([{ id: 'runtime', name: 'api' }]),
+      inspectContainer: vi.fn().mockResolvedValue({ Image: 'sha256:old', State: { Running: false } }),
+      recreateWithConfig: vi.fn(),
+      startContainer: vi.fn(),
+    };
+    const service = new DockerBuildRolloutService(
+      {} as never,
+      docker as never,
+      {} as never,
+      { ensureBinding: vi.fn() } as never
     );
+    vi.spyOn(service as any, 'previousArtifactImage').mockResolvedValue(wasDeployed ? 'sha256:old' : null);
+    vi.spyOn(service as any, 'waitForContainerReady').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'waitForReplacement').mockResolvedValue('replacement');
+    await (service as any).deployTarget(
+      {
+        targetKind: 'container',
+        nodeId: 'node',
+        containerName: 'api',
+        initialConfig: { name: 'api' },
+        deployedCommitSha: wasDeployed ? 'prior-commit' : null,
+      },
+      'sha256:new',
+      'user'
+    );
+    expect(docker.startContainer).toHaveBeenCalledTimes(wasDeployed ? 0 : 1);
+  });
+
+  it('waits for the recreate watcher and a new runtime ID before starting a same-image first-activation retry', async () => {
+    vi.useFakeTimers();
+    try {
+      let transition: string | undefined = 'recreating';
+      let runtimeId = 'old-runtime';
+      let running = false;
+      const docker = {
+        listAllContainers: vi.fn(async () => [{ id: runtimeId, name: 'api' }]),
+        inspectContainer: vi.fn(async () => ({
+          Image: 'sha256:new',
+          Config: { Image: 'sha256:new' },
+          State: { Running: running },
+        })),
+        getContainerTransition: vi.fn(() => transition),
+        recreateWithConfig: vi.fn(),
+        startContainer: vi.fn(async () => {
+          running = true;
+        }),
+      };
+      const service = new DockerBuildRolloutService(
+        {} as never,
+        docker as never,
+        {} as never,
+        { ensureBinding: vi.fn() } as never
+      );
+      vi.spyOn(service as any, 'previousArtifactImage').mockResolvedValue(null);
+      const rollout = (service as any).deployTarget(
+        {
+          targetKind: 'container',
+          nodeId: 'node',
+          containerName: 'api',
+          initialConfig: { name: 'api' },
+          deployedCommitSha: null,
+        },
+        'sha256:new',
+        'user'
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(docker.startContainer).not.toHaveBeenCalled();
+      transition = undefined;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(docker.startContainer).not.toHaveBeenCalled();
+      transition = 'recreating';
+      runtimeId = 'new-runtime';
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(docker.startContainer).not.toHaveBeenCalled();
+      transition = undefined;
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(rollout).resolves.toBe('container:node:api');
+      expect(docker.startContainer).toHaveBeenCalledExactlyOnceWith('node', 'new-runtime', 'user');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not deploy a completed artifact after a newer desired commit supersedes it', async () => {
@@ -356,7 +551,7 @@ describe('DockerBuildRolloutService', () => {
     expect(db.transaction).not.toHaveBeenCalled();
   });
 
-  it('serializes duplicate rollout events and deploys an immutable commit only once', async () => {
+  it('serializes duplicate rollout events and deploys an immutable artifact only once', async () => {
     const commitSha = 'a'.repeat(40);
     const joined = {
       build: {
@@ -369,6 +564,9 @@ describe('DockerBuildRolloutService', () => {
       },
       source: {
         id: 'source-1',
+        targetKind: 'container',
+        nodeId: 'node-1',
+        containerName: 'api',
         desiredCommitSha: commitSha,
         deployedCommitSha: null as string | null,
         createdById: 'source-owner-1',
@@ -381,6 +579,7 @@ describe('DockerBuildRolloutService', () => {
         status: 'ready',
       },
     };
+    let activeArtifactId: string | null = null;
     let transactionTail = Promise.resolve();
     const db = {
       select: vi.fn(() => ({
@@ -413,6 +612,15 @@ describe('DockerBuildRolloutService', () => {
                     })),
                   })),
                 })),
+              })
+              .mockReturnValueOnce({
+                from: vi.fn(() => ({
+                  where: vi.fn(() => ({
+                    limit: vi.fn(async () =>
+                      activeArtifactId === joined.artifact.id ? [{ artifactId: activeArtifactId }] : []
+                    ),
+                  })),
+                })),
               }),
             update: vi.fn(() => ({
               set: vi.fn((values: { deployedCommitSha?: string }) => ({
@@ -434,7 +642,9 @@ describe('DockerBuildRolloutService', () => {
     };
     const service = new DockerBuildRolloutService(db as never, {} as never, {} as never, {} as never);
     const deployTarget = vi.spyOn(service as any, 'deployTarget').mockResolvedValue('container:node-1:api');
-    vi.spyOn(service as any, 'rotatePins').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'rotatePins').mockImplementation(async (_tx, _sourceId, artifactId) => {
+      activeArtifactId = artifactId as string;
+    });
 
     await expect(
       Promise.all([

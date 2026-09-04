@@ -16,8 +16,9 @@ func TestRuntimeUnitsExposeNoPublicListenerOrDockerDependency(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"containerd --config /etc/gateway-builder/containerd.toml",
-		"buildkitd --config /etc/gateway-builder/buildkitd.toml",
+		"Environment=\"PATH=/opt/gateway-builder/bin:",
+		"/opt/gateway-builder/bin/containerd --config /etc/gateway-builder/containerd.toml",
+		"/opt/gateway-builder/bin/buildkitd --config /etc/gateway-builder/buildkitd.toml",
 		"Requires=gateway-builder-containerd.service",
 		"NoNewPrivileges=true",
 		"CPUQuota=200.00%",

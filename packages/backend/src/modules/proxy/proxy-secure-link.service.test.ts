@@ -2,6 +2,96 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it('removes an Availability member runtime only after the proxy config excludes it', async () => {
+    const order: string[] = [];
+    const host = { id: '11111111-1111-4111-8111-111111111111' } as any;
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      purpose: 'availability_member',
+      referenceId: '33333333-3333-4333-8333-333333333333',
+      availabilityOwnerKey: `proxy-host:${host.id}`,
+      status: 'active',
+    } as any;
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(binding) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([binding]) })),
+        })),
+      })),
+      delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'deprovisionAdditionalRuntime').mockImplementation(async () => {
+      order.push('runtime');
+    });
+
+    await service.deleteAvailabilityMember(host, binding.referenceId, binding.availabilityOwnerKey, async () => {
+      order.push('proxy');
+    });
+
+    expect(order).toEqual(['proxy', 'runtime']);
+  });
+
+  it('reprovisions an unchanged Availability member after its target was previously unavailable', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      rawConfigEnabled: false,
+      nodeId: 'nginx-node',
+    } as any;
+    const existing = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      purpose: 'availability_member',
+      referenceId: '33333333-3333-4333-8333-333333333333',
+      availabilityOwnerKey: `proxy-host:${host.id}`,
+      status: 'active',
+      lastError: 'target container is unavailable',
+      dockerNodeId: 'docker-node',
+      targetNetwork: 'app-net',
+      targetContainer: 'app-router',
+      dockerHostPort: 8080,
+    } as any;
+    const reprovisioning = {
+      ...existing,
+      status: 'provisioning',
+      lastError: null,
+    } as any;
+    const ready = { ...reprovisioning, status: 'active' };
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(existing) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([reprovisioning]) })),
+        })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    const remove = vi.spyOn(service as any, 'finishAdditionalDeletion').mockResolvedValue(undefined);
+    const provision = vi.spyOn(service as any, 'createAdditionalFromExisting').mockResolvedValue(ready);
+
+    await expect(
+      service.ensureAvailabilityMember(host, {
+        placementId: existing.referenceId,
+        ingressOwnerKey: existing.availabilityOwnerKey,
+        dockerNodeId: existing.dockerNodeId,
+        upstreamKind: 'docker_deployment',
+        forwardScheme: 'http',
+        dockerDeploymentId: '55555555-5555-4555-8555-555555555555',
+        dockerContainerPort: 80,
+        dockerHostPort: existing.dockerHostPort,
+        targetNetwork: existing.targetNetwork,
+        targetContainer: existing.targetContainer,
+      })
+    ).resolves.toEqual(ready);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(provision).toHaveBeenCalledWith(host, existing.id);
+  });
+
   it('quarantines an unavailable sibling target instead of blocking a new route on the same node', async () => {
     const unavailableId = '6a7998b4-7a37-464d-905b-92f34cf6a32f';
     const requiredId = '77777777-7777-4777-8777-777777777777';
@@ -352,6 +442,24 @@ describe('ProxySecureLinkService migration rollback', () => {
         bindingAction: 'cleanup_pending',
       })
     );
+  });
+
+  it('does not keep cleanup pending when an offline node cannot receive the updated link set', async () => {
+    const relayPolicy = { revokeOwner: vi.fn().mockResolvedValue(undefined) };
+    const service = new ProxySecureLinkService({} as any, {} as any, relayPolicy as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'syncSourceNode').mockRejectedValue(new Error('source offline'));
+    vi.spyOn(service as any, 'syncTargetNode').mockRejectedValue(new Error('target offline'));
+
+    await expect(
+      (service as any).deprovisionAdditionalRuntime({
+        id: 'binding-1',
+        sourceNodeId: 'source-node',
+        dockerNodeId: 'target-node',
+      })
+    ).resolves.toBeUndefined();
+    expect(relayPolicy.revokeOwner).toHaveBeenCalledWith('proxy_host_secure_link', 'binding-1', {
+      allowDeferredSnapshot: true,
+    });
   });
 
   it('accepts only active additional binding variables', async () => {

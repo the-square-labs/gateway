@@ -167,15 +167,15 @@ func validateRegistryBindingProfile(mode, role string) error {
 	if mode == "builder" && role != "builder" {
 		return errors.New("builder profile accepts only builder registry bindings")
 	}
-	if mode != "builder" && role != "runtime" {
-		return errors.New("runtime profile accepts only runtime registry bindings")
+	if mode != "builder" && role != "runtime" && role != "mirror" {
+		return errors.New("runtime profile accepts only runtime or mirror registry bindings")
 	}
 	return nil
 }
 
 func validateRegistryBindingActions(role string, values []string) (map[string]struct{}, error) {
-	if role != "builder" && role != "runtime" {
-		return nil, errors.New("registry binding role must be builder or runtime")
+	if role != "builder" && role != "runtime" && role != "mirror" {
+		return nil, errors.New("registry binding role must be builder, runtime, or mirror")
 	}
 	actions := map[string]struct{}{}
 	for _, action := range values {

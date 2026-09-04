@@ -14,7 +14,13 @@ interface HealthEntry {
 }
 
 function currentStatusToBarStatus(status?: string): BarStatus {
-  if (!status || status === "unknown" || status === "disabled" || status === "pending") {
+  if (
+    !status ||
+    status === "unknown" ||
+    status === "disabled" ||
+    status === "pending" ||
+    status === "stopped"
+  ) {
     return "none";
   }
   if (status === "online") return "ok";
@@ -96,7 +102,7 @@ export function HealthBars({
         return t >= bucketStart && t < bucketEnd;
       });
 
-      if (inBucket.length === 0) {
+      if (inBucket.length === 0 || inBucket.every((c) => c.status === "stopped")) {
         result.push("none");
       } else {
         const offlineCount = inBucket.filter((c) => c.status === "offline").length;
@@ -115,6 +121,7 @@ export function HealthBars({
     // Reflect current status on the newest bar immediately, then backfill any
     // empty buckets leading up to it.
     const currentBar = currentStatusToBarStatus(currentStatus);
+    if (currentStatus === "stopped") result[result.length - 1] = "none";
     if (currentBar !== "none") {
       result[result.length - 1] = mergeLatestBar(result[result.length - 1], currentBar);
       const recentChecks = checks.filter((c) => {

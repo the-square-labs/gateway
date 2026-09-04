@@ -65,11 +65,12 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
+| Multi-node Workload Availability (Container, Deployment, Compose) | Ready | — | — | ✅ | ✅ |
 | Git Build Vulnerability Scanning and Admission Policy | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
 | Broader Workload Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
-| Horizontal Application Clusters Across Multiple Nodes | In development | — | — | ✅ | ✅ |
+| Metric Autoscaling and Same-node Workload Replicas | In development | — | — | ✅ | ✅ |
 | Multiple Instances of One Workload on One Machine | In development | — | — | ✅ | ✅ |
 | Guided Onboarding and Configuration Review | Plan benefit | — | — | ✅ | ✅ |
 | Internal PKI | Ready | — | — | — | ✅ |

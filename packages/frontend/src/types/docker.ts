@@ -65,6 +65,7 @@ export interface DockerRuntimeStatus {
 }
 
 export interface DockerContainer {
+  pendingSourceBuild?: boolean;
   id: string;
   /** Stable Gateway authorization identity. Unlike the Docker runtime ID, this survives recreate and migration. */
   scopeResourceId?: string;
@@ -84,7 +85,7 @@ export interface DockerContainer {
   activeSlotContainerId?: string | null;
   healthCheckId?: string | null;
   healthCheckEnabled?: boolean;
-  healthStatus?: "online" | "offline" | "degraded" | "unknown" | "disabled";
+  healthStatus?: "online" | "offline" | "degraded" | "unknown" | "disabled" | "stopped";
   secureLinkDown?: boolean;
   lastHealthCheckAt?: string | null;
   healthHistory?: Array<{ ts: string; status: string; responseMs?: number; slow?: boolean }>;
@@ -99,6 +100,24 @@ export interface DockerContainer {
   /** Snapshot origin. A resource remains present while its node is unavailable. */
   nodeId?: string;
   availability?: "available" | "unavailable";
+  availabilityPolicyStatus?:
+    | "starting"
+    | "stopping"
+    | "restarting"
+    | "stopped"
+    | "online"
+    | "offline"
+    | "enabling"
+    | "healthy"
+    | "degraded"
+    | "unavailable"
+    | "scaling"
+    | "rolling_out"
+    | "disabling"
+    | "failed";
+  availabilityHealthStatus?: "online" | "degraded" | "offline" | "stopped";
+  availabilityServing?: number;
+  availabilityDesired?: number;
   _listTruncated?: boolean;
   _listTotal?: number;
   _listLimit?: number;
@@ -137,7 +156,7 @@ export interface DockerHealthCheck {
   intervalSeconds: number;
   timeoutSeconds: number;
   slowThreshold: number;
-  healthStatus: "online" | "offline" | "degraded" | "unknown" | "disabled";
+  healthStatus: "online" | "offline" | "degraded" | "unknown" | "disabled" | "stopped";
   lastHealthCheckAt: string | null;
   healthHistory: Array<{ ts: string; status: string; responseMs?: number; slow?: boolean }>;
   routeOptions: DockerHealthRouteOption[];
@@ -324,6 +343,24 @@ export interface DockerComposeProjectSummary {
   desiredState: DockerComposeDesiredState;
   status: DockerComposeProjectStatus;
   availability: DockerComposeAvailability;
+  availabilityPolicyStatus?:
+    | "starting"
+    | "stopping"
+    | "restarting"
+    | "stopped"
+    | "online"
+    | "offline"
+    | "enabling"
+    | "healthy"
+    | "degraded"
+    | "unavailable"
+    | "scaling"
+    | "rolling_out"
+    | "disabling"
+    | "failed";
+  availabilityHealthStatus?: "online" | "degraded" | "offline" | "stopped";
+  availabilityServing?: number;
+  availabilityDesired?: number;
   activeRevisionId: string | null;
   observedFingerprint: string | null;
   lastSeenAt: string | null;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { DockerAvailabilityService } from '../availability/docker-availability.service.js';
 import { DockerManagementService } from '../docker.service.js';
 import { DockerSnapshotService } from '../docker-snapshot.service.js';
 import { DockerComposeService } from './compose.service.js';
@@ -12,6 +13,17 @@ import {
 afterEach(() => container.reset());
 
 describe('Compose child mutation guard', () => {
+  it('allows logical Availability container mutations without inspecting the removed source container', async () => {
+    const inspectContainer = vi.fn();
+    container.registerInstance(DockerAvailabilityService, {
+      isContainerManaged: vi.fn().mockResolvedValue(true),
+    } as never);
+    container.registerInstance(DockerManagementService, { inspectContainer } as never);
+
+    await expect(assertComposeChildMutationAllowed('node-1', 'logical-container')).resolves.toBeUndefined();
+    expect(inspectContainer).not.toHaveBeenCalled();
+  });
+
   it('allows standalone container mutations', async () => {
     container.registerInstance(DockerManagementService, {
       inspectContainer: vi.fn().mockResolvedValue({ Config: { Labels: {} } }),

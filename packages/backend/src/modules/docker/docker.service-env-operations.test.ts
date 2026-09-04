@@ -62,7 +62,7 @@ describe('DockerManagementService env operations', () => {
     service.setEnvironmentService(environmentService as never);
 
     await expect(service.getContainerEnv('node-1', 'container-1')).resolves.toEqual(['FOO=stored', 'EMPTY=']);
-    expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledTimes(2);
+    expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledTimes(1);
     expect(environmentService.getDecryptedMap).toHaveBeenCalledWith('node-1', 'api');
     expect(environmentService.seedFromRuntimeIfMissing).not.toHaveBeenCalled();
   });

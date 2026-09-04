@@ -1,12 +1,6 @@
+import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type { PageProject, PageTag } from "@/types";
 
 export interface PagesTargetPickerProps {
@@ -52,6 +46,40 @@ export function PagesTargetPicker({
   const showProjectFallback =
     Boolean(projectId) && !projects.some((project) => project.id === projectId);
   const showTagFallback = Boolean(tagId) && !tags.some((tag) => tag.id === tagId);
+  const projectOptions: ComboboxOption[] = [
+    ...projects.map((project) => ({
+      value: project.id,
+      label: `${project.name} · ${project.slug}`,
+      keywords: `${project.name} ${project.slug}`,
+    })),
+    ...(showProjectFallback
+      ? [
+          {
+            value: projectId,
+            label: selectedProjectLabel ?? "Selected Project",
+          },
+        ]
+      : []),
+  ];
+  const tagOptions: ComboboxOption[] = [
+    ...tags.map((tag) => ({
+      value: tag.id,
+      label: `${tag.name}${tag.system ? " · system" : ""}${
+        tag.deployment ? ` · ${tag.deployment.publicSlug}` : " · no Deployment"
+      }`,
+      keywords: [tag.name, tag.deployment?.publicSlug, tag.system ? "system" : null]
+        .filter(Boolean)
+        .join(" "),
+    })),
+    ...(showTagFallback
+      ? [
+          {
+            value: tagId,
+            label: selectedTagLabel ?? "Selected Tag",
+          },
+        ]
+      : []),
+  ];
 
   return (
     <>
@@ -59,63 +87,31 @@ export function PagesTargetPicker({
         title="Page Project"
         description="Project that owns the Tag served by this route."
       >
-        <Select
-          value={projectId || "__none__"}
-          onValueChange={(value) => onProjectChange(value === "__none__" ? "" : value)}
+        <Combobox
+          value={projectId}
+          options={projectOptions}
+          onValueChange={onProjectChange}
+          placeholder={projectsLoading ? "Loading Projects…" : "Select a Project"}
+          searchPlaceholder="Search projects..."
+          emptyMessage="No matching Page Projects."
+          ariaLabel="Page Project"
           disabled={projectsLoading || disabled}
-        >
-          <SelectTrigger aria-label="Page Project">
-            <SelectValue placeholder={projectsLoading ? "Loading Projects…" : "Select a Project"}>
-              {showProjectFallback ? selectedProjectLabel : undefined}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__" disabled>
-              Select a Project
-            </SelectItem>
-            {projects.map((project) => (
-              <SelectItem key={project.id} value={project.id}>
-                {project.name} · {project.slug}
-              </SelectItem>
-            ))}
-            {showProjectFallback ? (
-              <SelectItem value={projectId}>
-                {selectedProjectLabel ?? "Selected Project"}
-              </SelectItem>
-            ) : null}
-          </SelectContent>
-        </Select>
+        />
       </SettingsControlRow>
       <SettingsControlRow
         title="Tag"
         description="Mutable Tag whose ready Deployment is published on this route."
       >
-        <Select
-          value={tagId || "__none__"}
-          onValueChange={(value) => onTagChange(value === "__none__" ? "" : value)}
+        <Combobox
+          value={tagId}
+          options={tagOptions}
+          onValueChange={onTagChange}
+          placeholder={tagsLoading ? "Loading Tags…" : "Select a Tag"}
+          searchPlaceholder="Search tags..."
+          emptyMessage="No matching Tags."
+          ariaLabel="Tag"
           disabled={!projectId || tagsLoading || disabled}
-        >
-          <SelectTrigger aria-label="Tag">
-            <SelectValue placeholder={tagsLoading ? "Loading Tags…" : "Select a Tag"}>
-              {showTagFallback ? selectedTagLabel : undefined}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__" disabled>
-              Select a Tag
-            </SelectItem>
-            {tags.map((tag) => (
-              <SelectItem key={tag.id} value={tag.id}>
-                {tag.name}
-                {tag.system ? " · system" : ""}
-                {tag.deployment ? ` · ${tag.deployment.publicSlug}` : " · no Deployment"}
-              </SelectItem>
-            ))}
-            {showTagFallback ? (
-              <SelectItem value={tagId}>{selectedTagLabel ?? "Selected Tag"}</SelectItem>
-            ) : null}
-          </SelectContent>
-        </Select>
+        />
       </SettingsControlRow>
       {availability ? (
         <SettingsControlRow title="Availability" description={availabilityDescription}>

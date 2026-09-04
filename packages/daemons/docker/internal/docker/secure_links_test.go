@@ -53,6 +53,11 @@ func TestValidSecureLinkConnectorRejectsPrivilegeAndMountDrift(t *testing.T) {
 	if !validSecureLinkConnector(inspect, image, "/state/secure-link-connector") {
 		t.Fatal("expected exact managed connector configuration to be accepted")
 	}
+	officialImage := "ghcr.io/the-square-labs/gateway/secure-link-connector:v99.0.0-relay"
+	officialInspect := secureLinkConnectorInspect("official-connector-id", officialImage, "/state/secure-link-connector")
+	if !validSecureLinkConnector(officialInspect, officialImage, "/state/secure-link-connector") {
+		t.Fatal("expected an official release-tag connector to survive daemon restart validation")
+	}
 	if !ownedSecureLinkConnector(inspect) {
 		t.Fatal("expected managed label to establish connector ownership")
 	}

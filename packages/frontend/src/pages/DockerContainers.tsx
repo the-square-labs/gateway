@@ -761,7 +761,9 @@ export function DockerContainers({
       cellContentClassName: "text-sm text-muted-foreground",
       renderCell: (container) => (
         <Badge variant="secondary" className="max-w-full font-mono">
-          {formatDisplayImageRef(container.image)}
+          {container.pendingSourceBuild
+            ? "Awaiting build"
+            : formatDisplayImageRef(container.image ?? "")}
         </Badge>
       ),
     },
@@ -787,8 +789,11 @@ export function DockerContainers({
         if (container.availability === "unavailable") {
           return <Badge variant="secondary">Unavailable</Badge>;
         }
-        const status = container._transition ?? container.state;
-        return <Badge variant={STATUS_BADGE[status] ?? "secondary"}>{status}</Badge>;
+        const status =
+          container.availabilityPolicyStatus ?? container._transition ?? container.state;
+        return (
+          <Badge variant={STATUS_BADGE[status] ?? "secondary"}>{status.replaceAll("_", " ")}</Badge>
+        );
       },
     },
     {
@@ -796,11 +801,15 @@ export function DockerContainers({
       label: "Health",
       width: "7rem",
       renderCell: (container) => {
-        const status = container.secureLinkDown
-          ? "offline"
-          : container.healthCheckEnabled
-            ? (container.healthStatus ?? "unknown")
-            : "disabled";
+        const status =
+          container.availabilityHealthStatus ??
+          (container.healthStatus === "stopped"
+            ? "stopped"
+            : container.secureLinkDown
+              ? "offline"
+              : container.healthCheckEnabled
+                ? (container.healthStatus ?? "unknown")
+                : "disabled");
         return <Badge variant={STATUS_BADGE[status] ?? "secondary"}>{status}</Badge>;
       },
     },
@@ -819,6 +828,7 @@ export function DockerContainers({
               const manage = canManageContainer(container);
               const reorganize = canReorganizeContainer(container);
               const lifecycleActions = containerLifecycleActions(container.state);
+              if (container.pendingSourceBuild) return null;
               if (!manage && !reorganize) return null;
 
               return (

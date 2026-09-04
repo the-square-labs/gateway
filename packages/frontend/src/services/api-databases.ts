@@ -236,7 +236,7 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
     ): Promise<void> {
       await this.request<void>(
         `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`,
-        { method: "DELETE", ...(data ? { body: JSON.stringify(data) } : {}) }
+        { method: "DELETE", body: JSON.stringify(data ?? {}) }
       );
     }
 

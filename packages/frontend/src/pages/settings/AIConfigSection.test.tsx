@@ -140,20 +140,23 @@ describe("AIConfigSection provider guidance", () => {
     vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
     vi.spyOn(api, "listAISkills").mockResolvedValue([]);
     vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
-    const listArtifacts = vi
-      .spyOn(api, "listAISandboxArtifacts")
-      .mockImplementation(async (options) => {
-        if (options?.limit === 10) {
-          return {
-            data: Array.from({ length: 10 }, (_, index) => artifact(`recent-${index}`)),
-            nextPage: 2,
-          };
-        }
-        if (options?.page === 2) {
-          return { data: [artifact("older")], nextPage: null };
-        }
-        return { data: [artifact("all-first")], nextPage: 2 };
+    let resolveFullPage:
+      | ((page: { data: ReturnType<typeof artifact>[]; nextPage: number | null }) => void)
+      | undefined;
+    const listArtifacts = vi.spyOn(api, "listAISandboxArtifacts").mockImplementation((options) => {
+      if (options?.limit === 10) {
+        return Promise.resolve({
+          data: Array.from({ length: 10 }, (_, index) => artifact(`recent-${index}`)),
+          nextPage: 2,
+        });
+      }
+      if (options?.page === 2) {
+        return Promise.resolve({ data: [artifact("older")], nextPage: null });
+      }
+      return new Promise((resolve) => {
+        resolveFullPage = resolve;
       });
+    });
     let intersectionCallback: IntersectionObserverCallback | undefined;
     vi.stubGlobal(
       "IntersectionObserver",
@@ -176,9 +179,18 @@ describe("AIConfigSection provider guidance", () => {
     expect(listArtifacts).toHaveBeenCalledWith({ page: 1, limit: 10 });
 
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getAllByText(/Scroll to load older artifacts/)).toHaveLength(2);
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByRole("status", { name: "Loading stored artifacts" })
+    ).toBeInTheDocument();
     await waitFor(() => expect(listArtifacts).toHaveBeenCalledWith({ page: 1, limit: 25 }));
+    await act(async () => {
+      resolveFullPage?.({ data: [artifact("all-first")], nextPage: 2 });
+    });
+    expect(within(dialog).getAllByText(/Scroll to load older artifacts/)).toHaveLength(2);
+    expect(
+      within(dialog).queryByRole("status", { name: "Loading stored artifacts" })
+    ).not.toBeInTheDocument();
 
     await waitFor(() => expect(intersectionCallback).toBeDefined());
     act(() => {

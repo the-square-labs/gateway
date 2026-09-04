@@ -170,6 +170,7 @@ export const ALL_SCOPES = [
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  'docker:availability:manage',
   'docker:containers:folders:manage',
   // ── Docker: Compose Projects ─────────────────────────────────────
   'docker:compose:view',

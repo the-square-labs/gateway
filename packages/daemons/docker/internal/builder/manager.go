@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -75,7 +74,7 @@ func NewManager(config RuntimeConfig, workspace, askpass string, emit EventSink)
 	manager := &Manager{
 		config: config, workspace: workspace, askpass: askpass, emit: emit, jobs: map[string]context.CancelFunc{}, secrets: map[string][]string{},
 		attempts: map[string]uint32{}, terminalEvents: map[string]*pb.DockerBuildEvent{}, terminalAcks: map[string]chan string{},
-		executable: exec.LookPath, terminalRetryInterval: terminalEventRetryInterval, terminalAckTimeout: terminalEventAckTimeout,
+		executable: resolveBuilderExecutable, terminalRetryInterval: terminalEventRetryInterval, terminalAckTimeout: terminalEventAckTimeout,
 	}
 	manager.cleanupAfterJob = manager.pruneAfterJob
 	return manager

@@ -3,12 +3,15 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/authconfig"
 	"github.com/moby/moby/api/types/container"
 	imagetypes "github.com/moby/moby/api/types/image"
+	registrytypes "github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
 )
 
@@ -109,7 +112,121 @@ func (c *Client) EnsureImage(ctx context.Context, imageRef string, registryAuth 
 	} else if !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("inspect image: %w", err)
 	}
+
+	// Some Engine/API combinations fail to resolve an existing tagged image
+	// through /images/{name}/json even though it is present in the local image
+	// store. Use the Engine's reference filter as a compatibility fallback, but
+	// require an exact RepoTag/RepoDigest match before skipping the pull.
+	listed, err := c.cli.ImageList(ctx, client.ImageListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("reference", imageRef),
+	})
+	if err != nil {
+		return fmt.Errorf("list local images after inspect miss: %w", err)
+	}
+	for _, image := range listed.Items {
+		if containsExactImageReference(image.RepoTags, imageRef) ||
+			containsExactImageReference(image.RepoDigests, imageRef) {
+			return nil
+		}
+	}
 	return c.PullImage(ctx, imageRef, registryAuth)
+}
+
+func containsExactImageReference(references []string, expected string) bool {
+	for _, reference := range references {
+		if reference == expected {
+			return true
+		}
+	}
+	return false
+}
+
+type MirroredImage struct {
+	Reference     string `json:"reference"`
+	Repository    string `json:"repository"`
+	Digest        string `json:"digest"`
+	Platform      string `json:"platform"`
+	SizeBytes     int64  `json:"sizeBytes"`
+	SourceImageID string `json:"sourceImageId"`
+}
+
+func (c *Client) TagImage(ctx context.Context, sourceRef, targetRef string) error {
+	source, err := c.cli.ImageInspect(ctx, sourceRef)
+	if err != nil {
+		return fmt.Errorf("inspect source image for tag: %w", err)
+	}
+	if _, err := c.cli.ImageTag(ctx, client.ImageTagOptions{Source: source.ID, Target: targetRef}); err != nil {
+		return fmt.Errorf("tag image: %w", err)
+	}
+	return nil
+}
+
+// MirrorImage pulls an arbitrary source image, tags it into the node-local
+// outbound-only internal-registry proxy, pushes it, and returns the immutable
+// repository digest that every Availability placement must consume.
+func (c *Client) MirrorImage(ctx context.Context, sourceRef, targetRef, sourceRegistryAuth string) (MirroredImage, error) {
+	source, inspectErr := c.cli.ImageInspect(ctx, sourceRef)
+	if inspectErr != nil {
+		if err := c.PullImage(ctx, sourceRef, sourceRegistryAuth); err != nil {
+			return MirroredImage{}, err
+		}
+		source, inspectErr = c.cli.ImageInspect(ctx, sourceRef)
+	}
+	if inspectErr != nil {
+		return MirroredImage{}, fmt.Errorf("inspect mirrored source image: %w", inspectErr)
+	}
+	if _, err := c.cli.ImageTag(ctx, client.ImageTagOptions{Source: source.ID, Target: targetRef}); err != nil {
+		return MirroredImage{}, fmt.Errorf("tag mirrored image: %w", err)
+	}
+	// Docker Engine expects X-Registry-Auth even for an unauthenticated
+	// registry on some daemon/API combinations. An encoded empty AuthConfig is
+	// the canonical anonymous value and avoids the legacy EOF fallback path.
+	pushRegistryAuth, err := authconfig.Encode(registrytypes.AuthConfig{})
+	if err != nil {
+		return MirroredImage{}, fmt.Errorf("encode mirrored image registry auth: %w", err)
+	}
+	push, err := c.cli.ImagePush(ctx, targetRef, client.ImagePushOptions{RegistryAuth: pushRegistryAuth})
+	if err != nil {
+		return MirroredImage{}, fmt.Errorf("push mirrored image: %w", err)
+	}
+	defer push.Close()
+	if err := push.Wait(ctx); err != nil {
+		return MirroredImage{}, fmt.Errorf("wait for mirrored image push: %w", err)
+	}
+	inspected, err := c.cli.ImageInspect(ctx, targetRef)
+	if err != nil {
+		return MirroredImage{}, fmt.Errorf("inspect mirrored target image: %w", err)
+	}
+	repository := imageRepository(targetRef)
+	digest := ""
+	for _, reference := range inspected.RepoDigests {
+		if strings.HasPrefix(reference, repository+"@sha256:") {
+			digest = strings.TrimPrefix(reference, repository+"@")
+			break
+		}
+	}
+	if digest == "" {
+		return MirroredImage{}, errors.New("internal registry did not return an immutable image digest")
+	}
+	platform := strings.Trim(strings.Join([]string{inspected.Os, inspected.Architecture}, "/"), "/")
+	return MirroredImage{
+		Reference:     repository + "@" + digest,
+		Repository:    strings.TrimPrefix(repository, "127.0.0.1:5443/"),
+		Digest:        digest,
+		Platform:      platform,
+		SizeBytes:     inspected.Size,
+		SourceImageID: source.ID,
+	}, nil
+}
+
+func imageRepository(reference string) string {
+	withoutDigest := strings.SplitN(reference, "@", 2)[0]
+	lastSlash := strings.LastIndex(withoutDigest, "/")
+	if colon := strings.LastIndex(withoutDigest, ":"); colon > lastSlash {
+		return withoutDigest[:colon]
+	}
+	return withoutDigest
 }
 
 // RemoveImage removes an image by ID or reference.

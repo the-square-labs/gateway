@@ -125,6 +125,9 @@ export abstract class AdditionalRouteServiceRuntime {
             })
           : await this.secureLinks?.getManagedRoute(row.id);
         if (!binding) continue;
+        const availabilityMembers = this.secureLinks?.getActiveAvailabilityMembers
+          ? await this.secureLinks.getActiveAvailabilityMembers(hostId, `additional-route:${row.id}`)
+          : [];
         configs.push({
           id: row.id,
           path: row.path,
@@ -134,6 +137,10 @@ export abstract class AdditionalRouteServiceRuntime {
           forwardPort: binding.listenerPort ?? 1,
           secureLinkUpstream: true,
           secureLinkSocketPath: `/run/gateway-secure-links/${binding.id}.sock`,
+          secureLinkSocketPaths:
+            availabilityMembers.length > 0
+              ? availabilityMembers.map((member) => `/run/gateway-secure-links/${member.id}.sock`)
+              : undefined,
           stripPrefix: row.stripPrefix,
           websocketSupport: row.websocketSupport,
           requestBuffering: row.requestBuffering,

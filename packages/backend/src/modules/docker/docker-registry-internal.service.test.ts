@@ -168,11 +168,11 @@ describe('DockerInternalRegistryService', () => {
     expect(store.state).toMatchObject({ status: 'ready', writable: true, maintenancePhase: 'idle' });
   });
 
-  it('retains the latest three approved artifacts per source plus every active pin', () => {
+  it('retains only the latest approved artifact per source plus every active pin', () => {
     const artifacts = [artifact('a', 0), artifact('b', 1), artifact('c', 2), artifact('d', 3), artifact('e', 4, true)];
     const result = selectRegistryRetentionCandidates(artifacts);
-    expect(result.retained.map((item) => item.id)).toEqual(['a', 'b', 'c', 'e']);
-    expect(result.candidates.map((item) => item.id)).toEqual(['d']);
+    expect(result.retained.map((item) => item.id)).toEqual(['a', 'e']);
+    expect(result.candidates.map((item) => item.id)).toEqual(['b', 'c', 'd']);
   });
 
   it('does not delete a shared registry digest while a newer build still retains it', () => {
@@ -193,8 +193,8 @@ describe('DockerInternalRegistryService', () => {
       artifact('b', 2),
       artifact('c', 3),
     ]);
-    expect(result.retained.map((item) => item.id)).toEqual(['a', 'b', 'c']);
-    expect(result.candidates.map((item) => item.id)).toEqual(['failed']);
+    expect(result.retained.map((item) => item.id)).toEqual(['a']);
+    expect(result.candidates.map((item) => item.id)).toEqual(['failed', 'b', 'c']);
   });
 
   it('fails closed for writes at disk pressure while preserving scoped pull token issuance', async () => {
@@ -240,6 +240,19 @@ describe('DockerInternalRegistryService', () => {
         writable: true,
       })
     );
+  });
+
+  it('does not persist or publish an unchanged internal registry health report', async () => {
+    const store = new FakeStore();
+    const { service } = createService(store, createExecutor(store));
+    const publish = vi.fn();
+    const updateState = vi.spyOn(store, 'updateState');
+    service.setEventBus({ publish } as never);
+
+    await service.reportHealth({ healthy: true, writable: true, usedBytes: 0, capacityBytes: null });
+
+    expect(updateState).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('limits every write grant to the bounded maintenance drain window', async () => {
@@ -469,7 +482,7 @@ describe('DockerInternalRegistryService', () => {
     ]) {
       expect(store.events.indexOf(`state:${phase}`)).toBeLessThan(store.events.indexOf(`exec:${action}`));
     }
-    expect(store.deleted).toEqual(new Set(['d']));
+    expect(store.deleted).toEqual(new Set(['b', 'c', 'd']));
     expect(store.state).toMatchObject({ status: 'ready', writable: true, maintenancePhase: 'idle' });
   });
 

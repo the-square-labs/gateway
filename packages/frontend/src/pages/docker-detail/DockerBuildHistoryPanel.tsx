@@ -1,6 +1,7 @@
 import { Hammer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -451,7 +452,7 @@ export function DockerBuildHistoryPanel({
     loadingMore.current = false;
     setAllBuilds([]);
     setNextCursor(null);
-    setAllLoading(false);
+    setAllLoading(true);
     setAllOpen(true);
   };
   const closeAll = (nextOpen: boolean) => {
@@ -531,7 +532,11 @@ export function DockerBuildHistoryPanel({
             <DialogTitle>Build history</DialogTitle>
             <DialogDescription>Scroll the table to load older builds.</DialogDescription>
           </DialogHeader>
-          {historyTable(false)}
+          {allLoading && allBuilds.length === 0 ? (
+            <LoadingSpinner className="min-h-48" label="Loading build history" />
+          ) : (
+            historyTable(false)
+          )}
         </DialogContent>
       </Dialog>
 

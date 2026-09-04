@@ -247,6 +247,32 @@ describe("Profile", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/profile");
   });
 
+  it("keeps Powered by inside each animated profile tab", async () => {
+    const user = userEvent.setup();
+    renderProfile("/profile");
+
+    const preferencesTransition = [
+      ...document.querySelectorAll<HTMLElement>("[data-page-transition]"),
+    ].at(-1);
+    expect(screen.getByText(/Powered by/).closest('[role="tabpanel"]')).toHaveAttribute(
+      "data-state",
+      "active"
+    );
+    expect(preferencesTransition).toContainElement(screen.getByText(/Powered by/));
+
+    await user.click(screen.getByRole("tab", { name: "Authorizations" }));
+    expect(await screen.findByText("Gateway API authorizations")).toBeInTheDocument();
+    const authorizationsTransition = [
+      ...document.querySelectorAll<HTMLElement>("[data-page-transition]"),
+    ].at(-1);
+    expect(authorizationsTransition).not.toBe(preferencesTransition);
+    expect(authorizationsTransition).toContainElement(screen.getByText(/Powered by/));
+    expect(screen.getByText(/Powered by/).closest('[role="tabpanel"]')).toHaveAttribute(
+      "data-state",
+      "active"
+    );
+  });
+
   it("returns unknown profile tabs to Preferences", async () => {
     renderProfile("/profile/unknown");
 

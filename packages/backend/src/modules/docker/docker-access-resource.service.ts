@@ -12,6 +12,7 @@ import {
 } from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
+import { AppError } from '@/middleware/error-handler.js';
 
 const DOCKER_CONTAINER_SCOPE_PREFIX = 'docker:containers:';
 
@@ -104,6 +105,7 @@ export class DockerAccessResourceService {
     preserveRuntimeChanges: ReadonlySet<string> = new Set()
   ): Promise<Map<string, string>> {
     const normalized = containers
+      .filter((container) => container.pendingSourceBuild !== true)
       .map((container) => ({ name: containerName(container), runtimeId: containerRuntimeId(container) }))
       .filter((container): container is ContainerIdentity => !!container.name && !!container.runtimeId);
 
@@ -119,8 +121,14 @@ export class DockerAccessResourceService {
     return new Map(rows.map((row) => [row.resourceKey, row.id]));
   }
 
-  async ensureContainer(nodeId: string, name: string, runtimeId: string, preserveExisting = false): Promise<string> {
-    const resourceId = await this.db.transaction(async (tx) => {
+  async ensureContainer(
+    nodeId: string,
+    name: string,
+    runtimeId: string,
+    preserveExisting = false,
+    executor?: DrizzleExecutor
+  ): Promise<string> {
+    const ensure = async (tx: DrizzleExecutor) => {
       await this.lockContainerIdentity(tx, nodeId, name);
       const [existing] = await tx
         .select()
@@ -142,6 +150,10 @@ export class DockerAccessResourceService {
         return created.id;
       }
 
+      if (!runtimeId && existing.runtimeId) {
+        throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A runtime already owns this container identity');
+      }
+
       if (!existing.runtimeId || existing.runtimeId === runtimeId || preserveExisting) {
         if (existing.runtimeId !== runtimeId) {
           await tx
@@ -159,7 +171,8 @@ export class DockerAccessResourceService {
         .values({ nodeId, resourceType: 'container', resourceKey: name, runtimeId })
         .returning({ id: dockerAccessResources.id });
       return created.id;
-    });
+    };
+    const resourceId = executor ? await ensure(executor) : await this.db.transaction(ensure);
     this.rememberContainer(nodeId, name, runtimeId, resourceId);
     return resourceId;
   }
@@ -268,6 +281,27 @@ export class DockerAccessResourceService {
     });
     if (removed) this.forgetContainer(nodeId, name, removed);
     return removed;
+  }
+
+  /** Delete a logical reservation only; an identity adopted by a runtime is retained. */
+  async removePendingContainer(nodeId: string, name: string, tx: DrizzleExecutor): Promise<string | null> {
+    await this.lockContainerIdentity(tx, nodeId, name);
+    const [row] = await tx
+      .select()
+      .from(dockerAccessResources)
+      .where(
+        and(
+          eq(dockerAccessResources.nodeId, nodeId),
+          eq(dockerAccessResources.resourceType, 'container'),
+          eq(dockerAccessResources.resourceKey, name)
+        )
+      )
+      .limit(1);
+    if (!row || row.runtimeId) return null;
+    await this.rewritePersistedScopes(tx, dockerChildScopeResourceId(nodeId, row.id), null);
+    await tx.delete(dockerAccessResources).where(eq(dockerAccessResources.id, row.id));
+    this.forgetContainer(nodeId, name, row.id);
+    return row.id;
   }
 
   async moveContainer(nodeId: string, targetNodeId: string, name: string, runtimeId?: string): Promise<void> {

@@ -101,6 +101,7 @@ Container workflows:
 - Review global build history, Build Worker assignment, logs, vulnerability findings/policy results, desired and deployed commits, Compose service names, and per-resource source settings. Repository, integration, branch, Dockerfile/Compose-file path, build context, separate automatic-build and automatic-deploy controls, and source-scoped Build Secrets remain part of the Docker or Compose resource rather than a separate application entity.
 - AI Workspace and remote MCP expose first-class Compose lifecycle/revision/secret/operation tools, Git-source management for containers, deployments, Compose Projects and Pages, Build Worker-filtered build history, build logs/cancel/retry, and resource search for Compose Projects and build jobs. Every operation reuses the same REST schemas, license checks, and resource-scoped permissions as the Console.
 - Use the Gateway-managed internal Distribution registry on every plan without assigning a domain or publishing a host port. It keeps three successful artifacts plus active, rollback, in-progress, and manually pinned digests. Optional Business+ external Docker-client access is configured under **Settings > Features** and is exposed only through a selected nginx node, domain, TLS certificate, and repository/action-scoped token. Entitlement loss disables that ingress and every public token request rechecks the current plan.
+- On Business and Enterprise, enable Availability for an existing standalone Container, managed Deployment, or whole Compose Project with no mounts. Replicated mode keeps 2–32 serving placements on independent eligible Docker nodes; Failover keeps one serving placement and replaces it after Gateway loses the node control channel. Gateway mirrors workload images into pinned immutable internal-registry digests, pre-pulls eligible standby nodes, projects managed-database bindings and Proxy Host/Additional Route/Advanced Secure Link targets per placement, and balances new ingress connections with least-connections. The nodes remain independent: Gateway does not create Swarm state, an overlay, node-to-node trust, or inbound cluster ports.
 - Configure a trusted HTTPS token-service origin only for registries whose Bearer auth service is intentionally hosted on a separate origin.
 - Track long-running Docker operations in the Tasks view.
 
@@ -291,11 +292,12 @@ Connector credentials are encrypted at rest. GitLab access is split between conn
 
 ## Application Scaling
 
-The following application-scaling capabilities are **In development** for Business and Enterprise. They are included in those plan positions when released, but they are not generally available runtime features today:
+Gateway Availability provides fixed-count multi-node placement for eligible Containers, Deployments, and whole Compose Projects on Business and Enterprise. It deliberately does not create an application cluster or shared node network.
 
-- **Horizontal application scaling:** group multiple Docker nodes as one application cluster and deploy an application to that cluster.
+The following scaling capabilities remain **In development**:
+
+- **Metric autoscaling:** change the placement count from CPU, memory, queue, or traffic metrics.
 - **Vertical workload scaling:** run multiple managed instances of one workload on the same managed machine.
-Existing single-node Compose Projects, multi-node resource management, cross-node migration, and blue/green deployments do not constitute horizontal clustering or same-node replica scaling.
 
 ## Vulnerability And Security Scanning
 

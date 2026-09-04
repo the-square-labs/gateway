@@ -62,6 +62,7 @@ export function ComposeVariablesTab({
         targetResourceId={project.id}
         containerName={project.name}
         disabled={serviceNames.length === 0 || !canManage}
+        recreatesRunningWorkload={recreatesRunningProject}
         composeServices={serviceNames.map((name) => ({
           name,
           existingVariableNames: Object.keys(
@@ -88,6 +89,7 @@ export function ComposeVariablesTab({
               ? "Saving variables creates and applies a new immutable revision. Running services will be recreated and experience brief downtime. Continue?"
               : "Saving variables creates a new immutable revision for this stopped project."
           }
+          flushBottom
         />
       ) : (
         <PanelShell

@@ -19,6 +19,7 @@ const certificate = {
   id: "cert-1",
   name: "Example certificate",
   type: "acme",
+  domainNames: ["example.com"],
 } as SSLCertificate;
 
 function makeProps(overrides: Partial<SettingsTabProps> = {}): SettingsTabProps {
@@ -208,6 +209,29 @@ describe("proxy detail SettingsTab", () => {
     render(<SettingsTab {...makeProps()} />);
 
     expect(screen.getByRole("combobox", { name: "SSL Certificate" })).toBeEnabled();
+  });
+
+  it("uses SSL certificate text as search only and commits selected certificate IDs", async () => {
+    const user = userEvent.setup();
+    const setSslCertificateId = vi.fn();
+    render(<SettingsTab {...makeProps({ setSslCertificateId })} />);
+
+    const certificateCombobox = screen.getByRole("combobox", { name: "SSL Certificate" });
+    expect(certificateCombobox).toHaveValue("None");
+
+    await user.click(certificateCombobox);
+    await user.type(certificateCombobox, "missing");
+    expect(screen.getByText("No matching certificates.")).toBeInTheDocument();
+    await user.tab();
+
+    expect(setSslCertificateId).not.toHaveBeenCalled();
+    expect(certificateCombobox).toHaveValue("None");
+
+    await user.click(certificateCombobox);
+    await user.type(certificateCombobox, "Example");
+    await user.click(screen.getByRole("button", { name: "Example certificate (acme)" }));
+
+    expect(setSslCertificateId).toHaveBeenCalledWith("cert-1");
   });
 
   it("keeps SSL certificate selection disabled without edit permission", () => {

@@ -153,18 +153,24 @@ export class DockerWebhookService {
     userId?: string;
     webhookId?: string;
   }): Promise<{ taskId: string; message: string }> {
-    const { nodeId, containerName, containerId, tag, userId, webhookId } = params;
+    const managed = await this.docker.getManagedContainerConfiguration(params.nodeId, params.containerId);
+    const { tag, userId, webhookId } = params;
+    const nodeId = managed?.nodeId ?? params.nodeId;
+    const containerName = managed?.containerName ?? params.containerName;
+    const containerId = managed?.containerName ?? params.containerId;
 
-    // Inspect current container to get its config
-    const inspectData = await this.docker.inspectContainer(nodeId, containerId);
-    const currentImage: string = (inspectData as any)?.Config?.Image ?? '';
+    // HA uses the canonical source image; replica snapshots contain mirror
+    // references and projected environment/secrets, not editable configuration.
+    const inspectData = managed ? null : await this.docker.inspectContainer(nodeId, containerId);
+    const currentImage: string = managed?.image ?? (inspectData as any)?.Config?.Image ?? '';
     if (!currentImage) {
       throw new AppError(400, 'NO_IMAGE', 'Cannot determine current container image');
     }
 
-    const { imageName, currentTag } = parseImageRef(currentImage);
+    const { imageName, currentTag } = parseImageRef(managed ? currentImage.split('@')[0]! : currentImage);
     const targetTag = tag ?? currentTag;
-    const targetRef = `${imageName}:${targetTag}`;
+    const targetRef =
+      managed && tag === undefined && currentImage.includes('@') ? currentImage : `${imageName}:${targetTag}`;
 
     // Check container is not busy
     this.docker.requireNoTransition(nodeId, containerName);
@@ -176,29 +182,34 @@ export class DockerWebhookService {
       containerName,
       type: 'webhook_update',
     });
-    await this.tasks.update(task.id, { status: 'running', progress: `Pulling ${targetRef}...` });
+    await this.tasks.update(task.id, {
+      status: 'running',
+      progress: managed ? `Rolling out ${targetRef}...` : `Pulling ${targetRef}...`,
+    });
 
     // Set transition and broadcast to frontend
     this.docker.setTransition(nodeId, containerName, 'updating');
     this.docker.emitTransition(nodeId, containerName, containerId, 'updating');
 
     try {
-      // Synchronous pull — validates the image exists
-      const registryAuthCandidates = await this.registry.resolveAuthCandidatesForImagePull(nodeId, targetRef);
-      const registryAttempts = registryAuthCandidates.length ? registryAuthCandidates : [null];
-      for (const registryAuth of registryAttempts) {
-        const pullPayload: { imageRef: string; registryAuthJson?: string } = { imageRef: targetRef };
-        if (registryAuth) {
-          pullPayload.registryAuthJson = registryAuth.authJson;
-        }
+      if (!managed) {
+        // Synchronous pull — validates the image exists
+        const registryAuthCandidates = await this.registry.resolveAuthCandidatesForImagePull(nodeId, targetRef);
+        const registryAttempts = registryAuthCandidates.length ? registryAuthCandidates : [null];
+        for (const registryAuth of registryAttempts) {
+          const pullPayload: { imageRef: string; registryAuthJson?: string } = { imageRef: targetRef };
+          if (registryAuth) {
+            pullPayload.registryAuthJson = registryAuth.authJson;
+          }
 
-        const pullResult = await this.dispatch.sendDockerImageCommand(nodeId, 'pull', pullPayload, 600000);
-        if (pullResult.success) {
-          await this.registry.rememberImageRegistry(nodeId, targetRef, registryAuth?.registryId);
-          break;
-        }
-        if (registryAuth === registryAttempts.at(-1) || !isRegistryRetryablePullError(pullResult.error)) {
-          throw new AppError(400, 'PULL_FAILED', pullResult.error || `Failed to pull ${targetRef}`);
+          const pullResult = await this.dispatch.sendDockerImageCommand(nodeId, 'pull', pullPayload, 600000);
+          if (pullResult.success) {
+            await this.registry.rememberImageRegistry(nodeId, targetRef, registryAuth?.registryId);
+            break;
+          }
+          if (registryAuth === registryAttempts.at(-1) || !isRegistryRetryablePullError(pullResult.error)) {
+            throw new AppError(400, 'PULL_FAILED', pullResult.error || `Failed to pull ${targetRef}`);
+          }
         }
       }
     } catch (err) {
@@ -216,14 +227,21 @@ export class DockerWebhookService {
     // Clear our transition — recreateWithConfig will set 'recreating'
     this.docker.clearTransition(nodeId, containerName);
 
-    // Build recreate config from current inspect
-    const config = buildRecreateConfig(inspectData as Record<string, unknown>, targetRef);
-
     try {
-      await this.docker.recreateWithConfig(nodeId, containerId, config, userId ?? (null as any), {
-        skipImagePull: true,
-        skipWebhookCleanup: true,
-      });
+      if (managed) {
+        // The coordinator merges this image-only patch, preserves shouldRun and
+        // runtime/security settings, and resolves only after the rollout finishes.
+        await this.docker.recreateWithConfig(nodeId, containerId, { image: targetRef }, userId ?? null, {
+          waitForAvailability: true,
+          forceAvailabilityRollout: true,
+        });
+      } else {
+        const config = buildRecreateConfig(inspectData as Record<string, unknown>, targetRef);
+        await this.docker.recreateWithConfig(nodeId, containerId, config, userId ?? null, {
+          skipImagePull: true,
+          skipWebhookCleanup: true,
+        });
+      }
     } catch (err) {
       await this.tasks
         .update(task.id, {
@@ -261,7 +279,7 @@ export class DockerWebhookService {
       })
       .catch(() => {});
 
-    this.cleanup.scheduleCleanupForContainer(nodeId, containerName, imageName).catch(() => {});
+    if (!managed) this.cleanup.scheduleCleanupForContainer(nodeId, containerName, imageName).catch(() => {});
 
     const message = `Updating ${containerName} to ${targetRef}`;
     logger.info(message, { nodeId, containerId, webhookId });

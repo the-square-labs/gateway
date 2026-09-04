@@ -1,9 +1,15 @@
-import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   dockerArtifactPins,
+  dockerAvailabilityOperations,
+  dockerAvailabilityPlacements,
+  dockerAvailabilityPolicies,
   dockerBuildArtifacts,
   dockerBuilds,
+  dockerComposeProjects,
+  dockerComposeRevisions,
+  dockerDeployments,
   dockerInternalRegistryState,
   dockerRegistryMaintenanceRuns,
 } from '@/db/schema/index.js';
@@ -12,11 +18,37 @@ import type { DockerService } from '@/services/docker.service.js';
 import type { DockerRegistryGrant, DockerRegistryTokenService } from './docker-registry-token.service.js';
 
 const REGISTRY_STATE_ID = 'system';
-export const DEFAULT_REGISTRY_RETENTION_COUNT = 3;
+export const DEFAULT_REGISTRY_RETENTION_COUNT = 1;
 
 export const DEFAULT_REGISTRY_MAINTENANCE_LEASE_MS = 15 * 60_000;
 export const MAX_REGISTRY_WRITE_TOKEN_TTL_SECONDS = 30;
 export const REGISTRY_WRITE_DRAIN_GRACE_MS = (MAX_REGISTRY_WRITE_TOKEN_TTL_SECONDS + 5) * 1000;
+
+export async function registryRuntimeReferences(db: DrizzleClient): Promise<string> {
+  return JSON.stringify(
+    await Promise.all([
+      db
+        .select({ spec: dockerAvailabilityPolicies.portableSpec, image: dockerAvailabilityPolicies.imageReference })
+        .from(dockerAvailabilityPolicies),
+      db
+        .select({
+          runtime: dockerAvailabilityPlacements.runtimeIdentity,
+          image: dockerAvailabilityPlacements.imageReference,
+        })
+        .from(dockerAvailabilityPlacements)
+        .where(sql`${dockerAvailabilityPlacements.actualState} <> 'removed'`),
+      db
+        .select({ requested: dockerAvailabilityOperations.requestedPolicy })
+        .from(dockerAvailabilityOperations)
+        .where(sql`${dockerAvailabilityOperations.status} in ('pending', 'running', 'waiting')`),
+      db
+        .select({ source: dockerComposeRevisions.sourceYaml, model: dockerComposeRevisions.normalizedModel })
+        .from(dockerComposeProjects)
+        .innerJoin(dockerComposeRevisions, eq(dockerComposeRevisions.id, dockerComposeProjects.activeRevisionId)),
+      db.select({ config: dockerDeployments.desiredConfig }).from(dockerDeployments),
+    ])
+  );
+}
 
 export type RegistryState = typeof dockerInternalRegistryState.$inferSelect;
 export type MaintenanceRun = typeof dockerRegistryMaintenanceRuns.$inferSelect;
@@ -25,7 +57,7 @@ type MaintenanceRunUpdate = Partial<typeof dockerRegistryMaintenanceRuns.$inferI
 
 export interface RegistryRetentionArtifact {
   id: string;
-  sourceBindingId: string;
+  sourceBindingId: string | null;
   repository: string;
   digest: string;
   createdAt: Date;
@@ -151,7 +183,7 @@ export function selectRegistryRetentionCandidates(
   retentionCount = DEFAULT_REGISTRY_RETENTION_COUNT
 ): { retained: RegistryRetentionArtifact[]; candidates: RegistryRetentionArtifact[] } {
   const retainedIds = new Set(artifacts.filter((artifact) => artifact.pinned).map((artifact) => artifact.id));
-  const byBinding = new Map<string, RegistryRetentionArtifact[]>();
+  const byBinding = new Map<string | null, RegistryRetentionArtifact[]>();
   for (const artifact of artifacts.filter((candidate) => candidate.retainInHistory)) {
     const group = byBinding.get(artifact.sourceBindingId) ?? [];
     group.push(artifact);
@@ -286,7 +318,7 @@ class DrizzleDockerRegistryMaintenanceStore implements DockerRegistryMaintenance
   }
 
   async listRetentionArtifacts(now: Date): Promise<RegistryRetentionArtifact[]> {
-    const [artifacts, pins] = await Promise.all([
+    const [artifacts, pins, references] = await Promise.all([
       this.db
         .select({
           id: dockerBuildArtifacts.id,
@@ -294,22 +326,29 @@ class DrizzleDockerRegistryMaintenanceStore implements DockerRegistryMaintenance
           repository: dockerBuildArtifacts.registryRepository,
           digest: dockerBuildArtifacts.digest,
           createdAt: dockerBuildArtifacts.createdAt,
+          policyDecision: dockerBuildArtifacts.policyDecision,
           buildStatus: dockerBuilds.status,
         })
         .from(dockerBuildArtifacts)
-        .innerJoin(dockerBuilds, eq(dockerBuilds.id, dockerBuildArtifacts.buildId))
-        .where(and(eq(dockerBuildArtifacts.status, 'ready'), eq(dockerBuildArtifacts.policyDecision, 'approved')))
+        .leftJoin(dockerBuilds, eq(dockerBuilds.id, dockerBuildArtifacts.buildId))
+        .where(inArray(dockerBuildArtifacts.status, ['ready', 'rejected']))
         .orderBy(desc(dockerBuildArtifacts.createdAt)),
       this.db
         .select({ artifactId: dockerArtifactPins.artifactId })
         .from(dockerArtifactPins)
         .where(or(isNull(dockerArtifactPins.expiresAt), gt(dockerArtifactPins.expiresAt, now))),
+      registryRuntimeReferences(this.db),
     ]);
     const pinned = new Set(pins.map((pin) => pin.artifactId));
     return artifacts.map(({ buildStatus, ...artifact }) => ({
       ...artifact,
-      pinned: pinned.has(artifact.id),
-      retainInHistory: buildStatus === 'pushing' || buildStatus === 'deploying' || buildStatus === 'succeeded',
+      pinned:
+        pinned.has(artifact.id) ||
+        references.includes(`${artifact.repository}@`) ||
+        references.includes(`${artifact.repository}:`),
+      retainInHistory:
+        artifact.policyDecision === 'approved' &&
+        (buildStatus === 'pushing' || buildStatus === 'deploying' || buildStatus === 'succeeded'),
     }));
   }
 

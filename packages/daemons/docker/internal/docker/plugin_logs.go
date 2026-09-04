@@ -9,7 +9,22 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"io"
 	"strings"
+	"sync"
 )
+
+type logStreamOwnerKey struct {
+	plugin      *DockerPlugin
+	containerID string
+}
+
+type logStreamOwner struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// Keep private ownership even when a shared-map user removes its cancel entry
+// before invoking it. Entries exist only until their current stream finishes.
+var logStreamOwners sync.Map // logStreamOwnerKey -> logStreamOwner
 
 func (p *DockerPlugin) handleLogsCommand(cmd *pb.DockerLogsCommand, result *pb.CommandResult) {
 	ctx := context.Background()
@@ -24,28 +39,25 @@ func (p *DockerPlugin) handleLogsCommand(cmd *pb.DockerLogsCommand, result *pb.C
 
 	// If follow mode and we have a writer, start streaming
 	if cmd.Follow && p.writer != nil {
-		// Cancel any existing stream for this container
-		p.logStreamMu.Lock()
-		if cancel, ok := p.logStreamCancel[cmd.ContainerId]; ok {
-			cancel()
-			delete(p.logStreamCancel, cmd.ContainerId)
-		}
-		p.logStreamMu.Unlock()
-
 		streamCtx, streamCancel := context.WithCancel(ctx)
+		// Register before opening the reader: overlapping opens must cancel
+		// the earlier attempt, not leave two untracked follow streams alive.
+		p.registerLogStream(streamCtx, streamCancel, cmd.ContainerId)
 
 		reader, err := p.client.ContainerLogsFollow(streamCtx, cmd.ContainerId, tail, cmd.Timestamps, cmd.Since)
 		if err != nil {
-			streamCancel()
+			p.releaseLogStream(streamCtx, streamCancel, cmd.ContainerId)
 			result.Success = false
 			result.Error = err.Error()
 			return
 		}
-
-		// Track the cancel function for cleanup
-		p.logStreamMu.Lock()
-		p.logStreamCancel[cmd.ContainerId] = streamCancel
-		p.logStreamMu.Unlock()
+		if err := streamCtx.Err(); err != nil {
+			reader.Close()
+			p.releaseLogStream(streamCtx, streamCancel, cmd.ContainerId)
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
 
 		// Start streaming goroutine
 		go p.streamLogs(streamCtx, streamCancel, cmd.ContainerId, reader)
@@ -80,10 +92,7 @@ func (p *DockerPlugin) handleLogsCommand(cmd *pb.DockerLogsCommand, result *pb.C
 func (p *DockerPlugin) streamLogs(ctx context.Context, cancel context.CancelFunc, containerID string, reader io.ReadCloser) {
 	defer func() {
 		reader.Close()
-		cancel()
-		p.logStreamMu.Lock()
-		delete(p.logStreamCancel, containerID)
-		p.logStreamMu.Unlock()
+		p.releaseLogStream(ctx, cancel, containerID)
 		p.logger.Info("log stream ended", "container", containerID)
 	}()
 
@@ -100,25 +109,15 @@ func (p *DockerPlugin) streamLogs(ctx context.Context, cancel context.CancelFunc
 		// Read Docker multiplexed log header (8 bytes)
 		_, err := io.ReadFull(reader, header)
 		if err != nil {
-			// Stream ended (container stopped, context cancelled, etc.)
-			// Send end-of-stream notification
-			if p.writer != nil {
-				endMsg, _ := json.Marshal(map[string]interface{}{
-					"type":        "log_stream",
-					"containerId": containerID,
-					"lines":       []string{},
-					"ended":       true,
-				})
-				p.writer.Send(&pb.DaemonMessage{
-					Payload: &pb.DaemonMessage_CommandResult{
-						CommandResult: &pb.CommandResult{
-							CommandId: "log_stream:" + containerID,
-							Success:   true,
-							Detail:    string(endMsg),
-						},
-					},
-				})
-			}
+			// Natural EOF ends the current stream; cancellation of an older
+			// reader must never end the replacement's backend handler.
+			endMsg, _ := json.Marshal(map[string]interface{}{
+				"type":        "log_stream",
+				"containerId": containerID,
+				"lines":       []string{},
+				"ended":       true,
+			})
+			p.sendLogStream(ctx, containerID, string(endMsg))
 			return
 		}
 
@@ -168,21 +167,68 @@ func (p *DockerPlugin) streamLogs(ctx context.Context, cancel context.CancelFunc
 			"lines":       lines,
 		})
 
-		if p.writer != nil {
-			if err := p.writer.Send(&pb.DaemonMessage{
-				Payload: &pb.DaemonMessage_CommandResult{
-					CommandResult: &pb.CommandResult{
-						CommandId: "log_stream:" + containerID,
-						Success:   true,
-						Detail:    string(streamMsg),
-					},
-				},
-			}); err != nil {
-				p.logger.Debug("log stream send failed", "container", containerID, "error", err)
-				return
-			}
+		if err := p.sendLogStream(ctx, containerID, string(streamMsg)); err != nil {
+			p.logger.Debug("log stream send failed", "container", containerID, "error", err)
+			return
 		}
 	}
+}
+
+func (p *DockerPlugin) registerLogStream(ctx context.Context, cancel context.CancelFunc, containerID string) {
+	p.logStreamMu.Lock()
+	defer p.logStreamMu.Unlock()
+	key := logStreamOwnerKey{p, containerID}
+	if previous, ok := logStreamOwners.Load(key); ok {
+		previous.(logStreamOwner).cancel()
+	}
+	if previous := p.logStreamCancel[containerID]; previous != nil {
+		previous()
+	}
+	logStreamOwners.Store(key, logStreamOwner{ctx, cancel})
+	p.logStreamCancel[containerID] = cancel
+}
+
+func (p *DockerPlugin) releaseLogStream(ctx context.Context, cancel context.CancelFunc, containerID string) {
+	p.logStreamMu.Lock()
+	key := logStreamOwnerKey{p, containerID}
+	if owner, ok := logStreamOwners.Load(key); ok && owner.(logStreamOwner).ctx == ctx {
+		delete(p.logStreamCancel, containerID)
+		logStreamOwners.Delete(key)
+	}
+	p.logStreamMu.Unlock()
+	cancel()
+}
+
+func (p *DockerPlugin) sendLogStream(ctx context.Context, containerID, detail string) error {
+	p.logStreamMu.Lock()
+	if err := ctx.Err(); err != nil {
+		p.logStreamMu.Unlock()
+		return err
+	}
+	owner, ok := logStreamOwners.Load(logStreamOwnerKey{p, containerID})
+	if !ok || owner.(logStreamOwner).ctx != ctx {
+		p.logStreamMu.Unlock()
+		return context.Canceled
+	}
+	writer := p.writer
+	p.logStreamMu.Unlock()
+	if writer == nil {
+		return nil
+	}
+	// Network backpressure must not block replacement, stop, or session cleanup.
+	// Recheck after releasing ownership; already in-flight sends cannot be undone.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writer.Send(&pb.DaemonMessage{
+		Payload: &pb.DaemonMessage_CommandResult{
+			CommandResult: &pb.CommandResult{
+				CommandId: "log_stream:" + containerID,
+				Success:   true,
+				Detail:    detail,
+			},
+		},
+	})
 }
 
 // stopLogStream cancels a running log stream for the given container.

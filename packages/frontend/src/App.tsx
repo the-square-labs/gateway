@@ -58,6 +58,10 @@ import { DockerFilePopout } from "@/pages/DockerFilePopout";
 import { DockerLogsPopout } from "@/pages/DockerLogsPopout";
 import { DockerVolumeDetail } from "@/pages/DockerVolumeDetail";
 import { Domains } from "@/pages/Domains";
+import {
+  DockerPendingContainerDetail,
+  resolveContainerOrPendingSource,
+} from "@/pages/docker-detail/DockerPendingContainerDetail";
 import { Logging } from "@/pages/Logging";
 import { NginxTemplateEdit } from "@/pages/NginxTemplateEdit";
 import { NodeConsolePopout } from "@/pages/NodeConsolePopout";
@@ -84,7 +88,7 @@ import {
   syncGatewayOperationStatus,
   useAppStatusStore,
 } from "@/stores/app-status";
-import { useAuthStore } from "@/stores/auth";
+import { authContextKey, useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
@@ -312,7 +316,7 @@ function DockerContainerDetailGuard() {
         const node = await api.getDockerNodeBySlug(nodeSlug!);
         const container = migrationHandoff?.targetResourceId
           ? await api.inspectContainer(node.id, migrationHandoff.targetResourceId, true)
-          : await api.inspectContainerByName(node.id, containerName!);
+          : await resolveContainerOrPendingSource(node.id, containerName!);
         const containerId = String((container as any).Id ?? (container as any).id ?? "");
         const canonicalName = String(
           (container as any).Name ?? (container as any).name ?? ""
@@ -341,6 +345,17 @@ function DockerContainerDetailGuard() {
     );
   }
   if (!resolved.data) return <Navigate to="/docker/containers" replace />;
+  if ((resolved.data.container as any).pendingSourceBuild)
+    return (
+      <DockerPendingContainerDetail
+        key={`${resolved.data.node.id}:${resolved.data.canonicalName}`}
+        nodeId={resolved.data.node.id}
+        nodeSlug={resolved.data.node.slug}
+        containerName={resolved.data.canonicalName}
+        snapshot={resolved.data.container}
+        pageContextToken={resolved.ownerToken}
+      />
+    );
   return (
     <DockerContainerDetail
       resolvedNodeId={resolved.data.node.id}
@@ -836,9 +851,10 @@ function AdministrationPageGuard() {
   return <Administration />;
 }
 
-function RealtimeBridge() {
+export function RealtimeBridge() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
+  const preferenceContextKey = authContextKey(user);
   const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
   const canListNodes = useAuthStore((s) => s.hasScopedAccess("nodes:details"));
@@ -967,26 +983,35 @@ function RealtimeBridge() {
     return;
   }, [isAuthenticated]);
 
+  // Permission changes clear these preferences even when the user ID is unchanged.
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
+    const isCurrentContext = () =>
+      !cancelled && authContextKey(useAuthStore.getState().user) === preferenceContextKey;
     beginInterfacePreferenceLoad();
     void api
       .getUserPreferences()
       .then((preferences) => {
-        if (cancelled) return;
+        if (!isCurrentContext()) return;
         const ui = useUIStore.getState();
         if (!ui.aiApprovalModeLoaded) hydrateAIApprovalMode(preferences.aiApprovalMode);
         if (!ui.interfacePreferenceLoaded)
           hydratePreferredInterface(preferences.preferredInterface);
       })
       .catch(() => {
-        if (!cancelled) hydratePreferredInterface(null);
+        if (isCurrentContext()) hydratePreferredInterface(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [beginInterfacePreferenceLoad, hydrateAIApprovalMode, hydratePreferredInterface, user?.id]);
+  }, [
+    beginInterfacePreferenceLoad,
+    hydrateAIApprovalMode,
+    hydratePreferredInterface,
+    preferenceContextKey,
+    user?.id,
+  ]);
 
   // Live permission updates: refresh the local user (and thus scopes) whenever
   // the server says this user's permissions changed.
@@ -1037,7 +1062,10 @@ function RealtimeBridge() {
 
   useEffect(() => {
     if (!user || !canViewProxy) return;
-    return eventStream.subscribe("proxy.host.changed", invalidateDashboardBootstrap);
+    return eventStream.subscribe("proxy.host.changed", (payload) => {
+      if ((payload as { action?: string } | null)?.action === "health.sampled") return;
+      invalidateDashboardBootstrap();
+    });
   }, [canViewProxy, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
@@ -1050,18 +1078,14 @@ function RealtimeBridge() {
 
   useEffect(() => {
     if (!user || !canViewDockerContainers) return;
-    const unsubscribeContainer = eventStream.subscribe(
+    const unsubscribe = [
       "docker.container.changed",
-      invalidateDashboardBootstrap
-    );
-    const unsubscribeDeployment = eventStream.subscribe(
       "docker.deployment.changed",
-      invalidateDashboardBootstrap
-    );
-    return () => {
-      unsubscribeContainer();
-      unsubscribeDeployment();
-    };
+      "docker.health.changed",
+      "docker.availability.changed",
+      "docker.availability.operation.changed",
+    ].map((channel) => eventStream.subscribe(channel, invalidateDashboardBootstrap));
+    return () => unsubscribe.forEach((dispose) => dispose());
   }, [canViewDockerContainers, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
@@ -1214,9 +1238,7 @@ function GatewayApp() {
   const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
   const setGatewayRestartingActive = useAppStatusStore((s) => s.setGatewayRestartingActive);
   const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
-  const authRouteKey = user
-    ? `${user.id}:${[...user.scopes].sort().join(",")}:${user.isBlocked ? "blocked" : "active"}`
-    : "anonymous";
+  const authRouteKey = authContextKey(user);
 
   useEffect(() => {
     if (maintenanceActive) return;

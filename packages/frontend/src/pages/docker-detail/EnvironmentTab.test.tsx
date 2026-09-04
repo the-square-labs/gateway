@@ -56,6 +56,35 @@ describe("EnvironmentTab managed database links", () => {
     realtimeHandlers.clear();
   });
 
+  it("labels service environment changes as Save & Recreate while the workload is running", async () => {
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="deployment-1"
+          containerName="app"
+          containerState="running"
+          serviceEnv={{ VERSION: "old" }}
+          onSaveServiceEnv={vi.fn()}
+          canEditOverride
+          canManageSecretsOverride={false}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("button", { name: "Save & Recreate" })).toBeDisabled();
+    fireEvent.change(screen.getByDisplayValue("old"), { target: { value: "new" } });
+    expect(screen.getByRole("button", { name: "Save & Recreate" })).toBeEnabled();
+  });
+
   it("reloads environment from the replacement container after recreate settles", async () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["docker:containers:environment"] }),
@@ -181,7 +210,12 @@ describe("EnvironmentTab managed database links", () => {
 
     render(
       <MemoryRouter>
-        <EnvironmentTab nodeId="node-1" containerId="container-1" containerName="app" />
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="container-1"
+          containerName="app"
+          containerState="running"
+        />
       </MemoryRouter>
     );
 
@@ -195,6 +229,56 @@ describe("EnvironmentTab managed database links", () => {
     for (const button of screen.getAllByRole("button", { name: "Save & Recreate" })) {
       expect(button).toBeEnabled();
     }
+  });
+
+  it("hides active managed database projections from the editable environment", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "getContainerEnv").mockResolvedValue([
+      "DATABASE_URL=postgresql://internal-credentials",
+      "LANG=C.UTF-8",
+    ]);
+    vi.spyOn(api, "listDockerSecrets").mockResolvedValue([]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [makeNode({ id: database.nodeId, type: "databases" })],
+      total: 1,
+      page: 1,
+      limit: 1,
+      totalPages: 1,
+    });
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([binding]);
+
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="container-1"
+          containerName="app"
+          containerState="running"
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("App Postgres")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByDisplayValue("DATABASE_URL")).not.toBeInTheDocument());
+    expect(screen.queryByDisplayValue("postgresql://internal-credentials")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Unlink App Postgres" })).toBeEnabled();
+
+    const saves = screen.getAllByRole("button", { name: "Save & Recreate" });
+    expect(saves).toHaveLength(2);
+    expect(saves[0]).toBeDisabled();
+    expect(saves[1]).toBeDisabled();
+
+    fireEvent.change(screen.getByDisplayValue("C.UTF-8"), {
+      target: { value: "C.UTF-8-test" },
+    });
+    expect(saves[1]).toBeEnabled();
   });
 
   it("does not show managed database links when no databases node exists", async () => {
@@ -367,7 +451,7 @@ describe("EnvironmentTab managed database links", () => {
       { PATH: "/usr/bin" },
       undefined
     );
-    expect(onMutationStart).toHaveBeenCalledWith("updating");
+    expect(onMutationStart).toHaveBeenCalledWith("recreating");
     expect(onRecreating).toHaveBeenCalledOnce();
   });
 

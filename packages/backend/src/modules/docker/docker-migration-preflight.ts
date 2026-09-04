@@ -7,6 +7,7 @@ import type { DockerManagementService } from './docker.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
 import type { DockerMigrationPreflight, DockerMigrationPreflightInput } from './docker-migration.schemas.js';
+import { migrationAvailabilityBlocker } from './docker-migration-availability.js';
 import {
   compareDockerMigrationCapabilities,
   migrationCapacityFreeBytes,
@@ -359,6 +360,9 @@ export class DockerMigrationPreflightService {
         hasProxyHosts: linkedProxyHosts.length > 0,
       });
     }
+
+    const availabilityBlocker = await migrationAvailabilityBlocker(this.db, input);
+    if (availabilityBlocker) blockers.push(availabilityBlocker);
 
     const deploymentEnvNames = Object.keys(deployment?.desiredConfig?.env ?? {}).sort();
     const runtimeEnvNames = [...new Set([...migrationEnvNames(inspect?.Config?.Env), ...deploymentEnvNames])];

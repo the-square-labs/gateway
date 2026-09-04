@@ -6,6 +6,7 @@ import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.m
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from '../availability/docker-availability.service.js';
 import {
   adoptComposeProjectRoute,
   composeProjectActionRoute,
@@ -91,7 +92,25 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
     const data = (await service.list(c.req.query('nodeId'))).filter((project) =>
       hasDockerResourceScope(scopes, 'docker:compose:view', project.nodeId, project.id)
     );
-    return c.json({ data });
+    const logicalStates = await container
+      .resolve(DockerAvailabilityService)
+      .listComposeSurfaceStates(data.map((project) => project.id));
+    return c.json({
+      data: data.map((project) => {
+        const state = logicalStates[project.id];
+        return state
+          ? {
+              ...project,
+              availabilityPolicyStatus: state.status,
+              availabilityHealthStatus: state.healthStatus,
+              availabilityServing: state.serving,
+              availabilityDesired: state.desired,
+              serviceCount: state.serviceCount ?? project.serviceCount,
+              runningServiceCount: state.runningServiceCount ?? project.runningServiceCount,
+            }
+          : project;
+      }),
+    });
   });
 
   router.openapi(

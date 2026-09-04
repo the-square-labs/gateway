@@ -288,6 +288,7 @@ export interface GatewayCommand {
   dockerBuildEventAck?: DockerBuildEventAck;
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
+  dockerAvailability?: DockerAvailabilityCommand;
   applyTlsBundle?: ApplyTlsBundleCommand;
   inspectCertificates?: InspectCertificatesCommand;
   exportLegacyCertificates?: ExportLegacyCertificatesCommand;
@@ -380,7 +381,7 @@ export interface SyncDockerRegistryBindingsCommand {
 
 export interface DockerRegistryBinding {
   bindingId: string;
-  role: 'builder' | 'runtime' | 'ingress';
+  role: 'builder' | 'runtime' | 'mirror' | 'ingress';
   generation: string;
   repository: string;
   actions: Array<'pull' | 'push'>;
@@ -451,7 +452,9 @@ export interface PagesCleanupDeploymentCommand {
   deploymentId: string;
 }
 
-export type PagesInventoryCommand = Record<string, never>;
+export interface PagesInventoryCommand {
+  expectationsJson?: Buffer;
+}
 
 export interface PagesStoragePreflightCommand {
   requiredBytes: string;
@@ -616,6 +619,7 @@ export interface DockerImageCommand {
   imageRef: string;
   registryAuthJson: string;
   force: boolean;
+  targetImageRef: string;
 }
 
 export interface DockerVolumeCommand {
@@ -725,6 +729,19 @@ export interface DockerLogsCommand {
 export interface DockerDatabaseCommand {
   action: string;
   managedDatabaseId: string;
+  configJson: string;
+}
+
+/** Generation-fenced workload placement command for independent Docker nodes. */
+export interface DockerAvailabilityCommand {
+  action: string;
+  policyId: string;
+  placementId: string;
+  generation: string;
+  operationId: string;
+  idempotencyKey: string;
+  resourceKind: string;
+  resourceId: string;
   configJson: string;
 }
 

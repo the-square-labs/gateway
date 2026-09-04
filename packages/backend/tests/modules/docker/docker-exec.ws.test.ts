@@ -5,6 +5,7 @@ import { DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES, createDockerExecWSHandlers } fro
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
+import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 
 const authMocks = vi.hoisted(() => ({
@@ -100,6 +101,9 @@ function registerServices(options: {
   container.registerInstance(NodeDispatchService, dispatch as never);
   container.registerInstance(NodeRegistryService, registry as never);
   container.registerInstance(DockerManagementService, docker as never);
+  container.registerInstance(DockerAvailabilityService, {
+    resolveRuntimeAccessIdentity: vi.fn().mockResolvedValue(null),
+  } as never);
   return { dispatch, registry, docker };
 }
 
@@ -204,7 +208,7 @@ describe('Docker exec WebSocket permission revocation', () => {
     allowScopedAccess();
     const { handlers, ws } = await openSession(services);
     ws.send.mockClear();
-    authMocks.resolveWebSocketCredential.mockResolvedValue(null);
+    authMocks.resolveWebSocketCredentialForScopeBase.mockResolvedValue(null);
 
     await handlers.onMessage(
       { data: JSON.stringify({ type: 'input', data: Buffer.from('pwd').toString('base64') }) } as never,
@@ -223,7 +227,7 @@ describe('Docker exec WebSocket permission revocation', () => {
     const { handlers, ws } = await openSession(services);
     const outputHandler = registeredOutputHandler(services);
     ws.send.mockClear();
-    authMocks.resolveWebSocketCredential.mockResolvedValue(null);
+    authMocks.resolveWebSocketCredentialForScopeBase.mockResolvedValue(null);
 
     outputHandler({ data: Buffer.from('secret'), exited: true, exitCode: 7 });
     await settleAsyncWork();

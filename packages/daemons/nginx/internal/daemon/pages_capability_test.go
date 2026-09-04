@@ -45,10 +45,16 @@ func TestPagesCapabilityRequiresCompleteRuntimeInitialization(t *testing.T) {
 	if !hasCapability(plugin.capabilities(), "nginx_pages_route_probe_v1") {
 		t.Fatal("Pages Route probe capability missing after complete v1 runtime initialization")
 	}
+	if hasCapability(plugin.capabilities(), "nginx_pages_reconcile_v1") {
+		t.Fatal("binding inspection advertised before runtime config support")
+	}
 	if hasCapability(plugin.capabilities(), "nginx_pages_config_v1") {
 		t.Fatal("runtime config capability advertised without http_sub_module preflight")
 	}
 	plugin.pagesRuntimeConfigAvailable = true
+	if !hasCapability(plugin.capabilities(), "nginx_pages_reconcile_v1") {
+		t.Fatal("binding inspection capability missing after runtime initialization")
+	}
 	if !hasCapability(plugin.capabilities(), "nginx_pages_config_v1") {
 		t.Fatal("runtime config capability missing after complete preflight")
 	}
@@ -76,6 +82,26 @@ func TestPagesCommandsFailClosedWithoutRuntime(t *testing.T) {
 	})
 	if result.Success || result.Error != "Gateway Pages v1 runtime is unavailable on this node" {
 		t.Fatalf("unexpected unavailable runtime result: %#v", result)
+	}
+}
+
+func TestPagesInventoryOptionalInspectionPayload(t *testing.T) {
+	runtime, err := pages.New(filepath.Join(t.TempDir(), "pages"), filepath.Join(t.TempDir(), "conf"), filepath.Join(t.TempDir(), "certs"), pagesNginx{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, runtime, true)
+	for _, test := range []struct {
+		payload string
+		success bool
+	}{{"[]", true}, {"invalid", false}, {"{}", false}} {
+		result := handler.HandleCommand(&pb.GatewayCommand{Payload: &pb.GatewayCommand_PagesInventory{PagesInventory: &pb.PagesInventoryCommand{ExpectationsJson: []byte(test.payload)}}})
+		if result.Success != test.success {
+			t.Fatalf("%s: %#v", test.payload, result)
+		}
+		if test.success && !bytes.Contains(result.Data, []byte(`"matches":[]`)) {
+			t.Fatalf("not inspection result: %s", result.Data)
+		}
 	}
 }
 

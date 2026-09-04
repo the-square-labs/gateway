@@ -1,0 +1,3 @@
+CREATE UNIQUE INDEX "proxy_additional_secure_links_availability_owner_unique" ON "proxy_additional_secure_links" USING btree ("proxy_host_id","availability_owner_key","reference_id") WHERE "proxy_additional_secure_links"."purpose" = 'availability_member';--> statement-breakpoint
+ALTER TABLE "proxy_additional_secure_links" ADD CONSTRAINT "proxy_additional_secure_links_availability_owner_check" CHECK (("proxy_additional_secure_links"."purpose" = 'availability_member' AND "proxy_additional_secure_links"."availability_owner_key" IS NOT NULL AND "proxy_additional_secure_links"."reference_id" IS NOT NULL)
+        OR ("proxy_additional_secure_links"."purpose" <> 'availability_member' AND "proxy_additional_secure_links"."availability_owner_key" IS NULL));

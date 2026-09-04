@@ -97,6 +97,12 @@ export class DockerComposeService {
   private dispatcher?: DockerComposeDispatcher;
   private eventBus?: EventBusService;
   private snapshotReconciler?: Pick<DockerSnapshotReconciler, 'refreshNow'>;
+  private availabilityCoordinator?: {
+    isManaged(projectId: string): Promise<boolean>;
+    removeManaged(projectId: string, userId: string | null): Promise<boolean>;
+    applyRevision(projectId: string, revisionId: string, userId: string | null): Promise<boolean>;
+    setRunning(projectId: string, running: boolean, userId: string | null, restart?: boolean): Promise<boolean>;
+  };
 
   constructor(
     private readonly db: DrizzleClient,
@@ -116,6 +122,10 @@ export class DockerComposeService {
 
   setSnapshotReconciler(reconciler: Pick<DockerSnapshotReconciler, 'refreshNow'>) {
     this.snapshotReconciler = reconciler;
+  }
+
+  setAvailabilityCoordinator(coordinator: NonNullable<DockerComposeService['availabilityCoordinator']>): void {
+    this.availabilityCoordinator = coordinator;
   }
 
   validate(input: ComposeYamlInput) {
@@ -330,14 +340,24 @@ export class DockerComposeService {
     const effectiveInput = await this.addCurrentManagedDatabaseBindings(project, input);
     const effectiveValidation = validateComposeYaml({ ...effectiveInput, projectName: project.name });
     this.assertValid(effectiveValidation);
-    const revision = await this.insertRevision(
-      project,
-      effectiveInput,
-      sourceValidation.normalizedModel!,
-      effectiveValidation.configDigest!,
-      userId,
-      input.yaml
-    );
+    let revision: RevisionRow;
+    try {
+      revision = await this.insertRevision(
+        project,
+        effectiveInput,
+        sourceValidation.normalizedModel!,
+        effectiveValidation.configDigest!,
+        userId,
+        input.yaml
+      );
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'COMPOSE_REVISION_EXISTS') throw error;
+      // Secret values live outside immutable revision identity. Reapplying the
+      // same YAML/keys after a secret update must still reach Pull & Apply.
+      const existing = await this.getRevisionByDigest(project.id, effectiveValidation.configDigest!);
+      if (!existing) throw error;
+      return existing;
+    }
     await this.audit.log({
       userId,
       action: 'docker.compose.revision.create',
@@ -608,6 +628,7 @@ export class DockerComposeService {
   }
 
   private async cleanupProjectRuntime(project: ProjectRow, userId: string) {
+    await this.availabilityCoordinator?.removeManaged(project.id, userId);
     const runtime = await this.refreshProjectRuntime(project);
     if (runtime.serviceCount > 0 || runtime.networkNames.length > 0) {
       const down = await this.startOperation(
@@ -673,7 +694,8 @@ export class DockerComposeService {
   ): Promise<OperationRow> {
     const project = await this.getProject(nodeId, projectId);
     const effectiveAction: DockerComposeOperationAction = action === 'apply' ? 'pull_apply' : action;
-    if (!this.dispatcher) {
+    const availabilityManaged = (await this.availabilityCoordinator?.isManaged(project.id)) ?? false;
+    if (!this.dispatcher && !availabilityManaged) {
       throw new AppError(
         409,
         'COMPOSE_CAPABILITY_UNAVAILABLE',
@@ -776,16 +798,98 @@ export class DockerComposeService {
       throw error;
     }
 
-    void this.executeOperation(
-      project,
-      revision,
-      reserved.operation.id,
-      task.id,
-      effectiveAction,
-      allowProjectDeleting
-    ).catch(() => {});
+    if (availabilityManaged) {
+      void this.executeAvailabilityOperation(
+        project,
+        revision,
+        reserved.operation.id,
+        task.id,
+        effectiveAction,
+        userId
+      ).catch(() => {});
+    } else {
+      void this.executeOperation(
+        project,
+        revision,
+        reserved.operation.id,
+        task.id,
+        effectiveAction,
+        allowProjectDeleting
+      ).catch(() => {});
+    }
     this.emit('operation_started', project, { operationId: reserved.operation.id, action: effectiveAction });
     return { ...reserved.operation, taskId: task.id };
+  }
+
+  private async executeAvailabilityOperation(
+    project: ProjectRow,
+    revision: RevisionRow | null,
+    operationId: string,
+    taskId: string,
+    action: DockerComposeOperationAction,
+    userId: string
+  ): Promise<void> {
+    const startedAt = new Date();
+    await Promise.all([
+      this.db
+        .update(dockerComposeOperations)
+        .set({ status: 'running', startedAt, progress: `Running ${action} through Availability` })
+        .where(eq(dockerComposeOperations.id, operationId)),
+      this.tasks.update(taskId, { status: 'running', progress: `Running Compose ${action} through Availability` }),
+    ]);
+    try {
+      if (action === 'pull_apply') {
+        if (!revision) throw new AppError(409, 'COMPOSE_REVISION_REQUIRED', 'A Compose revision is required');
+        await this.availabilityCoordinator?.applyRevision(project.id, revision.id, userId);
+      } else if (action === 'start') {
+        await this.availabilityCoordinator?.setRunning(project.id, true, userId);
+      } else if (action === 'restart') {
+        await this.availabilityCoordinator?.setRunning(project.id, true, userId, true);
+      } else if (action === 'stop' || action === 'down') {
+        await this.availabilityCoordinator?.setRunning(project.id, false, userId);
+      } else if (action === 'delete_volumes') {
+        throw new AppError(
+          409,
+          'AVAILABILITY_MOUNTS_UNSUPPORTED',
+          'Compose projects with Availability cannot use volumes or mounts'
+        );
+      }
+      const completedAt = new Date();
+      const stopped = action === 'stop' || action === 'down';
+      await Promise.all([
+        this.db
+          .update(dockerComposeOperations)
+          .set({ status: 'succeeded', progress: `Compose ${action} queued in Availability`, completedAt })
+          .where(eq(dockerComposeOperations.id, operationId)),
+        this.tasks.update(taskId, {
+          status: 'succeeded',
+          progress: `Compose ${action} queued in Availability`,
+          completedAt,
+        }),
+        this.db
+          .update(dockerComposeProjects)
+          .set({
+            ...(revision && action === 'pull_apply' ? { activeRevisionId: revision.id } : {}),
+            desiredState: stopped ? 'stopped' : 'running',
+            status: stopped ? 'stopped' : 'running',
+            updatedAt: completedAt,
+          })
+          .where(eq(dockerComposeProjects.id, project.id)),
+      ]);
+      this.emit('operation_succeeded', project, { operationId, action });
+    } catch (error) {
+      const message = this.sanitizeOperationError(error, {});
+      const completedAt = new Date();
+      await Promise.all([
+        this.db
+          .update(dockerComposeOperations)
+          .set({ status: 'failed', error: message, completedAt })
+          .where(eq(dockerComposeOperations.id, operationId)),
+        this.tasks.update(taskId, { status: 'failed', error: message, completedAt }),
+      ]);
+      this.emit('operation_failed', project, { operationId, action });
+      throw error;
+    }
   }
 
   async recoverInterruptedOperations(now = new Date()) {
@@ -1366,6 +1470,7 @@ export class DockerComposeService {
         and(
           eq(managedDatabaseBindings.targetNodeId, project.nodeId),
           eq(managedDatabaseBindings.targetType, 'compose_service'),
+          eq(managedDatabaseBindings.desiredState, 'active'),
           inArray(managedDatabaseBindings.status, ['creating', 'ready', 'error'])
         )
       );
@@ -1413,6 +1518,7 @@ export class DockerComposeService {
         and(
           eq(managedDatabaseBindings.targetNodeId, project.nodeId),
           eq(managedDatabaseBindings.targetType, 'compose_service'),
+          eq(managedDatabaseBindings.desiredState, 'active'),
           inArray(managedDatabaseBindings.status, ['creating', 'ready', 'error'])
         )
       );
@@ -1682,12 +1788,14 @@ export class DockerComposeService {
   }
 
   private emit(action: string, project: ProjectRow, extra: Record<string, unknown> = {}) {
+    const { action: operationAction, ...details } = extra;
     this.eventBus?.publish('docker.compose.changed', {
       action,
       projectId: project.id,
       projectName: project.name,
       nodeId: project.nodeId,
-      ...extra,
+      ...details,
+      ...(operationAction ? { operationAction } : {}),
     });
   }
 }

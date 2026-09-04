@@ -482,6 +482,7 @@ export function Profile() {
                   )}
                 </div>
               </PanelShell>
+              <PoweredByFooter />
             </div>
           </TabsContent>
 
@@ -502,11 +503,10 @@ export function Profile() {
               />
               {canUseInference && <InferenceTokensSection canManage={canManageInferenceTokens} />}
               <BrowserSessionsPanel />
+              <PoweredByFooter />
             </div>
           </TabsContent>
         </Tabs>
-
-        <PoweredByFooter />
       </div>
       <InferenceHarnessDialog
         open={inferenceHarnessDevOpen}

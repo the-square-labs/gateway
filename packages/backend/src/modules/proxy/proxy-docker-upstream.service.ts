@@ -1,6 +1,13 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerComposeProjects, dockerDeploymentRoutes, dockerDeployments, nodes } from '@/db/schema/index.js';
+import {
+  dockerAvailabilityPlacements,
+  dockerAvailabilityPolicies,
+  dockerComposeProjects,
+  dockerDeploymentRoutes,
+  dockerDeployments,
+  nodes,
+} from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   type DockerAccessResourceService,
@@ -95,6 +102,20 @@ function isDeploymentInternal(container: Record<string, unknown>): boolean {
     !Array.isArray(labels) &&
     (labels as Record<string, unknown>)[DOCKER_DEPLOYMENT_MANAGED_LABEL] === 'true'
   );
+}
+
+function composeAvailabilityContainer(runtimeIdentity: unknown, serviceName: string): { containerName: string } | null {
+  if (!runtimeIdentity || typeof runtimeIdentity !== 'object' || Array.isArray(runtimeIdentity)) return null;
+  const containers = (runtimeIdentity as Record<string, unknown>).containers;
+  if (!Array.isArray(containers)) return null;
+  for (const candidate of containers) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const value = candidate as Record<string, unknown>;
+    if (String(value.serviceName ?? '') !== serviceName) continue;
+    const containerName = String(value.containerName ?? '').replace(/^\/+/, '');
+    if (containerName) return { containerName };
+  }
+  return null;
 }
 
 export function clearDockerUpstreamFields() {
@@ -228,6 +249,49 @@ export class ProxyDockerUpstreamService {
       }
       container = matches[0];
       containerName = container ? readContainerName(container) : '';
+      if (!container) {
+        const [policy] = await this.db
+          .select({ id: dockerAvailabilityPolicies.id })
+          .from(dockerAvailabilityPolicies)
+          .where(eq(dockerAvailabilityPolicies.composeProjectId, project.id))
+          .limit(1);
+        if (policy) {
+          const [placement] = await this.db
+            .select({
+              nodeId: dockerAvailabilityPlacements.nodeId,
+              runtimeIdentity: dockerAvailabilityPlacements.runtimeIdentity,
+            })
+            .from(dockerAvailabilityPlacements)
+            .where(
+              and(
+                eq(dockerAvailabilityPlacements.policyId, policy.id),
+                eq(dockerAvailabilityPlacements.serving, true),
+                eq(dockerAvailabilityPlacements.actualState, 'serving')
+              )
+            )
+            .limit(1);
+          const availabilityContainer = placement
+            ? composeAvailabilityContainer(placement.runtimeIdentity, reference.dockerComposeServiceName)
+            : null;
+          if (placement && availabilityContainer) {
+            await this.getDockerNode(placement.nodeId, options);
+            const selectedPort = this.choosePort(reference, []);
+            return {
+              upstreamKind: 'docker_container',
+              forwardHost: '127.0.0.1',
+              forwardPort: 1,
+              dockerNodeId: placement.nodeId,
+              dockerContainerName: availabilityContainer.containerName,
+              dockerComposeProjectId: project.id,
+              dockerComposeServiceName: reference.dockerComposeServiceName,
+              dockerDeploymentId: null,
+              dockerContainerPort: selectedPort,
+              dockerHostPort: null,
+              dockerProtocol: 'tcp',
+            };
+          }
+        }
+      }
     } else {
       if (!containerName) {
         throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and exact container name are required');

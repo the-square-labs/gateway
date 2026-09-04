@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Loader2, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
@@ -704,23 +705,23 @@ export function CreateProxyHostDialog({
                   </SettingsControlRow>
                   <SettingsControlRow title="SSL Certificate">
                     <div className={cn("w-full", !sslEnabled && "pointer-events-none opacity-50")}>
-                      <Select
-                        value={sslCertificateId || "__none__"}
-                        onValueChange={(v) => setSslCertificateId(v === "__none__" ? "" : v)}
+                      <Combobox
+                        value={sslCertificateId}
+                        options={[
+                          { value: "", label: "None" },
+                          ...sslCerts.map((certificate) => ({
+                            value: certificate.id,
+                            label: `${certificate.name} (${certificate.type})`,
+                            keywords: certificate.domainNames?.join(" ") ?? "",
+                          })),
+                        ]}
+                        onValueChange={setSslCertificateId}
+                        placeholder="Select certificate..."
+                        searchPlaceholder="Search certificates..."
+                        emptyMessage="No matching certificates."
+                        ariaLabel="SSL Certificate"
                         disabled={!sslEnabled}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select certificate..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">None</SelectItem>
-                          {sslCerts.map((cert) => (
-                            <SelectItem key={cert.id} value={cert.id}>
-                              {cert.name} ({cert.type})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      />
                     </div>
                   </SettingsControlRow>
                 </div>

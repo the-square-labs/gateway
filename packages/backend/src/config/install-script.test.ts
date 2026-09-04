@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,12 +37,86 @@ describe('nginx node installer baseline', () => {
     expect(source).toContain(`child_args=$(tr '\\0' ' ' < "/proc/\${child_pid}/cmdline")`);
     expect(source).toContain('Running nginx worker process still has a nofile limit below');
     expect(source).not.toContain('Running nginx master process still has a nofile limit below');
+    expect(source).toContain('run_apt_with_lock_retry()');
+    expect(source).toContain('Unable to acquire the dpkg frontend lock');
+    expect(source).toContain('run_apt_with_lock_retry install -y -qq gnupg2 ca-certificates lsb-release');
+    expect(source).toContain('run_apt_with_lock_retry install -y -qq nginx');
+    expect(source).toContain('if ! systemctl is-active --quiet nginx; then');
+    expect(source).toContain('systemctl start nginx >> "$LOG_FILE" 2>&1 || die "Failed to start nginx"');
     const configTest = source.indexOf('if nginx -t >> "$LOG_FILE" 2>&1; then');
     const tokenCheck = source.indexOf('verify_nginx_server_tokens', configTest);
+    const serviceStart = source.indexOf('systemctl start nginx', tokenCheck);
     const serviceAction = source.indexOf('systemctl restart nginx', tokenCheck);
     expect(configTest).toBeGreaterThanOrEqual(0);
     expect(tokenCheck).toBeGreaterThan(configTest);
+    expect(serviceStart).toBeGreaterThan(tokenCheck);
     expect(serviceAction).toBeGreaterThan(tokenCheck);
+  });
+
+  it('retries apt lock contention without retrying unrelated package errors', () => {
+    const source = readFileSync(nginxNodeInstaller, 'utf8');
+    const helperStart = source.indexOf('run_apt_with_lock_retry() {');
+    const helperEnd = source.indexOf('\ninstall_nginx_stable_repo() {', helperStart);
+    const helper = source.slice(helperStart, helperEnd);
+    const testDir = mkdtempSync(join(tmpdir(), 'gateway-node-apt-retry-'));
+    const binDir = join(testDir, 'bin');
+    const runner = join(testDir, 'runner.sh');
+    const fakeApt = join(binDir, 'apt-get');
+    const attempts = join(testDir, 'attempts');
+    const logFile = join(testDir, 'installer.log');
+
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    mkdirSync(binDir);
+    writeFileSync(
+      fakeApt,
+      `#!/usr/bin/env bash
+count=0
+[[ ! -f "$FAKE_APT_ATTEMPTS" ]] || count=$(cat "$FAKE_APT_ATTEMPTS")
+count=$((count + 1))
+printf '%s' "$count" > "$FAKE_APT_ATTEMPTS"
+if [[ "$FAKE_APT_MODE" == "lock-once" && "$count" -eq 1 ]]; then
+  echo 'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 123 (apt-get)'
+  exit 100
+fi
+if [[ "$FAKE_APT_MODE" == "failure" ]]; then
+  echo 'E: repository unavailable'
+  exit 42
+fi
+echo 'package operation complete'
+`
+    );
+    chmodSync(fakeApt, 0o755);
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -euo pipefail
+PATH="${binDir}:$PATH"
+LOG_FILE="${logFile}"
+APT_LOCK_RETRY_ATTEMPTS=3
+APT_LOCK_RETRY_DELAY_SECONDS=0
+warn() { :; }
+die() { return 1; }
+${helper}
+run_apt_with_lock_retry update -qq
+`
+    );
+
+    const lockRetry = spawnSync('bash', [runner], {
+      encoding: 'utf8',
+      env: { ...process.env, FAKE_APT_ATTEMPTS: attempts, FAKE_APT_MODE: 'lock-once' },
+    });
+    expect(lockRetry.status, lockRetry.stderr).toBe(0);
+    expect(readFileSync(attempts, 'utf8')).toBe('2');
+    expect(readFileSync(logFile, 'utf8')).toContain('Could not get lock');
+
+    writeFileSync(attempts, '0');
+    const unrelatedFailure = spawnSync('bash', [runner], {
+      encoding: 'utf8',
+      env: { ...process.env, FAKE_APT_ATTEMPTS: attempts, FAKE_APT_MODE: 'failure' },
+    });
+    expect(unrelatedFailure.status).toBe(42);
+    expect(readFileSync(attempts, 'utf8')).toBe('1');
   });
 });
 
@@ -287,6 +361,22 @@ describe('database daemon installer prerequisites', () => {
     expect(source).toContain('github.com/anchore/syft/releases/download');
     expect(source).toContain('github.com/anchore/grype/releases/download');
     expect(source).toContain('containerd-shim-runc-v2');
+    expect(source).toContain('BUILDER_RUNTIME_BIN_DIR="$' + '{BUILDER_RUNTIME_ROOT}/bin"');
+    expect(source).toContain('"format=3"');
+    expect(source).toContain('"bin_dir=$' + '{BUILDER_RUNTIME_BIN_DIR}"');
+    expect(source).toContain(
+      'install -m 0755 "$' + '{staging_dir}/bin/$' + '{binary}" "$' + '{BUILDER_RUNTIME_BIN_DIR}/$' + '{binary}"'
+    );
+    expect(source).toContain('service_environment="Environment=\\"PATH=$' + '{BUILDER_RUNTIME_PATH}\\""');
+    expect(source).toContain('Moved legacy Gateway builder binary');
+    expect(source).toContain('quarantine_legacy_builder_runtime_conflicts');
+    expect(source).toContain('Moved a legacy Gateway builder runtime out of /usr/local/bin');
+    expect(source).toContain('"$legacy_containerd" --version');
+    expect(source).toContain('"$legacy_shim" -v');
+    expect(source).toContain('"$legacy_runc" --version');
+    expect(source).not.toContain(
+      'install -m 0755 "$' + '{staging_dir}/bin/$' + '{binary}" "/usr/local/bin/$' + '{binary}"'
+    );
     expect(source).toContain('Checksum verification failed for $' + '{label}.');
     expect(source).not.toContain('docker-builder-runtime-linux-');
   });

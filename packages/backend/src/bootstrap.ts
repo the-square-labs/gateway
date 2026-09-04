@@ -41,6 +41,17 @@ import { DatabaseConnectionService } from '@/modules/databases/databases.service
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
+import {
+  CompositeDockerAvailabilityProjector,
+  DockerComposeAvailabilityAdapter,
+  DockerContainerAvailabilityAdapter,
+  DockerDeploymentAvailabilityAdapter,
+  ManagedDatabaseAvailabilityProjector,
+} from '@/modules/docker/availability/docker-availability.adapters.js';
+import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
+import { DockerAvailabilityArtifactService } from '@/modules/docker/availability/docker-availability-artifact.service.js';
+import { DockerAvailabilityIngressProjector } from '@/modules/docker/availability/docker-availability-ingress.js';
+import { DockerWorkloadResolverService } from '@/modules/docker/availability/docker-workload-resolver.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerComposeNodeDispatcher } from '@/modules/docker/compose/compose-node-dispatcher.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -966,6 +977,99 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
+  const dockerAvailabilityIngressProjector = proxySecureLinkService
+    ? new DockerAvailabilityIngressProjector(
+        db,
+        nodeRegistry,
+        dockerManagementService,
+        proxySecureLinkService,
+        proxyService
+      )
+    : undefined;
+  if (dockerAvailabilityIngressProjector) {
+    proxyService.setAvailabilityIngressReconciler((hostId) => dockerAvailabilityIngressProjector.reconcileHost(hostId));
+  }
+  const dockerAvailabilityProjectors = [
+    new ManagedDatabaseAvailabilityProjector(managedDatabaseBindingService, nodeRegistry),
+    ...(dockerAvailabilityIngressProjector ? [dockerAvailabilityIngressProjector] : []),
+  ];
+  const dockerAvailabilityProjector = new CompositeDockerAvailabilityProjector(dockerAvailabilityProjectors);
+  const dockerAvailabilityArtifacts = relayRegistryService
+    ? new DockerAvailabilityArtifactService(db, dockerInternalRegistryService, relayRegistryService, nodeDispatch)
+    : undefined;
+  const dockerWorkloadResolver = new DockerWorkloadResolverService(db);
+  container.registerInstance(DockerWorkloadResolverService, dockerWorkloadResolver);
+  dockerHealthCheckService.setWorkloadResolver(dockerWorkloadResolver);
+  const dockerAvailabilityService = new DockerAvailabilityService(
+    db,
+    nodeRegistry,
+    licensePolicyService,
+    auditService,
+    eventBus,
+    dockerAvailabilityArtifacts,
+    dockerEnvironmentService,
+    dockerWorkloadResolver
+  );
+  dockerAvailabilityService.registerAdapter(
+    new DockerContainerAvailabilityAdapter(
+      db,
+      nodeDispatch,
+      dockerManagementService,
+      dockerEnvironmentService,
+      dockerSecretService,
+      dockerAvailabilityProjector
+    )
+  );
+  dockerAvailabilityService.registerAdapter(
+    new DockerDeploymentAvailabilityAdapter(db, nodeDispatch, dockerSecretService, dockerAvailabilityProjector)
+  );
+  dockerAvailabilityService.registerAdapter(
+    new DockerComposeAvailabilityAdapter(db, nodeDispatch, dockerSecretService, dockerAvailabilityProjector)
+  );
+  container.registerInstance(DockerAvailabilityService, dockerAvailabilityService);
+  dockerManagementService.setWorkloadResolver(dockerWorkloadResolver);
+  dockerManagementService.setAvailabilityMutationGuard((nodeId, containerName) =>
+    dockerAvailabilityService.assertContainerMutationAllowed(nodeId, containerName)
+  );
+  dockerManagementService.setAvailabilityMutationCoordinator({
+    containerRemoved: (nodeId, containerName) => dockerAvailabilityService.containerRemoved(nodeId, containerName),
+    getConfiguration: (nodeId, containerName) =>
+      dockerAvailabilityService.getContainerConfiguration(nodeId, containerName),
+    updateConfiguration: (nodeId, containerName, config, userId, options) =>
+      dockerAvailabilityService.updateContainerConfiguration(nodeId, containerName, config, userId, options),
+    updateEnvironment: (nodeId, containerName, env, removeEnv, userId) =>
+      dockerAvailabilityService.updateContainerEnvironment(nodeId, containerName, env, removeEnv, userId),
+    getEnvironment: (nodeId, containerName) => dockerAvailabilityService.getContainerEnvironment(nodeId, containerName),
+    setRunning: (nodeId, containerName, running, userId, restart) =>
+      dockerAvailabilityService.setContainerRunning(nodeId, containerName, running, userId, restart),
+  });
+  dockerDeploymentService.setAvailabilityCoordinator({
+    isManaged: (deploymentId) => dockerAvailabilityService.isDeploymentManaged(deploymentId),
+    deploy: (deploymentId, input, targetActiveSlot, userId, source, releaseId) =>
+      dockerAvailabilityService.deployDeployment(deploymentId, input, targetActiveSlot, userId, source, releaseId),
+    updateConfiguration: (deploymentId, snapshot, userId, reason) =>
+      dockerAvailabilityService.updateDeploymentConfiguration(deploymentId, snapshot, userId, reason),
+    setRunning: (deploymentId, running, userId, restart) =>
+      dockerAvailabilityService.setDeploymentRunning(deploymentId, running, userId, restart),
+    switchSlot: (deploymentId, targetActiveSlot, userId) =>
+      dockerAvailabilityService.switchDeploymentSlot(deploymentId, targetActiveSlot, userId),
+  });
+  dockerComposeService.setAvailabilityCoordinator({
+    isManaged: (projectId) => dockerAvailabilityService.isComposeManaged(projectId),
+    removeManaged: (projectId, userId) => dockerAvailabilityService.removeComposeManaged(projectId, userId),
+    applyRevision: (projectId, revisionId, userId) =>
+      dockerAvailabilityService.applyComposeRevision(projectId, revisionId, userId),
+    setRunning: (projectId, running, userId, restart) =>
+      dockerAvailabilityService.setComposeRunning(projectId, running, userId, restart),
+  });
+  managedDatabaseBindingService.setAvailabilityCoordinator({
+    resolvePolicyId: (target) => dockerAvailabilityService.resolveManagedDatabaseBindingPolicyId(target),
+    queueDependencyRollout: async (policyId, userId) => {
+      await dockerAvailabilityService.queueDependencyRollout(policyId, userId);
+    },
+    removeBinding: (policyId, userId) => dockerAvailabilityService.removeManagedDatabaseBinding(policyId, userId),
+  });
+  dockerAvailabilityService.start();
   dockerManagementService.setContainerRecreateCompletedHandler(async (nodeId, newContainerId) => {
     // A recreated workload keeps its persisted binding metadata, but the
     // daemon-owned listeners and Relay lanes still need to be proven against

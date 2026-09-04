@@ -18,6 +18,8 @@ describe('ProxyService create rollback', () => {
       accessListId: null,
       healthCheckEnabled: false,
     } as any;
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
     const deleteWhere = vi.fn().mockResolvedValue(undefined);
     const db = {
       select: vi
@@ -35,6 +37,7 @@ describe('ProxyService create rollback', () => {
       insert: vi.fn(() => ({
         values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([host]) })),
       })),
+      update: vi.fn(() => ({ set: updateSet })),
       delete: vi.fn(() => ({ where: deleteWhere })),
     } as any;
     const service = new ProxyService(db, {} as any, { log: vi.fn() } as any, {} as any, {} as any, {} as any);
@@ -55,8 +58,11 @@ describe('ProxyService create rollback', () => {
       code: 'NGINX_CONFIG_FAILED',
     });
 
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+    expect(updateWhere).toHaveBeenCalledOnce();
     expect(removeConfig).toHaveBeenCalledWith(host.id, host.nodeId);
     expect(deleteWhere).toHaveBeenCalledOnce();
+    expect(updateWhere.mock.invocationCallOrder[0]).toBeLessThan(removeConfig.mock.invocationCallOrder[0]!);
     expect(removeConfig.mock.invocationCallOrder[0]).toBeLessThan(deleteWhere.mock.invocationCallOrder[0]!);
   });
 });

@@ -1,5 +1,22 @@
 export const GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL = "wiolett.gateway.archive.image.reference";
 
+export function resolveDeploymentImageReference(
+  image: string | null | undefined,
+  configuredImage: string,
+  sourceImageReference?: string | null,
+  inspect?: Record<string, any>
+): string {
+  const isPublicReference = (value?: string | null) =>
+    Boolean(value && !/^sha256:/i.test(value) && !/(^|\/)gateway\/availability\//i.test(value));
+  const inspectedImage = inspect && resolveContainerImageReference(inspect);
+  if (isPublicReference(inspectedImage)) return inspectedImage!;
+  if (isPublicReference(image)) return image!;
+  // Only map the configured artifact. A standby slot may hold an older image.
+  if (image === configuredImage && isPublicReference(sourceImageReference))
+    return sourceImageReference!;
+  return image || inspectedImage || "—";
+}
+
 export function resolveContainerImageReference(container: Record<string, any>): string {
   const config = (container.Config ?? {}) as Record<string, any>;
   const labels = (config.Labels ?? container.Labels ?? {}) as Record<string, string>;

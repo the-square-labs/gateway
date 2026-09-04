@@ -20,11 +20,7 @@ interface HousekeepingSectionProps {
   canConfigure: boolean;
 }
 
-import {
-  HousekeepingCard,
-  normalizeHousekeepingConfig,
-  RegistryRetentionControl,
-} from "./housekeeping-section-helpers";
+import { HousekeepingCard, normalizeHousekeepingConfig } from "./housekeeping-section-helpers";
 
 export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectionProps) {
   const cachedConfig = api.getCached<HousekeepingConfig>("housekeeping:config");
@@ -46,7 +42,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
           },
           clickHouseInternals: { enabled: true, maxSizeBytes: 512 * 1024 ** 2 },
           orphanedAIArtifacts: { enabled: true },
-          internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 3 },
+          internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 1 },
           orphanedVolumes: { enabled: true, retentionDays: 30 },
           dockerPrune: { enabled: true },
           orphanedCerts: { enabled: true },
@@ -535,18 +531,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               inlineControls={
                 <>
                   <span>&middot;</span>
-                  <span>keep</span>
-                  <RegistryRetentionControl
-                    value={hkConfig.internalRegistry.retentionSuccessfulArtifacts}
-                    disabled={controlsDisabled}
-                    onChange={(retentionSuccessfulArtifacts) =>
-                      setHkConfig((current) => ({
-                        ...current,
-                        internalRegistry: { enabled: true, retentionSuccessfulArtifacts },
-                      }))
-                    }
-                  />
-                  <span>artifacts per source</span>
+                  <span>keep latest artifact per source</span>
                 </>
               }
             />

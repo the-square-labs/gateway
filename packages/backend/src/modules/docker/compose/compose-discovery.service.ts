@@ -9,6 +9,7 @@ const COMPOSE_CONTAINER_NUMBER_LABEL = 'com.docker.compose.container-number';
 const COMPOSE_VOLUME_LABEL = 'com.docker.compose.volume';
 const COMPOSE_NETWORK_LABEL = 'com.docker.compose.network';
 const COMPOSE_SIDECAR_LABEL = 'wiolett.gateway.compose.sidecar';
+const GATEWAY_COMPOSE_MANAGED_LABEL = 'wiolett.gateway.compose.managed';
 
 type DockerResource = Record<string, unknown>;
 type ComposeResourceKind = 'container' | 'volume' | 'network';
@@ -16,6 +17,7 @@ type ComposeResourceKind = 'container' | 'volume' | 'network';
 export interface ComposeProjectObservation {
   name: string;
   observedFingerprint: string;
+  gatewayManaged?: boolean;
 }
 
 export interface ComposeDiscoveryChange {
@@ -97,7 +99,7 @@ export function observeComposeProjects(input: {
   volumes?: DockerResource[];
   networks?: DockerResource[];
 }): ComposeProjectObservation[] {
-  const entries = new Map<string, string[]>();
+  const entries = new Map<string, { values: string[]; gatewayManaged: boolean }>();
   const resources: Array<[ComposeResourceKind, DockerResource[] | undefined]> = [
     ['container', input.containers],
     ['volume', input.volumes],
@@ -109,20 +111,35 @@ export function observeComposeProjects(input: {
       const entry = fingerprintEntry(kind, resource);
       if (!entry) continue;
       const [project, identity] = entry;
-      const projectEntries = entries.get(project) ?? [];
-      projectEntries.push(identity);
+      const labels = labelsFor(resource);
+      const projectEntries = entries.get(project) ?? { values: [], gatewayManaged: false };
+      projectEntries.values.push(identity);
+      projectEntries.gatewayManaged ||= labels[GATEWAY_COMPOSE_MANAGED_LABEL] === 'true';
       entries.set(project, projectEntries);
     }
   }
 
   return [...entries.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, values]) => ({
+    .map(([name, entry]) => ({
       name,
       observedFingerprint: createHash('sha256')
-        .update([...new Set(values)].sort().join('\n'))
+        .update([...new Set(entry.values)].sort().join('\n'))
         .digest('hex'),
+      ...(entry.gatewayManaged ? { gatewayManaged: true } : {}),
     }));
+}
+
+export function filterDiscoverableComposeProjects(
+  observed: ComposeProjectObservation[],
+  existing: ExistingComposeProject[]
+): ComposeProjectObservation[] {
+  const localManagedNames = new Set(
+    existing.filter((project) => project.managementState === 'managed').map((project) => project.name)
+  );
+  return observed
+    .filter((project) => !project.gatewayManaged || localManagedNames.has(project.name))
+    .map(({ gatewayManaged: _gatewayManaged, ...project }) => project);
 }
 
 export function planExternalComposeProjectReconciliation(
@@ -153,7 +170,7 @@ export async function reconcileExternalComposeProjects(
   observedAt = new Date(),
   onChange?: (change: ComposeDiscoveryChange) => void
 ): Promise<ComposeProjectObservation[]> {
-  const observed = observeComposeProjects(input);
+  const observedProjects = observeComposeProjects(input);
   const existingRows = await db
     .select({
       id: dockerComposeProjects.id,
@@ -188,6 +205,7 @@ export async function reconcileExternalComposeProjects(
     availability: project.availability,
     preserveWhenMissing: project.hasRevisions || project.folderId !== null || (project.folderSortOrder ?? 0) !== 0,
   }));
+  const observed = filterDiscoverableComposeProjects(observedProjects, existing);
   const plan = planExternalComposeProjectReconciliation(existing, observed);
 
   if (plan.create.length > 0) {

@@ -168,7 +168,8 @@ export function ProxyHosts({
     fetchGroupedHosts();
   }, [fetchGroupedHosts]);
 
-  useRealtime("proxy.host.changed", () => {
+  useRealtime("proxy.host.changed", (payload) => {
+    if ((payload as { action?: string } | null)?.action === "health.sampled") return;
     fetchGroupedHosts();
   });
 

@@ -1,16 +1,13 @@
 import type { WSContext } from 'hono/ws';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
-import {
-  resolveWebSocketCredential,
-  resolveWebSocketCredentialForScopeBase,
-  type WebSocketCredential,
-} from '@/modules/auth/websocket-auth.js';
+import { resolveWebSocketCredentialForScopeBase, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
 import { DockerManagementService } from './docker.service.js';
-import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
+import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
 
 const logger = createChildLogger('DockerExec');
@@ -30,8 +27,9 @@ async function authorizeExecAccess(
   nodeId: string,
   resourceId: string
 ): Promise<User | null> {
-  const result = await resolveWebSocketCredential(credential, `docker:containers:console:${nodeId}/${resourceId}`);
-  return result?.user ?? null;
+  const result = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:console');
+  if (!result) return null;
+  return hasDockerResourceScope(result.scopes, 'docker:containers:console', nodeId, resourceId) ? result.user : null;
 }
 
 function send(ws: WSContext, msg: Record<string, unknown>): void {
@@ -71,6 +69,7 @@ interface ExecWSState {
   outputQueue: Promise<void>;
   credential: WebSocketCredential | null;
   scopeResourceId: string | null;
+  scopeNodeId: string | null;
 }
 
 export interface DockerExecTerminalSize {
@@ -126,6 +125,7 @@ export function createDockerExecWSHandlers(
   const dispatch = container.resolve(NodeDispatchService);
   const registry = container.resolve(NodeRegistryService);
   const docker = container.resolve(DockerManagementService);
+  const availability = container.resolve(DockerAvailabilityService);
 
   return {
     onOpen(_event: Event, ws: WSContext) {
@@ -139,6 +139,7 @@ export function createDockerExecWSHandlers(
         outputQueue: Promise.resolve(),
         credential,
         scopeResourceId: null,
+        scopeNodeId: null,
       };
       wsStates.set(ws, state);
 
@@ -147,16 +148,25 @@ export function createDockerExecWSHandlers(
       }, 30_000);
 
       // Authenticate immediately from the session cookie.
-      authenticateAndCreateExec(ws, state, credential, nodeId, containerId, shell, dispatch, registry, docker).catch(
-        (err) => {
-          logger.error('Auth/exec creation failed', { error: err instanceof Error ? err.message : String(err) });
-          try {
-            ws.close();
-          } catch {
-            /* ignore */
-          }
+      authenticateAndCreateExec(
+        ws,
+        state,
+        credential,
+        nodeId,
+        containerId,
+        shell,
+        dispatch,
+        registry,
+        docker,
+        availability
+      ).catch((err) => {
+        logger.error('Auth/exec creation failed', { error: err instanceof Error ? err.message : String(err) });
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
         }
-      );
+      });
     },
 
     async onMessage(event: MessageEvent, ws: WSContext) {
@@ -232,7 +242,7 @@ export function createDockerExecWSHandlers(
       }
     },
 
-    onClose(_event: unknown, ws: WSContext) {
+    onClose(event: unknown, ws: WSContext) {
       const state = wsStates.get(ws);
       if (state) {
         if (state.execId) {
@@ -241,7 +251,14 @@ export function createDockerExecWSHandlers(
         if (state.keepaliveInterval) clearInterval(state.keepaliveInterval);
         wsStates.delete(ws);
       }
-      logger.info('Docker exec WS closed', { nodeId, containerId });
+      const closeEvent = event as { code?: unknown; reason?: unknown; wasClean?: unknown } | null;
+      logger.info('Docker exec WS closed', {
+        nodeId,
+        containerId,
+        code: typeof closeEvent?.code === 'number' ? closeEvent.code : undefined,
+        reason: typeof closeEvent?.reason === 'string' ? closeEvent.reason : undefined,
+        wasClean: typeof closeEvent?.wasClean === 'boolean' ? closeEvent.wasClean : undefined,
+      });
     },
 
     onError(_error: Event, ws: WSContext) {
@@ -271,22 +288,25 @@ async function authenticateAndCreateExec(
   shell: string,
   dispatch: NodeDispatchService,
   registry: NodeRegistryService,
-  docker: DockerManagementService
+  docker: DockerManagementService,
+  availability: DockerAvailabilityService
 ): Promise<void> {
   const initialAuth = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:console');
-  if (
-    !initialAuth ||
-    (!hasDockerResourceScope(initialAuth.scopes, 'docker:containers:console', nodeId, '') &&
-      !dockerScopedNodeIds(initialAuth.scopes, ['docker:containers:console']).includes(nodeId))
-  ) {
+  if (!initialAuth) {
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     ws.close(1008, 'Authentication failed');
     return;
   }
-  const inspect = await inspectUserContainer(docker, nodeId, containerId).catch(() => null);
-  const scopeResourceId = String(inspect?.scopeResourceId ?? '');
+  // Availability placements can still be inspectable as regular containers (notably
+  // deployment slots). Resolve their logical identity first so authorization is
+  // checked against the user-owned workload rather than the generated runtime name.
+  const placementIdentity = await availability.resolveRuntimeAccessIdentity(nodeId, containerId).catch(() => null);
+  const inspect = placementIdentity ? null : await inspectUserContainer(docker, nodeId, containerId).catch(() => null);
+  const scopeNodeId = placementIdentity?.nodeId ?? nodeId;
+  const scopeResourceId = String(placementIdentity?.resourceId ?? inspect?.scopeResourceId ?? '');
   const user =
-    scopeResourceId && hasDockerResourceScope(initialAuth.scopes, 'docker:containers:console', nodeId, scopeResourceId)
+    scopeResourceId &&
+    hasDockerResourceScope(initialAuth.scopes, 'docker:containers:console', scopeNodeId, scopeResourceId)
       ? initialAuth.user
       : null;
   if (!user) {
@@ -298,6 +318,7 @@ async function authenticateAndCreateExec(
   state.user = user;
   state.authenticated = true;
   state.scopeResourceId = scopeResourceId;
+  state.scopeNodeId = scopeNodeId;
 
   logger.info('Docker exec authenticated', { nodeId, containerId, userId: user.id });
 
@@ -445,7 +466,7 @@ async function revalidateExecAccess(
   emitPong = false
 ): Promise<boolean> {
   const user = state.scopeResourceId
-    ? await authorizeExecAccess(state.credential, nodeId, state.scopeResourceId)
+    ? await authorizeExecAccess(state.credential, state.scopeNodeId ?? nodeId, state.scopeResourceId)
     : null;
   if (!user) {
     state.authenticated = false;

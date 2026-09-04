@@ -96,8 +96,12 @@ func chmodNoFollowRegular(path string, mode os.FileMode) error {
 		return err
 	}
 	defer file.Close()
-	if _, err := lstatRegularFile(file, path); err != nil {
+	info, err := lstatRegularFile(file, path)
+	if err != nil {
 		return err
+	}
+	if info.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) == mode {
+		return nil
 	}
 	return file.Chmod(mode)
 }
@@ -114,6 +118,9 @@ func chmodNoFollowDirectory(path string, mode os.FileMode) error {
 	}
 	if err := validateDirectoryInfo(path, info); err != nil {
 		return err
+	}
+	if info.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) == mode {
+		return nil
 	}
 	return file.Chmod(mode)
 }

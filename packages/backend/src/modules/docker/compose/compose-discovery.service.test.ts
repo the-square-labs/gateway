@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  filterDiscoverableComposeProjects,
   isComposeOwnedContainer,
   isComposeOwnedNetwork,
   isComposeOwnedVolume,
@@ -70,6 +71,42 @@ describe('Compose discovery', () => {
     expect(isComposeOwnedNetwork(projectNetwork)).toBe(true);
     expect(isComposeOwnedNetwork(external)).toBe(false);
     expect(isComposeOwnedContainer({ Labels: { 'wiolett.gateway.compose.sidecar': 'true' } })).toBe(true);
+  });
+
+  it('does not discover Gateway-managed placement projects as external projects on another node', () => {
+    const observations = observeComposeProjects({
+      containers: [
+        {
+          Name: '/gwav-compose-policy-placement-web-1',
+          Labels: {
+            'com.docker.compose.project': 'gwav-compose-policy-placement',
+            'com.docker.compose.service': 'web',
+            'wiolett.gateway.compose.managed': 'true',
+          },
+        },
+        {
+          Name: '/user-project-web-1',
+          Labels: {
+            'com.docker.compose.project': 'user-project',
+            'com.docker.compose.service': 'web',
+          },
+        },
+      ],
+    });
+
+    expect(
+      filterDiscoverableComposeProjects(observations, [
+        { id: 'managed-origin', name: 'origin-project', managementState: 'managed' },
+      ])
+    ).toEqual([expect.objectContaining({ name: 'user-project' })]);
+    expect(
+      filterDiscoverableComposeProjects(observations, [
+        { id: 'managed-local', name: 'gwav-compose-policy-placement', managementState: 'managed' },
+      ])
+    ).toEqual([
+      expect.objectContaining({ name: 'gwav-compose-policy-placement' }),
+      expect.objectContaining({ name: 'user-project' }),
+    ]);
   });
 
   it('removes untouched missing discoveries but preserves user-touched external projects', () => {

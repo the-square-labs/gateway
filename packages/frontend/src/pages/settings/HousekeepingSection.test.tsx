@@ -87,13 +87,12 @@ describe("HousekeepingSection ClickHouse internals", () => {
     );
   });
 
-  it("keeps registry cleanup enabled while allowing its retention to be saved", async () => {
-    const user = userEvent.setup();
+  it("keeps registry cleanup enabled with one fixed history artifact per source", async () => {
     vi.spyOn(api, "getHousekeepingConfig").mockResolvedValue(structuredClone(config));
     vi.spyOn(api, "getHousekeepingStats").mockResolvedValue(stats);
-    const update = vi
-      .spyOn(api, "updateHousekeepingConfig")
-      .mockImplementation(async (next) => next as HousekeepingConfig);
+    vi.spyOn(api, "updateHousekeepingConfig").mockImplementation(
+      async (next) => next as HousekeepingConfig
+    );
 
     render(
       <MemoryRouter>
@@ -104,20 +103,9 @@ describe("HousekeepingSection ClickHouse internals", () => {
     await screen.findByText("Internal Registry");
     expect(screen.getByRole("button", { name: "Internal Registry cleanup" })).toBeDisabled();
 
-    const input = screen.getByRole("spinbutton", {
-      name: "Retained successful registry artifacts",
-    });
-    expect(input).toHaveValue(3);
-    await user.clear(input);
-    await user.type(input, "5");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 5 },
-        })
-      )
-    );
+    expect(screen.getByText("keep latest artifact per source")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Retained successful registry artifacts" })
+    ).not.toBeInTheDocument();
   });
 });

@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from './availability/docker-availability.service.js';
 import { DockerManagementService } from './docker.service.js';
 import {
   DockerAccessResourceService,
@@ -11,6 +12,7 @@ import {
   hasDockerResourceScope,
 } from './docker-access-resource.service.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
+import { DockerSourceService } from './docker-source.service.js';
 
 function deny(baseScope: string): never {
   throw new HTTPException(403, { message: `Missing required scope: ${baseScope}` });
@@ -54,33 +56,61 @@ export async function resolveDockerContainerScopeResourceId(
 export function requireDockerContainerScope(
   baseScope: string,
   identifierParam = 'containerId',
-  options: { allowTransitionIdentityFallback?: boolean; allowBroadWithoutResolve?: boolean } = {}
+  options: {
+    allowTransitionIdentityFallback?: boolean;
+    allowBroadWithoutResolve?: boolean;
+    allowPendingSource?: boolean;
+  } = {}
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const scopes = c.get('effectiveScopes') ?? [];
     const nodeId = c.req.param('nodeId');
     const identifier = c.req.param(identifierParam);
     if (!nodeId || !identifier) deny(baseScope);
+    if (options.allowPendingSource) {
+      const pending = await container.resolve(DockerSourceService).getPendingContainer(nodeId, identifier);
+      if (pending) {
+        assertDockerResourceScope(scopes, baseScope, nodeId, pending.scopeResourceId);
+        await next();
+        return;
+      }
+    }
     if (options.allowBroadWithoutResolve && hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
       await next();
       return;
     }
     const service = container.resolve(DockerManagementService);
-    const resourceId = await resolveDockerContainerScopeResourceId(
-      () => inspectUserContainer(service, nodeId, identifier),
-      options.allowTransitionIdentityFallback
-        ? {
-            active: () => Boolean(service.getContainerTransition(nodeId, identifier)),
-            resolvePersisted: () =>
-              container.resolve(DockerAccessResourceService).resolveContainer(nodeId, { name: identifier }),
-          }
-        : undefined
-    );
+    let accessNodeId = nodeId;
+    let resourceId: string;
+    const identity = await container
+      .resolve(DockerAvailabilityService)
+      .resolveRuntimeAccessIdentity(nodeId, identifier);
+    if (identity) {
+      accessNodeId = identity.nodeId;
+      resourceId = identity.resourceId;
+    } else {
+      resourceId = await resolveDockerContainerScopeResourceId(
+        () => inspectUserContainer(service, nodeId, identifier),
+        options.allowTransitionIdentityFallback
+          ? {
+              active: () => Boolean(service.getContainerTransition(nodeId, identifier)),
+              resolvePersisted: () =>
+                container.resolve(DockerAccessResourceService).resolveContainer(nodeId, { name: identifier }),
+            }
+          : undefined
+      );
+    }
     if (hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
       await next();
       return;
     }
-    if (!resourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope);
+    if (
+      !resourceId ||
+      (!hasDockerResourceScope(scopes, baseScope, accessNodeId, '') &&
+        !hasDockerResourceScope(scopes, baseScope, accessNodeId, resourceId))
+    ) {
+      deny(baseScope);
+    }
     await next();
   };
 }

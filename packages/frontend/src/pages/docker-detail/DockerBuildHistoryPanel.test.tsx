@@ -64,7 +64,15 @@ describe("DockerBuildHistoryPanel", () => {
 
   it("shows 5 recent builds and opens the full history from View all", async () => {
     const builds = Array.from({ length: 12 }, (_, index) => build(index));
-    vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({ data: builds, nextCursor: null });
+    let resolveBuilds:
+      | ((page: { data: DockerBuild[]; nextCursor: string | null }) => void)
+      | undefined;
+    vi.spyOn(api, "listDockerBuildPage").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBuilds = resolve;
+        })
+    );
     vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
     renderWithRouter(
       <DockerBuildHistoryPanel
@@ -76,8 +84,13 @@ describe("DockerBuildHistoryPanel", () => {
     expect(screen.getAllByRole("row")).toHaveLength(6);
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Build history" });
+    const dialog = screen.getByRole("dialog", { name: "Build history" });
     expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading build history" })).toBeInTheDocument();
+    await act(async () => {
+      resolveBuilds?.({ data: builds, nextCursor: null });
+    });
+    expect(screen.queryByRole("status", { name: "Loading build history" })).not.toBeInTheDocument();
     const scrollContainer = dialog.querySelector('[data-route-scroll-container=""]');
     expect(scrollContainer).toHaveClass("overflow-y-auto");
     expect(scrollContainer).not.toHaveClass("overflow-auto");

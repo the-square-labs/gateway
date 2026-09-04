@@ -2,6 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { knownProviderModel, pricingFromDiscoveredMetadata } from './inference-provider-model-catalog.js';
 
 describe('known inference provider model catalog', () => {
+  it('provides Astra defaults for first-party discovery without assuming Codex-only effort levels', () => {
+    for (const provider of ['openai', 'openai-apikey']) {
+      expect(knownProviderModel(provider, 'gpt-6-astra')).toMatchObject({
+        displayName: 'GPT-6 Astra',
+        contextWindow: 1_050_000,
+        maxInputTokens: 922_000,
+        maxOutputTokens: 128_000,
+        reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        pricing: {
+          inputMicrodollarsPerMillion: 10_000_000,
+          cachedInputMicrodollarsPerMillion: 1_000_000,
+          cacheWriteMicrodollarsPerMillion: 12_500_000,
+          outputMicrodollarsPerMillion: 50_000_000,
+          version: 'openai-api-2026-09-05',
+          otherUnitPrices: {
+            long_context_threshold_tokens: 272_000,
+            long_context_input_microdollars_per_million: 20_000_000,
+            long_context_cached_input_microdollars_per_million: 2_000_000,
+            long_context_cache_write_microdollars_per_million: 25_000_000,
+            long_context_output_microdollars_per_million: 75_000_000,
+          },
+        },
+      });
+    }
+    expect(knownProviderModel('openai-compatible', 'gpt-6-astra')).toBeUndefined();
+  });
+
   it('provides audited OpenAI API metadata and pricing without leaking into compatible providers', () => {
     expect(knownProviderModel('openai-apikey', 'gpt-5.1-codex-mini')).toMatchObject({
       contextWindow: 400_000,

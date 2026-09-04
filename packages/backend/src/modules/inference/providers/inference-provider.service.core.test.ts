@@ -215,6 +215,42 @@ describe('inference provider service — core-managed delegation', () => {
     expect(setupEvents.publishCatalogChanged).toHaveBeenCalledOnce();
   });
 
+  it('includes newly discovered Astra metadata in the same sync and preserves live effort levels', async () => {
+    let refreshed = false;
+    const row = {
+      provider: 'core-conn-1',
+      id: 'gpt-6-astra',
+      namespaced: 'core-conn-1/gpt-6-astra',
+      contextWindow: 272_000,
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    };
+    const { service, db } = createService({
+      client: {
+        coreProviderLiveModelIds: vi.fn(async () => {
+          await Promise.resolve();
+          refreshed = true;
+          return ['gpt-6-astra'];
+        }),
+        listCoreModels: vi.fn(async () => (refreshed ? [row] : [])),
+      },
+    });
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(persistModels).toHaveBeenCalledWith('conn-1', [
+      expect.objectContaining({
+        id: 'gpt-6-astra',
+        contextWindow: 272_000,
+        reasoningEfforts: row.reasoningEfforts,
+        modalities: ['text', 'image'],
+      }),
+    ]);
+  });
+
   it('fills missing Claude subscription capabilities from the provider catalog', async () => {
     const connection = {
       ...CORE_CONNECTION,

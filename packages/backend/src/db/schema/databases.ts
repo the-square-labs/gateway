@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { certificates } from './certificates.js';
 import { databaseConnectionFolders } from './database-connection-folders.js';
+import { dockerAvailabilityPlacements } from './docker-availability.js';
 import { nodes } from './nodes.js';
 import { users } from './users.js';
 
@@ -280,5 +281,56 @@ export const managedDatabaseBindings = pgTable(
       table.targetType,
       table.targetResourceId
     ),
+  })
+);
+
+/**
+ * Node-local materialization of one logical managed database binding. The
+ * parent binding remains the only owner of credentials and environment names.
+ */
+export const managedDatabaseBindingPlacements = pgTable(
+  'managed_database_binding_placements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    bindingId: uuid('binding_id')
+      .notNull()
+      .references(() => managedDatabaseBindings.id, { onDelete: 'cascade' }),
+    availabilityPlacementId: uuid('availability_placement_id').references(() => dockerAvailabilityPlacements.id, {
+      onDelete: 'cascade',
+    }),
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => nodes.id, { onDelete: 'restrict' }),
+    generation: integer('generation').notNull().default(1),
+    networkName: varchar('network_name', { length: 128 }).notNull(),
+    connectorName: varchar('connector_name', { length: 128 }).notNull(),
+    connectorAlias: varchar('connector_alias', { length: 128 }).notNull(),
+    connectorAddress: varchar('connector_address', { length: 45 }),
+    relayEndpointId: uuid('relay_endpoint_id'),
+    desiredState: varchar('desired_state', { length: 32 })
+      .$type<ManagedDatabaseBindingDesiredState>()
+      .notNull()
+      .default('active'),
+    observedState: varchar('observed_state', { length: 32 })
+      .$type<ManagedDatabaseBindingObservedState>()
+      .notNull()
+      .default('legacy'),
+    status: databaseBindingStatusEnum('status').notNull().default('creating'),
+    lastError: text('last_error'),
+    lastObservedAt: timestamp('last_observed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    bindingNodeUnique: unique('managed_database_binding_placements_binding_node_unique').on(
+      table.bindingId,
+      table.nodeId
+    ),
+    availabilityPlacementUnique: unique('managed_database_binding_placements_availability_unique').on(
+      table.bindingId,
+      table.availabilityPlacementId
+    ),
+    bindingIdx: index('managed_database_binding_placements_binding_idx').on(table.bindingId),
+    nodeStatusIdx: index('managed_database_binding_placements_node_status_idx').on(table.nodeId, table.status),
   })
 );

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -472,6 +473,28 @@ func TestDirectoryUsageDoesNotFollowSymlinks(t *testing.T) {
 	}
 	if usage != 5 {
 		t.Fatalf("unexpected directory usage: %d", usage)
+	}
+}
+
+func TestStorageAccountingOnlyIgnoresDisappearingChildren(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		path    string
+		err     error
+		ignored bool
+	}{
+		{"removed child", "/storage/child", os.ErrNotExist, true},
+		{"replaced child directory", "/storage/child", syscall.ENOTDIR, true},
+		{"invalid root", "/storage", syscall.ENOTDIR, false},
+		{"permission denied", "/storage/child", os.ErrPermission, false},
+		{"io error", "/storage/child", syscall.EIO, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := &os.PathError{Op: "open", Path: test.path, Err: test.err}
+			if got := storageEntryDisappeared("/storage", test.path, err); got != test.ignored {
+				t.Fatalf("ignored=%v, want %v", got, test.ignored)
+			}
+		})
 	}
 }
 

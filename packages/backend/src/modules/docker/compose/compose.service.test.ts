@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { DockerComposeService } from './compose.service.js';
 
 function service() {
@@ -28,6 +29,95 @@ const PROJECT = {
 } as const;
 
 describe('DockerComposeService', () => {
+  it.each([
+    'operation_started',
+    'operation_succeeded',
+    'operation_failed',
+    'operation_cancelled',
+  ])('preserves %s as the notification event discriminator', (action) => {
+    const compose = service() as any;
+    compose.eventBus = { publish: vi.fn() };
+    compose.emit(action, PROJECT, { operationId: 'op-1', action: 'stop' });
+    expect(compose.eventBus.publish).toHaveBeenCalledWith('docker.compose.changed', {
+      action,
+      operationAction: 'stop',
+      operationId: 'op-1',
+      projectId: PROJECT.id,
+      projectName: PROJECT.name,
+      nodeId: PROJECT.nodeId,
+    });
+  });
+  it('reuses an identical revision when reapplying updated secret values', async () => {
+    const compose = service() as any;
+    const input = {
+      yaml: 'services:\n  api:\n    image: nginx:alpine\n    environment:\n      TOKEN: $' + '{TOKEN}\n',
+      variables: {},
+      secretKeys: ['TOKEN'],
+    };
+    compose.getProject = vi.fn().mockResolvedValue({ ...PROJECT, managementState: 'managed' });
+    compose.addCurrentManagedDatabaseBindings = vi.fn().mockResolvedValue(input);
+    compose.insertRevision = vi.fn().mockRejectedValue(new AppError(409, 'COMPOSE_REVISION_EXISTS', 'exists'));
+    const existing = { id: 'existing-revision', revisionNumber: 2, secretKeys: ['TOKEN'] };
+    compose.getRevisionByDigest = vi.fn().mockResolvedValue(existing);
+    compose.emit = vi.fn();
+    await expect(compose.createRevision(PROJECT.nodeId, PROJECT.id, input, 'user-1')).resolves.toBe(existing);
+    expect(compose.getRevisionByDigest).toHaveBeenCalledWith(PROJECT.id, expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(compose.emit).not.toHaveBeenCalled();
+    expect(compose.audit.log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'COMPOSE_REVISION_EXISTS',
+    'COMPOSE_REVISION_CONFLICT',
+  ])('preserves %s when no exact reusable revision is available', async (code) => {
+    const compose = service() as any;
+    const input = { yaml: 'services:\n  api:\n    image: nginx:alpine\n', variables: {}, secretKeys: [] };
+    compose.getProject = vi.fn().mockResolvedValue({ ...PROJECT, managementState: 'managed' });
+    compose.addCurrentManagedDatabaseBindings = vi.fn().mockResolvedValue(input);
+    const error = new AppError(409, code, 'conflict');
+    compose.insertRevision = vi.fn().mockRejectedValue(error);
+    compose.getRevisionByDigest = vi.fn().mockResolvedValue(null);
+    await expect(compose.createRevision(PROJECT.nodeId, PROJECT.id, input, 'user-1')).rejects.toBe(error);
+    if (code === 'COMPOSE_REVISION_CONFLICT') expect(compose.getRevisionByDigest).not.toHaveBeenCalled();
+  });
+
+  it('waits for the HA revision operation before marking a Git pull_apply successful', async () => {
+    const compose = service() as any;
+    const patches: unknown[] = [];
+    compose.db = {
+      update: () => ({
+        set: (patch: unknown) => {
+          patches.push(patch);
+          return { where: vi.fn() };
+        },
+      }),
+    };
+    compose.tasks = { update: vi.fn() };
+    compose.emit = vi.fn();
+    let complete!: () => void;
+    const applyRevision = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          complete = () => resolve(true);
+        })
+    );
+    compose.setAvailabilityCoordinator({ applyRevision });
+    const applying = compose.executeAvailabilityOperation(
+      PROJECT,
+      { id: 'built-revision' },
+      'operation',
+      'task',
+      'pull_apply',
+      'actor'
+    );
+    await vi.waitFor(() => expect(applyRevision).toHaveBeenCalledWith(PROJECT.id, 'built-revision', 'actor'));
+    expect(patches).not.toContainEqual(expect.objectContaining({ status: 'succeeded' }));
+    complete();
+    await applying;
+    expect(patches).toContainEqual(expect.objectContaining({ status: 'succeeded' }));
+    expect(patches).toContainEqual(expect.objectContaining({ activeRevisionId: 'built-revision' }));
+  });
+
   it('creates a managed pending project for a repository-backed first revision', async () => {
     const returning = vi.fn().mockResolvedValue([{ ...PROJECT, managementState: 'managed', status: 'validating' }]);
     const values = vi.fn(() => ({ returning }));

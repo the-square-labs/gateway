@@ -102,11 +102,11 @@ describe('DockerManagementService runtime settings', () => {
       State: { Status: 'restarting' },
     };
     const dispatch = {
-      sendDockerContainerCommand: vi
-        .fn()
-        .mockResolvedValueOnce({ success: true, detail: JSON.stringify(inspect) })
-        .mockResolvedValueOnce({ success: true, detail: JSON.stringify(inspect) })
-        .mockResolvedValueOnce({ success: false, error: 'update rejected' }),
+      sendDockerContainerCommand: vi.fn(async (_nodeId, action) =>
+        action === 'live_update'
+          ? { success: false, error: 'update rejected' }
+          : { success: true, detail: JSON.stringify(inspect) }
+      ),
     };
     const service = createService(dispatch);
     const replace = vi.fn().mockResolvedValue(undefined);

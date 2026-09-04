@@ -50,6 +50,11 @@ const EMPTY: Record<DashboardReadModelName, unknown[]> = {
   'stats-system': [],
 };
 
+const MATERIAL_PROXY_CHANGE: ReadModelEventSubscription = {
+  channel: 'proxy.host.changed',
+  matches: (payload) => (payload as { action?: string } | null)?.action !== 'health.sampled',
+};
+
 /**
  * Global, sanitized dashboard sources. Request handlers only filter these
  * projections by the caller's scopes; refreshes never run in a user request.
@@ -65,11 +70,11 @@ export class DashboardReadModelService {
     private readonly certificates: CertService,
     private readonly cas: CAService
   ) {
-    this.register('health', () => this.monitoring.getHealthOverview(), ['proxy.host.changed']);
+    this.register('health', () => this.monitoring.getHealthOverview(), [MATERIAL_PROXY_CHANGE]);
     this.register(
       'proxies',
       () => this.listAll((page) => this.proxies.listProxyHosts({ page, limit: 1_000 } as never)),
-      ['proxy.host.changed']
+      [MATERIAL_PROXY_CHANGE]
     );
     this.register('databases', () => this.listAll((page) => this.databases.list({ page, limit: 1_000 } as never)), [
       {
@@ -90,14 +95,14 @@ export class DashboardReadModelService {
     );
     this.register('cas', () => this.cas.getCATree(true), ['ca.changed', 'cert.changed']);
     this.register('stats-user', () => this.monitoring.getDashboardStats({ showSystem: false }), [
-      'proxy.host.changed',
+      MATERIAL_PROXY_CHANGE,
       'ssl.cert.changed',
       'cert.changed',
       'ca.changed',
       'node.changed',
     ]);
     this.register('stats-system', () => this.monitoring.getDashboardStats({ showSystem: true }), [
-      'proxy.host.changed',
+      MATERIAL_PROXY_CHANGE,
       'ssl.cert.changed',
       'cert.changed',
       'ca.changed',

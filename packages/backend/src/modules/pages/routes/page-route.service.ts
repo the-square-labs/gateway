@@ -13,6 +13,11 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CreateProxyHostInput } from '@/modules/proxy/proxy.schemas.js';
 import { hasRequiredNginxPagesCapabilities } from '../profile/page-node-capability.js';
+import {
+  bindingInspectionKey,
+  bindingInspectionMatches,
+  type PageBindingExpectation,
+} from '../runtime/page-binding-inspection.js';
 import { type PageNodeRuntimeService, validatePageRouteIncludePath } from '../runtime/page-node-runtime.service.js';
 import type {
   PageRuntimeConfigPublicationAdapter,
@@ -228,6 +233,28 @@ export class PageRouteService implements PageTagPublicationAdapter, PageRuntimeC
       .from(pageRouteTargets)
       .innerJoin(proxyHosts, eq(pageRouteTargets.proxyHostId, proxyHosts.id))
       .where(eq(proxyHosts.upstreamKind, 'pages'));
+    const supported = new Map<string, boolean>();
+    const expectations: Array<{ nodeId: string; expectation: PageBindingExpectation }> = [];
+    for (const route of routes) {
+      if (!route.nodeId || !route.target.activeDeploymentId || route.target.status !== 'ready') continue;
+      if (!supported.has(route.nodeId))
+        supported.set(route.nodeId, (await this.runtime.supportsInspection?.(route.nodeId)) === true);
+      if (!supported.get(route.nodeId)) continue;
+      try {
+        const config = await this.runtimeConfig.getEffective(route.target.projectId, route.target.tagId);
+        const expectation = await this.runtime.routeExpectation({
+          routeId: route.target.proxyHostId,
+          deploymentId: route.target.activeDeploymentId,
+          generation: route.target.runtimeConfigGeneration,
+          stateGeneration: route.target.generation,
+          runtimeConfig: config.value,
+        });
+        if (expectation) expectations.push({ nodeId: route.nodeId, expectation });
+      } catch {
+        // The existing per-route repair path owns error state and rollback.
+      }
+    }
+    const inspection = expectations.length ? await this.runtime.inspectBindings(expectations) : undefined;
     for (const route of routes) {
       if (!route.nodeId) continue;
       if (this.hasDeferredCleanupClaim(route.target)) {
@@ -276,6 +303,22 @@ export class PageRouteService implements PageTagPublicationAdapter, PageRuntimeC
           .where(eq(pageRouteTargets.id, route.target.id))
           .limit(1);
         if (!current?.activeDeploymentId || current.status !== 'ready') return;
+
+        if (inspection?.has(bindingInspectionKey(route.nodeId!, { kind: 'route', id: current.proxyHostId }))) {
+          try {
+            const config = await this.runtimeConfig.getEffective(current.projectId, current.tagId);
+            const expected = await this.runtime.routeExpectation({
+              routeId: current.proxyHostId,
+              deploymentId: current.activeDeploymentId,
+              generation: current.runtimeConfigGeneration,
+              stateGeneration: current.generation,
+              runtimeConfig: config.value,
+            });
+            if (bindingInspectionMatches(inspection, route.nodeId!, expected)) return;
+          } catch {
+            // An indeterminate inspection cannot suppress normal recovery.
+          }
+        }
 
         const [claimed] = await this.db
           .update(pageRouteTargets)

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
@@ -57,6 +58,43 @@ function emptyEnvelope<T>(data: T): DockerSnapshotEnvelope<T> {
     lastError: null,
     refreshStatus: 'never',
   };
+}
+
+function normalizeCachedValue<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return (serialized === undefined ? null : JSON.parse(serialized)) as T;
+}
+
+function sortMaterialArrays(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        const normalized = sortMaterialArrays(item);
+        return { normalized, key: JSON.stringify(normalized) };
+      })
+      .sort((left, right) => left.key.localeCompare(right.key))
+      .map(({ normalized }) => normalized);
+  }
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, sortMaterialArrays(nested)])
+  );
+}
+
+function materialListValue(kind: DockerSnapshotKind, value: unknown): unknown {
+  const stableValue =
+    kind !== 'containers' || !Array.isArray(value)
+      ? value
+      : value.map((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+          const { status, ...stable } = item as Record<string, unknown>;
+          const health =
+            typeof status === 'string'
+              ? status.match(/\((?:health:\s*)?(starting|healthy|unhealthy)\)/i)?.[1]?.toLowerCase()
+              : undefined;
+          return health ? { ...stable, __dockerHealth: health } : stable;
+        });
+  return sortMaterialArrays(stableValue);
 }
 
 export function sanitizeContainerInspect(value: unknown): unknown {
@@ -201,10 +239,14 @@ export class DockerSnapshotService {
     const current = await this.getList(nodeId, kind);
     if (this.isNodeDeleted(nodeId)) return current;
     const now = new Date().toISOString();
-    const sanitizedData = kind === 'volumes' ? data.map(sanitizeVolumeSnapshot) : data;
+    const sanitizedData = normalizeCachedValue(kind === 'volumes' ? data.map(sanitizeVolumeSnapshot) : data);
+    const materiallyChanged =
+      !isDeepStrictEqual(materialListValue(kind, current.data), materialListValue(kind, sanitizedData)) ||
+      current.observedAt === null ||
+      current.lastError !== null;
     const next: DockerSnapshotEnvelope = {
       data: sanitizedData,
-      revision: current.revision + 1,
+      revision: current.revision + (materiallyChanged ? 1 : 0),
       observedAt: now,
       lastAttemptAt: now,
       lastError: null,
@@ -225,7 +267,9 @@ export class DockerSnapshotService {
       if (staleNames.length > 0) await this.cache.getClient().hdel(detailKey, ...staleNames);
     }
     if (this.isNodeDeleted(nodeId)) return current;
-    this.eventBus.publish('docker.snapshot.changed', { nodeId, kind, revision: next.revision });
+    if (materiallyChanged) {
+      this.eventBus.publish('docker.snapshot.changed', { nodeId, kind, revision: next.revision });
+    }
     return next;
   }
 
@@ -317,14 +361,21 @@ export class DockerSnapshotService {
     const current = await this.getDetail(nodeId, kind, key);
     if (this.isNodeDeleted(nodeId)) return current;
     const now = new Date().toISOString();
+    const sanitizedData = normalizeCachedValue(
+      kind === 'container-detail'
+        ? sanitizeContainerInspect(data)
+        : kind === 'volume-metrics'
+          ? sanitizeVolumeMetricsSnapshot(data)
+          : sanitizeVolumeSnapshot(data)
+    );
+    const materiallyChanged =
+      !current ||
+      !isDeepStrictEqual(current.data, sanitizedData) ||
+      current.observedAt === null ||
+      current.lastError !== null;
     const next: DockerSnapshotEnvelope<unknown> = {
-      data:
-        kind === 'container-detail'
-          ? sanitizeContainerInspect(data)
-          : kind === 'volume-metrics'
-            ? sanitizeVolumeMetricsSnapshot(data)
-            : sanitizeVolumeSnapshot(data),
-      revision: (current?.revision ?? 0) + 1,
+      data: sanitizedData,
+      revision: (current?.revision ?? 0) + (materiallyChanged ? 1 : 0),
       observedAt: now,
       lastAttemptAt: now,
       lastError: null,
@@ -334,7 +385,9 @@ export class DockerSnapshotService {
     if (this.isNodeDeleted(nodeId)) return current;
     await this.cache.getClient().hset(this.detailKey(nodeId, kind), key, JSON.stringify(next));
     if (this.isNodeDeleted(nodeId)) return current;
-    this.eventBus.publish('docker.snapshot.changed', { nodeId, kind, key, revision: next.revision });
+    if (materiallyChanged) {
+      this.eventBus.publish('docker.snapshot.changed', { nodeId, kind, key, revision: next.revision });
+    }
     return next;
   }
 

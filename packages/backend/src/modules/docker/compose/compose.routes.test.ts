@@ -5,6 +5,7 @@ import { container } from '@/container.js';
 import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
+import { DockerAvailabilityService } from '../availability/docker-availability.service.js';
 import { registerDockerComposeRoutes } from './compose.routes.js';
 import { DockerComposeService } from './compose.service.js';
 
@@ -12,6 +13,9 @@ const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const PROJECT_ID = '22222222-2222-4222-8222-222222222222';
 
 function appWithScopes(scopes: string[]) {
+  container.registerInstance(DockerAvailabilityService, {
+    listComposeSurfaceStates: vi.fn().mockResolvedValue({}),
+  } as never);
   const app = new OpenAPIHono<AppEnv>();
   app.use('*', async (c, next) => {
     c.set('effectiveScopes', scopes);

@@ -201,16 +201,18 @@ class EventStream {
           api.invalidateCache("req:/api/monitoring/dashboard");
           api.invalidateCache("dashboard:stats:");
         } else if (msg.channel === "proxy.host.changed") {
-          api.invalidateCache("req:/api/proxy-hosts");
-          api.invalidateCache("req:/api/proxy-host-folders/grouped");
-          api.invalidateCache("proxy:grouped");
-          api.invalidateCache("req:/api/domains");
-          api.invalidateCache("domains:list");
-          api.invalidateCache("req:/api/monitoring/dashboard");
-          api.invalidateCache("req:/api/monitoring/health-status");
-          api.invalidateCache("dashboard:stats:");
-          api.invalidateCache("dashboard:health");
           const payload = msg.payload as { action?: string; id?: string } | undefined;
+          if (payload?.action !== "health.sampled") {
+            api.invalidateCache("req:/api/proxy-hosts");
+            api.invalidateCache("req:/api/proxy-host-folders/grouped");
+            api.invalidateCache("proxy:grouped");
+            api.invalidateCache("req:/api/domains");
+            api.invalidateCache("domains:list");
+            api.invalidateCache("req:/api/monitoring/dashboard");
+            api.invalidateCache("req:/api/monitoring/health-status");
+            api.invalidateCache("dashboard:stats:");
+            api.invalidateCache("dashboard:health");
+          }
           if (payload?.action === "deleted" && payload.id) {
             usePinnedProxiesStore.getState().removePin(payload.id);
           }
