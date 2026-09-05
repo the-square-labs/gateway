@@ -170,42 +170,6 @@ Gateway 的设计目标是让自托管基础设施控制平面默认更安全：
 
 最终形成的是 PKI-backed trust model：short-lived enrollment tokens 只有在 daemon 确认自己正在与 pinned Gateway certificate 通信后才会让节点进入系统，长期信任则基于 certificate identity，而不是 reusable shared secrets。这让 Gateway 对 setup 期间的 token interception 和 enrollment 后的 node hijacking 都具备更强的默认防护。完整说明和 hardening checklist 见 [security model](docs/security.md)。
 
-## Roadmap
-
-Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方向是让它对中小型 infrastructure fleets 更安全、更容易运维、更有用。
-
-已完成的基础：
-
-- [x] Multi-node nginx ingress management，包含 domain affinity、routes 和 TLS deployment over outbound gRPC with mTLS。
-- [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
-- [x] Monitoring daemon for host metrics, runtime state, and log streaming.
-- [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
-- [x] PostgreSQL、Redis 和 ClickHouse database explorer with encrypted saved credentials，以及 private-by-default managed Postgres、Redis 和 ClickHouse database nodes with secure application bindings。
-- [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
-- [x] 可在 Gateway 设置中启用的 SIEM 审计导出，支持加密 Bearer、HMAC-SHA256 或自定义请求头认证。
-- [x] 可选的 ClickHouse-backed structured logging 和可选的 AI Workspace。
-- [x] AI Workspace Scenarios 和 Plan Mode，包含已验证计划、明确的执行确认、进度控制和最终验证。
-- [x] 可选的 multi-provider inference gateway，提供 OpenAI-compatible 和 harness-specific APIs。
-- [x] View-based, resource-scoped permission model with filtered list visibility.
-- [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
-- [x] Gateway and daemon update workflows with signature-verified artifacts.
-- [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
-- [x] Docker-to-nginx Secure Links。
-- [x] 单节点 first-class Compose Projects：Community 提供外部项目发现、inventory、monitoring 和 logs；Personal 及以上提供 deployment 与 lifecycle management，包括不可变修订、adoption、folders、drift 与子资源保护。
-- [x] Business+ Git push-to-deploy，包含隔离的 Build Workers、internal registry immutable artifacts、vulnerability policy 和可选 external registry access。
-
-计划中的工作：
-
-- [ ] S3、R2、MinIO、FTP、FTPS、SFTP 和 SMB storage connections。
-- [ ] Storage foundation 完成后的带 Secure Links 的 managed storages 和 managed-database backup/restore。
-- [ ] Business 和 Enterprise 的 vulnerability and security scanning。
-- [ ] Business 和 Enterprise 的横向应用扩展：把多个 Docker nodes 组成 cluster，并把 application 部署到该 cluster。**In development.**
-- [ ] Business 和 Enterprise 的纵向 workload 扩展：在同一台机器上运行同一 workload 的多个 managed instances。**In development.**
-- [ ] Bastion and SSH management daemon for controlled host access.
-- [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
-- [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Broader operational documentation and examples for common deployment patterns.
-
 ## FAQ
 
 <details>
@@ -270,8 +234,8 @@ Gateway 源代码由 Square Labs 依据 [PolyForm Perimeter License 1.0.1](LICEN
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference，可用于内部及其他非竞争性用途；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；不包含正在开发的 application-cluster 功能。 |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Compose management 和 Pages）的全部功能，并增加面向 containers、blue/green deployments、Compose Projects 与 Pages、带隔离 Build Workers 和 build vulnerability policy 的 Git push-to-deploy、private internal registry 的可选 external access、Docker Secure Runtime、structured logging、audit export、guided onboarding、发布后的 security scanning，以及正在开发的 application cluster 和 same-node multi-instance 功能。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；多节点 Workload Availability 需要 Business 或 Enterprise。 |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Compose management 和 Pages）的全部功能，并增加面向 containers、blue/green deployments、Compose Projects 与 Pages、带隔离 Build Workers 和 build vulnerability policy 的 Git push-to-deploy、private internal registry 的可选 external access、Docker Secure Runtime、structured logging、audit export、guided onboarding、已可用的多节点 Workload Availability (HA)，以及发布后的更广泛安全扫描、基于指标的自动扩缩容和 same-node multi-instance 功能。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business（包括 Pages）的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。

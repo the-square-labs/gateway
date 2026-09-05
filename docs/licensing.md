@@ -19,8 +19,8 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Plan | Best fit | Scale | Support |
 |---|---|---|---|
 | **Community** | Internal and other noncompeting use of the core platform, including evaluation, modification, and redistribution under PolyForm Perimeter | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
-| **Personal** | Installations that need unlimited node/user/group quotas, Compose deployment and lifecycle management, and current workload lifecycle features, without the in-development application-cluster capabilities | Unlimited nodes, users, and custom permission groups | Standard |
-| **Business** | Teams that need Git push-to-deploy for containers, deployments, Compose, and Pages; isolated Build Workers; external access to the internal registry; Secure Runtime isolation; structured logging; audit export; guided onboarding; and planned application scaling/security scanning | Unlimited | Priority |
+| **Personal** | Installations that need unlimited node/user/group quotas, single-node Compose deployment and lifecycle management, and current workload lifecycle features, without multi-node Workload Availability | Unlimited nodes, users, and custom permission groups | Standard |
+| **Business** | Teams that need multi-node Workload Availability (HA); Git push-to-deploy for containers, deployments, Compose, and Pages; isolated Build Workers; external access to the internal registry; Secure Runtime isolation; structured logging; audit export; and guided onboarding | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
 ## Feature Availability
@@ -43,11 +43,13 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Folder- and Resource-Scoped Role-Based Access Control | Ready | ✅ | ✅ | ✅ | ✅ |
 | Audit Log | Ready | ✅ | ✅ | ✅ | ✅ |
 | REST API, OAuth, and MCP Automation | Ready | ✅ | ✅ | ✅ | ✅ |
+| General Gateway CLI | Expected in 2.13 | ✅ | ✅ | ✅ | ✅ |
 | GitLab Integration | Ready | ✅ | ✅ | ✅ | ✅ |
 | AI Workspace, Plan Mode, Scenarios, and AI Sandboxes | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
-| Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | In development | ✅ | ✅ | ✅ | ✅ |
+| Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Expected in 2.11 | ✅ | ✅ | ✅ | ✅ |
+| Gateway Configuration Export for Transfer to Another Instance | Expected in 2.12 | ✅ | ✅ | ✅ | ✅ |
 | Managed Nodes | Plan limit | 100 | Unlimited | Unlimited | Unlimited |
 | Users | Plan limit | 10 | Unlimited | Unlimited | Unlimited |
 | Custom Permission Groups | Plan limit | 5 | Unlimited | Unlimited | Unlimited |
@@ -60,8 +62,8 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Public Status Pages | Ready, opt-in | — | ✅ | ✅ | ✅ |
 | Pages | Ready | — | ✅ | ✅ | ✅ |
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
-| Managed Database Backup and Restore | In development, after Storage | — | ✅ | ✅ | ✅ |
-| Managed Storages with Secure Links | In development | — | ✅ | ✅ | ✅ |
+| Managed Database Backup and Restore | Expected in 2.12 | — | ✅ | ✅ | ✅ |
+| Managed Storages with Secure Links | Expected in 2.11 | — | ✅ | ✅ | ✅ |
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
@@ -69,8 +71,9 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Git Build Vulnerability Scanning and Admission Policy | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
+| Bastion / SSH Management Daemon | Expected in 2.14 | — | — | ✅ | ✅ |
 | Broader Workload Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
-| Metric Autoscaling and Same-node Workload Replicas | In development | — | — | ✅ | ✅ |
+| Metric Autoscaling | In development | — | — | ✅ | ✅ |
 | Multiple Instances of One Workload on One Machine | In development | — | — | ✅ | ✅ |
 | Guided Onboarding and Configuration Review | Plan benefit | — | — | ✅ | ✅ |
 | Internal PKI | Ready | — | — | — | ✅ |
@@ -79,7 +82,9 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Dedicated Technical Contact | Plan benefit | — | — | — | ✅ |
 | Assisted Deployment and Migration | Plan benefit | — | — | — | ✅ |
 
-`In development` identifies product availability separately from plan entitlement. A checkmark on such a row means the feature is included in that plan when released.
+`In development` and `Expected in 2.x` identify future product availability separately from plan entitlement. A checkmark on such a row means the feature is intended to be included in that plan when released. Target versions are roadmap estimates, not currently available features.
+
+Workload Availability (HA) is available for mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise: 2–32 serving placements in Replicated mode or one serving placement with replacement in Failover mode. This is not HA for the Gateway control plane, nginx, registry storage, or shared volumes; metric autoscaling and same-node replicas remain in development.
 
 Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 

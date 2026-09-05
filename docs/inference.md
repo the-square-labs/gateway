@@ -152,6 +152,9 @@ API usage is stored in integer microdollars using the pricing snapshot selected 
 
 ## Compaction and continuation
 
+During long silent SSE responses, including native compaction, Gateway sends an initial comment and then checks every 15 seconds for idle output. Keepalive comments are emitted only between complete SSE frames and when the consumer can accept data. They are not model output or completion events; the real terminal event still controls request accounting. This protects the HTTP stream from intermediary idle timeouts without inventing response content.
+
+
 Gateway supports:
 
 - `previous_response_id` continuation, isolated to the owning user;

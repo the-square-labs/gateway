@@ -212,7 +212,7 @@ Credential reveal and query execution are intentionally separate permissions. Us
 
 ## Storage
 
-Storage is the next product capability family and is marked **In development**.
+Storage connections and managed storages with Secure Links are **expected in 2.11** and are not currently available.
 
 Planned connection types:
 
@@ -223,7 +223,17 @@ Planned connection types:
 - SFTP.
 - SMB.
 
-Managed storages with Secure Links and managed-database backup and restore are also **In development**. Database backup and restore follows the Storage foundation and should not be described as generally available before that release.
+Managed-database backup and restore is **expected in 2.12**, after the Storage foundation. These versions are roadmap estimates, not availability guarantees.
+
+## Planned Host Access And CLI
+
+The general Gateway CLI for terminal and CI/CD control is **expected in 2.13** on every plan. It is distinct from the existing Gateway Inference client CLI. The Bastion / SSH management daemon for controlled host access is **expected in 2.14** on Business and Enterprise. These are roadmap estimates, not currently available capabilities.
+
+The future [plugin system](plugins.md) is unfinished Gateway core infrastructure, not a plan-specific feature. Its tentative timing is no earlier than 2.20 and may change.
+
+## Gateway Configuration Transfer
+
+Export of Gateway's own configuration for transfer to another Gateway instance is **expected in 2.12**. It is planned for all four product plans. This planned workflow is distinct from existing container archive export/import and manual backup of Gateway's database, persistent volumes, and encryption keys; it is not currently available.
 
 ## Nodes And Monitoring
 
@@ -292,7 +302,7 @@ Connector credentials are encrypted at rest. GitLab access is split between conn
 
 ## Application Scaling
 
-Gateway Availability provides fixed-count multi-node placement for eligible Containers, Deployments, and whole Compose Projects on Business and Enterprise. It deliberately does not create an application cluster or shared node network.
+Gateway Availability (HA) is available and provides fixed-count multi-node placement for eligible mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise. Replicated mode maintains 2–32 serving placements; Failover maintains one serving placement and replaces it after loss of the node control channel. It deliberately does not create an application cluster or shared node network, and does not provide HA for Gateway itself, nginx, registry storage, or shared volumes.
 
 The following scaling capabilities remain **In development**:
 
@@ -301,7 +311,7 @@ The following scaling capabilities remain **In development**:
 
 ## Vulnerability And Security Scanning
 
-Vulnerability and security scanning is **In development** for Business and Enterprise. It is not a completed capability until the scanning workflow is released.
+Git build vulnerability scanning and admission policy are available on Business and Enterprise. Broader workload vulnerability and security scanning remains **In development**, with no target version assigned yet.
 
 ## Gateway Inference
 

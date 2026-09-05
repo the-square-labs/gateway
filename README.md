@@ -177,42 +177,6 @@ Gateway is designed to be secure by default as an infrastructure control plane:
 
 The result is a PKI-backed trust model: short-lived enrollment tokens get a node into the system only after the daemon confirms it is talking to the pinned Gateway certificate, and long-term trust is based on certificate identity rather than reusable shared secrets. This gives Gateway a strong default posture against token interception during setup and node hijacking after enrollment. Read the [security model](docs/security.md) for the full explanation and deployment hardening checklist.
 
-## Roadmap
-
-Gateway is already focused on production operations rather than a narrow MVP. The active direction is to make it safer, easier to operate, and more capable across complex, distributed, and regulated infrastructure estates.
-
-Completed foundations:
-
-- [x] Multi-node nginx ingress management with domain affinity, routes, and TLS deployment over outbound gRPC with mTLS.
-- [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
-- [x] Monitoring daemon for host metrics, runtime state, and log streaming.
-- [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
-- [x] PostgreSQL, Redis, and ClickHouse database explorer with encrypted saved credentials, plus private-by-default managed Postgres, Redis, and ClickHouse database nodes with secure application bindings.
-- [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
-- [x] SIEM audit export, enabled in Gateway settings, with encrypted bearer, HMAC-SHA256, or custom-header authentication.
-- [x] Optional ClickHouse-backed structured logging and optional AI Workspace.
-- [x] AI Workspace Scenarios and Plan Mode with validated plans, explicit execution confirmation, progress controls, and final verification.
-- [x] Optional multi-provider inference gateway with OpenAI- and Anthropic-compatible APIs.
-- [x] View-based, resource-scoped permission model with filtered list visibility.
-- [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
-- [x] Gateway and daemon update workflows with signature-verified artifacts.
-- [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
-- [x] Docker-to-nginx Secure Links.
-- [x] First-class single-node Docker Compose Projects: Community discovery, inventory, monitoring, and logs; Personal-or-higher deployment and lifecycle management with immutable revisions, adoption, folders, drift reporting, and protected child resources.
-- [x] Business+ Git push-to-deploy with isolated Build Workers, immutable internal-registry artifacts, vulnerability policy, and optional external registry access.
-
-Planned work:
-
-- [ ] Storage connections for S3, R2, MinIO, FTP, FTPS, SFTP, and SMB.
-- [ ] Managed storages with Secure Links and managed-database backup/restore after the Storage foundation.
-- [ ] Vulnerability and security scanning for Business and Enterprise.
-- [ ] Horizontal application scaling for Business and Enterprise: group multiple Docker nodes into a cluster and deploy an application to that cluster. **In development.**
-- [ ] Vertical workload scaling for Business and Enterprise: run multiple managed instances of one workload on the same machine. **In development.**
-- [ ] Bastion and SSH management daemon for controlled host access.
-- [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
-- [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Broader operational documentation and examples for common deployment patterns.
-
 ## FAQ
 
 <details>
@@ -277,8 +241,8 @@ Every official release also carries the [Product Continuity MIT Grant](CONTINUIT
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
 | ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference for internal and other noncompeting use; up to 100 managed nodes, 10 users, and 5 custom permission groups; read-only Compose discovery, inventory, monitoring, and logs. Pages unavailable. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited managed-node/user/group plan quotas, Compose deployment and lifecycle management, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. This does not include the in-development application-cluster features. |
-| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Compose management and Pages) plus Git push-to-deploy for containers, blue/green deployments, Compose Projects, and Pages with isolated Build Workers and build vulnerability policy, optional external access to the private internal registry, Docker Secure Runtime, structured logging, audit export, guided onboarding, security scanning when released, and the in-development application cluster and same-node multi-instance features. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited managed-node/user/group plan quotas, Compose deployment and lifecycle management, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. Multi-node Workload Availability requires Business or Enterprise. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Compose management and Pages) plus Git push-to-deploy for containers, blue/green deployments, Compose Projects, and Pages with isolated Build Workers and build vulnerability policy, optional external access to the private internal registry, Docker Secure Runtime, structured logging, audit export, guided onboarding, multi-node Workload Availability (HA), and broader security scanning, metric autoscaling, and same-node replicas when released. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business (including Pages) plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.

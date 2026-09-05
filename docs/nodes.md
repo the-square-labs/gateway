@@ -249,7 +249,9 @@ From the UI:
 2. Review runtime and version status.
 3. Click **Update** when an update is available.
 
-Gateway verifies the signed daemon release manifest before dispatching an update. New daemons verify the signed manifest locally, download the binary, verify its SHA256 checksum, replace the binary atomically, and exit so systemd restarts the service.
+Gateway verifies the signed daemon release manifest before dispatching an update. New daemons verify the signed manifest locally, download the binary, verify its SHA256 checksum, replace the binary atomically, and hand restart to the launcher on launcher-managed installations. The service manager supervises the launcher; older direct-run installations still rely on service-manager restart.
+
+The crash-safe launcher introduced in 2.10 preserves the previous binary and an on-disk update journal for Docker, nginx, monitoring, and the Relay supervisor. A candidate must report local readiness and remain running through a 30-second stability window before the update is committed. Failed candidates can roll back to the preserved binary. This is local process readiness, not proof of Relay connectivity or healthy customer workloads; verify reconnect, capabilities, and the relevant runtime after an update. If launcher bootstrap is unavailable and the daemon runs directly, launcher rollback protection is unavailable.
 
 Daemons installed before signed-manifest support can perform one transition update: Gateway verifies the signed manifest and sends the verified checksum, while the old daemon enforces the checksum. After that update, daemon-side signature verification is enforced.
 
