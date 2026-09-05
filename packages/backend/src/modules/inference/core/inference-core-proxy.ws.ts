@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { WSContext, WSEvents } from 'hono/ws';
 import type WebSocketType from 'ws';
 import { container } from '@/container.js';
@@ -12,6 +13,7 @@ import { InferenceProtocolError, inferenceProtocolError } from '../protocol/infe
 import { canFailOver } from '../providers/inference-routing.service.js';
 import { coreRequestHeaders, newCoreRequestContext } from './inference-core-context.js';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
+import { startInferenceWebSocketHeartbeat } from './inference-websocket-heartbeat.js';
 
 // tsc-alias treats the bare `ws` specifier as the local `src/ws` directory
 // during production builds. Resolve the runtime dependency through Node so the
@@ -40,12 +42,19 @@ export interface InferenceCoreWebSocketAuth {
 }
 
 interface ConnectionState {
+  connectionId: string;
+  openedAt: number;
+  lastClientMessageAt: number | null;
+  lastCoreMessageAt: number | null;
+  lastRequestId: string | null;
+  stopHeartbeat: () => void;
   active: ActiveTurn | null;
   unsubscribe: (() => void) | null;
   closedForRevocation: boolean;
 }
 
 interface ActiveTurn {
+  startedAt: number;
   upstream: WebSocketType | null;
   requestId: string;
   responseId: string;
@@ -77,7 +86,17 @@ export function createCoreResponsesWSHandlers(
   auth: InferenceCoreWebSocketAuth | null,
   maxPayloadBytes: number | (() => number | Promise<number>) = 128 * 1024 * 1024
 ): WSEvents {
-  const state: ConnectionState = { active: null, unsubscribe: null, closedForRevocation: false };
+  const state: ConnectionState = {
+    connectionId: randomUUID(),
+    openedAt: Date.now(),
+    lastClientMessageAt: null,
+    lastCoreMessageAt: null,
+    lastRequestId: null,
+    stopHeartbeat: () => undefined,
+    active: null,
+    unsubscribe: null,
+    closedForRevocation: false,
+  };
   return {
     onOpen(_event, ws) {
       if (!auth) {
@@ -85,6 +104,10 @@ export function createCoreResponsesWSHandlers(
         ws.close(1008, 'Unauthorized');
         return;
       }
+      state.stopHeartbeat();
+      state.stopHeartbeat = startInferenceWebSocketHeartbeat(ws.raw, () => {
+        logTransportEvent(state, state.active, 'client', 'heartbeat_error');
+      });
       if (container.isRegistered(EventBusService)) {
         state.unsubscribe = container
           .resolve(EventBusService)
@@ -95,6 +118,7 @@ export function createCoreResponsesWSHandlers(
     },
     async onMessage(event, ws) {
       if (!auth) return;
+      state.lastClientMessageAt = Date.now();
       try {
         await consumeInferenceRateLimit(auth);
       } catch (error) {
@@ -106,6 +130,7 @@ export function createCoreResponsesWSHandlers(
         typeof maxPayloadBytes === 'function' ? await maxPayloadBytes() : maxPayloadBytes;
       if (payloadBytes(event.data) > effectiveMaxPayloadBytes) {
         sendError(ws, 413, 'request_too_large', 'WebSocket message is too large');
+        state.stopHeartbeat();
         ws.close(1009, 'Message too large');
         return;
       }
@@ -144,6 +169,7 @@ export function createCoreResponsesWSHandlers(
       const freshAuth = await revalidateAuth(auth);
       if (!freshAuth) {
         sendError(ws, 401, 'invalid_api_key', 'Invalid or revoked Gateway inference token');
+        state.stopHeartbeat();
         ws.close(1008, 'Unauthorized');
         return;
       }
@@ -166,12 +192,16 @@ export function createCoreResponsesWSHandlers(
         sendError(ws, protocol.status, protocol.code, protocol.message);
       }
     },
-    onClose() {
+    onClose(event) {
+      state.stopHeartbeat();
+      logTransportEvent(state, state.active, 'client', 'close', event.code);
       endTurn(state, 'cancelled');
       state.unsubscribe?.();
       state.unsubscribe = null;
     },
     onError() {
+      state.stopHeartbeat();
+      logTransportEvent(state, state.active, 'client', 'error');
       endTurn(state, 'cancelled');
       state.unsubscribe?.();
       state.unsubscribe = null;
@@ -233,6 +263,7 @@ async function startTurn(
       }
     : undefined;
   const turn: ActiveTurn = {
+    startedAt: Date.now(),
     upstream: null,
     requestId,
     responseId: `resp_${requestId}`,
@@ -247,6 +278,8 @@ async function startTurn(
     release,
   };
   state.active = turn;
+  state.lastRequestId = requestId;
+  state.lastCoreMessageAt = null;
   try {
     await connectTurnAttempt({
       state,
@@ -410,6 +443,7 @@ async function connectTurnAttempt(input: {
   });
   upstream.on('message', (data) => {
     if (ended || input.state.active !== input.turn) return;
+    input.state.lastCoreMessageAt = Date.now();
     const text = String(data);
     const parsed = asObject(safeParse(text));
     const terminal = parsed !== null && typeof parsed.type === 'string' && TERMINAL_EVENTS.has(parsed.type);
@@ -458,7 +492,8 @@ async function connectTurnAttempt(input: {
       finalizeTurn(input.accounting, input.turn, terminalOutcome(parsed));
     }
   });
-  upstream.on('close', () => {
+  upstream.on('close', (code) => {
+    logTransportEvent(input.state, input.turn, 'core', 'close', code);
     if (ended) return;
     if (retryAfterClose) {
       retryAfterClose = false;
@@ -476,7 +511,42 @@ async function connectTurnAttempt(input: {
     }
     retryOrFail();
   });
-  upstream.on('error', (error) => retryOrFail(error));
+  upstream.on('error', (error) => {
+    logTransportEvent(input.state, input.turn, 'core', 'error');
+    retryOrFail(error);
+  });
+}
+
+function logTransportEvent(
+  state: ConnectionState,
+  turn: ActiveTurn | null,
+  side: 'client' | 'core',
+  event: 'close' | 'error' | 'heartbeat_error',
+  closeCode?: number
+): void {
+  const now = Date.now();
+  const fields = {
+    connectionId: state.connectionId,
+    requestId: turn?.requestId ?? state.lastRequestId,
+    side,
+    event,
+    closeCode: typeof closeCode === 'number' ? closeCode : null,
+    connectionAgeMs: now - state.openedAt,
+    requestAgeMs: turn ? now - turn.startedAt : null,
+    sinceLastClientMessageMs: state.lastClientMessageAt === null ? null : now - state.lastClientMessageAt,
+    sinceLastCoreMessageMs: state.lastCoreMessageAt === null ? null : now - state.lastCoreMessageAt,
+    activeTurn: turn !== null && state.active === turn,
+    terminalSeen: turn?.terminalSeen ?? false,
+    emittedOutput: turn?.emittedOutput ?? false,
+    cancelled: turn?.cancelled ?? false,
+  };
+  // Close reasons and Error messages are peer-controlled; never log their text,
+  // credentials, headers, or payloads. Normal terminal closes stay out of info logs.
+  if (event !== 'close' || (fields.activeTurn && !fields.terminalSeen && !fields.cancelled)) {
+    logger.warn('Inference WebSocket transport event', fields);
+  } else {
+    logger.debug('Inference WebSocket transport event', fields);
+  }
 }
 
 function terminalOutcome(event: Record<string, unknown>): 'completed' | 'failed' {
@@ -543,6 +613,7 @@ function isAccessRevocation(payload: unknown): boolean {
 function closeForRevocation(state: ConnectionState, ws: WSContext): void {
   if (state.closedForRevocation) return;
   state.closedForRevocation = true;
+  state.stopHeartbeat();
   endTurn(state, 'cancelled');
   state.unsubscribe?.();
   state.unsubscribe = null;

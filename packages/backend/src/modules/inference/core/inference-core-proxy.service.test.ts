@@ -4,6 +4,7 @@ import { zstdCompressSync } from 'node:zlib';
 import { serve } from '@hono/node-server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
+import { MAX_CORE_SSE_FRAME_BYTES } from './inference-core-sse-observer.js';
 
 const USER = { id: '11111111-1111-4111-8111-111111111111', isBlocked: false };
 const MODEL = {
@@ -450,6 +451,93 @@ describe('inference core proxy', () => {
       '3fa85f64-5717-4562-b3fc-2c963f66afa6',
       'completed',
       undefined
+    );
+  });
+
+  it.each([
+    'response.completed',
+    'response.failed',
+    'response.incomplete',
+  ])('recognizes a fragmented %s larger than 64 KiB without changing the stream', async (type) => {
+    // Put type after the large payload: observing a JSON prefix is not enough.
+    const event = `event: ${type}\r\ndata: ${JSON.stringify({
+      response: { output: [{ type: 'reasoning', encrypted_content: 'x'.repeat(128 * 1024) }] },
+      type,
+    })}\r\n\r\n`;
+    const bytes = new TextEncoder().encode(event);
+    let offset = 0;
+    const cancel = vi.fn();
+    const { service, coreAccounting } = createService({
+      coreResponse: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (offset === bytes.length) return controller.close();
+            const end = Math.min(offset + 16 * 1024, bytes.length);
+            controller.enqueue(bytes.slice(offset, end));
+            offset = end;
+          },
+          cancel,
+        }),
+        { headers: { 'content-type': 'text/event-stream' } }
+      ),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: MODEL.publicId, stream: true }), { 'content-type': 'application/json' }),
+      'responses'
+    );
+
+    expect((await response.text()) === `: gateway keepalive\n\n${event}`).toBe(true);
+    await vi.waitFor(() => expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledOnce());
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      type === 'response.completed' ? 'completed' : 'failed',
+      undefined
+    );
+  });
+
+  it('keeps the first terminal outcome when another event shares its chunk', async () => {
+    const events = 'data: {"type":"response.completed"}\n\ndata: {"type":"error"}\n\n';
+    const { service, coreAccounting } = createService({
+      coreResponse: new Response(events, { headers: { 'content-type': 'text/event-stream' } }),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: MODEL.publicId }), { 'content-type': 'application/json' }),
+      'responses'
+    );
+
+    expect(await response.text()).toBe(`: gateway keepalive\n\n${events}`);
+    await vi.waitFor(() => expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledOnce());
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'completed', undefined);
+  });
+
+  it('fails and cancels an oversized unfinished SSE frame instead of silently discarding its prefix', async () => {
+    const cancel = vi.fn();
+    const { service, coreAccounting, fetchStub } = createService({
+      coreResponse: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${'x'.repeat(MAX_CORE_SSE_FRAME_BYTES)}`));
+          },
+          cancel,
+        }),
+        { headers: { 'content-type': 'text/event-stream' } }
+      ),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: MODEL.publicId }), { 'content-type': 'application/json' }),
+      'responses'
+    );
+
+    const text = await response.text();
+    expect(text).toContain('response.failed');
+    expect(text).toContain('SSE frame exceeded');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetchStub.mock.calls[0]![1].signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledOnce());
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      'failed',
+      expect.objectContaining({ message: expect.stringContaining('SSE frame exceeded') })
     );
   });
 

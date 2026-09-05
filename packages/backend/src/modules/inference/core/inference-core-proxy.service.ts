@@ -23,6 +23,7 @@ import { canFailOver, type InferenceRoutingService } from '../providers/inferenc
 import type { InferenceCoreBridgeService } from './inference-core-bridge.service.js';
 import { coreRequestHeaders, newCoreRequestContext } from './inference-core-context.js';
 import { CORE_ACCOUNT_METADATA_KEY } from './inference-core-provider-map.js';
+import { CoreResponsesSseObserver } from './inference-core-sse-observer.js';
 
 type SourceCandidate = {
   source: typeof inferenceModelSources.$inferSelect;
@@ -1059,9 +1060,8 @@ function relayCoreResponseBody(
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const isSse = options.contentType.toLowerCase().includes('text/event-stream');
-  const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let sseBuffer = '';
+  const sseObserver = new CoreResponsesSseObserver();
   let terminal: Exclude<CoreStreamOutcome, 'cancelled'> | null = null;
   let settled = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -1070,34 +1070,8 @@ function relayCoreResponseBody(
     if (settled) return;
     settled = true;
     if (heartbeat) clearInterval(heartbeat);
+    sseObserver.clear();
     options.finalize(outcome, error);
-  };
-  const observe = (value: Uint8Array) => {
-    if (!isSse || terminal) return;
-    sseBuffer += decoder.decode(value, { stream: true });
-    for (;;) {
-      const match = /\r?\n\r?\n/.exec(sseBuffer);
-      if (!match || match.index === undefined) break;
-      const block = sseBuffer.slice(0, match.index);
-      sseBuffer = sseBuffer.slice(match.index + match[0].length);
-      const payload = block
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (!payload || payload === '[DONE]') continue;
-      try {
-        const event = JSON.parse(payload) as { type?: unknown };
-        if (event.type === 'response.completed') terminal = 'completed';
-        else if (event.type === 'response.failed' || event.type === 'response.incomplete' || event.type === 'error') {
-          terminal = 'failed';
-        }
-      } catch {
-        // The core owns protocol validation. This observer only decides whether
-        // it must append a terminal after a transport-level body failure.
-      }
-    }
-    if (sseBuffer.length > 64 * 1024) sseBuffer = sseBuffer.slice(-64 * 1024);
   };
   const failedTail = (error?: unknown) => {
     const failure = {
@@ -1132,7 +1106,7 @@ function relayCoreResponseBody(
       heartbeat = setInterval(() => {
         // Never splice a comment into a fragmented SSE event, or queue unbounded
         // heartbeats behind a slow/disconnected consumer.
-        if (settled || sseBuffer.length !== 0 || (controller.desiredSize ?? 0) <= 0) return;
+        if (settled || sseObserver.hasPendingFrame || (controller.desiredSize ?? 0) <= 0) return;
         if (Date.now() - lastOutputAt < 15_000) return;
         controller.enqueue(keepalive);
         lastOutputAt = Date.now();
@@ -1144,7 +1118,7 @@ function relayCoreResponseBody(
         const { done, value } = await reader.read();
         if (settled) return;
         if (!done) {
-          observe(value);
+          if (isSse) terminal = sseObserver.observe(value);
           controller.enqueue(value);
           lastOutputAt = Date.now();
           if (terminal) {
@@ -1163,6 +1137,8 @@ function relayCoreResponseBody(
         controller.close();
       } catch (error) {
         if (settled) return;
+        options.abortUpstream(error);
+        void reader.cancel(error).catch(() => undefined);
         if (options.clientGone()) {
           settle('cancelled', error);
           try {

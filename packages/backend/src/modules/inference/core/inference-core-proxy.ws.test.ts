@@ -1,6 +1,9 @@
 import 'reflect-metadata';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const transportLog = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() }));
+vi.mock('@/lib/logger.js', () => ({ createChildLogger: () => transportLog, logger: transportLog }));
+
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'http://localhost/db';
 process.env.REDIS_URL = 'redis://localhost:6379';
@@ -44,6 +47,7 @@ vi.mock('ws', () => {
 });
 
 import { container, TOKENS } from '@/container.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import { InferenceTokenService } from '../inference-token.service.js';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
@@ -111,9 +115,76 @@ const AUTH = { user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_a', rawToken: '
 afterEach(() => {
   container.reset();
   upstreamInstances.length = 0;
+  vi.useRealTimers();
+  vi.clearAllMocks();
 });
 
 describe('core responses websocket proxy', () => {
+  it.each([
+    'close',
+    'error',
+    'revoke',
+    'invalid_auth',
+    'oversized',
+  ])('cleans the connection heartbeat on %s without adding model messages', async (ending) => {
+    vi.useFakeTimers();
+    registerCommon();
+    const bus = new EventBusService();
+    container.registerInstance(EventBusService, bus);
+    const raw = {
+      readyState: 1,
+      bufferedAmount: 0,
+      ping: vi.fn((_data, _mask, done: () => void) => done()),
+    };
+    const ws = { ...clientSocket(), raw };
+    const handlers = createCoreResponsesWSHandlers(AUTH, ending === 'oversized' ? 1 : undefined);
+    handlers.onOpen?.({} as never, ws as never);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(raw.ping).toHaveBeenCalledOnce();
+    expect(ws.send).not.toHaveBeenCalled();
+    if (ending === 'close') handlers.onClose?.({ code: 1012 } as never, ws as never);
+    if (ending === 'error') handlers.onError?.({} as never, ws as never);
+    if (ending === 'revoke') bus.publish(`permissions.changed.${USER.id}`, { reason: 'user_blocked' });
+    if (ending === 'invalid_auth') {
+      container.registerInstance(InferenceTokenService, { validateToken: vi.fn().mockResolvedValue(null) } as never);
+    }
+    if (ending === 'invalid_auth' || ending === 'oversized') {
+      await handlers.onMessage?.({ data: '{"type":"response.create"}' } as never, ws as never);
+    }
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(raw.ping).toHaveBeenCalledOnce();
+  });
+
+  it('logs correlation and silence on close without retaining peer-supplied text', async () => {
+    vi.useFakeTimers();
+    const { accounting } = registerCommon();
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.({ data: '{"type":"response.create","model":"gpt-5.5"}' } as never, ws as never);
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.message?.('{"type":"response.created"}');
+    await vi.advanceTimersByTimeAsync(125_000);
+    upstream.handlers.close?.(1006, Buffer.from('Bearer do-not-log-this'));
+    expect(transportLog.warn).toHaveBeenCalledWith(
+      'Inference WebSocket transport event',
+      expect.objectContaining({
+        side: 'core',
+        event: 'close',
+        closeCode: 1006,
+        requestId: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+        requestAgeMs: 125_000,
+        sinceLastCoreMessageMs: 125_000,
+        terminalSeen: false,
+        emittedOutput: false,
+      })
+    );
+    handlers.onClose?.({ code: 1006, reason: 'Bearer do-not-log-this' } as never, ws as never);
+    expect(JSON.stringify(transportLog.warn.mock.calls)).not.toContain('do-not-log-this');
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledOnce();
+  });
+
   it.each([
     'max',
     'ultra',
