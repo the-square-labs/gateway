@@ -1,5 +1,7 @@
 import 'reflect-metadata';
+import { get } from 'node:http';
 import { zstdCompressSync } from 'node:zlib';
+import { serve } from '@hono/node-server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 
@@ -170,7 +172,11 @@ function createService(
   return { service, models, routing, releaseAffinityTurn, bridge, coreAccounting, fetchStub, selection };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('inference core proxy', () => {
   it.each(['max', 'ultra'])('records the requested %s effort before provider mapping over HTTP', async (effort) => {
@@ -445,6 +451,214 @@ describe('inference core proxy', () => {
       'completed',
       undefined
     );
+  });
+
+  it('keeps a silent 165-second compaction stream alive until its real terminal', async () => {
+    vi.useFakeTimers();
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const { service, coreAccounting } = createService({
+      coreResponse: new Response(
+        new ReadableStream({
+          start(controller) {
+            upstream = controller;
+          },
+        }),
+        {
+          headers: { 'content-type': 'text/event-stream' },
+        }
+      ),
+    });
+    const response = await service.proxy(
+      createContext(
+        JSON.stringify({
+          model: 'gpt-5.5',
+          stream: true,
+          input: [{ type: 'compaction_trigger' }],
+        }),
+        { 'content-type': 'application/json' }
+      ),
+      'responses'
+    );
+    const chunks: string[] = [];
+    const consume = (async () => {
+      for await (const chunk of response.body!) chunks.push(new TextDecoder().decode(chunk));
+    })();
+    // Model the idle intermediary: it must see traffic during every 15-second interval.
+    for (let elapsed = 0; elapsed < 165_000; elapsed += 15_000) {
+      const previous = chunks.length;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(chunks.length).toBeGreaterThan(previous);
+      expect(chunks.at(-1)).toBe(': gateway keepalive\n\n');
+      expect(coreAccounting.finalizeCoreRequest).not.toHaveBeenCalled();
+    }
+    const terminal =
+      'data: {"type":"response.completed","response":{"output":[{"type":"compaction","encrypted_content":"opaque"}]}}\n\n';
+    upstream.enqueue(new TextEncoder().encode(terminal));
+    await consume;
+    expect(chunks.at(-1)).toBe(terminal);
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'completed', undefined);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('flushes keepalives over the real HTTP adapter before the socket idle deadline', async () => {
+    const nativeInterval = globalThis.setInterval;
+    const nativeNow = Date.now;
+    const clockOrigin = nativeNow();
+    // Scale the heartbeat clock; socket deadlines and the upstream delay remain real.
+    vi.spyOn(Date, 'now').mockImplementation(() => clockOrigin + (nativeNow() - clockOrigin) * 500);
+    vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+      ...[callback, delay, ...args]: Parameters<typeof setInterval>
+    ) => nativeInterval(callback, delay === 15_000 ? 30 : delay, ...args)) as typeof setInterval);
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const { service } = createService({
+      coreResponse: new Response(
+        new ReadableStream({
+          start(controller) {
+            upstream = controller;
+          },
+        }),
+        {
+          headers: { 'content-type': 'text/event-stream' },
+        }
+      ),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5', stream: true }), {
+        'content-type': 'application/json',
+      }),
+      'responses'
+    );
+    const server = serve({ fetch: () => response, port: 0, hostname: '127.0.0.1', overrideGlobalObjects: false });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing test server port');
+    const timer = setTimeout(() => {
+      upstream.enqueue(new TextEncoder().encode('data: {"type":"response.completed"}\n\n'));
+    }, 500);
+    try {
+      const text = await new Promise<string>((resolve, reject) => {
+        const request = get(`http://127.0.0.1:${address.port}/`, (incoming) => {
+          let body = '';
+          incoming.setEncoding('utf8');
+          incoming.on('data', (chunk) => {
+            body += chunk;
+          });
+          incoming.on('end', () => resolve(body));
+          incoming.on('error', reject);
+        });
+        request.setTimeout(150, () => request.destroy(new Error('SSE socket idle timeout')));
+        request.on('error', reject);
+      });
+      expect(text.match(/: gateway keepalive/g)?.length).toBeGreaterThan(1);
+      expect(text).toContain('data: {"type":"response.completed"}\n\n');
+    } finally {
+      clearTimeout(timer);
+      if ('closeAllConnections' in server) server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('keeps comments outside fragmented SSE frames', async () => {
+    vi.useFakeTimers();
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const { service } = createService({
+      coreResponse: new Response(
+        new ReadableStream({
+          start(controller) {
+            upstream = controller;
+          },
+        }),
+        {
+          headers: { 'content-type': 'text/event-stream' },
+        }
+      ),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5' }), {
+        'content-type': 'application/json',
+      }),
+      'responses'
+    );
+    const chunks: string[] = [];
+    const consume = (async () => {
+      for await (const chunk of response.body!) chunks.push(new TextDecoder().decode(chunk));
+    })();
+    upstream.enqueue(new TextEncoder().encode('data: {"type":"response.cre'));
+    await vi.advanceTimersByTimeAsync(0);
+    const beforePause = chunks.join('');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(chunks.join('')).toBe(beforePause);
+    upstream.enqueue(new TextEncoder().encode('ated"}\n\n'));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(chunks.at(-1)).toBe(': gateway keepalive\n\n');
+    upstream.enqueue(new TextEncoder().encode('data: {"type":"response.completed"}\n\n'));
+    await consume;
+    expect(chunks.join('')).toContain('data: {"type":"response.created"}\n\n');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds idle keepalives under backpressure and stops them on cancellation', async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    const { service, coreAccounting, fetchStub } = createService({
+      coreResponse: new Response(new ReadableStream({ cancel }), {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5' }), {
+        'content-type': 'application/json',
+      }),
+      'responses'
+    );
+    // An unread stream retains just the initial comment, not ten minutes of queued pings.
+    await vi.advanceTimersByTimeAsync(600_000);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(': gateway keepalive\n\n');
+    let readSettled = false;
+    const pending = reader.read().then((result) => {
+      readSettled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSettled).toBe(false);
+    await reader.cancel('client gone');
+    expect((await pending).done).toBe(true);
+    expect(cancel).toHaveBeenCalledWith('client gone');
+    expect(fetchStub.mock.calls[0]![1].signal.aborted).toBe(true);
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledOnce();
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'cancelled', 'client gone');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not inject keepalives into a non-SSE response', async () => {
+    vi.useFakeTimers();
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const { service } = createService({
+      coreResponse: new Response(
+        new ReadableStream({
+          start(controller) {
+            upstream = controller;
+          },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+        }
+      ),
+    });
+    const response = await service.proxy(
+      createContext(JSON.stringify({ model: 'gpt-5.5' }), {
+        'content-type': 'application/json',
+      }),
+      'responses'
+    );
+    const text = response.text();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(vi.getTimerCount()).toBe(0);
+    upstream.enqueue(new TextEncoder().encode('{"output":[]}'));
+    upstream.close();
+    expect(await text).toBe('{"output":[]}');
   });
 
   it('repairs an interrupted core SSE body with a structured failed terminal', async () => {

@@ -1064,9 +1064,12 @@ function relayCoreResponseBody(
   let sseBuffer = '';
   let terminal: Exclude<CoreStreamOutcome, 'cancelled'> | null = null;
   let settled = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let lastOutputAt = Date.now();
   const settle = (outcome: CoreStreamOutcome, error?: unknown) => {
     if (settled) return;
     settled = true;
+    if (heartbeat) clearInterval(heartbeat);
     options.finalize(outcome, error);
   };
   const observe = (value: Uint8Array) => {
@@ -1120,12 +1123,30 @@ function relayCoreResponseBody(
   };
 
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (!isSse) return;
+      // Native compaction can stay silent for minutes. Keep the public HTTP stream
+      // active without inventing model events or letting keepalives count as output.
+      const keepalive = encoder.encode(': gateway keepalive\n\n');
+      controller.enqueue(keepalive);
+      heartbeat = setInterval(() => {
+        // Never splice a comment into a fragmented SSE event, or queue unbounded
+        // heartbeats behind a slow/disconnected consumer.
+        if (settled || sseBuffer.length !== 0 || (controller.desiredSize ?? 0) <= 0) return;
+        if (Date.now() - lastOutputAt < 15_000) return;
+        controller.enqueue(keepalive);
+        lastOutputAt = Date.now();
+      }, 15_000);
+      heartbeat.unref();
+    },
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
+        if (settled) return;
         if (!done) {
           observe(value);
           controller.enqueue(value);
+          lastOutputAt = Date.now();
           if (terminal) {
             void reader.cancel('Responses terminal event received').catch(() => undefined);
             settle(terminal);
@@ -1141,6 +1162,7 @@ function relayCoreResponseBody(
         }
         controller.close();
       } catch (error) {
+        if (settled) return;
         if (options.clientGone()) {
           settle('cancelled', error);
           try {
