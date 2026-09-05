@@ -20,6 +20,17 @@ var gatewayCertSHA256Pattern = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 var Version = "dev"
 
 func main() {
+	if lifecycle.IsLauncherProbeCommand(os.Args) {
+		lifecycle.PrintLauncherProbe()
+		return
+	}
+	if lifecycle.IsLauncherCommand(os.Args) {
+		if err := lifecycle.RunLauncherCommand(os.Args, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "launcher failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version":
@@ -35,6 +46,13 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if err := lifecycle.BootstrapLauncher(lifecycle.LauncherSpec{
+		DaemonType: "monitoring",
+		StateDir:   "/var/lib/monitoring-daemon",
+		ChildArgs:  os.Args[1:],
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: launcher unavailable; continuing in direct mode: %v\n", err)
+	}
 	// Default: run the daemon
 	configPath := os.Getenv("MONITORING_DAEMON_CONFIG")
 	if configPath == "" {
@@ -48,7 +66,6 @@ func main() {
 		logger.Error("failed to load config", "path", configPath, "error", err)
 		os.Exit(1)
 	}
-
 	logger = setupLogger(cfg.LogLevel, cfg.LogFormat)
 	logger.Info("starting monitoring-daemon", "version", Version, "config", configPath)
 
@@ -62,6 +79,7 @@ func main() {
 		logger.Error("failed to initialize daemon", "error", err)
 		os.Exit(1)
 	}
+	lifecycle.NotifyLauncherLocalReady(Version)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -77,7 +95,7 @@ func main() {
 
 	if err := d.Run(ctx); err != nil {
 		logger.Error("daemon exited with error", "error", err)
-		os.Exit(1)
+		os.Exit(lifecycle.DaemonExitCode(err))
 	}
 }
 

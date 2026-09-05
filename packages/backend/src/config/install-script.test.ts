@@ -121,7 +121,7 @@ run_apt_with_lock_retry update -qq
 });
 
 describe('setup-relay-node.sh', () => {
-  it('verifies separately scoped artifacts and leaves rollback supervision to the shared daemon guard', () => {
+  it('verifies separately scoped artifacts and registers the immutable launcher', () => {
     const syntax = spawnSync('bash', ['-n', relayNodeInstaller], { encoding: 'utf8' });
     expect(syntax.status, syntax.stderr).toBe(0);
 
@@ -130,12 +130,70 @@ describe('setup-relay-node.sh', () => {
     expect(source).toContain('fetch_verified "$WORKER" relay-worker');
     expect(source).toContain('openssl pkeyutl -verify');
     expect(source).toContain('run-supervisor');
-    expect(source).toContain('exec /usr/local/bin/relay-supervisor "$@"');
-    expect(source).not.toContain('.update-pending');
+    expect(source).toContain('exec /usr/local/bin/relay-supervisor run "$@"');
+    expect(source).toContain('.update-pending');
     expect(source).not.toContain('mv -f "$previous" "$binary"');
     expect(source).toContain('ExecStart=/usr/local/lib/gateway-relay/run-supervisor');
     expect(source).toContain(`local name="$1" daemon_type="$2"\n  local manifest="\${TEMP_DIR}/\${name}.update.json"`);
     expect(source).not.toContain(`local name="$1" daemon_type="$2" manifest="\${TEMP_DIR}/\${name}.update.json"`);
+  });
+});
+
+describe('immutable launcher service registration fallback', () => {
+  it.each([
+    ['docker', dockerNodeInstaller, '/usr/local/bin/docker-daemon', '/var/lib/docker-daemon', 'docker-daemon'],
+    ['nginx', nginxNodeInstaller, '/usr/local/bin/nginx-daemon', '/var/lib/nginx-daemon', 'nginx-daemon'],
+    [
+      'monitoring',
+      monitoringNodeInstaller,
+      '/usr/local/bin/monitoring-daemon',
+      '/var/lib/monitoring-daemon',
+      'monitoring-daemon',
+    ],
+    [
+      'relay',
+      relayNodeInstaller,
+      '/usr/local/bin/relay-supervisor',
+      '/var/lib/gateway-relay-supervisor',
+      'gateway-relay-supervisor',
+    ],
+  ])('%s retains a verified manual fallback contract', (_name, path, binary, stateDir, unit) => {
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain('manual_launcher_fallback()');
+    expect(source).toContain(`manual_launcher_fallback`);
+    expect(source).toContain(binary);
+    expect(source).toContain(stateDir);
+    expect(source).toContain('owner.json');
+    expect(source).toContain('child.json');
+    expect(source).toContain('"protocolVersion"[[:space:]]*:[[:space:]]*1');
+    expect(source).toContain('daemonType');
+    expect(source).toContain('manual.log');
+    expect(source).toContain('kill -0');
+    expect(source).toContain('"ready"[[:space:]]*:[[:space:]]*true');
+    expect(source).toContain('nohup');
+    expect(source).toContain('setsid');
+    expect(source).toContain('RUN_USER');
+    expect(source).toContain('RUN_GROUP');
+    expect(source).toContain('Manual mode is not persistent across reboot.');
+    expect(source).toContain('Foreground command:');
+    expect(source).toContain(`/etc/systemd/system/\${unit}.service.d/20-update-rollback.conf`);
+    expect(source).toContain(unit);
+    expect(source).toContain('update-guard');
+    expect(source).toContain('.update-state.json');
+    expect(source).toContain('.update-pending');
+    expect(source).toContain('.update-outcome.json');
+    expect(source).toContain('preserved .previous and unknown files');
+    expect(source).toContain('if ! systemctl daemon-reload');
+    expect(source).toContain('command_exists systemctl && [[ -d /run/systemd/system ]]');
+  });
+
+  it('keeps OpenRC fallback coverage on every daemon installer', () => {
+    for (const path of [nginxNodeInstaller, dockerNodeInstaller, monitoringNodeInstaller, relayNodeInstaller]) {
+      const source = readFileSync(path, 'utf8');
+      expect(source).toContain('rc-service');
+      expect(source).toContain('manual_launcher_fallback');
+    }
   });
 });
 

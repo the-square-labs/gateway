@@ -44,6 +44,7 @@ NO_LOGO=0
 DRY_RUN=0
 GUIDE_ACTIVE=0
 APT_UPDATED=0
+MANUAL_LAUNCH_TIMEOUT_SECONDS="${GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS:-30}"
 OS_VERSION_CODENAME=""
 DOCKER_USE_SUDO=0
 DOCKER_SYSTEMD_UNIT=""
@@ -61,6 +62,7 @@ EXISTING_INSTALL=0
 EXISTING_VERSION=""
 EXISTING_GATEWAY_ADDR=""
 EXISTING_ENROLLED=0
+MANUAL_FALLBACK_USED=0
 DATABASE_PREFLIGHT_DIR=""
 DATABASE_PREFLIGHT_MOUNT_DIR=""
 DATABASE_PREFLIGHT_LOOP_DEVICE=""
@@ -549,8 +551,252 @@ detect_arch() {
 }
 
 command_exists() { command -v "$1" &>/dev/null; }
-has_systemd() { command_exists systemctl; }
+has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
+
+launcher_pid_from_json() {
+    local metadata="$1"
+    local pid
+    [[ -f "$metadata" && ! -L "$metadata" ]] || return 1
+    pid=$(sed -nE 's/.*"(pid|launcherPid|launcher_pid)"[[:space:]]*:[[:space:]]*([0-9]+).*/\2/p' "$metadata" | head -n 1 || true)
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s\n' "$pid"
+}
+
+launcher_pid_is_live() {
+    local pid="${1:-}"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+launcher_child_is_ready() {
+    local metadata="$1"
+    [[ -f "$metadata" && ! -L "$metadata" ]] || return 1
+    grep -Eq '"ready"[[:space:]]*:[[:space:]]*true' "$metadata" 2>/dev/null
+}
+
+legacy_file_owner_is_allowed() {
+    local path="$1"
+    local owner run_uid
+    owner=$(stat -c '%u' "$path" 2>/dev/null || true)
+    [[ "$owner" == "0" ]] && return 0
+    [[ "$RUN_USER" != "root" ]] || return 1
+    run_uid=$(id -u "$RUN_USER" 2>/dev/null || true)
+    [[ -n "$run_uid" && "$owner" == "$run_uid" ]]
+}
+
+legacy_update_marker_is_recognizable() {
+    local marker="$1"
+    local daemon_binary="$2"
+    [[ -f "$marker" && ! -L "$marker" ]] || return 1
+    legacy_file_owner_is_allowed "$marker" || return 1
+    case "$marker" in
+        "${daemon_binary}.update-pending")
+            grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9._-]+)?[[:space:]]*$' "$marker" 2>/dev/null
+            ;;
+        "${daemon_binary}.update-state.json")
+            grep -Eq '"schemaVersion"[[:space:]]*:[[:space:]]*1([,}[:space:]]|$)' "$marker" 2>/dev/null \
+                && grep -Eq '"fromVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$marker" 2>/dev/null \
+                && grep -Eq '"targetVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$marker" 2>/dev/null
+            ;;
+        "${daemon_binary}.update-outcome.json")
+            grep -Eq '"schemaVersion"[[:space:]]*:[[:space:]]*1([,}[:space:]]|$)' "$marker" 2>/dev/null \
+                && grep -Eq '"status"[[:space:]]*:[[:space:]]*"rolled_back"' "$marker" 2>/dev/null \
+                && grep -Eq '"fromVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$marker" 2>/dev/null \
+                && grep -Eq '"targetVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$marker" 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+retire_legacy_update_guard() {
+    local unit="$1"
+    local daemon_binary="$2"
+    local dropin="/etc/systemd/system/${unit}.service.d/20-update-rollback.conf"
+    local marker
+    local marker_found=0
+    local dropin_owner
+
+    [[ -f "$dropin" && ! -L "$dropin" ]] || return 0
+    dropin_owner=$(stat -c '%u' "$dropin" 2>/dev/null || true)
+    [[ "$dropin_owner" == "0" ]] || return 0
+    grep -Fq -- "update-guard" "$dropin" || return 0
+    grep -Fq -- "$daemon_binary" "$dropin" || return 0
+    grep -Eq -- "(^|[[:space:]=])${daemon_binary}([[:space:]]|$)" "$dropin" || return 0
+
+    for marker in \
+        "${daemon_binary}.update-state.json" \
+        "${daemon_binary}.update-pending" \
+        "${daemon_binary}.update-outcome.json"; do
+        if legacy_update_marker_is_recognizable "$marker" "$daemon_binary"; then
+            marker_found=1
+            break
+        fi
+    done
+    [[ "$marker_found" -eq 1 ]] || return 0
+
+    if ! rm -f -- "$dropin"; then
+        warn "Could not retire the legacy update guard at ${dropin}; preserving it."
+        return 0
+    fi
+    for marker in \
+        "${daemon_binary}.update-state.json" \
+        "${daemon_binary}.update-pending" \
+        "${daemon_binary}.update-outcome.json"; do
+        if legacy_update_marker_is_recognizable "$marker" "$daemon_binary"; then
+            rm -f -- "$marker" || warn "Could not retire legacy update marker ${marker}; preserving it."
+        fi
+    done
+    ok "Retired the legacy update guard for ${daemon_binary}; preserved .previous and unknown files."
+}
+
+launcher_foreground_command() {
+    local daemon_binary="$1"
+    if [[ "$RUN_USER" == "root" ]]; then
+        printf '%q run' "$daemon_binary"
+    elif command_exists runuser; then
+        printf 'runuser -u %q -g %q -- %q run' "$RUN_USER" "$RUN_GROUP" "$daemon_binary"
+    elif command_exists sudo; then
+        printf 'sudo -n -u %q -g %q -- %q run' "$RUN_USER" "$RUN_GROUP" "$daemon_binary"
+    elif command_exists setpriv; then
+        printf 'setpriv --reuid=%q --regid=%q --init-groups -- %q run' "$RUN_USER" "$RUN_GROUP" "$daemon_binary"
+    else
+        printf '%q run' "$daemon_binary"
+    fi
+}
+
+prepare_manual_launcher_state() {
+    local state_dir="$1"
+    local launcher_dir="${state_dir}/launcher"
+    local manual_log="${launcher_dir}/manual.log"
+
+    [[ ! -L "$launcher_dir" ]] || return 1
+    mkdir -p "$launcher_dir" || return 1
+    chmod 0700 "$launcher_dir" || return 1
+    if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir"; then
+        return 1
+    fi
+    [[ ! -L "$manual_log" ]] || return 1
+    touch "$manual_log" || return 1
+    chmod 0640 "$manual_log" || return 1
+    if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$manual_log"; then
+        return 1
+    fi
+}
+
+detach_manual_launcher() {
+    local daemon_binary="$1"
+    local manual_log="$2"
+    local -a user_prefix=()
+
+    if [[ "$RUN_USER" != "root" ]]; then
+        if command_exists runuser; then
+            user_prefix=(runuser -u "$RUN_USER" -g "$RUN_GROUP" --)
+        elif command_exists sudo; then
+            user_prefix=(sudo -n -u "$RUN_USER" -g "$RUN_GROUP" --)
+        elif command_exists setpriv; then
+            user_prefix=(setpriv "--reuid=${RUN_USER}" "--regid=${RUN_GROUP}" --init-groups --)
+        else
+            return 1
+        fi
+    fi
+
+    if command_exists setsid && command_exists nohup; then
+        setsid nohup "${user_prefix[@]}" "$daemon_binary" run </dev/null >>"$manual_log" 2>&1 &
+    elif command_exists nohup; then
+        nohup "${user_prefix[@]}" "$daemon_binary" run </dev/null >>"$manual_log" 2>&1 &
+    else
+        return 1
+    fi
+    MANUAL_LAUNCH_PID=$!
+}
+
+wait_for_manual_launcher_ready() {
+    local launcher_dir="$1"
+    local daemon_type="$2"
+    local owner_json="${launcher_dir}/owner.json"
+    local child_json="${launcher_dir}/child.json"
+    local owner_pid child_pid attempts=0
+
+    while (( attempts < MANUAL_LAUNCH_TIMEOUT_SECONDS )); do
+        owner_pid="$(launcher_pid_from_json "$owner_json" || true)"
+        child_pid="$(launcher_pid_from_json "$child_json" || true)"
+        if grep -Eq '"protocolVersion"[[:space:]]*:[[:space:]]*1([,}[:space:]]|$)' "$owner_json" 2>/dev/null \
+            && grep -Fq -- "\"daemonType\":\"${daemon_type}\"" "$owner_json" 2>/dev/null \
+            && launcher_pid_is_live "$owner_pid" \
+            && launcher_pid_is_live "$child_pid" \
+            && launcher_child_is_ready "$child_json"; then
+            MANUAL_OWNER_PID="$owner_pid"
+            MANUAL_CHILD_PID="$child_pid"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        sleep 1
+    done
+    return 1
+}
+
+manual_launcher_fallback() {
+    local daemon_name="$1"
+    local daemon_binary="$2"
+    local state_dir="$3"
+    local launcher_dir="${state_dir}/launcher"
+    local manual_log="${launcher_dir}/manual.log"
+    local owner_pid daemon_type
+    MANUAL_FALLBACK_USED=1
+
+    case "$daemon_binary" in
+        */docker-daemon) daemon_type="docker" ;;
+        */nginx-daemon) daemon_type="nginx" ;;
+        */monitoring-daemon) daemon_type="monitoring" ;;
+        */relay-supervisor) daemon_type="relay" ;;
+        *) warn "Unknown launcher daemon binary ${daemon_binary}; preserving installed files."; return 0 ;;
+    esac
+
+    owner_pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
+    if launcher_pid_is_live "$owner_pid"; then
+        if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
+            ok "${daemon_name} launcher is already ready (PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
+            echo "Manual launcher log: ${manual_log}"
+            echo "Manual mode is not persistent across reboot."
+        else
+            warn "${daemon_name} has a live launcher owner but no verified ready child; refusing to start a competing launcher."
+            echo "Launcher state: ${launcher_dir}"
+            echo "Launcher log: ${manual_log}"
+        fi
+        return 0
+    fi
+
+    if ! prepare_manual_launcher_state "$state_dir"; then
+        warn "Could not prepare manual launcher state for ${daemon_name}; installed files were preserved."
+        echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
+        return 0
+    fi
+    if ! detach_manual_launcher "$daemon_binary" "$manual_log"; then
+        warn "Could not detach ${daemon_name}; installed files and launcher files were preserved."
+        echo "Launcher log: ${manual_log}"
+        echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
+        return 0
+    fi
+
+    if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
+        ok "${daemon_name} is running in manual mode (launcher PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
+        echo "Launcher PID: ${MANUAL_OWNER_PID}"
+        echo "Child PID: ${MANUAL_CHILD_PID}"
+        echo "Manual launcher log: ${manual_log}"
+        echo "Manual mode is not persistent across reboot."
+        return 0
+    fi
+
+    warn "Could not verify the detached ${daemon_name} launcher; installed files and launcher files were preserved."
+    echo "Launcher state: ${launcher_dir}"
+    echo "Launcher log: ${manual_log}"
+    echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
+    echo "Manual mode is not persistent across reboot."
+    return 0
+}
 
 run_quiet() {
     if "$@" >>"$LOG_FILE" 2>&1; then
@@ -1629,6 +1875,7 @@ enroll_daemon() {
 
 # ── Step 4: Start the daemon ─────────────────────────────────────────
 start_daemon() {
+    retire_legacy_update_guard "docker-daemon" "/usr/local/bin/docker-daemon"
     log "Enabling and starting docker-daemon..."
 
     if has_systemd; then
@@ -1651,7 +1898,7 @@ start_daemon() {
             service_environment="Environment=\"PATH=${BUILDER_RUNTIME_PATH}\""
         fi
 
-        cat > /etc/systemd/system/docker-daemon.service <<UNIT
+        if ! cat > /etc/systemd/system/docker-daemon.service <<UNIT
 [Unit]
 Description=Gateway Docker Daemon
 After=${docker_after}
@@ -1671,21 +1918,39 @@ ${service_environment}
 [Install]
 WantedBy=multi-user.target
 UNIT
+        then
+            warn "Could not write the docker-daemon systemd unit; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
 
-        systemctl daemon-reload >> "$LOG_FILE" 2>&1
-        systemctl enable docker-daemon >> "$LOG_FILE" 2>&1
-        systemctl restart docker-daemon >> "$LOG_FILE" 2>&1
+        if ! systemctl daemon-reload >> "$LOG_FILE" 2>&1; then
+            warn "systemd daemon-reload failed; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
+        if ! systemctl enable docker-daemon >> "$LOG_FILE" 2>&1; then
+            warn "Could not enable docker-daemon; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
+        if ! systemctl restart docker-daemon >> "$LOG_FILE" 2>&1; then
+            warn "Could not start or restart docker-daemon; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
         sleep 2
 
         if systemctl is-active --quiet docker-daemon; then
             ok "docker-daemon is running"
         else
-            warn "docker-daemon may not have started. Check: journalctl -u docker-daemon -f"
+            warn "docker-daemon is not active; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
         fi
     elif has_openrc; then
         local openrc_need="net docker"
         [[ "$DOCKER_MODE" != "builder" ]] || openrc_need="net"
-        cat > /etc/init.d/docker-daemon <<UNIT
+        if ! cat > /etc/init.d/docker-daemon <<UNIT
 #!/sbin/openrc-run
 name="Gateway Docker Daemon"
 description="Gateway Docker Daemon"
@@ -1702,18 +1967,39 @@ depend() {
     need ${openrc_need}
 }
 UNIT
-        chmod +x /etc/init.d/docker-daemon
-        rc-update add docker-daemon default >> "$LOG_FILE" 2>&1
-        rc-service docker-daemon restart >> "$LOG_FILE" 2>&1 || rc-service docker-daemon start >> "$LOG_FILE" 2>&1
+        then
+            warn "Could not write the docker-daemon OpenRC service; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
+        if ! chmod +x /etc/init.d/docker-daemon; then
+            warn "Could not make the docker-daemon OpenRC service executable; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
+        if ! rc-update add docker-daemon default >> "$LOG_FILE" 2>&1; then
+            warn "Could not enable docker-daemon in OpenRC; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+            return 0
+        fi
+        if ! rc-service docker-daemon restart >> "$LOG_FILE" 2>&1; then
+            if ! rc-service docker-daemon start >> "$LOG_FILE" 2>&1; then
+                warn "Could not start docker-daemon in OpenRC; using manual mode."
+                manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+                return 0
+            fi
+        fi
         sleep 2
 
         if rc-service docker-daemon status >> "$LOG_FILE" 2>&1; then
             ok "docker-daemon is running"
         else
-            warn "docker-daemon may not have started. Check: rc-service docker-daemon status"
+            warn "docker-daemon is not active in OpenRC; using manual mode."
+            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
         fi
     else
-        warn "systemd not found — start the daemon manually: docker-daemon run"
+        warn "No supported service manager found; using manual mode."
+        manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
     fi
 }
 
@@ -1731,7 +2017,9 @@ start_daemon
 echo ""
 echo ""
 echo -e "  The node should appear as ${GREEN}online${NC} in Gateway within a few seconds."
-if has_systemd; then
+if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+    echo -e "  Manual mode is not persistent across reboot."
+elif has_systemd; then
     echo -e "  Check status:  ${BRAND_MINT}systemctl status docker-daemon${NC}"
     echo -e "  View logs:     ${BRAND_MINT}journalctl -u docker-daemon -f${NC}"
 elif has_openrc; then

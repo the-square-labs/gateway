@@ -112,7 +112,7 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 		}
 		if restart, ok := err.(*RestartRequestedError); ok {
 			d.logger.Info(restart.Message, "action", "restarting")
-			return fmt.Errorf("restart requested: %s", restart.Message)
+			return restart
 		}
 		d.logger.Warn("session ended, reconnecting", "error", err)
 		// The relay can remain reachable while its app upstream is restarting.

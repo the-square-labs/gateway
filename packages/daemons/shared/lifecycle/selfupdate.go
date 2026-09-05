@@ -24,6 +24,9 @@ type daemonManifestVerifier func(string, updateauth.DaemonExpectation) (*updatea
 // and atomically replaces the current binary. Restart is delegated to the
 // process supervisor and is not coupled to a particular init system.
 func SelfUpdate(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType string, logger *slog.Logger) error {
+	if os.Getenv(LauncherManagedEnv) != "1" {
+		return fmt.Errorf("self-update requires launcher supervision")
+	}
 	if strings.TrimSpace(expectedChecksum) == "" {
 		return fmt.Errorf("missing update checksum")
 	}
@@ -40,7 +43,21 @@ func SelfUpdate(downloadURL, targetVersion, expectedChecksum, signedManifest, da
 		logger.Error("self-update failed to resolve executable symlink", "error", err)
 		return fmt.Errorf("resolve symlinks: %w", err)
 	}
-	return ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, execPath, logger)
+	stateDir := launcherStateDirFromEnvironment(execPath)
+	if _, err := stageLauncherUpdate(stateDir, daemonType, execPath, Version, targetVersion, time.Now()); err != nil {
+		logger.Error("self-update failed to stage rollback state", "error", err)
+		return err
+	}
+	if err := ReplaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedManifest, daemonType, execPath, logger); err != nil {
+		state, stateErr := readLauncherUpdateState(stateDir)
+		if stateErr == nil && state != nil {
+			if rollbackErr := rollbackLauncherUpdate(stateDir, state, "candidate staging failed"); rollbackErr != nil {
+				logger.Error("self-update failed to restore previous binary after staging failure", "error", rollbackErr)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 // ReplaceBinaryAtPath downloads and verifies a signed daemon artifact before
@@ -129,9 +146,6 @@ func replaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedMan
 		logger.Error("self-update failed while writing downloaded binary", "error", err)
 		return fmt.Errorf("write binary: %w", err)
 	}
-	tmpFile.Close()
-	logger.Info("daemon update downloaded", "target_version", targetVersion)
-
 	// Verify checksum
 	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
 	if actualChecksum != expectedChecksum {
@@ -140,16 +154,28 @@ func replaceBinaryAtPath(downloadURL, targetVersion, expectedChecksum, signedMan
 	}
 	logger.Info("self-update checksum verified", "checksum", actualChecksum)
 
-	// Make executable
-	if err := os.Chmod(tmpPath, 0755); err != nil {
+	// Set final permissions and make both bytes and mode durable before rename.
+	if err := tmpFile.Chmod(0755); err != nil {
 		logger.Error("self-update failed to chmod new binary", "error", err)
 		return fmt.Errorf("chmod: %w", err)
 	}
+	if err := tmpFile.Sync(); err != nil {
+		logger.Error("self-update failed to sync new binary", "error", err)
+		return fmt.Errorf("sync binary: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close binary: %w", err)
+	}
+	logger.Info("daemon update downloaded", "target_version", targetVersion)
 
 	// Atomic replace: rename temp file over the current binary
 	if err := os.Rename(tmpPath, destination); err != nil {
 		logger.Error("self-update failed to replace binary", "error", err, "path", destination)
 		return fmt.Errorf("replace binary: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+		logger.Error("self-update failed to sync replaced binary", "error", err, "path", destination)
+		return fmt.Errorf("sync replaced binary: %w", err)
 	}
 
 	logger.Info("binary replaced successfully",

@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -26,6 +27,17 @@ type RestartRequestedError struct {
 
 func (e *RestartRequestedError) Error() string {
 	return e.Message
+}
+
+// DaemonExitCode maps the intentional self-update handoff to a dedicated code
+// while preserving the ordinary non-zero failure contract for every other
+// daemon error.
+func DaemonExitCode(err error) int {
+	var restart *RestartRequestedError
+	if errors.As(err, &restart) {
+		return LauncherUpdateExitCode
+	}
+	return 1
 }
 
 // DaemonPlugin defines the interface that daemon-specific logic must implement.
