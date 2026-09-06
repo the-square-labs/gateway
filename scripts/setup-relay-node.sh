@@ -21,6 +21,66 @@ usage() {
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_dependencies() {
+  local dependency needs_coreutils=0
+  local missing=() packages=()
+  for dependency in curl jq openssl sha256sum install uname; do
+    command_exists "$dependency" && continue
+    missing+=("$dependency")
+    case "$dependency" in
+      curl) packages+=(curl ca-certificates) ;;
+      jq|openssl) packages+=("$dependency") ;;
+      sha256sum|install|uname) needs_coreutils=1 ;;
+    esac
+  done
+  # An already prepared host needs neither a package manager nor network access here.
+  [[ ${#missing[@]} -gt 0 ]] || return 0
+  [[ "$needs_coreutils" -eq 0 ]] || packages+=(coreutils)
+
+  printf 'Installing missing Relay installer dependencies:'
+  printf ' %s' "${missing[@]}"
+  printf '\n'
+  if command_exists apt-get; then
+    if ! apt-get update; then
+      echo 'Could not refresh APT package metadata; Relay installation stopped.' >&2
+      return 1
+    fi
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"; then
+      echo 'Could not install Relay dependencies with apt-get; Relay installation stopped.' >&2
+      return 1
+    fi
+  elif command_exists dnf; then
+    if ! dnf install -y "${packages[@]}"; then
+      echo 'Could not install Relay dependencies with dnf; Relay installation stopped.' >&2
+      return 1
+    fi
+  elif command_exists yum; then
+    if ! yum install -y "${packages[@]}"; then
+      echo 'Could not install Relay dependencies with yum; Relay installation stopped.' >&2
+      return 1
+    fi
+  elif command_exists apk; then
+    if ! apk add --no-cache "${packages[@]}"; then
+      echo 'Could not install Relay dependencies with apk; Relay installation stopped.' >&2
+      return 1
+    fi
+  else
+    printf 'No supported package manager found. Install these commands and retry:' >&2
+    printf ' %s' "${missing[@]}" >&2
+    printf '\n' >&2
+    return 1
+  fi
+
+  for dependency in "${missing[@]}"; do
+    if ! command_exists "$dependency"; then
+      echo "$dependency is still missing after package installation; Relay installation stopped." >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
 
@@ -284,7 +344,7 @@ done
 [[ ${EUID} -eq 0 ]] || { echo "Run this installer as root" >&2; exit 1; }
 [[ -n "$GATEWAY" && -n "$TOKEN" && -n "$GATEWAY_CERT_SHA256" && -n "$ADVERTISE_ADDRESS" ]] || { usage >&2; exit 2; }
 [[ "$SERVICE_PORT" =~ ^[0-9]+$ && "$SERVICE_PORT" -ge 1 && "$SERVICE_PORT" -le 65535 ]] || { echo "Invalid service port" >&2; exit 2; }
-for command in curl jq openssl sha256sum install uname; do command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }; done
+ensure_dependencies
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH="amd64" ;;
