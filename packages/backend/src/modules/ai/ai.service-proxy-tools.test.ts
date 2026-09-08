@@ -53,7 +53,7 @@ function createService(proxyService: Record<string, unknown>, folderService: Rec
     {} as never,
     {} as never,
     proxyService as never,
-    folderService as never,
+    { assertFolderExists: vi.fn().mockResolvedValue(undefined), ...folderService } as never,
     {} as never,
     {} as never,
     {} as never,

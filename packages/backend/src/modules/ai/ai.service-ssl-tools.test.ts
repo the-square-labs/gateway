@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -14,6 +16,9 @@ const BASE_USER = {
 };
 
 function createService(sslService: Record<string, unknown>) {
+  container.registerInstance(SSLCertificateFolderService, {
+    assertFolderExists: vi.fn().mockResolvedValue(undefined),
+  } as never);
   return new AIService(
     {} as never,
     {} as never,
@@ -35,6 +40,7 @@ function createService(sslService: Record<string, unknown>) {
 }
 
 describe('AIService SSL tool routing', () => {
+  afterEach(() => container.reset());
   it('routes Cloudflare DNS-01 ACME requests through SSL service', async () => {
     const sslService = {
       requestACMECert: vi.fn().mockResolvedValue({ certificate: { id: 'cert-1' }, status: 'issued' }),

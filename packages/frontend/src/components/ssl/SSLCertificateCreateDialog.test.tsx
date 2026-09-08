@@ -68,6 +68,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
 
     await waitFor(() =>
       expect(request).toHaveBeenCalledWith({
+        folderId: null,
         domains: ["app.example.com"],
         challengeType: "dns-01",
         provider: "letsencrypt",
@@ -190,6 +191,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
 
     await waitFor(() =>
       expect(request).toHaveBeenCalledWith({
+        folderId: null,
         domains: ["app.example.com"],
         challengeType: "dns-01",
         provider: "letsencrypt",

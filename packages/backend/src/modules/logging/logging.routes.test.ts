@@ -10,6 +10,7 @@ import { loggingRoutes } from './logging.routes.js';
 import { LoggingFeatureService } from './logging-feature.service.js';
 import { LoggingMaintenanceService } from './logging-maintenance.service.js';
 import { LoggingSchemaService } from './logging-schema.service.js';
+import { LoggingSchemaFolderService } from './logging-schema-folders.service.js';
 
 const USER: User = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -62,6 +63,9 @@ function registerServices(
     requireFeature: vi.fn().mockResolvedValue(undefined),
   } as unknown as LicensePolicyService);
   container.registerInstance(LoggingSchemaService, schemaService as LoggingSchemaService);
+  container.registerInstance(LoggingSchemaFolderService, {
+    assertFolderExists: vi.fn().mockResolvedValue(undefined),
+  } as never);
 }
 
 function authHeaders() {

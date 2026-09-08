@@ -23,7 +23,7 @@ describe('Personal entitlement service boundaries', () => {
     const policy = deniedPolicy();
     service.setLicensePolicyService(policy as never);
 
-    await expect(service.create('node', {} as never, 'user')).rejects.toBe(policy.error);
+    await expect(service.create('node', {} as never, 'user', ['docker:containers:create'])).rejects.toBe(policy.error);
     expect(policy.requireFeature).toHaveBeenCalledWith('blue-green');
   });
 

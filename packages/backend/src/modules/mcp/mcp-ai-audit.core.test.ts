@@ -171,7 +171,9 @@ describe('AIService MCP audit core behavior', () => {
       'registry.example.com/team/app:v1',
       'encoded-auth',
       USER.id,
-      registryId
+      registryId,
+      undefined,
+      ['docker:images:pull:node-1']
     );
   });
 

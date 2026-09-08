@@ -27,7 +27,7 @@ describe('DockerManagementService service creation lock', () => {
     const service = createDockerService(dbWithLockedDockerNode(), dispatch);
 
     await expect(
-      service.createContainer('node-1', { name: 'app', image: 'nginx:latest' }, 'user-1')
+      service.createContainer('node-1', { name: 'app', image: 'nginx:latest' }, 'user-1', ['docker:containers:create'])
     ).rejects.toMatchObject({ statusCode: 409, code: 'NODE_SERVICE_CREATION_LOCKED' });
     expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
   });
@@ -36,7 +36,9 @@ describe('DockerManagementService service creation lock', () => {
     const dispatch = { sendDockerContainerCommand: vi.fn() };
     const service = createDockerService(dbWithLockedDockerNode(), dispatch);
 
-    await expect(service.duplicateContainer('node-1', 'container-1', 'app-copy', 'user-1')).rejects.toMatchObject({
+    await expect(
+      service.duplicateContainer('node-1', 'container-1', 'app-copy', 'user-1', ['docker:containers:create'])
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: 'NODE_SERVICE_CREATION_LOCKED',
     });

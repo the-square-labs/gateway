@@ -438,9 +438,9 @@ describe('AuthService additional permissions', () => {
     const updated = await service.updateUserGroup(targetUser.id, 'group-2');
 
     expect(updated.additionalScopes).toEqual(['nodes:console:node-1']);
-    expect(updated.scopes).toEqual(['nodes:details', 'nodes:console:node-1']);
+    expect(updated.scopes).toEqual(['nodes:console:node-1', 'nodes:details']);
     expect(eventBus.publish).toHaveBeenCalledWith(`permissions.changed.${targetUser.id}`, {
-      scopes: ['nodes:details', 'nodes:console:node-1'],
+      scopes: ['nodes:console:node-1', 'nodes:details'],
       groupId: 'group-2',
       reason: 'permissions_changed',
     });

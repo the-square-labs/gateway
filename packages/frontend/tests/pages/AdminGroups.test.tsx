@@ -193,6 +193,7 @@ describe("AdminGroups characterization", () => {
     await waitFor(() => {
       expect(createGroup).toHaveBeenCalledWith({
         name: "ops-team",
+        folderId: null,
         description: "Scoped access",
         scopes: ["license:view"],
         parentId: null,
@@ -230,6 +231,7 @@ describe("AdminGroups characterization", () => {
     await waitFor(() => {
       expect(createGroup).toHaveBeenCalledWith({
         name: "node-ops",
+        folderId: null,
         description: undefined,
         scopes: ["nodes:console:node-1"],
         parentId: null,

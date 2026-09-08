@@ -29,7 +29,11 @@ function frontendResourceScopableScopes(): string[] {
   const source = readFileSync(join(process.cwd(), '../frontend/src/types/scope-resource-restrictions.ts'), 'utf8');
   const match = source.match(/export const RESOURCE_SCOPABLE_SCOPES = \[([\s\S]*?)\] as const;/);
   if (!match) throw new Error('RESOURCE_SCOPABLE_SCOPES not found');
-  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+  const creation = source.match(/export const FOLDER_CREATION_SCOPES = \[([\s\S]*?)\] as const;/);
+  if (!creation) throw new Error('FOLDER_CREATION_SCOPES not found');
+  return [...match[1].replace('...FOLDER_CREATION_SCOPES', creation[1]).matchAll(/"([^"]+)"/g)].map(
+    (entry) => entry[1]
+  );
 }
 
 function frontendSelectableScopes(): string[] {
@@ -199,7 +203,7 @@ describe('canonical scope definitions', () => {
     expect(FOLDER_SCOPABLE).toEqual(
       expect.arrayContaining(['docker:compose:view', 'docker:compose:manage', 'docker:compose:delete'])
     );
-    expect(FOLDER_SCOPABLE).not.toContain('docker:compose:create');
+    expect(FOLDER_SCOPABLE).toContain('docker:compose:create');
   });
 
   it('uses Docker operation scopes instead of provider-specific GitLab registry scopes', () => {
@@ -260,7 +264,9 @@ describe('canonical scope definitions', () => {
       expect(FOLDER_SCOPABLE).toContain(scope);
       expect(isApiTokenScope(`${scope}:project-1`)).toBe(true);
     }
-    for (const scope of ['pages:create', 'pages:folders:manage', 'pages:settings:view', 'pages:settings:edit']) {
+    expect(RESOURCE_SCOPABLE).toContain('pages:create');
+    expect(FOLDER_SCOPABLE).toContain('pages:create');
+    for (const scope of ['pages:folders:manage', 'pages:settings:view', 'pages:settings:edit']) {
       expect(RESOURCE_SCOPABLE).not.toContain(scope);
       expect(FOLDER_SCOPABLE).not.toContain(scope);
     }
@@ -454,7 +460,7 @@ describe('canonical scope definitions', () => {
   it('uses longest-match parsing for resource-scoped scopes', () => {
     expect(extractBaseScope('proxy:advanced:bypass:host-1')).toBe('proxy:advanced:bypass');
     expect(extractBaseScope('proxy:advanced:host-1')).toBe('proxy:advanced');
-    expect(isValidBaseScope('admin:users:team-1')).toBe(false);
+    expect(isValidBaseScope('admin:users:team-1')).toBe(true);
   });
 
   it('canonicalizes scopes with broad scopes winning over resource variants', () => {

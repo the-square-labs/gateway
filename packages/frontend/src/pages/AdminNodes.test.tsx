@@ -309,6 +309,7 @@ describe("AdminNodes", () => {
 
     expect(createNodeSpy).toHaveBeenCalledWith({
       type: "nginx",
+      folderId: null,
       hostname: "pending",
       displayName: "Branch Edge",
     });
@@ -351,7 +352,7 @@ describe("AdminNodes", () => {
     const user = userEvent.setup();
     await user.click(screen.getAllByRole("button", { name: /add node/i })[0]!);
     await user.click(screen.getByRole("button", { name: /External VM/ }));
-    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("combobox", { name: "Node Type" }));
     await user.click(screen.getByRole("option", { name: "Build Worker" }));
 
     expect(
@@ -362,6 +363,7 @@ describe("AdminNodes", () => {
 
     expect(createNodeSpy).toHaveBeenCalledWith({
       type: "builder",
+      folderId: null,
       hostname: "pending",
       displayName: "Build Worker EU",
     });

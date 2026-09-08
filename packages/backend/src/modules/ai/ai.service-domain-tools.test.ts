@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -14,6 +16,9 @@ const BASE_USER = {
 };
 
 function createService(domainsService: Record<string, unknown>) {
+  container.registerInstance(DomainFolderService, {
+    assertFolderExists: vi.fn().mockResolvedValue(undefined),
+  } as never);
   return new AIService(
     {} as never,
     {} as never,
@@ -35,6 +40,7 @@ function createService(domainsService: Record<string, unknown>) {
 }
 
 describe('AIService domain tool routing', () => {
+  afterEach(() => container.reset());
   it('routes domain list/create/delete operations through the domains service', async () => {
     const domainsService = {
       listDomains: vi.fn().mockResolvedValue({ data: [{ id: 'domain-1' }], total: 1 }),

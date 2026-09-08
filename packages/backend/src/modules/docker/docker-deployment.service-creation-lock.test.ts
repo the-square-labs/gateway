@@ -80,7 +80,8 @@ describe('DockerDeploymentService service creation lock', () => {
           restartPolicy: 'unless-stopped',
           runtimeProfile: 'default',
         },
-        'user-1'
+        'user-1',
+        ['docker:containers:create']
       )
     ).rejects.toMatchObject({ statusCode: 409, code: 'NODE_SERVICE_CREATION_LOCKED' });
     expect(dispatch.sendDockerDeploymentCommand).not.toHaveBeenCalled();

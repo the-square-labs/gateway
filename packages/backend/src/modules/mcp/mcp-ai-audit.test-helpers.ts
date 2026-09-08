@@ -59,7 +59,7 @@ export function createService({
     {} as never,
     templatesService as never,
     proxyService as never,
-    {} as never,
+    { assertFolderExists: async () => undefined } as never,
     {} as never,
     {} as never,
     {} as never,
@@ -69,7 +69,11 @@ export function createService({
     nodesService as never,
     {} as never,
     databaseService as never,
-    dockerService as never
+    {
+      decoratePublicImageSnapshot: async (_nodeId: string, rows: unknown[]) => rows,
+      decoratePublicNetworkSnapshot: async (_nodeId: string, rows: unknown[]) => rows,
+      ...dockerService,
+    } as never
   );
   (service as any).licensePolicyService = { requireFeature: async () => undefined };
   return service;

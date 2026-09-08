@@ -164,6 +164,7 @@ describe("DockerDeployDialog runtime section", () => {
 
     await waitFor(() =>
       expect(createContainer).toHaveBeenCalledWith("node-1", {
+        folderId: null,
         image: "nginx:alpine",
         registryId: undefined,
         restartPolicy: "no",
