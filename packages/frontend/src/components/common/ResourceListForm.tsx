@@ -23,6 +23,7 @@ export function ResourceListForm<TFolder, TItem>({
   items,
   dnd,
   minWidth = 900,
+  embedded = false,
   loading,
   loadingLabel = "Loading...",
   hasContent,
@@ -34,7 +35,7 @@ export function ResourceListForm<TFolder, TItem>({
   const initialLoading = useInitialLoading(Boolean(loading));
   const showLoading = initialLoading && !hasContent;
   const frame = (
-    <ResourceListFrame minWidth={minWidth}>
+    <ResourceListFrame minWidth={minWidth} className={embedded ? "border-0 text-sm" : undefined}>
       <ResourceListHeaderTable columns={columns} />
       {topLevelFolders.length > 0 && (
         <SortableContext
@@ -66,7 +67,7 @@ export function ResourceListForm<TFolder, TItem>({
   );
   const loadingFrame = (
     <div aria-label={loadingLabel} aria-busy="true">
-      <ResourceListFrame minWidth={minWidth}>
+      <ResourceListFrame minWidth={minWidth} className={embedded ? "border-0 text-sm" : undefined}>
         <ResourceListHeaderTable columns={columns} />
         <ResourceListTable columns={columns}>
           {Array.from({ length: 5 }, (_, row) => (
@@ -84,8 +85,12 @@ export function ResourceListForm<TFolder, TItem>({
   );
 
   return (
-    <div className="space-y-3">
-      <SearchFilterBar {...search} />
+    <div className={embedded ? undefined : "space-y-3"}>
+      <SearchFilterBar
+        {...search}
+        className={embedded ? "border-b border-border" : undefined}
+        inputClassName={embedded ? "h-12 border-0 shadow-none focus-visible:ring-inset" : undefined}
+      />
       {afterSearch}
       {showLoading ? (
         loadingFrame

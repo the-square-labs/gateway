@@ -3,6 +3,7 @@ import { useAIStore } from "@/stores/ai";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import { resetClientSessionState } from "@/stores/session-reset";
+import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 
 afterEach(() => {
@@ -10,6 +11,29 @@ afterEach(() => {
 });
 
 describe("resetClientSessionState", () => {
+  it("preserves only same-account shell preferences and global config, never private state", () => {
+    useUIStore.setState({
+      interfacePreferenceLoaded: true,
+      preferredInterface: "operations_console",
+      aiLiteMode: false,
+    });
+    useSystemConfigStore.getState().setConfig({ fileOpenMaxBytes: 123 });
+    api.setCache("secret", { data: "private" });
+    useAIStore.setState({ messages: [{ id: "m", role: "assistant", content: "private" }] });
+    usePinnedDatabasesStore.setState({ sidebarDatabaseIds: ["private"], databaseMeta: {} });
+    resetClientSessionState({ preserveShell: true });
+    expect(useUIStore.getState()).toMatchObject({
+      interfacePreferenceLoaded: true,
+      preferredInterface: "operations_console",
+    });
+    expect(useSystemConfigStore.getState()).toMatchObject({
+      loaded: true,
+      config: { fileOpenMaxBytes: 123 },
+    });
+    expect(api.getCached("secret")).toBeUndefined();
+    expect(useAIStore.getState().messages).toEqual([]);
+    expect(usePinnedDatabasesStore.getState().sidebarDatabaseIds).toEqual([]);
+  });
   it("clears auth-sensitive cache, AI state, and persisted pinned metadata", () => {
     api.setCache("sensitive", { ok: true });
     useAIStore.setState({

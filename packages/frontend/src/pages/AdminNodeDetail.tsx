@@ -1,15 +1,39 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpCircle, Minus, Pin, Plus, Settings, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  ArrowUpCircle,
+  Camera,
+  Database,
+  Folder,
+  LayoutDashboard,
+  ListTodo,
+  Minus,
+  Pin,
+  Plus,
+  Power,
+  RotateCcw,
+  Scaling,
+  ScrollText,
+  Server,
+  Settings,
+  Shield,
+  Terminal,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { HostingResizeDialog } from "@/components/nodes/HostingResizeDialog";
+import { NodeFirewallTab } from "@/components/nodes/NodeFirewallTab";
+import { NodeSnapshotsTab } from "@/components/nodes/NodeSnapshotsTab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +51,8 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { getForcedDaemonUpdateForNode } from "@/lib/dev-force-updates";
+import { performHostingAction } from "@/lib/hosting-intents";
+import { hostingNodeLabel, hostingOperationPending } from "@/lib/hosting-status";
 import {
   daemonTypeForNode,
   getNodeAppearanceColor,
@@ -34,11 +60,11 @@ import {
   nodeTypeLabel,
 } from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
-import { nodeRoute } from "@/lib/resource-routes";
+import { dockerNodeListRoute, nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
-import { useAuthStore } from "@/stores/auth";
+import { authContextKey, useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
@@ -49,12 +75,13 @@ import {
   isNodeIncompatible,
   isNodeUpdating,
 } from "@/types";
+import type {
+  HostingAction,
+  HostingCatalog,
+  HostingNodeProjection,
+  HostingResource,
+} from "@/types/hosting";
 import { Databases } from "./Databases";
-import { DockerComposeProjects } from "./DockerComposeProjects";
-import { DockerContainers } from "./DockerContainers";
-import { DockerImages } from "./DockerImages";
-import { DockerNetworks } from "./DockerNetworks";
-import { DockerVolumes } from "./DockerVolumes";
 import { type FileManagerOperations, FilesTab } from "./docker-detail/FilesTab";
 import { BuilderJobsTab } from "./node-detail/BuilderJobsTab";
 import { NodeConfigTab } from "./node-detail/NodeConfigTab";
@@ -72,6 +99,7 @@ const STATUS_BADGE: Record<
   offline: "destructive",
   degraded: "warning",
   pending: "secondary",
+  "provisioning failed": "destructive",
   error: "destructive",
   updating: "warning",
 };
@@ -116,16 +144,194 @@ export function AdminNodeDetail({
   const id = resolvedNodeId ?? params.id;
   const routeSlug = resolvedNodeSlug ?? params.nodeSlug ?? params.id ?? "";
   const navigate = useStableNavigate();
-  const { hasScope } = useAuthStore();
+  const { user, hasScope } = useAuthStore();
 
   const [node, setNode] = useState<NodeDetail | null>(null);
+  const [hosting, setHosting] = useState<HostingNodeProjection | null>(null);
+  const [hostingLoadState, setHostingLoadState] = useState<"loading" | "ready" | "error">(
+    "loading"
+  );
+  const hostingAuthKey = authContextKey(user);
+  const [resizeContext, setResizeContext] = useState<{
+    resource: HostingResource;
+    catalog: HostingCatalog;
+  } | null>(null);
+  const [resizeLoading, setResizeLoading] = useState(false);
+  const resizeReadGeneration = useRef(0);
+  const resizeReadIdentity = useRef({ id, user });
+  useEffect(() => {
+    resizeReadIdentity.current = { id, user };
+    resizeReadGeneration.current++;
+    setResizeContext(null);
+    setResizeLoading(false);
+    return () => {
+      resizeReadGeneration.current++;
+    };
+  }, [id, user]);
+  const openHostingResize = async () => {
+    if (!hosting?.connectorId || !hosting.resourceId || resizeLoading) return;
+    const target = hosting;
+    const generation = ++resizeReadGeneration.current;
+    const authKey = authContextKey(user);
+    setResizeLoading(true);
+    try {
+      const [resources, catalog] = await Promise.all([
+        api.listHostingResources(target.connectorId!),
+        api.getHostingCatalog(target.connectorId!),
+      ]);
+      if (
+        generation !== resizeReadGeneration.current ||
+        authKey !== authContextKey(useAuthStore.getState().user)
+      )
+        return;
+      const resource = resources.find((r) => r.id === target.resourceId);
+      if (!resource)
+        throw new Error("The VM is no longer available for resizing. Refresh this node.");
+      setResizeContext({ resource, catalog });
+    } catch (e) {
+      if (generation === resizeReadGeneration.current)
+        toast.error(e instanceof Error ? e.message : "Could not load resize options");
+    } finally {
+      if (generation === resizeReadGeneration.current) setResizeLoading(false);
+    }
+  };
+  const hostingReadGeneration = useRef(0);
+  const hostingActionPending = useRef(false);
+  const refreshHosting = useCallback(() => {
+    if (!id) return;
+    const generation = ++hostingReadGeneration.current;
+    void api
+      .getNodeHosting(id)
+      .then((value) => {
+        if (
+          generation !== hostingReadGeneration.current ||
+          hostingAuthKey !== authContextKey(useAuthStore.getState().user)
+        )
+          return;
+        setHosting(value);
+        setHostingLoadState("ready");
+      })
+      .catch((error) => {
+        if (
+          generation !== hostingReadGeneration.current ||
+          hostingAuthKey !== authContextKey(useAuthStore.getState().user)
+        )
+          return;
+        if (error instanceof ApiRequestError && [403, 404].includes(error.status)) {
+          setHosting(null);
+          setHostingLoadState("ready");
+        } else {
+          // A failed refresh is not evidence that the hosting binding or access disappeared.
+          setHostingLoadState("error");
+        }
+      });
+  }, [id, hostingAuthKey]);
+  useEffect(() => {
+    setHosting(null);
+    setHostingLoadState("loading");
+    refreshHosting();
+    return () => {
+      hostingReadGeneration.current += 1;
+    };
+  }, [refreshHosting]);
+  useRealtime("integration.connector.changed", refreshHosting);
+  const hostingAction = async (action: HostingAction) => {
+    if (
+      hostingActionPending.current ||
+      !user ||
+      !hosting?.connectorId ||
+      !hosting.resourceId ||
+      !hosting.incarnation ||
+      !hosting.actions[action]?.available
+    )
+      return;
+    hostingActionPending.current = true;
+    try {
+      if (
+        !(await confirm({
+          title:
+            action === "delete"
+              ? hosting.provider === "hostkey"
+                ? "Cancel hosted server rental"
+                : "Destroy hosted VM"
+              : `${action === "recover" ? "Restart daemon on" : action} provider VM`,
+          description: `This affects every Gateway role and workload on ${hosting.kind.toUpperCase()} ${hosting.remoteId}. ${action === "delete" ? "The VM and its data will be deleted, followed by its associated Gateway nodes. Proxmox VMs are shut down first." : action === "recover" ? "Restart only the known Gateway daemon services, without rebooting or reinstalling the VM." : "Provider VM power operations may interrupt traffic and running workloads."}`,
+          variant: action === "start" ? "default" : "destructive",
+        }))
+      )
+        return;
+      const operation = await performHostingAction(hosting.resourceId, {
+        action,
+        expectedIncarnation: hosting.incarnation,
+        confirmed: true,
+      });
+      setHosting((current) => (current ? { ...current, operation } : current));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Hosting action failed");
+    } finally {
+      hostingActionPending.current = false;
+    }
+  };
+  const hostingActions = hosting
+    ? [
+        ...(hosting.connectorId && hasScope(`integrations:hosting:view:${hosting.connectorId}`)
+          ? [
+              {
+                label: "Hosting account",
+                icon: <Server className="h-4 w-4" />,
+                alwaysOverflow: true,
+                onClick: () => navigate(`/hosting/${hosting.connectorId}`),
+              },
+              ...(hosting.actions.resize?.available
+                ? [
+                    {
+                      label: "Resize VM",
+                      alwaysOverflow: true,
+                      icon: <Scaling className="h-4 w-4" />,
+                      onClick: () => void openHostingResize(),
+                      disabled: resizeLoading,
+                    },
+                  ]
+                : []),
+            ]
+          : []),
+        ...(["start", "shutdown", "reboot", "recover", "delete"] as const).map((action) => ({
+          label:
+            action === "recover"
+              ? "Restart daemon"
+              : action === "delete"
+                ? hosting.provider === "hostkey"
+                  ? "Cancel server rental"
+                  : "Destroy VM"
+                : `${action === "start" ? "Start" : action === "shutdown" ? "Shut down" : "Reboot"} VM`,
+          onClick: () => void hostingAction(action),
+          icon:
+            action === "delete" ? (
+              <Trash2 className="h-4 w-4" />
+            ) : action === "reboot" || action === "recover" ? (
+              <RotateCcw className="h-4 w-4" />
+            ) : (
+              <Power className="h-4 w-4" />
+            ),
+          separatorBefore: action === "start" || action === "recover" || action === "delete",
+          disabled:
+            hostingOperationPending(hosting.operation) || !hosting.actions[action]?.available,
+          disabledReason: hosting.actions[action]?.reason,
+          destructive: action === "delete",
+          alwaysOverflow: action !== "start" && action !== "recover",
+        })),
+      ]
+    : [];
   const [healthHistory, setHealthHistory] = useState<Array<{ ts: string; status: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const [activeTab, setActiveTab] = useUrlTab(
     [
+      "overview",
       "details",
       "monitoring",
+      "firewall",
+      "snapshots",
       "databases",
       "files",
       "console",
@@ -139,7 +345,7 @@ export function AdminNodeDetail({
       "jobs",
       "daemon-logs",
     ],
-    "details",
+    "overview",
     (tab) => nodeRoute(routeSlug, tab)
   );
 
@@ -164,7 +370,21 @@ export function AdminNodeDetail({
   const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
     usePinnedNodesStore();
   const nodeUpdating = node ? isNodeUpdating(node) : false;
-  const nodeOffline = node?.status === "offline";
+  const nodeUnavailable =
+    node?.status === "pending" ||
+    (hostingOperationPending(hosting?.operation) &&
+      ["create", "install", "delete", "snapshot_restore"].includes(
+        hosting?.operation?.action ?? ""
+      ));
+  const nodeActionsLocked =
+    nodeUpdating ||
+    node?.status === "pending" ||
+    (hostingOperationPending(hosting?.operation) &&
+      ["create", "install", "delete", "snapshot_restore"].includes(
+        hosting?.operation?.action ?? ""
+      ));
+  const nodeOffline = node?.status !== "online" || nodeUnavailable;
+  const nodeRemovalLocked = nodeUpdating || (nodeActionsLocked && node?.status !== "pending");
   const localIpAddresses = useMemo(
     () =>
       Array.from(
@@ -229,13 +449,35 @@ export function AdminNodeDetail({
     (address) => !isValidServiceAddress(address)
   );
   const nonInteractiveWhileUpdating =
-    nodeUpdating && activeTab !== "details" && activeTab !== "jobs" && activeTab !== "daemon-logs";
+    nodeUpdating && activeTab !== "overview" && activeTab !== "jobs" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
   const canViewNodeLogs = !!(id && hasScope(`nodes:logs:${id}`)) || hasScope("nodes:logs");
   const canViewNodeConfig =
     !!(id && (hasScope(`nodes:config:view:${id}`) || hasScope(`nodes:config:edit:${id}`))) ||
     hasScope("nodes:config:view") ||
     hasScope("nodes:config:edit");
+  const canViewNodeDetails = !!(id && hasScope(`nodes:details:${id}`)) || hasScope("nodes:details");
+  const firewallProvider =
+    hosting?.provider === "digitalocean" || hosting?.provider === "proxmox"
+      ? hosting.provider
+      : null;
+  const canViewNodeFirewall = Boolean(
+    node &&
+      (hosting?.kind === "vm" || (hosting?.provider === "proxmox" && hosting.kind === "ct")) &&
+      hosting.resourceId &&
+      hosting.connectorId &&
+      firewallProvider &&
+      canViewNodeDetails &&
+      canViewNodeConfig &&
+      hasScope(`integrations:hosting:view:${hosting.connectorId}`)
+  );
+  const firewallMutationLocked = Boolean(
+    node?.status === "pending" ||
+      (hostingOperationPending(hosting?.operation) &&
+        ["create", "install", "delete", "snapshot_restore"].includes(
+          hosting?.operation?.action ?? ""
+        ))
+  );
   const canEditNodeServiceAddress =
     !!id &&
     (node?.type === "databases"
@@ -278,15 +520,18 @@ export function AdminNodeDetail({
   }, [daemonUpdates, id, node]);
   const visibleTabs = useMemo(
     () => [
-      "details",
+      "overview",
       ...(isCompatibleNode ? ["monitoring"] : []),
+      ...(canViewNodeFirewall ? ["firewall"] : []),
+      ...(hosting?.resourceId &&
+      hasScope(`hosting:resources:view:${hosting.resourceId}`) &&
+      hasScope(`hosting:snapshots:view:${hosting.resourceId}`)
+        ? ["snapshots"]
+        : []),
       ...(isCompatibleNode && node?.type === "databases" ? ["databases"] : []),
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeConfig ? ["configuration"] : []),
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeLogs ? ["nginx-logs"] : []),
       ...(isCompatibleNode && canReadNodeFiles ? ["files"] : []),
-      ...(isCompatibleNode && node.type === "docker"
-        ? ["containers", "images", "volumes", "networks", "compose"]
-        : []),
       ...(node?.type === "builder" ? ["jobs"] : []),
       ...(canShowNodeConsole ? ["console"] : []),
       ...(canViewNodeLogs ? ["daemon-logs"] : []),
@@ -295,8 +540,11 @@ export function AdminNodeDetail({
       canReadNodeFiles,
       canShowNodeConsole,
       canViewNodeConfig,
+      canViewNodeFirewall,
       canViewNodeLogs,
       isCompatibleNode,
+      hosting?.resourceId,
+      hasScope,
       node,
     ]
   );
@@ -375,10 +623,40 @@ export function AdminNodeDetail({
 
   useEffect(() => {
     if (!node) return;
-    if (!visibleTabs.includes(activeTab) || (nodeOffline && OFFLINE_DISABLED_TABS.has(activeTab))) {
-      setActiveTab("details");
+    if (activeTab === "details") {
+      setActiveTab("overview");
+      return;
     }
-  }, [activeTab, node, nodeOffline, setActiveTab, visibleTabs]);
+    if (
+      node.type === "docker" &&
+      ["containers", "images", "volumes", "networks", "compose"].includes(activeTab) &&
+      node.status !== "pending"
+    ) {
+      navigate(dockerNodeListRoute(node.id, activeTab), { replace: true });
+      return;
+    }
+    if ((activeTab === "snapshots" || activeTab === "firewall") && hostingLoadState !== "ready")
+      return;
+    if (
+      !visibleTabs.includes(activeTab) ||
+      (nodeOffline && OFFLINE_DISABLED_TABS.has(activeTab)) ||
+      (nodeUnavailable &&
+        activeTab !== "overview" &&
+        activeTab !== "firewall" &&
+        activeTab !== "snapshots")
+    ) {
+      setActiveTab("overview");
+    }
+  }, [
+    activeTab,
+    hostingLoadState,
+    navigate,
+    node,
+    nodeOffline,
+    nodeUnavailable,
+    setActiveTab,
+    visibleTabs,
+  ]);
 
   useEffect(() => {
     loadNode();
@@ -426,16 +704,16 @@ export function AdminNodeDetail({
   useEffect(() => {
     if (
       nodeUpdating &&
-      activeTab !== "details" &&
+      activeTab !== "overview" &&
       activeTab !== "jobs" &&
       activeTab !== "daemon-logs"
     ) {
-      setActiveTab("details");
+      setActiveTab("overview");
     }
   }, [activeTab, nodeUpdating, setActiveTab]);
 
   const openAppearanceDialog = () => {
-    if (!node) return;
+    if (!node || nodeActionsLocked) return;
     setAppearanceName(node.displayName ?? "");
     setAppearanceColor(node.appearanceColor ?? null);
     const configuredAddresses =
@@ -463,7 +741,7 @@ export function AdminNodeDetail({
   };
 
   const handleAppearanceSave = async () => {
-    if (!id) return;
+    if (!id || nodeActionsLocked) return;
     setAppearanceSaving(true);
     try {
       const update = {
@@ -531,7 +809,7 @@ export function AdminNodeDetail({
   };
 
   const handleDelete = async () => {
-    if (!node) return;
+    if (!node || nodeRemovalLocked) return;
     try {
       if (!(await confirmAndDeleteNode(node.id, node.hostname))) return;
       usePinnedNodesStore.getState().removePin(node.id);
@@ -543,7 +821,7 @@ export function AdminNodeDetail({
   };
 
   const handleCheckUpdates = async () => {
-    if (!node) return;
+    if (!node || nodeActionsLocked) return;
     setCheckingUpdates(true);
     try {
       const statuses = await api.checkDaemonUpdates();
@@ -565,7 +843,7 @@ export function AdminNodeDetail({
   };
 
   const handleServiceCreationLock = async (serviceCreationLocked: boolean) => {
-    if (!node) return;
+    if (!node || nodeActionsLocked) return;
     setLockSaving(true);
     try {
       const updated = await api.setNodeServiceCreationLock(node.id, serviceCreationLocked);
@@ -589,7 +867,16 @@ export function AdminNodeDetail({
     );
 
   const updateTargetVersion = getNodeUpdateTargetVersion(node);
-  const nodeState = nodeUpdating ? "updating" : effectiveNodeStatus(node);
+  const nodeState =
+    node.status === "pending" &&
+    hosting?.operation?.phase === "failed" &&
+    ["create", "install"].includes(hosting.operation.action)
+      ? "provisioning failed"
+      : hostingOperationPending(hosting?.operation) && hosting?.operation
+        ? hostingNodeLabel(hosting.operation).toLowerCase()
+        : nodeUpdating
+          ? "updating"
+          : effectiveNodeStatus(node);
   const detailsTabRefreshKey = [
     "details",
     node.id,
@@ -644,21 +931,36 @@ export function AdminNodeDetail({
             </div>
           </div>
 
+          <HostingResizeDialog
+            resource={resizeContext?.resource ?? null}
+            catalog={resizeContext?.catalog}
+            provider={hosting?.provider ?? "proxmox"}
+            onClose={() => setResizeContext(null)}
+            onChanged={refreshHosting}
+          />
           <ResponsiveHeaderActions
+            menuClassName="w-64"
             actions={[
               {
                 label: "Pin",
+                alwaysOverflow: true,
                 icon: <Pin className="h-4 w-4" />,
                 onClick: () => setPinOpen(true),
                 disabled: nodeUpdating,
               },
+              ...hostingActions.map((action, index) => ({
+                ...action,
+                separatorBefore:
+                  index === 0 || ("separatorBefore" in action && action.separatorBefore),
+              })),
               ...(canOpenNodeSettings
                 ? [
                     {
                       label: "Settings",
+                      separatorBefore: hostingActions.length === 0,
                       icon: <Settings className="h-4 w-4" />,
                       onClick: openAppearanceDialog,
-                      disabled: nodeUpdating,
+                      disabled: nodeActionsLocked,
                     },
                   ]
                 : []),
@@ -669,7 +971,7 @@ export function AdminNodeDetail({
                         ? "Unlock new services"
                         : "Lock new services",
                       onClick: () => handleServiceCreationLock(!node.serviceCreationLocked),
-                      disabled: lockSaving || nodeUpdating,
+                      disabled: lockSaving || nodeActionsLocked,
                     },
                   ]
                 : []),
@@ -679,7 +981,7 @@ export function AdminNodeDetail({
                       label: "Check for updates",
                       icon: <ArrowUpCircle className="h-4 w-4" />,
                       onClick: handleCheckUpdates,
-                      disabled: nodeUpdating || checkingUpdates,
+                      disabled: nodeActionsLocked || checkingUpdates,
                       separatorBefore: canManageServiceCreationLock,
                     },
                   ]
@@ -690,6 +992,7 @@ export function AdminNodeDetail({
                       label: "Remove",
                       icon: <Trash2 className="h-4 w-4" />,
                       onClick: handleDelete,
+                      disabled: nodeRemovalLocked,
                       destructive: true,
                       separatorBefore: hasScope("admin:update") || canManageServiceCreationLock,
                     },
@@ -697,6 +1000,16 @@ export function AdminNodeDetail({
                 : []),
             ]}
           >
+            {hostingActions.map((action) => (
+              <Button
+                key={action.label}
+                variant={"destructive" in action && action.destructive ? "destructive" : "outline"}
+                onClick={action.onClick}
+                disabled={"disabled" in action && action.disabled}
+              >
+                {action.label}
+              </Button>
+            ))}
             <Button
               variant="outline"
               size="icon"
@@ -706,7 +1019,7 @@ export function AdminNodeDetail({
               <Pin className="h-4 w-4" />
             </Button>
             {canOpenNodeSettings && (
-              <Button variant="outline" disabled={nodeUpdating} onClick={openAppearanceDialog}>
+              <Button variant="outline" disabled={nodeActionsLocked} onClick={openAppearanceDialog}>
                 <Settings className="h-4 w-4" />
                 Settings
               </Button>
@@ -715,7 +1028,7 @@ export function AdminNodeDetail({
               <Button
                 variant="outline"
                 onClick={() => handleServiceCreationLock(!node.serviceCreationLocked)}
-                disabled={lockSaving || nodeUpdating}
+                disabled={lockSaving || nodeActionsLocked}
               >
                 {node.serviceCreationLocked ? "Unlock new services" : "Lock new services"}
               </Button>
@@ -724,14 +1037,14 @@ export function AdminNodeDetail({
               <Button
                 variant="outline"
                 onClick={handleCheckUpdates}
-                disabled={nodeUpdating || checkingUpdates}
+                disabled={nodeActionsLocked || checkingUpdates}
               >
                 <ArrowUpCircle className="h-4 w-4" />
                 Check for updates
               </Button>
             )}
             {(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)) && (
-              <Button variant="destructive" onClick={handleDelete} disabled={nodeUpdating}>
+              <Button variant="destructive" onClick={handleDelete} disabled={nodeRemovalLocked}>
                 <Trash2 className="h-4 w-4" />
                 Remove
               </Button>
@@ -749,59 +1062,93 @@ export function AdminNodeDetail({
           className={`flex flex-col ${usesFillLayout ? "flex-1 min-h-0" : ""}`}
         >
           <TabsList className="shrink-0">
-            <TabsTrigger value="details">Details</TabsTrigger>
+            <TabsTrigger value="overview" className="gap-1.5">
+              <LayoutDashboard className="h-3.5 w-3.5" aria-hidden="true" />
+              Overview
+            </TabsTrigger>
             {!isNodeIncompatible(node) && (
-              <TabsTrigger value="monitoring" disabled={nodeUpdating || nodeOffline}>
+              <TabsTrigger
+                value="monitoring"
+                className="gap-1.5"
+                disabled={nodeUpdating || nodeOffline}
+              >
+                <Activity className="h-3.5 w-3.5" aria-hidden="true" />
                 Monitoring
               </TabsTrigger>
             )}
+            {canViewNodeFirewall && (
+              <TabsTrigger value="firewall" className="gap-1.5">
+                <Shield className="h-3.5 w-3.5" aria-hidden="true" />
+                Firewall
+              </TabsTrigger>
+            )}
+            {hostingLoadState !== "ready" &&
+              ["snapshots", "firewall"].includes(activeTab) &&
+              !visibleTabs.includes(activeTab) && (
+                <TabsTrigger value={activeTab} className="gap-1.5">
+                  {activeTab === "snapshots" ? (
+                    <Camera className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Shield className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {activeTab === "snapshots" ? "Snapshots" : "Firewall"}
+                </TabsTrigger>
+              )}
+            {hosting?.resourceId &&
+              hasScope(`hosting:resources:view:${hosting.resourceId}`) &&
+              hasScope(`hosting:snapshots:view:${hosting.resourceId}`) && (
+                <TabsTrigger value="snapshots" className="gap-1.5" disabled={nodeUpdating}>
+                  <Camera className="h-3.5 w-3.5" aria-hidden="true" />
+                  Snapshots
+                </TabsTrigger>
+              )}
             {!isNodeIncompatible(node) && node.type === "databases" && (
-              <TabsTrigger value="databases" disabled={nodeUpdating}>
+              <TabsTrigger
+                value="databases"
+                className="gap-1.5"
+                disabled={nodeUpdating || nodeUnavailable}
+              >
+                <Database className="h-3.5 w-3.5" aria-hidden="true" />
                 Databases
               </TabsTrigger>
             )}
             {!isNodeIncompatible(node) && canReadNodeFiles && (
-              <TabsTrigger value="files" disabled={nodeUpdating || nodeOffline}>
+              <TabsTrigger value="files" className="gap-1.5" disabled={nodeUpdating || nodeOffline}>
+                <Folder className="h-3.5 w-3.5" aria-hidden="true" />
                 Files
               </TabsTrigger>
             )}
             {!isNodeIncompatible(node) && node.type === "nginx" && canViewNodeConfig && (
-              <TabsTrigger value="configuration" disabled={nodeUpdating}>
+              <TabsTrigger value="configuration" className="gap-1.5" disabled={nodeActionsLocked}>
+                <Settings className="h-3.5 w-3.5" aria-hidden="true" />
                 Configuration
               </TabsTrigger>
             )}
             {!isNodeIncompatible(node) && node.type === "nginx" && canViewNodeLogs && (
-              <TabsTrigger value="nginx-logs" disabled={nodeUpdating || nodeOffline}>
+              <TabsTrigger
+                value="nginx-logs"
+                className="gap-1.5"
+                disabled={nodeUpdating || nodeOffline}
+              >
+                <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
                 Nginx Logs
               </TabsTrigger>
             )}
-            {!isNodeIncompatible(node) && node.type === "docker" && (
-              <>
-                <TabsTrigger value="containers" disabled={nodeUpdating}>
-                  Containers
-                </TabsTrigger>
-                <TabsTrigger value="images" disabled={nodeUpdating}>
-                  Images
-                </TabsTrigger>
-                <TabsTrigger value="volumes" disabled={nodeUpdating}>
-                  Volumes
-                </TabsTrigger>
-                <TabsTrigger value="networks" disabled={nodeUpdating}>
-                  Networks
-                </TabsTrigger>
-                <TabsTrigger value="compose" disabled={nodeUpdating}>
-                  Compose
-                </TabsTrigger>
-              </>
+            {node.type === "builder" && (
+              <TabsTrigger value="jobs" className="gap-1.5" disabled={nodeUnavailable}>
+                <ListTodo className="h-3.5 w-3.5" aria-hidden="true" />
+                Jobs
+              </TabsTrigger>
             )}
-            {node.type === "builder" && <TabsTrigger value="jobs">Jobs</TabsTrigger>}
             {canShowNodeConsole && (
-              <TabsTrigger value="console" disabled={nodeOffline}>
+              <TabsTrigger value="console" className="gap-1.5" disabled={nodeOffline}>
+                <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
                 Console
               </TabsTrigger>
             )}
             {canViewNodeLogs && (
-              <TabsTrigger value="daemon-logs" disabled={nodeOffline}>
+              <TabsTrigger value="daemon-logs" className="gap-1.5" disabled={nodeOffline}>
+                <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
                 Logs
               </TabsTrigger>
             )}
@@ -827,15 +1174,49 @@ export function AdminNodeDetail({
                 </div>
               </div>
             )}
-            <TabsContent key={detailsTabRefreshKey} value="details">
+            <TabsContent key={detailsTabRefreshKey} value="overview">
               <NodeDetailsTab
+                hosting={hosting}
                 node={node}
-                canManageSecureRuntime={hasScope("admin:update")}
-                daemonUpdate={daemonUpdate}
+                canManageSecureRuntime={hasScope("admin:update") && !nodeActionsLocked}
+                daemonUpdate={
+                  nodeActionsLocked ? { available: false, latestVersion: null } : daemonUpdate
+                }
                 refreshNode={refreshNodeDetails}
                 refreshDaemonUpdateStatus={loadDaemonUpdateStatus}
               />
             </TabsContent>
+            {hostingLoadState !== "ready" &&
+              ["snapshots", "firewall"].includes(activeTab) &&
+              !visibleTabs.includes(activeTab) && (
+                <TabsContent value={activeTab}>
+                  <EmptyState
+                    message={
+                      hostingLoadState === "error"
+                        ? "Could not load hosting information."
+                        : "Loading hosting information…"
+                    }
+                    {...(hostingLoadState === "error"
+                      ? { actionLabel: "Retry", onAction: refreshHosting }
+                      : {})}
+                  />
+                </TabsContent>
+              )}
+            {hosting?.resourceId &&
+              hasScope(`hosting:resources:view:${hosting.resourceId}`) &&
+              hasScope(`hosting:snapshots:view:${hosting.resourceId}`) && (
+                <TabsContent value="snapshots">
+                  {activeTab === "snapshots" && (
+                    <NodeSnapshotsTab
+                      resourceId={hosting.resourceId}
+                      mutationLocked={nodeUpdating || nodeUnavailable}
+                      onOperationChange={(operation) =>
+                        setHosting((current) => (current ? { ...current, operation } : current))
+                      }
+                    />
+                  )}
+                </TabsContent>
+              )}
             {!isNodeIncompatible(node) && (
               <TabsContent value="monitoring">
                 {activeTab === "monitoring" && !nodeOffline && (
@@ -849,14 +1230,32 @@ export function AdminNodeDetail({
                 )}
               </TabsContent>
             )}
+            {canViewNodeFirewall &&
+              hosting?.connectorId &&
+              hosting.resourceId &&
+              firewallProvider && (
+                <TabsContent value="firewall">
+                  {activeTab === "firewall" && (
+                    <NodeFirewallTab
+                      nodeId={node.id}
+                      connectorId={hosting.connectorId}
+                      resourceId={hosting.resourceId}
+                      provider={firewallProvider}
+                      mutationLocked={firewallMutationLocked}
+                    />
+                  )}
+                </TabsContent>
+              )}
             {!isNodeIncompatible(node) && node.type === "databases" && (
               <TabsContent value="databases" className="pb-0">
-                {activeTab === "databases" && <Databases embedded managedNodeId={node.id} />}
+                {activeTab === "databases" && !nodeUnavailable && (
+                  <Databases embedded managedNodeId={node.id} />
+                )}
               </TabsContent>
             )}
             {!isNodeIncompatible(node) && node.type === "nginx" && canViewNodeConfig && (
               <TabsContent value="configuration" className="flex flex-col flex-1 min-h-0">
-                {activeTab === "configuration" && (
+                {activeTab === "configuration" && !nodeUnavailable && (
                   <NodeConfigTab
                     nodeId={node.id}
                     nodeStatus={node.status}
@@ -887,32 +1286,9 @@ export function AdminNodeDetail({
                 )}
               </TabsContent>
             )}
-            {!isNodeIncompatible(node) && node.type === "docker" && (
-              <>
-                <TabsContent value="containers">
-                  {activeTab === "containers" && (
-                    <DockerContainers embedded fixedNodeId={node.id} />
-                  )}
-                </TabsContent>
-                <TabsContent value="images">
-                  {activeTab === "images" && <DockerImages embedded fixedNodeId={node.id} />}
-                </TabsContent>
-                <TabsContent value="volumes">
-                  {activeTab === "volumes" && <DockerVolumes embedded fixedNodeId={node.id} />}
-                </TabsContent>
-                <TabsContent value="networks">
-                  {activeTab === "networks" && <DockerNetworks embedded fixedNodeId={node.id} />}
-                </TabsContent>
-                <TabsContent value="compose">
-                  {activeTab === "compose" && (
-                    <DockerComposeProjects embedded fixedNodeId={node.id} />
-                  )}
-                </TabsContent>
-              </>
-            )}
             {node.type === "builder" && (
               <TabsContent value="jobs" className="flex min-h-0 flex-1 flex-col pb-0">
-                {activeTab === "jobs" && <BuilderJobsTab nodeId={node.id} />}
+                {activeTab === "jobs" && !nodeUnavailable && <BuilderJobsTab nodeId={node.id} />}
               </TabsContent>
             )}
             {canShowNodeConsole && !nodeOffline && (
@@ -1158,6 +1534,7 @@ export function AdminNodeDetail({
               onClick={handleAppearanceSave}
               disabled={
                 appearanceSaving ||
+                nodeActionsLocked ||
                 serviceAddressesIncomplete ||
                 serviceAddressesDuplicate ||
                 serviceAddressesInvalid ||

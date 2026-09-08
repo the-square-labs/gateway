@@ -28,6 +28,13 @@ import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-recon
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { detectPublicIP, initDnsResolver } from '@/modules/domains/dns.utils.js';
 import { DomainsService } from '@/modules/domains/domain.service.js';
+import { HostingConnectorsService } from '@/modules/hosting/hosting-connectors.service.js';
+import { HostingFinanceService } from '@/modules/hosting/hosting-finance.service.js';
+import { HostingFirewallService } from '@/modules/hosting/hosting-firewall.service.js';
+import { HostingInventoryService } from '@/modules/hosting/hosting-inventory.service.js';
+import { HostingManagementService } from '@/modules/hosting/hosting-management.service.js';
+import { HostingObservationsService } from '@/modules/hosting/hosting-observations.service.js';
+import { HostingProvisioningService } from '@/modules/hosting/hosting-provisioning.service.js';
 import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
@@ -63,6 +70,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
+import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { UpdateService } from '@/services/update.service.js';
@@ -305,6 +313,25 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('github-integration-health', 60000, () => integrationsService.runDueGitHubHealthChecks());
   scheduler.registerInterval('ssh-integration-health', 60000, () => externalSshService.runDueHealthChecks());
   scheduler.registerInterval('cloudflare-integration-sync', 60000, () => integrationsService.runDueCloudflareSyncs());
+  scheduler.registerInterval('hosting-inventory-sync', 60000, () =>
+    container.resolve(HostingInventoryService).reconcileDue()
+  );
+  const hostingObservations = new HostingObservationsService(
+    db,
+    container.resolve(HostingConnectorsService),
+    container.resolve(ResourceSnapshotStore),
+    eventBus
+  );
+  scheduler.registerInterval('hosting-alert-observations', 30_000, () => hostingObservations.publish());
+  scheduler.registerInterval('hosting-operations', 5000, async () => {
+    await container.resolve(HostingProvisioningService).reconcileDue();
+    await container.resolve(HostingManagementService).reconcileDue();
+    await container.resolve(HostingFinanceService).reconcileDue();
+  });
+  scheduler.registerInterval('hosting-firewalls', 5000, () => container.resolve(HostingFirewallService).reconcileDue());
+  scheduler.registerInterval('hosting-vm-snapshots', 30_000, () =>
+    container.resolve(HostingManagementService).snapshots.readModel.refreshDue()
+  );
 
   setTimeout(() => {
     licenseService.heartbeat().catch((error) => {

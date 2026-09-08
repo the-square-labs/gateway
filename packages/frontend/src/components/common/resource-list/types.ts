@@ -17,6 +17,7 @@ export interface ResourceListSearchProps {
   hasActiveFilters: boolean;
   onReset: () => void;
   filters?: React.ReactNode;
+  initialFiltersOpen?: boolean;
 }
 
 export interface ResourceListFolderConfig<TFolder, TItem> {
@@ -59,6 +60,7 @@ export interface ResourceListItemConfig<TItem> {
 }
 
 export interface ResourceListFormProps<TFolder, TItem> {
+  embedded?: boolean;
   columns: ResourceListColumn<TItem>[];
   search: ResourceListSearchProps;
   folders: ResourceListFolderConfig<TFolder, TItem>;

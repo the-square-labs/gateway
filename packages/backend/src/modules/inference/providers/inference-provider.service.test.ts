@@ -95,6 +95,7 @@ describe('InferenceProviderService policy helpers', () => {
     const now = new Date('2026-07-30T12:00:00.000Z');
     const where = vi.fn().mockResolvedValue([
       { id: 'healthy-due', syncStatus: 'success', updatedAt: new Date('2026-07-30T11:59:00.000Z') },
+      { id: 'failed-retry', syncStatus: 'error', updatedAt: new Date('2026-07-30T11:59:30.000Z') },
       { id: 'live-running', syncStatus: 'running', updatedAt: new Date('2026-07-30T11:51:00.001Z') },
       { id: 'abandoned-running', syncStatus: 'running', updatedAt: new Date('2026-07-30T11:50:00.000Z') },
     ]);
@@ -105,8 +106,9 @@ describe('InferenceProviderService policy helpers', () => {
 
     await service.syncDue(now);
 
-    expect(syncConnection).toHaveBeenCalledTimes(2);
+    expect(syncConnection).toHaveBeenCalledTimes(3);
     expect(syncConnection).toHaveBeenCalledWith('healthy-due', true);
+    expect(syncConnection).toHaveBeenCalledWith('failed-retry', true);
     expect(syncConnection).toHaveBeenCalledWith('abandoned-running', true);
     expect(syncConnection).not.toHaveBeenCalledWith('live-running', true);
   });
@@ -119,5 +121,26 @@ describe('InferenceProviderService policy helpers', () => {
     service.stop();
 
     expect(syncDue).toHaveBeenCalledOnce();
+  });
+
+  it('shares concurrent manual and background synchronization for one connection', async () => {
+    const service = new InferenceProviderService({} as never, {} as never, {} as never, {} as never);
+    let resolvePending: (value: unknown) => void = () => undefined;
+    const pending = new Promise<unknown>((resolve) => {
+      resolvePending = resolve;
+    });
+    const internals = service as unknown as {
+      syncConnectionInternal: (connectionId: string, force: boolean) => Promise<unknown>;
+    };
+    const syncInternal = vi.spyOn(internals, 'syncConnectionInternal').mockReturnValue(pending);
+
+    const background = service.syncConnection('connection-1', true);
+    const manual = service.syncConnection('connection-1', false);
+
+    expect(syncInternal).toHaveBeenCalledOnce();
+    expect(syncInternal).toHaveBeenCalledWith('connection-1', true);
+
+    resolvePending({ id: 'connection-1' });
+    await expect(Promise.all([background, manual])).resolves.toEqual([{ id: 'connection-1' }, { id: 'connection-1' }]);
   });
 });

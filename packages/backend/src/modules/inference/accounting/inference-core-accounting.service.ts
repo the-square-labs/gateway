@@ -1,4 +1,5 @@
-import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import type { Redis } from 'ioredis';
 import { injectable } from 'tsyringe';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
@@ -7,6 +8,7 @@ import {
   inferenceModels,
   inferencePricingSnapshots,
   inferenceProviderConnections,
+  inferenceQuotaSnapshots,
   inferenceRequestAttempts,
   inferenceRequests,
   inferenceUsageLedger,
@@ -21,6 +23,7 @@ import type {
 import { CORE_ACCOUNT_METADATA_KEY } from '../core/inference-core-provider-map.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceUsage } from '../protocol/inference-protocol.types.js';
+import { latestValidQuota } from '../providers/inference-provider.service.helpers.js';
 import {
   capSubscriptionEstimateToBudget,
   errorCode,
@@ -108,7 +111,8 @@ export class InferenceCoreAccountingService {
     private readonly policies: InferenceBudgetPolicyService,
     private readonly reservations: InferenceBudgetReservationService,
     private readonly locks: InferenceBudgetLockService,
-    private readonly eventBus?: EventBusService
+    private readonly eventBus: EventBusService | undefined,
+    private readonly redis: Redis
   ) {}
 
   /**
@@ -266,11 +270,42 @@ export class InferenceCoreAccountingService {
       if (!model.enabled || !source.enabled || !connection.enabled || connection.deletedAt) {
         return deny('model_disabled');
       }
+      if (!(await this.connectionAllowsNewAttempt(database, connection))) return deny('model_disabled');
 
       assertPinnedRoute(input, source, connection);
 
       return this.admitAttempt(database, input, request, userId, model, source, connection, limits);
     });
+  }
+
+  private async connectionAllowsNewAttempt(database: DrizzleTransaction, connection: ConnectionRow): Promise<boolean> {
+    // Redis is authoritative for cooldown lifetime. Check it regardless of the
+    // denormalized DB status so admission cannot race markCooldown's two writes,
+    // and treat an expired persisted cooldown exactly as routing does.
+    const cooldownActive = Boolean(await this.redis.exists(`inference:provider-cooldown:${connection.id}`));
+    if (cooldownActive) return false;
+    const connectionStatus = connection.status === 'cooldown' ? 'healthy' : connection.status;
+    if (['disabled', 'reauth_required'].includes(connectionStatus)) return false;
+    // A reasoned unavailable state is a hard provider/auth barrier. Quota
+    // availability is derived below from the same current snapshots as routing,
+    // rather than trusting a possibly lagging denormalized status.
+    if (connectionStatus === 'unavailable' && connection.healthReason !== null) return false;
+    const quotas = await database.query.inferenceQuotaSnapshots.findMany({
+      where: and(eq(inferenceQuotaSnapshots.connectionId, connection.id), eq(inferenceQuotaSnapshots.status, 'fresh')),
+      orderBy: [desc(inferenceQuotaSnapshots.fetchedAt)],
+    });
+    const minimumRemainingFraction = Number(connection.minimumRemainingPercent ?? 1) / 100;
+    const exhausted = latestValidQuota(quotas).some(
+      (quota) =>
+        quota.remainingFraction !== null &&
+        quota.remainingFraction !== undefined &&
+        Number(quota.remainingFraction) <= minimumRemainingFraction
+    );
+    if (exhausted) return false;
+    // A reason-less unavailable state with quota history becomes stale/usable
+    // once the latest reading expires or resets. With no history, routing keeps
+    // it unavailable because there is no basis for recovery.
+    return connectionStatus !== 'unavailable' || quotas.length > 0;
   }
 
   private async admitAttempt(
@@ -453,9 +488,16 @@ export class InferenceCoreAccountingService {
         const identical =
           attempt.status === input.terminalStatus &&
           (attempt.upstreamStatus ?? null) === input.upstreamStatus &&
+          (attempt.errorCode ?? null) === input.errorCode &&
+          attempt.emittedOutput === input.emittedOutput &&
+          (attempt.usageEstimated === null ||
+            attempt.usageEstimated === undefined ||
+            attempt.usageEstimated === input.usageEstimated) &&
           attempt.outputTokens === input.usage.outputTokens &&
           attempt.uncachedInputTokens === input.usage.uncachedInputTokens &&
-          attempt.cachedInputTokens === input.usage.cachedInputTokens;
+          attempt.cachedInputTokens === input.usage.cachedInputTokens &&
+          attempt.cacheWriteTokens === input.usage.cacheWriteTokens &&
+          attempt.reasoningTokens === input.usage.reasoningTokens;
         if (!identical) {
           throw new AppError(409, 'core_settlement_conflict', 'Settlement payload differs from the recorded one');
         }
@@ -489,6 +531,7 @@ export class InferenceCoreAccountingService {
           emittedOutput: input.emittedOutput,
           upstreamStatus: input.upstreamStatus,
           errorCode: input.errorCode,
+          usageEstimated: input.usageEstimated,
           uncachedInputTokens: input.usage.uncachedInputTokens,
           cachedInputTokens: input.usage.cachedInputTokens,
           cacheWriteTokens: input.usage.cacheWriteTokens,

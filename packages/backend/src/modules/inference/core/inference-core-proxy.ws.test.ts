@@ -18,11 +18,13 @@ const upstreamInstances: Array<{
   handlers: Record<string, (...args: unknown[]) => void>;
   readyState: number;
   close: () => void;
+  terminate: () => void;
 }> = [];
 
 vi.mock('ws', () => {
   class FakeWebSocket {
     static OPEN = 1;
+    static CLOSED = 3;
     url: string;
     options: { headers: Record<string, string> };
     sent: string[] = [];
@@ -36,11 +38,24 @@ vi.mock('ws', () => {
     on(event: string, handler: (...args: unknown[]) => void) {
       this.handlers[event] = handler;
     }
+    once(event: string, handler: (...args: unknown[]) => void) {
+      this.handlers[event] = (...args) => {
+        delete this.handlers[event];
+        handler(...args);
+      };
+    }
+    removeAllListeners(event: string) {
+      delete this.handlers[event];
+    }
     send(frame: string) {
       this.sent.push(frame);
     }
     close() {
       this.readyState = 3;
+    }
+    terminate() {
+      this.readyState = 3;
+      this.handlers.close?.(1006);
     }
   }
   return { default: FakeWebSocket, OPEN: 1 };
@@ -50,6 +65,7 @@ import { container, TOKENS } from '@/container.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { InferenceCoreAccountingService } from '../accounting/inference-core-accounting.service.js';
 import { InferenceTokenService } from '../inference-token.service.js';
+import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 import { createCoreResponsesWSHandlers } from './inference-core-proxy.ws.js';
 
@@ -120,6 +136,132 @@ afterEach(() => {
 });
 
 describe('core responses websocket proxy', () => {
+  it('bounds replay prelude by bytes as well as frame count', async () => {
+    const { proxy, accounting } = registerCommon(['conn-1', 'conn-2']);
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', model: 'gpt-5.5', input: 'hi' }) } as never,
+      ws as never
+    );
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    upstream.handlers.message?.(
+      JSON.stringify({ type: 'response.created', response: { metadata: 'x'.repeat(1024 * 1024) } })
+    );
+    expect(ws.send).toHaveBeenCalledOnce();
+    upstream.handlers.close?.(1006);
+    expect(proxy.resolveTarget).toHaveBeenCalledOnce();
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'failed');
+  });
+
+  it('releases a cancelled turn immediately even when the upstream never closes', async () => {
+    vi.useFakeTimers();
+    const { accounting, evalMock } = registerCommon();
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', model: 'gpt-5.5', input: 'large' }) } as never,
+      ws as never
+    );
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+    const terminate = vi.spyOn(upstream, 'terminate');
+    // Simulate a peer which does not acknowledge our closing frame.
+    upstream.close = () => {
+      upstream.readyState = 2;
+    };
+    await handlers.onMessage?.({ data: JSON.stringify({ type: 'response.cancel' }) } as never, ws as never);
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'cancelled');
+    expect(evalMock).toHaveBeenCalledTimes(2);
+    expect(upstream.handlers.message).toBeUndefined();
+    expect(upstream.handlers.open).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledOnce();
+  });
+
+  it.each(['disconnect', 'cancel'])('does not open an orphan upstream after %s during admission', async (ending) => {
+    const { proxy, accounting } = registerCommon();
+    let resolve!: (value: unknown) => void;
+    const target = await proxy.resolveTarget();
+    proxy.resolveTarget.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      })
+    );
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    const pending = handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', model: 'gpt-5.5', input: 'hi' }) } as never,
+      ws as never
+    );
+    await vi.waitFor(() => expect(proxy.resolveTarget).toHaveBeenCalledTimes(2));
+    if (ending === 'disconnect') handlers.onClose?.({ code: 1000 } as never, ws as never);
+    else await handlers.onMessage?.({ data: JSON.stringify({ type: 'response.cancel' }) } as never, ws as never);
+    resolve(target);
+    await pending;
+    expect(upstreamInstances).toHaveLength(0);
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'cancelled');
+  });
+
+  it('latches cancellation before its asynchronous payload lookup lets admission finish', async () => {
+    const { proxy, accounting } = registerCommon();
+    const target = await proxy.resolveTarget();
+    let admit!: (value: unknown) => void;
+    proxy.resolveTarget.mockReturnValueOnce(
+      new Promise((done) => {
+        admit = done;
+      })
+    );
+    let resolveLimit!: (value: number) => void;
+    const lookupLimit = vi
+      .fn()
+      .mockResolvedValueOnce(1024 * 1024)
+      .mockImplementationOnce(
+        () =>
+          new Promise<number>((done) => {
+            resolveLimit = done;
+          })
+      );
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH, lookupLimit);
+    const pending = handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', model: 'gpt-5.5', input: 'hi' }) } as never,
+      ws as never
+    );
+    await vi.waitFor(() => expect(proxy.resolveTarget).toHaveBeenCalledTimes(2));
+    const cancel = handlers.onMessage?.({ data: JSON.stringify({ type: 'response.cancel' }) } as never, ws as never);
+    await vi.waitFor(() => expect(lookupLimit).toHaveBeenCalledTimes(2));
+    admit(target);
+    await pending;
+    expect(upstreamInstances).toHaveLength(0);
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'cancelled');
+    resolveLimit(1024 * 1024);
+    await cancel;
+  });
+
+  it('preserves the transport cause when alternate capacity is unavailable', async () => {
+    const { proxy, accounting } = registerCommon(['conn-1', 'conn-2']);
+    const ws = clientSocket();
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', model: 'gpt-5.5', input: 'hi' }) } as never,
+      ws as never
+    );
+    proxy.resolveTarget.mockRejectedValueOnce(
+      new InferenceProtocolError(503, 'provider_capacity_unavailable', 'No capacity')
+    );
+    upstreamInstances[0]!.handlers.close?.(1006);
+    await vi.waitFor(() => expect(accounting.finalizeCoreRequest).toHaveBeenCalled());
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      'failed',
+      expect.objectContaining({ code: 'inference_core_unavailable' })
+    );
+    expect(upstreamInstances[0]!.handlers.message).toBeUndefined();
+  });
+
   it.each([
     'close',
     'error',

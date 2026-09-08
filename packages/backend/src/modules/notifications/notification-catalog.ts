@@ -29,6 +29,8 @@ export const SEVERITY_COLOR: Record<Severity, number> = {
 // ── Alert Categories ──────────────────────────────────────────────────
 
 export type AlertCategory =
+  | 'hosting_vm'
+  | 'hosting_account'
   | 'node'
   | 'container'
   | 'build'
@@ -87,6 +89,68 @@ export function isPerDeviceNodeMetric(metric: string): boolean {
 }
 
 export const ALERT_CATEGORIES: CategoryDefinition[] = [
+  {
+    id: 'hosting_vm',
+    label: 'Hosting VM',
+    metrics: [],
+    events: [
+      ...['running', 'stopped', 'starting', 'stopping', 'unknown', 'missing'].map((state) => ({
+        id: `power.${state}`,
+        label: `VM ${state}`,
+        defaultSeverity: state === 'running' ? ('info' as const) : ('warning' as const),
+        supportsThreshold: true,
+      })),
+      {
+        id: 'operation.failed',
+        label: 'VM operation failed (including provisioning and snapshots)',
+        defaultSeverity: 'critical',
+      },
+      { id: 'operation.ready', label: 'VM operation completed', defaultSeverity: 'info' },
+      { id: 'operation.unknown', label: 'VM operation outcome needs attention', defaultSeverity: 'warning' },
+      {
+        id: 'firewall.failed',
+        label: 'VM firewall synchronization failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+    ],
+    variables: [
+      { name: 'state.current', description: 'Observed VM power state' },
+      { name: 'details.provider', description: 'Hosting provider' },
+      { name: 'details.connector_id', description: 'Hosting account ID' },
+      { name: 'details.remote_id', description: 'Provider VM ID' },
+      { name: 'operation.kind', description: 'Provisioning, power, resize, destroy or snapshot action' },
+      { name: 'operation.phase', description: 'Operation phase' },
+      { name: 'details.failure_message', description: 'Safe operation error message' },
+    ],
+  },
+  {
+    id: 'hosting_account',
+    label: 'Hosting account',
+    metrics: [
+      { id: 'balance', label: 'Account balance', unit: 'currency', defaultOperator: '<', defaultValue: 10 },
+      {
+        id: 'monthly_expenses',
+        label: 'Estimated monthly VM expenses',
+        unit: 'currency/month',
+        defaultOperator: '>',
+        defaultValue: 100,
+      },
+    ],
+    events: [
+      {
+        id: 'sync.failed',
+        label: 'Hosting synchronization failed',
+        defaultSeverity: 'warning',
+        supportsThreshold: true,
+      },
+    ],
+    variables: [
+      { name: 'details.currency', description: 'ISO currency of the observed amount' },
+      { name: 'details.provider', description: 'Hosting provider' },
+      { name: 'state.current', description: 'Account synchronization state' },
+    ],
+  },
   {
     id: 'node',
     label: 'Node',

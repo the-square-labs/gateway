@@ -40,6 +40,9 @@ const CONNECTION = {
   id: 'conn-1',
   providerId: 'openai-apikey',
   enabled: true,
+  status: 'healthy',
+  healthReason: null,
+  minimumRemainingPercent: 1,
   deletedAt: null,
   apiMonthlyLimitMicrodollars: null,
 };
@@ -87,6 +90,9 @@ function createHarness(
     reserveError?: unknown;
     claimEmpty?: boolean;
     selectRows?: unknown[][];
+    connection?: unknown;
+    quotaRows?: unknown[];
+    cooldownActive?: boolean;
   } = {}
 ) {
   const insertedAttempts: unknown[] = [];
@@ -105,7 +111,8 @@ function createHarness(
       },
       inferenceModels: { findFirst: vi.fn().mockResolvedValue(MODEL) },
       inferenceModelSources: { findFirst: vi.fn().mockResolvedValue(SOURCE) },
-      inferenceProviderConnections: { findFirst: vi.fn().mockResolvedValue(CONNECTION) },
+      inferenceProviderConnections: { findFirst: vi.fn().mockResolvedValue(options.connection ?? CONNECTION) },
+      inferenceQuotaSnapshots: { findMany: vi.fn().mockResolvedValue(options.quotaRows ?? []) },
       inferencePricingSnapshots: { findFirst: vi.fn().mockResolvedValue(null) },
     },
     insert: vi.fn(() => ({
@@ -169,14 +176,28 @@ function createHarness(
     lockProviderConnection: vi.fn(),
   };
   const eventBus = { publish: vi.fn() };
+  const redis = { exists: vi.fn().mockResolvedValue(options.cooldownActive ? 1 : 0) };
   const service = new InferenceCoreAccountingService(
     db as never,
     policies as never,
     reservations as never,
     locks as never,
-    eventBus as never
+    eventBus as never,
+    redis as never
   );
-  return { service, db, tx, policies, reservations, locks, eventBus, insertedAttempts, ledgerRows, requestUpdates };
+  return {
+    service,
+    db,
+    tx,
+    policies,
+    reservations,
+    locks,
+    eventBus,
+    redis,
+    insertedAttempts,
+    ledgerRows,
+    requestUpdates,
+  };
 }
 
 describe('inference core accounting', () => {
@@ -231,6 +252,86 @@ describe('inference core accounting', () => {
       decision: 'deny',
       reason: 'model_disabled',
     });
+  });
+
+  it.each([
+    'disabled',
+    'reauth_required',
+  ] as const)('denies a new attempt when the connection becomes %s after ingress', async (status) => {
+    const { service } = createHarness({ connection: { ...CONNECTION, status } });
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({
+      decision: 'deny',
+      reason: 'model_disabled',
+    });
+  });
+
+  it('denies a new attempt while the Redis cooldown lease is active', async () => {
+    const { service } = createHarness({ cooldownActive: true });
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({
+      decision: 'deny',
+      reason: 'model_disabled',
+    });
+  });
+
+  it('allows a new attempt after a persisted cooldown lease expires', async () => {
+    const { service } = createHarness({ connection: { ...CONNECTION, status: 'cooldown' } });
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'allow' });
+  });
+
+  it('denies a new attempt while a current quota snapshot is exhausted', async () => {
+    const { service } = createHarness({
+      // Status persistence can lag the latest quota row; admission must use
+      // the same current-snapshot floor as routing even while still healthy.
+      connection: { ...CONNECTION, status: 'healthy' },
+      quotaRows: [
+        {
+          connectionId: CONNECTION.id,
+          dimension: '5h',
+          modelBucket: null,
+          status: 'fresh',
+          remainingFraction: '0',
+          fetchedAt: new Date(),
+          validUntil: new Date(Date.now() + 60_000),
+          resetAt: new Date(Date.now() + 60_000),
+        },
+      ],
+    });
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({
+      decision: 'deny',
+      reason: 'model_disabled',
+    });
+  });
+
+  it.each([
+    'validUntil',
+    'resetAt',
+  ] as const)('allows stale recovery when the exhausted quota %s has passed', async (expiredField) => {
+    const now = Date.now();
+    const quota = {
+      connectionId: CONNECTION.id,
+      dimension: '5h',
+      modelBucket: null,
+      status: 'fresh',
+      remainingFraction: '0',
+      fetchedAt: new Date(now - 120_000),
+      validUntil: new Date(now + 60_000),
+      resetAt: new Date(now + 60_000),
+      [expiredField]: new Date(now - 1),
+    };
+    const { service } = createHarness({
+      connection: { ...CONNECTION, status: 'unavailable' },
+      quotaRows: [quota],
+    });
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'allow' });
+  });
+
+  it('does not retroactively deny an idempotent admission replay after the connection hard-blocks', async () => {
+    const { service, reservations } = createHarness({
+      attempt: ATTEMPT,
+      connection: { ...CONNECTION, status: 'reauth_required', healthReason: 'Reconnect required' },
+    });
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'allow' });
+    expect(reservations.reserve).not.toHaveBeenCalled();
   });
 
   it('maps budget exhaustion to a deny with retry guidance', async () => {
@@ -337,6 +438,7 @@ describe('inference core accounting', () => {
   });
 
   it('does not charge silent failures and acknowledges identical redelivery', async () => {
+    const completedAt = new Date('2026-09-08T12:00:01.000Z');
     const failedAttempt = {
       ...ATTEMPT,
       status: 'failed',
@@ -344,6 +446,11 @@ describe('inference core accounting', () => {
       outputTokens: 0,
       uncachedInputTokens: 0,
       cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      emittedOutput: false,
+      errorCode: 'upstream_error',
+      completedAt,
     };
     const { service, ledgerRows } = createHarness({ attempt: failedAttempt });
     await service.settleCoreAttempt({
@@ -362,9 +469,100 @@ describe('inference core accounting', () => {
       usageEstimated: true,
       emittedOutput: false,
       startedAt: new Date(Date.now() - 1000).toISOString(),
-      completedAt: new Date().toISOString(),
+      completedAt: completedAt.toISOString(),
     });
     expect(ledgerRows).toHaveLength(0);
+  });
+
+  it('persists usageEstimated for a first silent failure without creating a ledger row', async () => {
+    const completedAt = new Date('2026-09-08T12:00:01.000Z');
+    const { service, ledgerRows, requestUpdates } = createHarness({
+      attempt: ATTEMPT,
+      selectRows: [
+        [
+          {
+            uncachedInputTokens: 0,
+            cachedInputTokens: 0,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+          },
+        ],
+        [{ credits: '0', apiMicrodollars: 0, estimatedUsage: false }],
+      ],
+    });
+    await service.settleCoreAttempt({
+      contractId: 'wiolett-core/v1',
+      rootRequestId: REQUEST.id,
+      attemptId: 'att_1',
+      parentAttemptId: null,
+      attemptKind: 'root',
+      terminalStatus: 'failed',
+      coreAccountId: 'core-conn-1',
+      coreModelId: 'core-conn-1/gpt-5.5',
+      sourceType: 'subscription',
+      upstreamStatus: 500,
+      errorCode: 'upstream_error',
+      usage: {
+        uncachedInputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+      },
+      usageEstimated: true,
+      emittedOutput: false,
+      startedAt: new Date(completedAt.getTime() - 1000).toISOString(),
+      completedAt: completedAt.toISOString(),
+    });
+    expect(ledgerRows).toHaveLength(0);
+    expect(requestUpdates).toContainEqual(expect.objectContaining({ usageEstimated: true }));
+  });
+
+  it('allows legacy settlement redelivery when per-attempt usageEstimated is null', async () => {
+    const completedAt = new Date('2026-09-08T12:00:01.000Z');
+    const { service } = createHarness({
+      attempt: {
+        ...ATTEMPT,
+        status: 'failed',
+        upstreamStatus: 500,
+        outputTokens: 0,
+        uncachedInputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        emittedOutput: false,
+        errorCode: 'upstream_error',
+        usageEstimated: null,
+        completedAt,
+      },
+    });
+    await expect(
+      service.settleCoreAttempt({
+        contractId: 'wiolett-core/v1',
+        rootRequestId: REQUEST.id,
+        attemptId: 'att_1',
+        parentAttemptId: null,
+        attemptKind: 'root',
+        terminalStatus: 'failed',
+        coreAccountId: 'core-conn-1',
+        coreModelId: 'core-conn-1/gpt-5.5',
+        sourceType: 'subscription',
+        upstreamStatus: 500,
+        errorCode: 'upstream_error',
+        usage: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+        },
+        usageEstimated: true,
+        emittedOutput: false,
+        startedAt: new Date(completedAt.getTime() - 1000).toISOString(),
+        completedAt: completedAt.toISOString(),
+      })
+    ).resolves.toBeUndefined();
   });
 
   it('rejects a redelivered settlement whose payload differs', async () => {
@@ -376,6 +574,10 @@ describe('inference core accounting', () => {
         outputTokens: 10,
         uncachedInputTokens: 5,
         cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        emittedOutput: true,
+        errorCode: null,
       },
     });
     await expect(
@@ -400,6 +602,57 @@ describe('inference core accounting', () => {
         },
         usageEstimated: false,
         emittedOutput: true,
+        startedAt: new Date(Date.now() - 1000).toISOString(),
+        completedAt: new Date().toISOString(),
+      })
+    ).rejects.toMatchObject({ statusCode: 409, code: 'core_settlement_conflict' });
+  });
+
+  it.each([
+    { field: 'cacheWriteTokens', usage: { cacheWriteTokens: 9 } },
+    { field: 'reasoningTokens', usage: { reasoningTokens: 9 } },
+    { field: 'emittedOutput', emittedOutput: false },
+    { field: 'errorCode', errorCode: 'different_error' },
+    { field: 'usageEstimated', usageEstimated: true },
+  ])('rejects a redelivered settlement with different $field', async (difference) => {
+    const settledAttempt = {
+      ...ATTEMPT,
+      status: 'completed',
+      upstreamStatus: 200,
+      outputTokens: 10,
+      uncachedInputTokens: 5,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      emittedOutput: true,
+      errorCode: null,
+      usageEstimated: false,
+    };
+    const { service } = createHarness({ attempt: settledAttempt });
+    const usage = {
+      uncachedInputTokens: 5,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 10,
+      reasoningTokens: 0,
+      ...(difference.usage ?? {}),
+    };
+    await expect(
+      service.settleCoreAttempt({
+        contractId: 'wiolett-core/v1',
+        rootRequestId: REQUEST.id,
+        attemptId: 'att_1',
+        parentAttemptId: null,
+        attemptKind: 'root',
+        terminalStatus: 'completed',
+        coreAccountId: 'core-conn-1',
+        coreModelId: 'core-conn-1/gpt-5.5',
+        sourceType: 'subscription',
+        upstreamStatus: 200,
+        errorCode: difference.errorCode ?? null,
+        usage,
+        usageEstimated: difference.usageEstimated ?? false,
+        emittedOutput: difference.emittedOutput ?? true,
         startedAt: new Date(Date.now() - 1000).toISOString(),
         completedAt: new Date().toISOString(),
       })

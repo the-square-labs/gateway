@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Filter, Search } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,7 @@ interface SearchFilterBarProps {
   filters?: ReactNode;
   /** Render filters beside search instead of behind the Filters button */
   inlineFilters?: boolean;
+  initialFiltersOpen?: boolean;
   /** Optional styling for embedding the bar into an existing panel */
   className?: string;
   /** Optional styling for the search input */
@@ -37,10 +38,14 @@ export function SearchFilterBar({
   onReset: _onReset,
   filters,
   inlineFilters = false,
+  initialFiltersOpen = false,
   className,
   inputClassName,
 }: SearchFilterBarProps) {
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(initialFiltersOpen);
+  useEffect(() => {
+    if (initialFiltersOpen) setShowFilters(true);
+  }, [initialFiltersOpen]);
 
   return (
     <div className={cn("space-y-0", className)}>
@@ -57,7 +62,11 @@ export function SearchFilterBar({
         </div>
         {filters && inlineFilters && filters}
         {filters && !inlineFilters && (
-          <Button variant="outline" onClick={() => setShowFilters(!showFilters)}>
+          <Button
+            variant="outline"
+            aria-expanded={showFilters}
+            onClick={() => setShowFilters(!showFilters)}
+          >
             <Filter className="h-4 w-4" />
             Filters
           </Button>

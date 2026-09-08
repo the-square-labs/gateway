@@ -1275,6 +1275,48 @@
       "when": 1788369861567,
       "tag": "0181_mute_kingpin",
       "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1788586307297,
+      "tag": "0182_simple_the_renegades",
+      "breakpoints": true
+    },
+    {
+      "idx": 183,
+      "version": "7",
+      "when": 1788614555234,
+      "tag": "0183_dashing_wolverine",
+      "breakpoints": true
+    },
+    {
+      "idx": 184,
+      "version": "7",
+      "when": 1788699533526,
+      "tag": "0184_hosted_vm_firewall",
+      "breakpoints": true
+    },
+    {
+      "idx": 185,
+      "version": "7",
+      "when": 1788787165502,
+      "tag": "0185_hosting_snapshot_folders",
+      "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "7",
+      "when": 1788818400000,
+      "tag": "0186_hosting_snapshot_entities",
+      "breakpoints": true
+    },
+    {
+      "idx": 187,
+      "version": "7",
+      "when": 1788869100000,
+      "tag": "0187_core_attempt_usage_estimated",
+      "breakpoints": true
     }
   ]
 }

@@ -217,6 +217,20 @@ export function ProxyHostDetail({
   const [renderedConfig, setRenderedConfig] = useState("");
   const [rawConfig, setRawConfig] = useState("");
   const [isLoadingRaw, setIsLoadingRaw] = useState(false);
+  const [hasLoadedRendered, setHasLoadedRendered] = useState(false);
+  const renderedRequest = useRef(0);
+  const renderedResource = useRef(id);
+  const renderedValue = useRef("");
+  useEffect(() => {
+    renderedResource.current = id;
+    renderedRequest.current++;
+    renderedValue.current = "";
+    setRenderedConfig("");
+    setHasLoadedRendered(false);
+    return () => {
+      renderedRequest.current++;
+    };
+  }, [id]);
   const [isSavingRaw, setIsSavingRaw] = useState(false);
 
   const dirtySectionsRef = useRef<ProxyHostDraftState>(CLEAN_PROXY_HOST_DRAFTS);
@@ -366,14 +380,22 @@ export function ProxyHostDetail({
   // ── Load rendered config ──────────────────────────────────────
   const loadRenderedConfig = useCallback(async () => {
     if (!id) return;
+    const request = ++renderedRequest.current;
     setIsLoadingRaw(true);
     try {
       const result = await api.getRenderedProxyConfig(id);
+      if (request !== renderedRequest.current || renderedResource.current !== id) return;
+      renderedValue.current = result.rendered;
       setRenderedConfig(result.rendered);
     } catch {
-      setRenderedConfig("# Could not load rendered config.");
+      if (request !== renderedRequest.current) return;
+      if (!renderedValue.current) setRenderedConfig("# Could not load rendered config.");
+      else toast.error("Could not refresh rendered config. Showing the last loaded version.");
     } finally {
-      setIsLoadingRaw(false);
+      if (request === renderedRequest.current) {
+        setIsLoadingRaw(false);
+        setHasLoadedRendered(true);
+      }
     }
   }, [id]);
 
@@ -1283,6 +1305,8 @@ export function ProxyHostDetail({
           {visibleTabs.includes("raw") && (
             <TabsContent value="raw" className="flex flex-col flex-1 min-h-0">
               <RawConfigTab
+                key={id}
+                hasLoadedRendered={hasLoadedRendered}
                 isRawMode={isRawMode}
                 rawConfig={rawConfig}
                 setRawConfig={setRawConfig}

@@ -11,6 +11,7 @@ import { InferenceTokenService } from '../inference-token.service.js';
 import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
 import { InferenceProtocolError, inferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { canFailOver } from '../providers/inference-routing.service.js';
+import type { CoreDataPlaneTarget } from './inference-core-bridge.service.js';
 import { coreRequestHeaders, newCoreRequestContext } from './inference-core-context.js';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 import { startInferenceWebSocketHeartbeat } from './inference-websocket-heartbeat.js';
@@ -51,6 +52,9 @@ interface ConnectionState {
   active: ActiveTurn | null;
   unsubscribe: (() => void) | null;
   closedForRevocation: boolean;
+  closed: boolean;
+  starting: boolean;
+  cancelStarting: boolean;
 }
 
 interface ActiveTurn {
@@ -65,6 +69,8 @@ interface ActiveTurn {
   emittedOutput: boolean;
   pendingPreludeFrames: string[];
   finalized: boolean;
+  disposeUpstream?: () => void;
+  firstTransportError?: Error;
   refreshAffinity?: () => Promise<void>;
   /** Per-user concurrency lease; released exactly once when the turn ends. */
   release: () => Promise<void>;
@@ -73,6 +79,7 @@ interface ActiveTurn {
 /** Responses WS events that end a turn. */
 const TERMINAL_EVENTS = new Set(['response.completed', 'response.failed', 'response.incomplete', 'error']);
 const MAX_PENDING_PRELUDE_FRAMES = 4;
+const MAX_PENDING_PRELUDE_BYTES = 1024 * 1024;
 const UPSTREAM_CLOSE_BEFORE_RETRY_MS = 1_000;
 
 /**
@@ -96,6 +103,9 @@ export function createCoreResponsesWSHandlers(
     active: null,
     unsubscribe: null,
     closedForRevocation: false,
+    closed: false,
+    starting: false,
+    cancelStarting: false,
   };
   return {
     onOpen(_event, ws) {
@@ -117,8 +127,18 @@ export function createCoreResponsesWSHandlers(
       }
     },
     async onMessage(event, ws) {
-      if (!auth) return;
+      if (!auth || state.closed) return;
       state.lastClientMessageAt = Date.now();
+      // A small cancellation frame must fence pending admission before any await.
+      // Still run the normal rate/payload checks below; this only prevents work
+      // from starting while those checks are outstanding.
+      if (state.starting && payloadBytes(event.data) <= 1024) {
+        try {
+          if (JSON.parse(String(event.data))?.type === 'response.cancel') state.cancelStarting = true;
+        } catch {
+          // The normal parser below reports malformed frames.
+        }
+      }
       try {
         await consumeInferenceRateLimit(auth);
       } catch (error) {
@@ -142,6 +162,7 @@ export function createCoreResponsesWSHandlers(
         return;
       }
       if (message.type === 'response.cancel') {
+        if (state.starting) state.cancelStarting = true;
         const active = state.active;
         if (active) {
           active.cancelled = true;
@@ -155,6 +176,7 @@ export function createCoreResponsesWSHandlers(
           } catch {
             // Already closed.
           }
+          endTurn(state, 'cancelled');
         }
         return;
       }
@@ -167,32 +189,45 @@ export function createCoreResponsesWSHandlers(
         return;
       }
       const freshAuth = await revalidateAuth(auth);
+      if (state.closed) return;
       if (!freshAuth) {
         sendError(ws, 401, 'invalid_api_key', 'Invalid or revoked Gateway inference token');
         state.stopHeartbeat();
         ws.close(1008, 'Unauthorized');
         return;
       }
-      if (state.active) {
+      if (state.active || state.starting) {
         sendError(ws, 409, 'response_in_progress', 'A response is already running');
         return;
       }
+      state.starting = true;
+      state.cancelStarting = false;
       const release = await acquireInferenceConcurrency(freshAuth).catch((error: unknown) => {
         const protocol = inferenceProtocolError(error);
         sendError(ws, protocol.status, protocol.code, protocol.message);
         return null;
       });
-      if (!release) return;
+      if (!release) {
+        state.starting = false;
+        return;
+      }
       try {
+        if (state.closed) {
+          await release();
+          return;
+        }
         await startTurn(state, ws, freshAuth, message, release);
       } catch (error) {
         // The turn never started, so the lease is still owned here.
         await release();
         const protocol = inferenceProtocolError(error);
         sendError(ws, protocol.status, protocol.code, protocol.message);
+      } finally {
+        state.starting = false;
       }
     },
     onClose(event) {
+      state.closed = true;
       state.stopHeartbeat();
       logTransportEvent(state, state.active, 'client', 'close', event.code);
       endTurn(state, 'cancelled');
@@ -200,6 +235,7 @@ export function createCoreResponsesWSHandlers(
       state.unsubscribe = null;
     },
     onError() {
+      state.closed = true;
       state.stopHeartbeat();
       logTransportEvent(state, state.active, 'client', 'error');
       endTurn(state, 'cancelled');
@@ -280,6 +316,14 @@ async function startTurn(
   state.active = turn;
   state.lastRequestId = requestId;
   state.lastCoreMessageAt = null;
+  if (state.closed || state.cancelStarting) {
+    if (!state.closed) {
+      send(ws, cancelledEvent(turn.responseId, turn.model));
+      turn.terminalSent = true;
+    }
+    endTurn(state, 'cancelled');
+    return;
+  }
   try {
     await connectTurnAttempt({
       state,
@@ -313,7 +357,7 @@ async function connectTurnAttempt(input: {
   auth: InferenceCoreWebSocketAuth;
   proxy: InferenceCoreProxyService;
   accounting: InferenceCoreAccountingService;
-  target: { baseUrl: string; credential: string };
+  target: CoreDataPlaneTarget;
   turn: ActiveTurn;
   message: Record<string, unknown>;
   envelope: Record<string, unknown>;
@@ -336,6 +380,8 @@ async function connectTurnAttempt(input: {
       resolved.selected.connection
     );
   }
+  // Resolving a replacement can outlive a downstream cancellation.
+  if (input.state.closed || input.state.active !== input.turn || input.turn.finalized) return;
 
   const rewritten: Record<string, unknown> = { ...input.message };
   const rewrittenEnvelope: Record<string, unknown> = { ...input.envelope, model: resolved.upstreamModel };
@@ -357,6 +403,7 @@ async function connectTurnAttempt(input: {
   else Object.assign(rewritten, rewrittenEnvelope);
 
   const { claims } = newCoreRequestContext({
+    requestLimits: input.target.requestLimits,
     tenantUserId: input.auth.user.id,
     rootRequestId: input.turn.requestId,
     publicModelId: resolved.model.publicId,
@@ -364,6 +411,17 @@ async function connectTurnAttempt(input: {
     coreModelId: resolved.upstreamModel,
     operation: 'responses',
   });
+  let pendingFrame: string | undefined = JSON.stringify(rewritten);
+  const maxCoreFrameBytes = input.target.requestLimits?.webSocketMaxPayloadBytes ?? 50 * 1024 * 1024;
+  if (Buffer.byteLength(pendingFrame) > maxCoreFrameBytes) {
+    throw new InferenceProtocolError(
+      413,
+      'request_too_large',
+      input.target.requestLimits
+        ? 'WebSocket message exceeds the configured inference limit'
+        : 'WebSocket message exceeds the legacy core limit; update the inference core to apply Gateway limits'
+    );
+  }
   let upstream: WebSocketType;
   try {
     upstream = new WebSocket(`${input.target.baseUrl.replace(/^http/, 'ws')}/v1/responses`, {
@@ -382,6 +440,7 @@ async function connectTurnAttempt(input: {
   input.turn.upstream = upstream;
   let ended = false;
   let retryAfterClose = false;
+  let providerFailure = false;
   let closeWatchdog: ReturnType<typeof setTimeout> | null = null;
 
   const clearCloseWatchdog = () => {
@@ -390,6 +449,22 @@ async function connectTurnAttempt(input: {
     closeWatchdog = null;
   };
 
+  // Keep only the serialized send buffer until open. The listener must not
+  // retain a second parsed copy of a large request for the socket lifetime.
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    ended = true;
+    clearCloseWatchdog();
+    pendingFrame = undefined;
+    input.message = {};
+    input.envelope = {};
+    if (input.turn.upstream === upstream) input.turn.upstream = null;
+    closeCoreSocket(upstream);
+  };
+  input.turn.disposeUpstream = dispose;
+
   const retryOrFail = (error?: unknown, allowConnectionFailover = true) => {
     if (ended) return;
     ended = true;
@@ -397,11 +472,35 @@ async function connectTurnAttempt(input: {
     if (input.state.active !== input.turn || input.turn.cancelled || input.turn.finalized) return;
     if (allowConnectionFailover && !input.turn.emittedOutput && resolved.candidateConnectionIds.length > 1) {
       input.turn.pendingPreludeFrames = [];
-      void connectTurnAttempt({
+      if (!providerFailure) {
+        input.turn.firstTransportError ??=
+          error instanceof CoreWebSocketUpgradeError
+            ? error
+            : new InferenceProtocolError(
+                502,
+                'inference_core_unavailable',
+                'The inference core connection ended before output'
+              );
+      }
+      const next = {
         ...input,
         resolved,
         excludedConnectionIds: [...input.excludedConnectionIds, resolved.selected.connection.id],
-      }).catch((retryError) => failTurn(input.state, input.ws, input.accounting, input.turn, retryError));
+      };
+      dispose();
+      void connectTurnAttempt(next).catch((retryError) =>
+        failTurn(
+          input.state,
+          input.ws,
+          input.accounting,
+          input.turn,
+          input.turn.firstTransportError &&
+            retryError instanceof InferenceProtocolError &&
+            retryError.code === 'provider_capacity_unavailable'
+            ? input.turn.firstTransportError
+            : retryError
+        )
+      );
       return;
     }
     failTurn(input.state, input.ws, input.accounting, input.turn, error);
@@ -410,6 +509,7 @@ async function connectTurnAttempt(input: {
   const retryOnceClosed = () => {
     if (ended || retryAfterClose) return;
     retryAfterClose = true;
+    providerFailure = true;
     closeWatchdog = setTimeout(() => {
       if (ended || !retryAfterClose) return;
       retryAfterClose = false;
@@ -429,7 +529,11 @@ async function connectTurnAttempt(input: {
     }
   };
 
-  upstream.on('open', () => upstreamSend(upstream, JSON.stringify(rewritten)));
+  upstream.once('open', () => {
+    const frame = pendingFrame;
+    pendingFrame = undefined;
+    if (!ended && frame) upstreamSend(upstream, frame);
+  });
   upstream.on('unexpected-response', (_request, response) => {
     const error = new CoreWebSocketUpgradeError(response.statusCode ?? null);
     response.resume();
@@ -462,7 +566,14 @@ async function connectTurnAttempt(input: {
     }
     const eventType = typeof parsed?.type === 'string' ? parsed.type : '';
     if (!terminal && isPreludeEvent(eventType)) {
-      if (input.turn.pendingPreludeFrames.length < MAX_PENDING_PRELUDE_FRAMES) {
+      const bufferedBytes = input.turn.pendingPreludeFrames.reduce(
+        (bytes, frame) => bytes + Buffer.byteLength(frame),
+        0
+      );
+      if (
+        input.turn.pendingPreludeFrames.length < MAX_PENDING_PRELUDE_FRAMES &&
+        bufferedBytes + Buffer.byteLength(text) <= MAX_PENDING_PRELUDE_BYTES
+      ) {
         input.turn.pendingPreludeFrames.push(text);
       } else {
         // Never discard an ordered protocol frame. Once the bounded prelude
@@ -471,6 +582,8 @@ async function connectTurnAttempt(input: {
         flushPreludeFrames(input.ws, input.turn);
         sendRaw(input.ws, text);
         input.turn.emittedOutput = true;
+        input.message = {};
+        input.envelope = {};
       }
       return;
     }
@@ -479,7 +592,13 @@ async function connectTurnAttempt(input: {
       return;
     }
     flushPreludeFrames(input.ws, input.turn);
-    if (!terminal) input.turn.emittedOutput = true;
+    if (!terminal) {
+      input.turn.emittedOutput = true;
+      // Crossing the output boundary permanently forbids replay. Release the
+      // full input while a long model response is still streaming.
+      input.message = {};
+      input.envelope = {};
+    }
     sendRaw(input.ws, text);
     if (terminal) {
       ended = true;
@@ -578,6 +697,10 @@ function finalizeTurn(
 ): void {
   if (turn.finalized) return;
   turn.finalized = true;
+  turn.disposeUpstream?.();
+  turn.disposeUpstream = undefined;
+  turn.pendingPreludeFrames = [];
+  turn.firstTransportError = undefined;
   void turn.release().catch(() => undefined);
   if (turn.refreshAffinity) void turn.refreshAffinity().catch(() => undefined);
   const finalized = error
@@ -613,11 +736,28 @@ function isAccessRevocation(payload: unknown): boolean {
 function closeForRevocation(state: ConnectionState, ws: WSContext): void {
   if (state.closedForRevocation) return;
   state.closedForRevocation = true;
+  state.closed = true;
   state.stopHeartbeat();
   endTurn(state, 'cancelled');
   state.unsubscribe?.();
   state.unsubscribe = null;
   ws.close(1008, 'Access revoked');
+}
+
+/** Detach request-bearing listeners now; only a tiny close deadline may linger. */
+function closeCoreSocket(upstream: WebSocketType): void {
+  for (const event of ['open', 'message', 'close', 'error', 'unexpected-response']) upstream.removeAllListeners(event);
+  upstream.on('error', () => undefined);
+  if (upstream.readyState === WebSocket.CLOSED) return;
+  const timer = setTimeout(() => upstream.terminate(), UPSTREAM_CLOSE_BEFORE_RETRY_MS);
+  timer.unref?.();
+  upstream.once('close', () => clearTimeout(timer));
+  try {
+    upstream.close();
+  } catch {
+    clearTimeout(timer);
+    upstream.terminate();
+  }
 }
 
 function upstreamSend(upstream: WebSocketType, frame: string): void {

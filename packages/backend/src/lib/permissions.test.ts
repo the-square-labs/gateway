@@ -13,6 +13,13 @@ import {
 
 describe('Scope-based permissions', () => {
   describe('hasScope', () => {
+    it('keeps snapshot view and mutation rights isolated by VM', () => {
+      expect(hasScope(['hosting:resources:view'], 'hosting:snapshots:view:vm')).toBe(false);
+      expect(hasScope(['hosting:snapshots:view:vm'], 'hosting:snapshots:create:vm')).toBe(false);
+      expect(hasScope(['hosting:snapshots:create:vm'], 'hosting:snapshots:view:vm')).toBe(true);
+      expect(hasScope(['hosting:snapshots:create:vm'], 'hosting:snapshots:view:other')).toBe(false);
+      expect(hasScope(['hosting:snapshots:create:vm'], 'hosting:snapshots:view')).toBe(false);
+    });
     it('exact match', () => {
       expect(hasScope(['cert:read', 'cert:issue'], 'cert:issue')).toBe(true);
     });

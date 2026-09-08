@@ -59,22 +59,27 @@ function extractApiErrorMessage(payload: unknown, fallback: string): string {
     error?: unknown;
     details?: unknown;
   };
-  const firstDetailMessage = Array.isArray(candidate.details)
+  const firstDetail = Array.isArray(candidate.details)
     ? candidate.details.find(
-        (detail): detail is { message: string } =>
+        (detail): detail is { message: string; path?: unknown } =>
           !!detail &&
           typeof detail === "object" &&
           typeof (detail as { message?: unknown }).message === "string" &&
           Boolean((detail as { message: string }).message.trim())
-      )?.message
+      )
     : undefined;
+  const firstDetailMessage = firstDetail?.message;
 
   if (
     candidate.code === "VALIDATION_ERROR" &&
     typeof firstDetailMessage === "string" &&
     firstDetailMessage.trim()
   ) {
-    return firstDetailMessage;
+    return /^invalid$/i.test(firstDetailMessage.trim()) &&
+      typeof firstDetail?.path === "string" &&
+      firstDetail.path
+      ? `Invalid value for ${firstDetail.path}`
+      : firstDetailMessage;
   }
   if (typeof candidate.message === "string" && candidate.message.trim()) {
     return candidate.message;

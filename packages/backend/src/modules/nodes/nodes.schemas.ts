@@ -85,6 +85,7 @@ export const UpdateNodeServiceCreationLockSchema = z.object({
 });
 
 export const NodeListQuerySchema = z.object({
+  hosting: z.union([z.string().uuid(), z.literal('unmanaged')]).optional(),
   search: z.string().optional(),
   type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'builder', 'databases', 'relay']).optional(),
   status: z.enum(['pending', 'online', 'offline', 'error']).optional(),

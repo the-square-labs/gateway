@@ -60,7 +60,7 @@ services:
       registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:3000/health || wget -qO- http://127.0.0.1:3000/health"]
+      # Inherit the image's bounded, child-process-free health probe.
       interval: 10s
       timeout: 5s
       retries: 5

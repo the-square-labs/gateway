@@ -534,6 +534,7 @@ export function DockerImages({
         resources={filteredImages as DockerImageListItem[]}
         columns={imageColumns}
         search={{
+          initialFiltersOpen: new URLSearchParams(location.search).get("filters") === "1",
           search,
           onSearchChange: setSearch,
           placeholder: "Search images by repository or tag...",

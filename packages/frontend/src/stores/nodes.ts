@@ -3,6 +3,7 @@ import { api } from "@/services/api";
 import type { Node, NodeStatus, NodeType } from "@/types";
 
 interface NodeFilters {
+  hosting: string;
   search: string;
   status: NodeStatus | "all";
   type: NodeType | "all";
@@ -33,7 +34,7 @@ export const useNodesStore = create<NodesState>()((set, get) => ({
   nodes: [],
   isLoading: true,
   error: null,
-  filters: { search: "", status: "all", type: "all" },
+  filters: { search: "", status: "all", type: "all", hosting: "all" },
   page: 1,
   limit: 50,
   total: 0,
@@ -44,7 +45,11 @@ export const useNodesStore = create<NodesState>()((set, get) => ({
     const requestId = ++fetchNodesRequestId;
     const { filters, page, limit } = get();
     const isDefaultQuery =
-      filters.search === "" && filters.status === "all" && filters.type === "all" && page === 1;
+      filters.search === "" &&
+      filters.status === "all" &&
+      filters.type === "all" &&
+      filters.hosting === "all" &&
+      page === 1;
     const cached = isDefaultQuery
       ? api.getCached<{
           data: Node[];
@@ -69,6 +74,7 @@ export const useNodesStore = create<NodesState>()((set, get) => ({
         search: filters.search || undefined,
         status: filters.status !== "all" ? filters.status : undefined,
         type: filters.type !== "all" ? filters.type : undefined,
+        hosting: filters.hosting !== "all" ? filters.hosting : undefined,
         page,
         limit,
       });
@@ -104,7 +110,7 @@ export const useNodesStore = create<NodesState>()((set, get) => ({
 
   resetFilters: () => {
     set({
-      filters: { search: "", status: "all", type: "all" },
+      filters: { search: "", status: "all", type: "all", hosting: "all" },
       page: 1,
     });
     get().fetchNodes();

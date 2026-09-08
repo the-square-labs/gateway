@@ -610,6 +610,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         icon: Settings,
         parentId: "settings",
         visible: hasAnyScope(
+          "integrations:hosting:view",
+          "integrations:hosting:manage",
           "integrations:gitlab:view",
           "integrations:gitlab:manage",
           "integrations:cloudflare:view",

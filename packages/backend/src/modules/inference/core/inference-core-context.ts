@@ -22,6 +22,7 @@ export function newCoreRequestContext(input: {
   operation: string;
   rootRequestId?: string;
   parentAttemptId?: string | null;
+  requestLimits?: InferenceCoreRequestContext['requestLimits'];
 }): { rootRequestId: string; claims: InferenceCoreRequestContext } {
   const issuedAt = Math.floor(Date.now() / 1000);
   const rootRequestId = input.rootRequestId ?? randomUUID();
@@ -39,6 +40,7 @@ export function newCoreRequestContext(input: {
       issuedAt,
       expiresAt: issuedAt + CONTEXT_TTL_SECONDS,
       nonce: randomBytes(16).toString('base64url'),
+      ...(input.requestLimits ? { requestLimits: input.requestLimits } : {}),
     },
   };
 }

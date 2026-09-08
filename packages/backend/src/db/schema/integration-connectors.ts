@@ -1,8 +1,9 @@
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, unique, uuid, varchar } from 'drizzle-orm/pg-core';
+import type { HostingProvider, HostingSettings } from '../../modules/hosting/hosting-provider.types.js';
 import { dockerRegistries } from './docker-registries.js';
 import { users } from './users.js';
 
-export type IntegrationProvider = 'gitlab' | 'github' | 'git' | 'cloudflare' | 'ssh';
+export type IntegrationProvider = 'gitlab' | 'github' | 'git' | 'cloudflare' | 'ssh' | HostingProvider;
 export type IntegrationConnectorAuthMode = 'token' | 'oauth';
 export type IntegrationAllowlistMode = 'selected' | 'all_visible';
 export type IntegrationSyncStatus = 'never' | 'idle' | 'running' | 'success' | 'error';
@@ -39,7 +40,8 @@ export type IntegrationConnectorCapabilities = Record<string, boolean>;
 export type IntegrationConnectorSettingsValue =
   | IntegrationConnectorSettings
   | CloudflareConnectorSettings
-  | GitConnectorSettings;
+  | GitConnectorSettings
+  | HostingSettings;
 
 export const integrationConnectors = pgTable(
   'integration_connectors',

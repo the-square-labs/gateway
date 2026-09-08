@@ -10,6 +10,8 @@ const CONTAINER_STATS_TTL = 600; // 10 minutes
 const NODE_MONITORING_HISTORY_KEY_PREFIX = 'node-monitoring-history:v1:';
 const NODE_MONITORING_HISTORY_TTL = 3_600; // 1 hour
 const NODE_MONITORING_HISTORY_MAX = 60;
+export const NODE_MONITORING_MAX_KEYS = 512;
+export const NODE_MONITORING_IDLE_TTL_MS = 60 * 60 * 1000;
 
 export const NODE_MONITORING_CADENCE_MS = {
   background: 10_000,
@@ -80,6 +82,9 @@ export function compactMonitoringHistorySnapshot(snapshot: any): MonitoringSnaps
 }
 
 export class NodeMonitoringService extends EventEmitter {
+  private destroyed = false;
+  private startupTimer: ReturnType<typeof setTimeout> | null = null;
+  private historyActivity = new Map<string, number>();
   private history = new Map<string, MonitoringSnapshot[]>();
   private clientCounts = new Map<string, number>();
   private focusedClientCounts = new Map<string, number>();
@@ -107,8 +112,11 @@ export class NodeMonitoringService extends EventEmitter {
    */
   private startBackgroundPolling(): void {
     // Delay start to let nodes connect first
-    setTimeout(() => {
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = null;
+      if (this.destroyed) return;
       this.backgroundInterval = setInterval(() => {
+        this.pruneHistory();
         const connectedNodes = this.registry.getConnectedNodeIds();
         for (const nodeId of connectedNodes) {
           // Skip nodes that already have stream-driven polling (2s or 5s)
@@ -120,7 +128,19 @@ export class NodeMonitoringService extends EventEmitter {
     }, 5000);
   }
 
+  private pruneHistory(): void {
+    const cutoff = Date.now() - NODE_MONITORING_IDLE_TTL_MS;
+    for (const [id, lastWrite] of this.historyActivity) {
+      if (lastWrite <= cutoff) {
+        this.historyActivity.delete(id);
+        this.history.delete(id);
+      }
+    }
+  }
+
   async getHistory(nodeId: string): Promise<MonitoringSnapshot[]> {
+    if (this.destroyed) return [];
+    this.pruneHistory();
     let persisted: MonitoringSnapshot[] = [];
     if (this.cache) {
       try {
@@ -136,6 +156,8 @@ export class NodeMonitoringService extends EventEmitter {
         // Redis is a read-model accelerator; retain the process-local fallback.
       }
     }
+    if (this.destroyed) return [];
+    this.pruneHistory();
     const local = (this.history.get(nodeId) ?? []).map(compactMonitoringHistorySnapshot);
     const byTimestamp = new Map(persisted.map((snapshot) => [snapshot.timestamp, snapshot]));
     for (const snapshot of local) byTimestamp.set(snapshot.timestamp, snapshot);
@@ -145,6 +167,15 @@ export class NodeMonitoringService extends EventEmitter {
   }
 
   pushSnapshot(nodeId: string, health: any, stats: any, traffic?: any): void {
+    if (this.destroyed) return;
+    this.pruneHistory();
+    this.historyActivity.delete(nodeId);
+    this.historyActivity.set(nodeId, Date.now());
+    while (this.historyActivity.size > NODE_MONITORING_MAX_KEYS) {
+      const oldest = this.historyActivity.keys().next().value!;
+      this.historyActivity.delete(oldest);
+      this.history.delete(oldest);
+    }
     const snapshot = compactMonitoringHistorySnapshot({
       timestamp: new Date().toISOString(),
       health,
@@ -219,6 +250,7 @@ export class NodeMonitoringService extends EventEmitter {
   }
 
   registerClient(nodeId: string, options: { focused?: boolean } = {}): void {
+    if (this.destroyed) return;
     const count = (this.clientCounts.get(nodeId) ?? 0) + 1;
     this.clientCounts.set(nodeId, count);
     if (options.focused) {
@@ -241,6 +273,7 @@ export class NodeMonitoringService extends EventEmitter {
   }
 
   private async pollOnce(nodeId: string): Promise<void> {
+    if (this.destroyed) return;
     try {
       const node = this.registry.getNode(nodeId);
       if (!node) return;
@@ -260,6 +293,7 @@ export class NodeMonitoringService extends EventEmitter {
       // Wait for daemon to respond and control.ts to update the registry
       await new Promise((r) => setTimeout(r, 1000));
 
+      if (this.destroyed) return;
       const health = node.lastHealthReport;
       const stats = node.lastStatsReport;
       if (health) {
@@ -278,6 +312,7 @@ export class NodeMonitoringService extends EventEmitter {
   }
 
   private syncPolling(nodeId: string): void {
+    if (this.destroyed) return;
     const clientCount = this.clientCounts.get(nodeId) ?? 0;
     if (clientCount === 0) {
       this.stopPolling(nodeId);
@@ -315,6 +350,12 @@ export class NodeMonitoringService extends EventEmitter {
   }
 
   destroy(): void {
+    this.destroyed = true;
+    if (this.startupTimer) clearTimeout(this.startupTimer);
+    this.startupTimer = null;
+    this.history.clear();
+    this.historyActivity.clear();
+    this.removeAllListeners();
     if (this.backgroundInterval) {
       clearInterval(this.backgroundInterval);
       this.backgroundInterval = null;

@@ -39,6 +39,40 @@ logRelay.setMaxListeners(100);
 
 const NGINX_LOG_BUFFER_SIZE = 300;
 const nginxLogBuffers = new Map<string, RelayedLogEntry[]>();
+export const LOG_HISTORY_MAX_KEYS = 1024;
+export const LOG_HISTORY_IDLE_TTL_MS = 60 * 60 * 1000;
+const historyActivity = new Map<string, number>();
+let historySweep: ReturnType<typeof setInterval> | null = null;
+
+function evictHistory(key: string): void {
+  historyActivity.delete(key);
+  if (key.startsWith('nginx:')) nginxLogBuffers.delete(key.slice(6));
+  else daemonLogBuffers.delete(key.slice(7));
+}
+
+function pruneHistory(): void {
+  const cutoff = Date.now() - LOG_HISTORY_IDLE_TTL_MS;
+  for (const [key, lastWrite] of historyActivity) {
+    if (lastWrite <= cutoff) evictHistory(key);
+  }
+  if (historyActivity.size === 0 && historySweep) {
+    clearInterval(historySweep);
+    historySweep = null;
+  }
+}
+
+function touchHistory(key: string): void {
+  pruneHistory();
+  historyActivity.delete(key);
+  historyActivity.set(key, Date.now());
+  while (historyActivity.size > LOG_HISTORY_MAX_KEYS) {
+    evictHistory(historyActivity.keys().next().value!);
+  }
+  if (!historySweep) {
+    historySweep = setInterval(pruneHistory, 60_000);
+    historySweep.unref?.();
+  }
+}
 
 function nginxLogEntryKey(entry: RelayedLogEntry): string {
   return [
@@ -57,6 +91,7 @@ function nginxLogEntryKey(entry: RelayedLogEntry): string {
 
 /** Buffer proxy-host nginx log entries for replay on SSE connect. */
 logRelay.on('log', (entry: RelayedLogEntry) => {
+  touchHistory(`nginx:${entry.hostId}`);
   let buf = nginxLogBuffers.get(entry.hostId);
   if (!buf) {
     buf = [];
@@ -72,11 +107,16 @@ logRelay.on('log', (entry: RelayedLogEntry) => {
 
 /** Get buffered nginx logs for a proxy host. */
 export function getNginxLogHistory(hostId: string): RelayedLogEntry[] {
+  pruneHistory();
   return [...(nginxLogBuffers.get(hostId) ?? [])];
 }
 
 export function resetNginxLogHistoryForTest(): void {
   nginxLogBuffers.clear();
+  daemonLogBuffers.clear();
+  historyActivity.clear();
+  if (historySweep) clearInterval(historySweep);
+  historySweep = null;
 }
 
 /**
@@ -91,6 +131,7 @@ const daemonLogBuffers = new Map<string, RelayedDaemonLogEntry[]>();
 
 /** Buffer daemon log entries per node for replay on SSE connect. */
 daemonLogRelay.on('log', (entry: RelayedDaemonLogEntry) => {
+  touchHistory(`daemon:${entry.nodeId}`);
   let buf = daemonLogBuffers.get(entry.nodeId);
   if (!buf) {
     buf = [];
@@ -104,5 +145,6 @@ daemonLogRelay.on('log', (entry: RelayedDaemonLogEntry) => {
 
 /** Get buffered daemon logs for a node (for replay on SSE connect). */
 export function getDaemonLogHistory(nodeId: string): RelayedDaemonLogEntry[] {
-  return daemonLogBuffers.get(nodeId) ?? [];
+  pruneHistory();
+  return [...(daemonLogBuffers.get(nodeId) ?? [])];
 }

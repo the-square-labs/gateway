@@ -2,6 +2,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { notificationAlertRules, notificationAlertStates, proxyHosts, sslCertificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import type { HostingAccountObservation } from '@/modules/hosting/hosting-observations.service.js';
 import type { CacheService, RedisClient } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -64,6 +65,8 @@ export class NotificationEvaluatorService {
   };
   private unsubscribers: Array<() => void> = [];
   private readonly activeHandlers = new Set<Promise<void>>();
+  private readonly hostingEventChains = new Map<string, Promise<void>>();
+  private hostingRuleBarrier: Promise<void> = Promise.resolve();
 
   private thresholdRulesCache: any[] = [];
   private eventRulesCache: any[] = [];
@@ -106,11 +109,27 @@ export class NotificationEvaluatorService {
 
     for (const channel of Object.keys(EVENT_BUS_MAPPINGS)) {
       const unsub = this.eventBus.subscribe(channel, (payload: unknown) => {
-        const active = this.handleBusEvent(channel, payload)
+        const hosting = channel.startsWith('hosting.')
+          ? (payload as { resourceId?: string; connectorId?: string; nodeId?: string; id?: string })
+          : null;
+        const key = hosting ? (hosting.resourceId ?? hosting.nodeId ?? hosting.connectorId ?? hosting.id) : undefined;
+        const ruleBarrier = this.hostingRuleBarrier;
+        // One resource's observations must retain order while asynchronous delivery is in flight.
+        const work = key
+          ? (this.hostingEventChains.get(key) ?? Promise.resolve()).then(async () => {
+              await ruleBarrier;
+              await this.handleBusEvent(channel, payload);
+            })
+          : this.handleBusEvent(channel, payload);
+        const active = work
           .catch((err) => {
             logger.error('Error handling event', { channel, error: err instanceof Error ? err.message : String(err) });
           })
-          .finally(() => this.activeHandlers.delete(active));
+          .finally(() => {
+            this.activeHandlers.delete(active);
+            if (key && this.hostingEventChains.get(key) === active) this.hostingEventChains.delete(key);
+          });
+        if (key) this.hostingEventChains.set(key, active);
         this.activeHandlers.add(active);
       });
       this.unsubscribers.push(unsub);
@@ -232,6 +251,84 @@ export class NotificationEvaluatorService {
           await this.handleThresholdClear(rule, resourceId, value, snapshot.databaseId, snapshot.name);
         }
       }
+    }
+  }
+  async evaluateHostingAccount(snapshot: HostingAccountObservation): Promise<void> {
+    if (snapshot.syncStatus !== 'success' || !snapshot.summary) return;
+    for (const rule of await this.getThresholdRules()) {
+      if (rule.category !== 'hosting_account' || !['balance', 'monthly_expenses'].includes(rule.metric)) continue;
+      if (rule.resourceIds?.length && !rule.resourceIds.includes(snapshot.connectorId)) continue;
+      const money = rule.metric === 'balance' ? snapshot.summary.balance : snapshot.summary.monthlyExpenses;
+      if (!money || money.currency !== rule.metricTarget || !/^[-+]?\d+(?:\.\d+)?$/.test(money.amount)) continue;
+      const value = Number(money.amount);
+      if (!Number.isFinite(value)) continue;
+      const breached = evaluateThreshold(value, rule.operator, rule.thresholdValue);
+      // Currency is part of the persistent alert key; an account currency change must not resolve a different currency's alert.
+      const key = `${snapshot.connectorId}:${money.currency}`;
+      await this.recordProbeOutcome(
+        rule.id,
+        key,
+        breached,
+        Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000
+      );
+      if ((breached ? rule.durationSeconds : rule.resolveAfterSeconds) > 0 && !this.redis) continue;
+      const details: TemplateDetails = {
+        resourceId: snapshot.connectorId,
+        details: { currency: money.currency, provider: snapshot.provider, estimated: money.estimated ?? false },
+      };
+      if (breached) await this.handleThresholdBreach(rule, key, value, snapshot.connectorId, snapshot.name, details);
+      else await this.handleThresholdClear(rule, key, value, snapshot.connectorId, snapshot.name, details);
+    }
+  }
+
+  /** Serialize rule edits between old observations and new ones, not through a cache-only race. */
+  async updateHostingRule<T>(previous: any, update: () => Promise<T>): Promise<T> {
+    const oldBarrier = this.hostingRuleBarrier;
+    const pending = [...this.hostingEventChains.values()];
+    let release!: () => void;
+    this.hostingRuleBarrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await oldBarrier;
+      await Promise.allSettled(pending);
+      const next = await update();
+      this.invalidateRuleCache();
+      await this.reconcileHostingRuleUpdate(previous, next);
+      return next;
+    } finally {
+      release();
+    }
+  }
+
+  /** Editing the source of a rule must not leave its old currency/resource firing forever. */
+  async reconcileHostingRuleUpdate(previous: any, next: any): Promise<void> {
+    if (!['hosting_account', 'hosting_vm'].includes(previous.category)) return;
+    const keys = [
+      'enabled',
+      'metric',
+      'metricTarget',
+      'operator',
+      'thresholdValue',
+      'eventPattern',
+      'resourceIds',
+      'durationSeconds',
+      'resolveAfterSeconds',
+      'fireThresholdPercent',
+      'resolveThresholdPercent',
+    ];
+    if (!keys.some((key) => JSON.stringify(previous[key]) !== JSON.stringify(next[key]))) return;
+    this.invalidateRuleCache();
+    const states = await this.db
+      .select()
+      .from(notificationAlertStates)
+      .where(and(eq(notificationAlertStates.ruleId, previous.id), eq(notificationAlertStates.status, 'firing')));
+    for (const state of states) {
+      const resourceId = previous.category === 'hosting_account' ? state.resourceId.split(':')[0] : state.resourceId;
+      await this.resolveAlert(state.id, previous, state.resourceType, state.resourceId, resourceId, {
+        resourceId,
+        details: { reason: 'rule_updated' },
+      });
     }
   }
 
@@ -486,7 +583,8 @@ export class NotificationEvaluatorService {
     compositeResourceId: string,
     currentValue: number,
     nodeId: string,
-    rawResourceId: string
+    rawResourceId: string,
+    extraDetails: TemplateDetails = {}
   ): Promise<void> {
     const durationMs = (rule.durationSeconds ?? 0) * 1000;
 
@@ -528,6 +626,7 @@ export class NotificationEvaluatorService {
     const resourceName = this.getThresholdResourceName(rule, nodeId, rawResourceId);
 
     await this.fireAlert(rule, rule.category, compositeResourceId, resourceName, {
+      ...extraDetails,
       resourceId: this.getThresholdResourceId(rule, nodeId),
       metric: {
         name: rule.metric,
@@ -548,7 +647,8 @@ export class NotificationEvaluatorService {
     compositeResourceId: string,
     currentValue: number,
     sourceId?: string,
-    rawResourceId?: string
+    rawResourceId?: string,
+    extraDetails: TemplateDetails = {}
   ): Promise<void> {
     const existingState = await this.getActiveAlertState(rule.id, rule.category, compositeResourceId);
     if (!existingState) return;
@@ -593,6 +693,7 @@ export class NotificationEvaluatorService {
     const resourceName = this.getThresholdResourceName(rule, sourceId ?? compositeResourceId, rawResourceId);
 
     await this.resolveAlert(existingState.id, rule, rule.category, compositeResourceId, resourceName, {
+      ...extraDetails,
       resourceId: this.getThresholdResourceId(rule, sourceId),
       metric: {
         name: rule.metric,
@@ -673,6 +774,7 @@ export class NotificationEvaluatorService {
   // ── EventBus Event Handling ─────────────────────────────────────────
 
   private async handleBusEvent(channel: string, payload: any): Promise<void> {
+    if (channel === 'hosting.account.observed') await this.evaluateHostingAccount(payload);
     const mappings = EVENT_BUS_MAPPINGS[channel];
     if (!mappings) return;
 
@@ -717,7 +819,7 @@ export class NotificationEvaluatorService {
           resource.type,
           resource.id,
           resource.name ?? resource.id,
-          this.getEventTemplateDetails(extraData, mapping.eventId)
+          this.getEventTemplateDetails(extraData, mapping.eventId, undefined, resource.id)
         );
       }
     }
@@ -1263,7 +1365,8 @@ export class NotificationEvaluatorService {
       rule.category === 'database_postgres' ||
       rule.category === 'database_clickhouse' ||
       rule.category === 'database_redis' ||
-      rule.category === 'logging'
+      rule.category === 'logging' ||
+      rule.category === 'hosting_account'
     ) {
       return sourceId;
     }

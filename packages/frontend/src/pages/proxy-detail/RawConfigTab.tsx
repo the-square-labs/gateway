@@ -11,6 +11,7 @@ export interface RawConfigTabProps {
   setRawConfig: (v: string) => void;
   renderedConfig: string;
   isLoadingRaw: boolean;
+  hasLoadedRendered?: boolean;
   isSavingRaw: boolean;
   editorErrorLines: number[];
   setEditorErrorLines: (v: number[]) => void;
@@ -27,6 +28,7 @@ export function RawConfigTab({
   setRawConfig,
   renderedConfig,
   isLoadingRaw,
+  hasLoadedRendered = renderedConfig !== "",
   isSavingRaw,
   editorErrorLines,
   setEditorErrorLines,
@@ -89,7 +91,7 @@ export function RawConfigTab({
       bodyClassName="flex min-h-0 flex-1"
       wrapHeader
     >
-      {isLoadingRaw ? (
+      {isLoadingRaw && !hasLoadedRendered ? (
         <div
           className="flex min-h-0 flex-1 flex-col gap-3 p-4"
           aria-label="Loading rendered config"
@@ -103,6 +105,7 @@ export function RawConfigTab({
       ) : (
         <CodeEditor
           value={renderedConfig}
+          preserveScrollOnChange
           onChange={() => {}}
           readOnly
           minHeight="0px"

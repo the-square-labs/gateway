@@ -25,6 +25,7 @@ import { withAuthApi } from "./api-auth";
 import { API_BASE, ApiClientBase } from "./api-base";
 import { withDatabaseApi } from "./api-databases";
 import { withDockerApi } from "./api-docker";
+import { withHostingApi } from "./api-hosting";
 import { withInferenceApi } from "./api-inference";
 import { withInferenceCoreApi } from "./api-inference-core";
 import { withIntegrationsApi } from "./api-integrations";
@@ -45,7 +46,9 @@ class ApiClient extends withPagesDomainsApi(
             withNotificationApi(
               withAuthApi(
                 withSystemApi(
-                  withDockerApi(withDatabaseApi(withPkiApi(withProxyApi(ApiClientBase))))
+                  withDockerApi(
+                    withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+                  )
                 )
               )
             )
@@ -752,6 +755,7 @@ class ApiClient extends withPagesDomainsApi(
   // ── Nodes ──
 
   async listNodes(params?: {
+    hosting?: string;
     search?: string;
     type?: string;
     status?: string;
@@ -768,6 +772,7 @@ class ApiClient extends withPagesDomainsApi(
     if (params?.search) query.set("search", params.search);
     if (params?.type) query.set("type", params.type);
     if (params?.status) query.set("status", params.status);
+    if (params?.hosting) query.set("hosting", params.hosting);
     if (params?.page) query.set("page", String(params.page));
     if (params?.limit) query.set("limit", String(params.limit));
     const qs = query.toString();

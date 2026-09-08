@@ -111,7 +111,7 @@ describe("GitIntegrationsSection", () => {
     render(<GitIntegrationsSection />);
 
     await waitFor(() => expect(mocks.getGitHubOAuthAvailability).toHaveBeenCalled());
-    await user.click(screen.getAllByRole("button", { name: "Add Connector" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Add connector" })[0]);
 
     expect(screen.getByRole("heading", { name: "Add GitHub Connector" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /OAuth/ })).toBeEnabled();
@@ -132,7 +132,7 @@ describe("GitIntegrationsSection", () => {
     render(<GitIntegrationsSection />);
 
     await waitFor(() => expect(mocks.getGitHubOAuthAvailability).toHaveBeenCalled());
-    await user.click(screen.getAllByRole("button", { name: "Add Connector" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Add connector" })[0]);
     await user.click(screen.getByRole("button", { name: /Personal access token/ }));
 
     expect(screen.getByText("GitHub personal access token")).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("GitIntegrationsSection", () => {
     render(<GitIntegrationsSection />);
 
     await waitFor(() => expect(mocks.getGitHubOAuthAvailability).toHaveBeenCalled());
-    await user.click(screen.getAllByRole("button", { name: "Add Connector" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Add connector" })[0]);
     await user.click(screen.getByRole("button", { name: /Personal access token/ }));
     vi.useFakeTimers();
 
@@ -166,7 +166,11 @@ describe("GitIntegrationsSection", () => {
     render(<GitIntegrationsSection />);
 
     await waitFor(() => expect(mocks.listGitConnectors).toHaveBeenCalledTimes(2));
-    await user.click(screen.getAllByRole("button", { name: "Add Connector" })[1]);
+    await user.click(
+      screen
+        .getAllByRole("button", { name: "Add connector" })
+        .filter((button) => button.hasAttribute("data-button"))[1]
+    );
 
     expect(screen.getByText("Git repository access")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "One repository" })).not.toBeInTheDocument();

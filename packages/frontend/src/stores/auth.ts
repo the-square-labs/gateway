@@ -3,7 +3,10 @@ import { hasScopeBase, scopeMatches } from "@/lib/scope-utils";
 import { useUIStore } from "@/stores/ui";
 import type { User } from "@/types";
 
-type AuthContextResetCallback = () => void;
+export interface AuthContextResetOptions {
+  preserveShell?: boolean;
+}
+type AuthContextResetCallback = (options?: AuthContextResetOptions) => void;
 
 let authContextResetCallback: AuthContextResetCallback | null = null;
 export const AUTH_CONTEXT_STORAGE_KEY = "gateway-auth-context-key";
@@ -71,7 +74,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       const nextKey = authContextKey(user);
       const currentKey = currentUser ? authContextKey(currentUser) : getStoredAuthContextKey();
       if (currentKey && currentKey !== nextKey) {
-        authContextResetCallback?.();
+        // Same-account permission changes invalidate private data, not the user's chosen interface.
+        authContextResetCallback?.({
+          preserveShell: currentUser?.id === user.id && !currentUser.isBlocked && !user.isBlocked,
+        });
       }
       setStoredAuthContextKey(nextKey);
       if (user.aiApprovalMode) useUIStore.getState().hydrateAIApprovalMode(user.aiApprovalMode);

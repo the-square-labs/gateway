@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -36,6 +36,9 @@ interface ResourceFolderConfig {
   resourcePlural: string;
   auditResourceType: string;
   eventName: string;
+  folderScope?: SQL;
+  resourceScope?: SQL;
+  folderDefaults?: Record<string, unknown>;
 }
 
 export class FolderedResourceService {
@@ -59,7 +62,7 @@ export class FolderedResourceService {
     const [folder] = await this.db
       .select()
       .from(this.config.folderTable)
-      .where(eq(this.config.folderTable.id, id))
+      .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)))
       .limit(1);
     if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
     return folder as FolderRow;
@@ -69,7 +72,12 @@ export class FolderedResourceService {
     const siblings = await this.db
       .select({ sortOrder: this.config.folderTable.sortOrder })
       .from(this.config.folderTable)
-      .where(parentId ? eq(this.config.folderTable.parentId, parentId) : isNull(this.config.folderTable.parentId))
+      .where(
+        and(
+          this.config.folderScope,
+          parentId ? eq(this.config.folderTable.parentId, parentId) : isNull(this.config.folderTable.parentId)
+        )
+      )
       .orderBy(desc(this.config.folderTable.sortOrder))
       .limit(1);
     return siblings.length > 0 ? siblings[0].sortOrder + 1 : 0;
@@ -88,6 +96,7 @@ export class FolderedResourceService {
     const rows = (await this.db
       .insert(this.config.folderTable)
       .values({
+        ...this.config.folderDefaults,
         name: input.name,
         parentId: input.parentId ?? null,
         sortOrder: await this.getNextSortOrder(input.parentId ?? null),
@@ -114,7 +123,7 @@ export class FolderedResourceService {
     const [folder] = await this.db
       .update(this.config.folderTable)
       .set({ name: input.name, updatedAt: new Date() })
-      .where(eq(this.config.folderTable.id, id))
+      .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)))
       .returning();
 
     await this.auditService.log({
@@ -160,7 +169,7 @@ export class FolderedResourceService {
         sortOrder: await this.getNextSortOrder(input.parentId),
         updatedAt: new Date(),
       })
-      .where(eq(this.config.folderTable.id, id))
+      .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)))
       .returning();
 
     if (depthDelta !== 0) {
@@ -172,7 +181,7 @@ export class FolderedResourceService {
             depth: sql`${this.config.folderTable.depth} + ${depthDelta}`,
             updatedAt: new Date(),
           })
-          .where(inArray(this.config.folderTable.id, descendantIds));
+          .where(and(this.config.folderScope, inArray(this.config.folderTable.id, descendantIds)));
       }
     }
 
@@ -194,9 +203,11 @@ export class FolderedResourceService {
     const affected = await this.db
       .select({ id: this.config.resourceTable.id })
       .from(this.config.resourceTable)
-      .where(inArray(this.config.resourceTable.folderId, folderIds));
+      .where(and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, folderIds)));
 
-    await this.db.delete(this.config.folderTable).where(eq(this.config.folderTable.id, id));
+    await this.db
+      .delete(this.config.folderTable)
+      .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)));
     await this.auditService.log({
       userId,
       action: `${this.config.auditResourceType}.delete`,
@@ -212,7 +223,7 @@ export class FolderedResourceService {
       await this.db
         .update(this.config.folderTable)
         .set({ sortOrder: item.sortOrder, updatedAt: new Date() })
-        .where(eq(this.config.folderTable.id, item.id));
+        .where(and(this.config.folderScope, eq(this.config.folderTable.id, item.id)));
     }
     this.emitLayoutChanged('folders_reordered');
   }
@@ -221,6 +232,7 @@ export class FolderedResourceService {
     const allFolders = await this.db
       .select()
       .from(this.config.folderTable)
+      .where(this.config.folderScope)
       .orderBy(asc(this.config.folderTable.depth), asc(this.config.folderTable.sortOrder));
 
     if (options?.includeAllFolders || !options?.allowedResourceIds) return this.buildTree(allFolders as FolderRow[]);
@@ -229,7 +241,7 @@ export class FolderedResourceService {
     const visibleResources = await this.db
       .select({ id: this.config.resourceTable.id, folderId: this.config.resourceTable.folderId })
       .from(this.config.resourceTable)
-      .where(inArray(this.config.resourceTable.id, options.allowedResourceIds));
+      .where(and(this.config.resourceScope, inArray(this.config.resourceTable.id, options.allowedResourceIds)));
     return this.pruneEmptyBranches(
       this.buildTree(allFolders as FolderRow[]),
       new Set(visibleResources.map((item) => item.folderId as string | null))
@@ -241,7 +253,7 @@ export class FolderedResourceService {
     await this.db
       .update(this.config.resourceTable)
       .set({ folderId: input.folderId, updatedAt: new Date() })
-      .where(inArray(this.config.resourceTable.id, input.ids));
+      .where(and(this.config.resourceScope, inArray(this.config.resourceTable.id, input.ids)));
 
     await this.auditService.log({
       userId,
@@ -257,7 +269,7 @@ export class FolderedResourceService {
       await this.db
         .update(this.config.resourceTable)
         .set({ sortOrder: item.sortOrder, updatedAt: new Date() })
-        .where(eq(this.config.resourceTable.id, item.id));
+        .where(and(this.config.resourceScope, eq(this.config.resourceTable.id, item.id)));
     }
     this.emitLayoutChanged(`${this.config.resourcePlural}_reordered`);
   }
@@ -289,7 +301,7 @@ export class FolderedResourceService {
       const children = await this.db
         .select({ id: this.config.folderTable.id })
         .from(this.config.folderTable)
-        .where(inArray(this.config.folderTable.parentId, currentLevel));
+        .where(and(this.config.folderScope, inArray(this.config.folderTable.parentId, currentLevel)));
       const childIds = children.map((child) => child.id);
       descendants.push(...childIds);
       currentLevel = childIds;
@@ -303,7 +315,7 @@ export class FolderedResourceService {
     const [result] = await this.db
       .select({ maxDepth: sql<number>`max(${this.config.folderTable.depth})` })
       .from(this.config.folderTable)
-      .where(inArray(this.config.folderTable.id, ids));
+      .where(and(this.config.folderScope, inArray(this.config.folderTable.id, ids)));
     return result?.maxDepth ?? 0;
   }
 }

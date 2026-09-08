@@ -44,6 +44,22 @@ describe('drizzle migration metadata', () => {
     expect(snapshotTags.at(-1)).toBe(entries.at(-1)?.tag.slice(0, 4));
   });
 
+  it('keeps historical core settlement estimation unknown during migration', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0187_core_attempt_usage_estimated.sql'),
+      'utf8'
+    );
+    expect(migration.trim()).toBe('ALTER TABLE "inference_request_attempts" ADD COLUMN "usage_estimated" boolean;');
+    const previous = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0186_snapshot.json'), 'utf8'));
+    const current = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0187_snapshot.json'), 'utf8'));
+    expect(current.prevId).toBe(previous.id);
+    const column = current.tables['public.inference_request_attempts'].columns.usage_estimated;
+    expect(column.notNull).toBe(false);
+    expect(column.default).toBeUndefined();
+    delete current.tables['public.inference_request_attempts'].columns.usage_estimated;
+    expect(current.tables).toEqual(previous.tables);
+  });
+
   it('keeps the AI search payload purge scoped to unsafe derived documents', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0053_ai_search_tool_payload_reset.sql'),

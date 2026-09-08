@@ -21,7 +21,13 @@ import {
 import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
-import { DATABASE_CHANNEL_SCOPE_BASES, hasChannelAccess, requiredScopeFor } from './events-channel-access.js';
+import {
+  DATABASE_CHANNEL_SCOPE_BASES,
+  hasChannelAccess,
+  hasHostingSnapshotEventAccess,
+  projectHostingSnapshotEvent,
+  requiredScopeFor,
+} from './events-channel-access.js';
 
 const logger = createChildLogger('Events-WebSocket');
 const MAX_EVENT_MESSAGE_BYTES = 64 * 1024;
@@ -110,6 +116,8 @@ function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unkn
 }
 
 function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown, userId?: string): boolean {
+  if (channel === 'hosting.snapshot.changed' || channel === 'hosting.snapshot.folder.changed')
+    return hasHostingSnapshotEventAccess(scopes, payload);
   const resourceChannelUserId = userResourceChannelUserId(channel);
   if (resourceChannelUserId) return resourceChannelUserId === userId;
   if (channel === 'system.update.changed') return true;
@@ -577,7 +585,11 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
       }
       const unsub = eventBus.subscribe(ch, (payload) => {
         if (!canReceiveChannelPayload(state.scopes, ch, payload, state.user?.id)) return;
-        send(ws, { type: 'event', channel: ch, payload });
+        send(ws, {
+          type: 'event',
+          channel: ch,
+          payload: ch === 'hosting.snapshot.changed' ? projectHostingSnapshotEvent(state.scopes, payload) : payload,
+        });
       });
       state.subs.set(ch, unsub);
       accepted.push(ch);
@@ -587,7 +599,14 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
     send(ws, { type: 'subscribed', channels: accepted, rejected });
     for (const event of retained) {
       if (canReceiveChannelPayload(state.scopes, event.channel, event.payload, state.user?.id)) {
-        send(ws, { type: 'event', channel: event.channel, payload: event.payload });
+        send(ws, {
+          type: 'event',
+          channel: event.channel,
+          payload:
+            event.channel === 'hosting.snapshot.changed'
+              ? projectHostingSnapshotEvent(state.scopes, event.payload)
+              : event.payload,
+        });
       }
     }
     return;

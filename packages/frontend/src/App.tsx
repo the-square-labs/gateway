@@ -62,6 +62,7 @@ import {
   DockerPendingContainerDetail,
   resolveContainerOrPendingSource,
 } from "@/pages/docker-detail/DockerPendingContainerDetail";
+import { HostingPage } from "@/pages/hosting/HostingPage";
 import { Logging } from "@/pages/Logging";
 import { NginxTemplateEdit } from "@/pages/NginxTemplateEdit";
 import { NodeConsolePopout } from "@/pages/NodeConsolePopout";
@@ -983,13 +984,13 @@ export function RealtimeBridge() {
     return;
   }, [isAuthenticated]);
 
-  // Permission changes clear these preferences even when the user ID is unchanged.
+  // Revalidate for every access context, keeping the same user's loaded interface visible.
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
     const isCurrentContext = () =>
       !cancelled && authContextKey(useAuthStore.getState().user) === preferenceContextKey;
-    beginInterfacePreferenceLoad();
+    if (!useUIStore.getState().interfacePreferenceLoaded) beginInterfacePreferenceLoad();
     void api
       .getUserPreferences()
       .then((preferences) => {
@@ -1000,7 +1001,8 @@ export function RealtimeBridge() {
           hydratePreferredInterface(preferences.preferredInterface);
       })
       .catch(() => {
-        if (isCurrentContext()) hydratePreferredInterface(null);
+        if (isCurrentContext() && !useUIStore.getState().interfacePreferenceLoaded)
+          hydratePreferredInterface(null);
       });
     return () => {
       cancelled = true;
@@ -1238,7 +1240,8 @@ function GatewayApp() {
   const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
   const setGatewayRestartingActive = useAppStatusStore((s) => s.setGatewayRestartingActive);
   const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
-  const authRouteKey = authContextKey(user);
+  // Keep navigation/chrome mounted for scope changes. DashboardLayout fences its protected content separately.
+  const authRouteKey = user ? `${user.id}:${user.isBlocked ? "blocked" : "active"}` : "anonymous";
 
   useEffect(() => {
     if (maintenanceActive) return;
@@ -1492,6 +1495,7 @@ function GatewayApp() {
                 element={scoped("admin:groups", <Navigate to="/administration/groups" replace />)}
               />
               <Route path="/nodes" element={<NodesPageGuard />} />
+              <Route path="/hosting/:connectorId/:tab?" element={<HostingPage />} />
               <Route path="/nodes/:nodeSlug/:tab?" element={<NodeDetailGuard />} />
               <Route
                 path="/docker/compose/new"

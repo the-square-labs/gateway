@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import ssh2, { Client } from 'ssh2';
 import type { DrizzleClient } from '@/db/client.js';
 import { externalSshConnectors, nodes } from '@/db/schema/index.js';
+import { normalizeIp } from '@/lib/ip-cidr.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { CryptoService } from '@/services/crypto.service.js';
@@ -225,6 +226,23 @@ export class ExternalSshService {
     const targetAddress = await this.assertExternalTarget(connector.host);
     const output = await this.execConnector(connector, targetAddress, command);
     return { connectorId: connector.id, command, ...output };
+  }
+
+  /** Hosting bootstrap cannot run on an unrelated SSH target or return the secret-bearing command. */
+  async executeForHosting(user: User, connectorId: string, command: string, expectedAddresses: string[]) {
+    this.assertScope(user, 'integrations:ssh:use');
+    const connector = await this.get(connectorId);
+    if (!connector.enabled) throw new AppError(409, 'SSH_CONNECTOR_DISABLED', 'SSH connector is disabled');
+    const targetAddress = await this.assertExternalTarget(connector.host);
+    const expected = new Set(expectedAddresses.map(normalizeIp).filter(Boolean));
+    if (!expected.has(normalizeIp(targetAddress)))
+      throw new AppError(
+        409,
+        'HOSTING_SSH_TARGET_MISMATCH',
+        'SSH connection does not target an assigned address of the selected VM'
+      );
+    const output = await this.execConnector(connector, targetAddress, command);
+    return { exitCode: output.exitCode };
   }
 
   private async get(id: string): Promise<Connector> {

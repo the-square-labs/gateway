@@ -2,6 +2,8 @@ const segment = (value: string) => encodeURIComponent(value);
 const withTab = (path: string, tab?: string) => (tab ? `${path}/${segment(tab)}` : path);
 
 export const nodeRoute = (slug: string, tab?: string) => withTab(`/nodes/${segment(slug)}`, tab);
+export const dockerNodeListRoute = (nodeId: string, tab: string) =>
+  `/docker/${segment(tab)}?${new URLSearchParams({ nodeId, filters: "1" })}`;
 export const databaseRoute = (slug: string, tab?: string) =>
   withTab(`/databases/${segment(slug)}`, tab);
 export const proxyHostRoute = (slug: string, tab?: string) =>

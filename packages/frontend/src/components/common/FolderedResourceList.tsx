@@ -49,6 +49,8 @@ interface FolderedResourceListProps<TItem extends FolderedResourceListItem> {
   loadingLabel: string;
   emptyState: React.ReactNode;
   minWidth?: React.CSSProperties["minWidth"];
+  /** Embed search and table directly in a PanelShell. */
+  embedded?: boolean;
   canManageFolders: boolean;
   canViewItem?: (item: TItem) => boolean;
   canReorganizeItem?: (item: TItem) => boolean;
@@ -57,6 +59,8 @@ interface FolderedResourceListProps<TItem extends FolderedResourceListItem> {
   onRefresh: (force?: boolean) => Promise<void> | void;
   onCreateFolderRef?: (fn: () => void) => void;
 }
+const EMPTY_FOLDERS: ResourceFolderTreeNode[] = [];
+const EMPTY_EXPANDED = new Set<string>();
 
 function sortResources<TItem extends FolderedResourceListItem>(
   resources: TItem[],
@@ -143,6 +147,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
   loadingLabel,
   emptyState,
   minWidth = 900,
+  embedded = false,
   canManageFolders,
   canViewItem,
   canReorganizeItem,
@@ -164,9 +169,9 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
     reorderResources,
     toggleFolder,
   } = useResourceFolderStore();
-  const folders = foldersByType[resourceType];
+  const folders = foldersByType[resourceType] ?? EMPTY_FOLDERS;
   const foldersLoading = loadingByType[resourceType];
-  const expandedFolderIds = expandedFolderIdsByType[resourceType];
+  const expandedFolderIds = expandedFolderIdsByType[resourceType] ?? EMPTY_EXPANDED;
   const isMobile = useIsMobile();
   const [activeDrag, setActiveDrag] = useState<DragEndEvent["active"] | null>(null);
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
@@ -426,6 +431,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
   return (
     <>
       <ResourceListForm<FolderTreeNodeWithItems<TItem>, TItem>
+        embedded={embedded}
         columns={columns}
         search={search}
         loading={loading || foldersLoading}

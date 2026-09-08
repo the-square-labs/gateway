@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 const alertCategorySchema = z.enum([
+  'hosting_vm',
+  'hosting_account',
   'node',
   'container',
   'build',
@@ -77,6 +79,16 @@ export const CreateAlertRuleSchema = z
       return true;
     },
     { message: 'Event rules require eventPattern' }
+  )
+  .refine(
+    (data) =>
+      data.category !== 'hosting_account' ||
+      data.type !== 'threshold' ||
+      (/^[A-Z]{3}$/.test(data.metricTarget ?? '') && ['balance', 'monthly_expenses'].includes(data.metric ?? '')),
+    {
+      message:
+        'Hosting account thresholds require a valid metric and an explicit three-letter currency in metricTarget',
+    }
   );
 
 export type CreateAlertRuleInput = z.infer<typeof CreateAlertRuleSchema>;

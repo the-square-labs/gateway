@@ -63,6 +63,7 @@ import { dockerSourceWebhookRoutes } from '@/modules/docker/docker-source.routes
 import { dockerWebhookTriggerRoutes } from '@/modules/docker/docker-webhook.routes.js';
 import { domainRoutes } from '@/modules/domains/domain.routes.js';
 import { groupRoutes } from '@/modules/groups/group.routes.js';
+import { hostingIntegrationRoutes, hostingRoutes } from '@/modules/hosting/hosting.routes.js';
 import { housekeepingRoutes } from '@/modules/housekeeping/housekeeping.routes.js';
 import { inferenceCoreLifecycleRoutes } from '@/modules/inference/core/inference-core.routes.js';
 import { createCoreResponsesWSHandlers } from '@/modules/inference/core/inference-core-proxy.ws.js';
@@ -418,7 +419,9 @@ export function createApp(): GatewayAppRuntime {
       const previousLimit = wss.options.maxPayload;
       const nextLimit = getEnvironmentSettingsSnapshot().requestLimits.inferenceWebSocketMaxPayloadBytes;
       wss.options.maxPayload = nextLimit;
-      if (typeof previousLimit !== 'number' || nextLimit >= previousLimit) return;
+      // ws snapshots maxPayload in each receiver at upgrade time. Reconnect on
+      // increases too, otherwise existing chats silently keep the old ceiling.
+      if (typeof previousLimit !== 'number' || nextLimit === previousLimit) return;
       for (const socket of inferenceSockets) socket.terminate();
       inferenceSockets.clear();
     });
@@ -784,6 +787,8 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/ui', uiBootstrapRoutes);
   app.route('/api/housekeeping', housekeepingRoutes);
   app.route('/api/settings/environment', environmentSettingsRoutes);
+  app.route('/api/integrations/hosting', hostingIntegrationRoutes);
+  app.route('/api/hosting', hostingRoutes);
   app.route('/api/integrations', integrationsRoutes);
   app.route('/api/notifications', notificationRoutes);
   app.route('/api/logging', loggingRoutes);

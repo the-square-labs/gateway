@@ -53,7 +53,7 @@ RUN pnpm --filter backend build
 # ── Production image ────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS production
 
-RUN apk add --no-cache git nginx openssl && \
+RUN apk add --no-cache git nginx openssl xorriso tini && \
     mkdir -p /var/lib/gateway/tls /var/lib/gateway/sandbox-workspaces && \
     corepack enable && \
     corepack prepare pnpm@9.15.0 --activate
@@ -83,6 +83,7 @@ COPY --from=status-page-builder /app/packages/status-page/dist ./status-public
 # Pre-generic Gateway releases pass the signed app image to the relay service
 # during the first self-update, so keep a one-hop relay binary in that image.
 COPY --from=relay-bridge-builder /gateway-relay /gateway-relay
+COPY scripts/healthcheck.mjs /app/healthcheck.mjs
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION
@@ -94,6 +95,7 @@ EXPOSE 3000
 EXPOSE 9443
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-check-certificate -qO- https://127.0.0.1:3000/health || wget -qO- http://127.0.0.1:3000/health || exit 1
+  CMD ["node", "/app/healthcheck.mjs"]
 
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]

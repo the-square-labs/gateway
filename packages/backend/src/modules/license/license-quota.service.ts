@@ -26,13 +26,20 @@ export class LicenseQuotaService {
     countCurrent: (tx: DrizzleTransaction) => Promise<number>,
     write: (tx: DrizzleTransaction) => Promise<T>
   ): Promise<T> {
-    return this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(${LICENSE_QUOTA_LOCK_NAMESPACE}, hashtext(${resource}))`);
-      const current = await countCurrent(tx);
+    return this.db.transaction((tx) => this.runInTransaction(tx, resource, countCurrent, write));
+  }
 
-      // LICENSE ENFORCEMENT: The lock, count, and write must stay in one transaction under the project license/TOS.
-      await this.policy.requireQuota(resource, current);
-      return write(tx);
-    });
+  /** Compose quota admission with a caller's durable operation, without nested independent commits. */
+  async runInTransaction<T>(
+    tx: DrizzleTransaction,
+    resource: LicenseQuotaResource,
+    countCurrent: (tx: DrizzleTransaction) => Promise<number>,
+    write: (tx: DrizzleTransaction) => Promise<T>
+  ): Promise<T> {
+    await tx.execute(sql`select pg_advisory_xact_lock(${LICENSE_QUOTA_LOCK_NAMESPACE}, hashtext(${resource}))`);
+    const current = await countCurrent(tx);
+    // LICENSE ENFORCEMENT: Lock, count and write remain in the SAME transaction. No quota bypass.
+    await this.policy.requireQuota(resource, current);
+    return write(tx);
   }
 }

@@ -15,6 +15,11 @@ function routingHarness(options: {
   strategy?: 'balanced' | 'even' | 'sequential';
   evalResults?: number[];
   subsequentAffinity?: string;
+  statuses?: string[];
+  healthReasons?: Array<string | null>;
+  lastSyncedAt?: Array<Date | null>;
+  validUntil?: Date[];
+  resetAt?: Array<Date | null>;
 }) {
   const connections = options.quotas.map((_, index) => ({
     id: `connection-${index + 1}`,
@@ -22,9 +27,10 @@ function routingHarness(options: {
     enabled: true,
     deletedAt: null,
     routingOrder: index,
-    status: 'healthy',
-    healthReason: null,
+    status: options.statuses?.[index] ?? 'healthy',
+    healthReason: options.healthReasons?.[index] ?? null,
     minimumRemainingPercent: 1,
+    lastSyncedAt: options.lastSyncedAt?.[index] ?? null,
   }));
   const selection = Promise.resolve(connections) as Promise<typeof connections> & {
     from: () => unknown;
@@ -45,7 +51,8 @@ function routingHarness(options: {
               modelBucket: null,
               remainingFraction: String(remainingFraction),
               fetchedAt: new Date('2099-08-28T10:00:00Z'),
-              validUntil: new Date('2099-08-28T11:00:00Z'),
+              validUntil: options.validUntil?.[index] ?? new Date('2099-08-28T11:00:00Z'),
+              resetAt: options.resetAt?.[index] ?? null,
             },
           ]
     );
@@ -533,6 +540,44 @@ describe('inference routing policy', () => {
     );
   });
 
+  it('routes stale accounts when their last good quota is still valid', async () => {
+    const { service, connections } = routingHarness({
+      affinity: null,
+      quotas: [0.6],
+      statuses: ['stale'],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: [connections[0]!.id],
+        existingThread: false,
+      })
+    ).resolves.toMatchObject({ connectionId: connections[0]!.id, remainingFraction: 0.6 });
+  });
+
+  it('does not resurrect a superseded valid quota after the newest reading expires', () => {
+    const now = new Date('2026-09-07T12:00:00.000Z').getTime();
+    const rows = [
+      {
+        dimension: '5h',
+        modelBucket: null,
+        remainingFraction: '0',
+        fetchedAt: new Date('2026-09-07T11:30:00.000Z'),
+        validUntil: new Date('2026-09-07T11:45:00.000Z'),
+      },
+      {
+        dimension: '5h',
+        modelBucket: null,
+        remainingFraction: '0.6',
+        fetchedAt: new Date('2026-09-07T11:00:00.000Z'),
+        validUntil: new Date('2026-09-07T12:15:00.000Z'),
+      },
+    ] as never;
+
+    expect(__testOnly.latestValidQuotaWindows(rows, now)).toEqual([]);
+  });
+
   it('replaces old affinity across providers when the pinned account is below its reserve', async () => {
     const connections = [
       {
@@ -654,6 +699,112 @@ describe('inference routing policy', () => {
     expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0.009 })).toBe(false);
     expect(__testOnly.isUsable({ ...healthy, remainingFraction: 0 })).toBe(false);
     expect(__testOnly.isUsable({ ...healthy, status: 'cooldown' })).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, status: 'stale', remainingFraction: null })).toBe(true);
+    expect(__testOnly.isUsable({ ...healthy, status: 'reauth_required', remainingFraction: 0.8 })).toBe(false);
+    expect(__testOnly.isUsable({ ...healthy, status: 'unavailable', remainingFraction: 0.8 })).toBe(false);
+  });
+
+  it('does not let an expired exhausted snapshot block an otherwise valid account', async () => {
+    const { service, connections } = routingHarness({
+      affinity: null,
+      quotas: [0],
+      statuses: ['unavailable'],
+      lastSyncedAt: [new Date('2026-09-07T11:00:00.000Z')],
+      validUntil: [new Date('2026-09-07T11:30:00.000Z')],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: [connections[0]!.id],
+        existingThread: false,
+      })
+    ).resolves.toMatchObject({ connectionId: connections[0]!.id, remainingFraction: null });
+  });
+
+  it('does not let a reset-passed exhausted snapshot block an otherwise valid account', async () => {
+    const { service, connections } = routingHarness({
+      affinity: null,
+      quotas: [0],
+      statuses: ['unavailable'],
+      healthReasons: [null],
+      lastSyncedAt: [new Date('2026-09-07T11:00:00.000Z')],
+      resetAt: [new Date('2026-09-07T11:30:00.000Z')],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: [connections[0]!.id],
+        existingThread: false,
+      })
+    ).resolves.toMatchObject({ connectionId: connections[0]!.id, remainingFraction: null });
+  });
+
+  it('keeps a hard unavailable provider rejection out of the route pool', async () => {
+    const { service, connections } = routingHarness({
+      affinity: null,
+      quotas: [0],
+      statuses: ['unavailable'],
+      healthReasons: ['Provider rejected the account'],
+      lastSyncedAt: [new Date('2026-09-07T11:00:00.000Z')],
+      validUntil: [new Date('2026-09-07T11:30:00.000Z')],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: [connections[0]!.id],
+        existingThread: false,
+      })
+    ).rejects.toMatchObject({ status: 503, code: 'provider_capacity_unavailable' });
+  });
+
+  it('keeps a currently exhausted valid quota out of the route pool', async () => {
+    const { service, connections } = routingHarness({
+      affinity: null,
+      quotas: [0],
+      statuses: ['unavailable'],
+      healthReasons: [null],
+      validUntil: [new Date('2099-08-28T11:00:00.000Z')],
+    });
+
+    await expect(
+      service.select({
+        providerId: 'openai',
+        allowedConnectionIds: [connections[0]!.id],
+        existingThread: false,
+      })
+    ).rejects.toMatchObject({ status: 503, code: 'provider_capacity_unavailable' });
+  });
+
+  it('keeps hard unknown unavailable separate from expired quota metadata', () => {
+    expect(
+      __testOnly.routingStatus('unavailable', {
+        hasExpiredQuota: true,
+        hasExhaustedQuota: false,
+        hasQuotaHistory: true,
+        healthReason: 'Provider rejected the account',
+      })
+    ).toBe('unavailable');
+    expect(
+      __testOnly.routingStatus('unavailable', {
+        hasExpiredQuota: true,
+        hasExhaustedQuota: false,
+        hasQuotaHistory: true,
+        healthReason: null,
+      })
+    ).toBe('stale');
+    for (const status of ['disabled', 'reauth_required', 'cooldown']) {
+      expect(
+        __testOnly.routingStatus(status, {
+          hasExpiredQuota: true,
+          hasExhaustedQuota: false,
+          hasQuotaHistory: true,
+          healthReason: null,
+        })
+      ).toBe(status);
+    }
   });
 
   it('keeps every account above its configured reserve in the routing pool', () => {

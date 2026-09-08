@@ -39,6 +39,21 @@ const BUILD_ONLY_APP_COMPOSE = `services:
 `;
 
 describe('foundation migrator patches', () => {
+  it('inherits image healthchecks on upgrades and preserves operator overrides', () => {
+    const legacy = OLD_COMPOSE.replace(
+      'wget -qO- http://127.0.0.1:3000/health',
+      'wget --no-check-certificate -qO- https://127.0.0.1:3000/health || wget -qO- http://127.0.0.1:3000/health'
+    ).replace('    healthcheck:', '    healthcheck:\n      interval: 10s\n      timeout: 5s');
+    const patched = patchCompose(legacy);
+    expect(patched).not.toContain('127.0.0.1:3000/health');
+    expect(patched).toContain('      interval: 10s');
+    expect(patched).toContain('      timeout: 5s');
+    expect(patchCompose(patched)).toBe(patched);
+    expect(patchCompose(OLD_COMPOSE)).not.toContain('    healthcheck:\n\n');
+    const custom = OLD_COMPOSE.replace('wget -qO- http://127.0.0.1:3000/health', 'custom-probe /health');
+    expect(patchCompose(custom)).toContain('custom-probe /health');
+  });
+
   it('ensures at least sixty seconds of app stop grace', () => {
     const added = patchCompose(OLD_COMPOSE);
     expect(added).toContain('    stop_grace_period: 60s');
@@ -64,7 +79,7 @@ describe('foundation migrator patches', () => {
     expect(patched).toContain('      # gateway-managed:end sandbox-workspace');
     expect(patched).toContain('      - /var/run/docker.sock:/var/run/docker.sock\n');
     expect(patched).toContain('      - gateway_data:/var/lib/gateway');
-    expect(patched).toContain('wget --no-check-certificate -qO- https://127.0.0.1:3000/health');
+    expect(patched).not.toContain('wget -qO- http://127.0.0.1:3000/health');
     expect(patched).toContain('\nvolumes:\n  gateway_data:');
     expect(patched).toContain(`  relay:\n    image: \${GATEWAY_RELAY_IMAGE_REF}`);
     expect(patched).toContain('    entrypoint: ["/gateway-relay"]');

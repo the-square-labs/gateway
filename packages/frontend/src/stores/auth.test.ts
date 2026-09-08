@@ -53,6 +53,16 @@ describe("auth store session reset callback", () => {
 
     useAuthStore.getState().setUser({ ...USER, scopes: ["proxy:view:host-1"] });
     expect(reset).toHaveBeenCalledTimes(1);
+    expect(reset).toHaveBeenCalledWith({ preserveShell: true });
+  });
+  it("does not preserve the shell when identity or blocked status changes", () => {
+    const reset = vi.fn();
+    registerAuthContextReset(reset);
+    useAuthStore.setState({ user: USER, isAuthenticated: true, isLoading: false });
+    useAuthStore.getState().setUser({ ...USER, isBlocked: true });
+    expect(reset).toHaveBeenLastCalledWith({ preserveShell: false });
+    useAuthStore.getState().setUser({ ...USER, id: "other" });
+    expect(reset).toHaveBeenLastCalledWith({ preserveShell: false });
   });
 
   it("runs when logging out from an authenticated session", () => {

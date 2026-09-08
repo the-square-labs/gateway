@@ -12,6 +12,7 @@ import {
   inferenceProviderSettings,
   inferenceQuotaSnapshots,
 } from '@/db/schema/index.js';
+import type { InferenceConnectionStatus } from '@/db/schema/inference-providers.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { providerApiMonthlySpend } from '../accounting/inference-provider-budget.js';
@@ -40,6 +41,7 @@ import {
   classifyStatus,
   connectionDisableBlockers,
   latestQuota,
+  latestValidQuota,
   nextRoutingOrder,
   redactedError,
   serializeConnection,
@@ -55,6 +57,7 @@ import type {
 import { knownProviderModel } from './inference-provider-model-catalog.js';
 
 const SYNC_FRESH_MS = 5 * 60_000;
+const SYNC_RETRY_MS = 60_000;
 const LAST_GOOD_MS = 30 * 60_000;
 const SYNC_RUNNING_RECOVERY_MS = 2 * SYNC_FRESH_MS;
 
@@ -62,6 +65,10 @@ const SYNC_RUNNING_RECOVERY_MS = 2 * SYNC_FRESH_MS;
 export class InferenceProviderService {
   private timer: NodeJS.Timeout | null = null;
   private activeSync: Promise<void> | null = null;
+  private readonly connectionSyncs = new Map<
+    string,
+    Promise<Awaited<ReturnType<InferenceProviderService['getConnection']>>>
+  >();
 
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
@@ -197,6 +204,18 @@ export class InferenceProviderService {
   }
 
   async syncConnection(connectionId: string, force = false) {
+    const existing = this.connectionSyncs.get(connectionId);
+    if (existing) return existing;
+    const sync = this.syncConnectionInternal(connectionId, force);
+    this.connectionSyncs.set(connectionId, sync);
+    try {
+      return await sync;
+    } finally {
+      if (this.connectionSyncs.get(connectionId) === sync) this.connectionSyncs.delete(connectionId);
+    }
+  }
+
+  private async syncConnectionInternal(connectionId: string, force = false) {
     const connection = await this.requireConnection(connectionId);
     if (!force && connection.lastSyncedAt && connection.lastSyncedAt.getTime() + SYNC_FRESH_MS > Date.now()) {
       return this.getConnection(connectionId);
@@ -206,14 +225,22 @@ export class InferenceProviderService {
     }
     // Legacy rows survive only as historical metadata after the engine
     // removal: there is no wire connector to sync them with anymore.
+    const failureStatus = syncFailureStatus(connection.status, {
+      hasLastSyncedAt: Boolean(connection.lastSyncedAt),
+      hasQuotaHistory: false,
+      hasCurrentQuotaExhaustion: false,
+      hasHardUnknownReason: connection.status === 'unavailable' && connection.healthReason !== null,
+    });
     await this.db
       .update(inferenceProviderConnections)
       .set({
-        status: connection.lastSyncedAt ? 'stale' : 'unavailable',
-        healthReason: 'Reconnect this provider through the inference core',
+        status: failureStatus,
+        healthReason: shouldPreserveSyncBarrier(connection.status, failureStatus)
+          ? connection.healthReason
+          : 'Reconnect this provider through the inference core',
         syncStatus: 'error',
         syncLastError: 'Reconnect this provider through the inference core',
-        nextSyncAt: new Date(Date.now() + SYNC_FRESH_MS),
+        nextSyncAt: new Date(Date.now() + SYNC_RETRY_MS),
         updatedAt: new Date(),
       })
       .where(eq(inferenceProviderConnections.id, connectionId));
@@ -443,6 +470,9 @@ export class InferenceProviderService {
       }
       // Discovery refreshes the core catalog. Read model metadata only after it
       // completes so a newly discovered id is included in this same sync.
+      // null is reserved for providers where live discovery is explicitly not
+      // applicable. Transport/protocol failures throw from the client so this
+      // sync cannot silently promote a stale catalog to success.
       const liveModelIds = await client.coreProviderLiveModelIds(providerRef);
       const [providers, modelsBody, quotasBody] = await Promise.all([
         client.listCoreProviders(),
@@ -512,11 +542,12 @@ export class InferenceProviderService {
         .where(eq(inferenceModelSources.connectionId, connectionId));
       const windows = await this.coreConnectionQuotaWindows(client, connection, parseCoreQuotaReports(quotasBody));
       await this.persistQuota(connectionId, windows);
+      const quotaStatus = classifyStatus(windows, connection.minimumRemainingPercent / 100);
       await this.db
         .update(inferenceProviderConnections)
         .set({
-          status: classifyStatus(windows, connection.minimumRemainingPercent / 100),
-          healthReason: null,
+          status: syncSuccessStatus(connection.status, quotaStatus),
+          healthReason: isStrongSyncBlockStatus(connection.status) ? connection.healthReason : null,
           syncStatus: 'success',
           syncLastError: null,
           lastSyncedAt: new Date(),
@@ -526,14 +557,29 @@ export class InferenceProviderService {
         .where(eq(inferenceProviderConnections.id, connectionId));
     } catch (error) {
       const connection = await this.requireConnection(connectionId);
+      const quotaState =
+        connection.status === 'unavailable' && connection.healthReason === null
+          ? await this.currentQuotaState(connection).catch(() => ({
+              hasQuotaHistory: false,
+              hasCurrentQuotaExhaustion: false,
+            }))
+          : { hasQuotaHistory: false, hasCurrentQuotaExhaustion: false };
+      const failureStatus = syncFailureStatus(connection.status, {
+        hasLastSyncedAt: Boolean(connection.lastSyncedAt),
+        hasQuotaHistory: quotaState.hasQuotaHistory,
+        hasCurrentQuotaExhaustion: quotaState.hasCurrentQuotaExhaustion,
+        hasHardUnknownReason: connection.status === 'unavailable' && connection.healthReason !== null,
+      });
       await this.db
         .update(inferenceProviderConnections)
         .set({
-          status: connection.lastSyncedAt ? 'stale' : 'unavailable',
-          healthReason: redactedError(error),
+          status: failureStatus,
+          healthReason: shouldPreserveSyncBarrier(connection.status, failureStatus)
+            ? connection.healthReason
+            : redactedError(error),
           syncStatus: 'error',
           syncLastError: redactedError(error),
-          nextSyncAt: new Date(Date.now() + SYNC_FRESH_MS),
+          nextSyncAt: new Date(Date.now() + SYNC_RETRY_MS),
           updatedAt: new Date(),
         })
         .where(eq(inferenceProviderConnections.id, connectionId));
@@ -577,6 +623,24 @@ export class InferenceProviderService {
     }
     const report = reports.find((candidate) => candidate.provider === providerRef);
     return report ? coreQuotaToWindows(report) : [];
+  }
+
+  private async currentQuotaState(
+    connection: typeof inferenceProviderConnections.$inferSelect
+  ): Promise<{ hasQuotaHistory: boolean; hasCurrentQuotaExhaustion: boolean }> {
+    const quotas = await this.db.query.inferenceQuotaSnapshots.findMany({
+      where: and(eq(inferenceQuotaSnapshots.connectionId, connection.id), eq(inferenceQuotaSnapshots.status, 'fresh')),
+      orderBy: [desc(inferenceQuotaSnapshots.fetchedAt)],
+    });
+    return {
+      hasQuotaHistory: quotas.length > 0,
+      hasCurrentQuotaExhaustion: latestValidQuota(quotas).some(
+        (quota) =>
+          quota.remainingFraction !== null &&
+          quota.remainingFraction !== undefined &&
+          Number(quota.remainingFraction) <= connection.minimumRemainingPercent / 100
+      ),
+    };
   }
 
   private async mirrorCoreConnectionEnabled(
@@ -856,6 +920,41 @@ export class InferenceProviderService {
 }
 
 export { __testOnly } from './inference-provider.service.helpers.js';
+
+function isStrongSyncBlockStatus(status: InferenceConnectionStatus): boolean {
+  return ['disabled', 'reauth_required', 'cooldown'].includes(status);
+}
+
+function syncFailureStatus(
+  status: InferenceConnectionStatus,
+  input: {
+    hasLastSyncedAt: boolean;
+    hasQuotaHistory: boolean;
+    hasCurrentQuotaExhaustion: boolean;
+    hasHardUnknownReason: boolean;
+  }
+): InferenceConnectionStatus {
+  if (isStrongSyncBlockStatus(status)) return status;
+  if (status === 'unavailable') {
+    if (input.hasCurrentQuotaExhaustion || input.hasHardUnknownReason || !input.hasQuotaHistory) return status;
+    return 'stale';
+  }
+  return input.hasLastSyncedAt || input.hasQuotaHistory ? 'stale' : 'unavailable';
+}
+
+function syncSuccessStatus(
+  status: InferenceConnectionStatus,
+  quotaStatus: InferenceConnectionStatus
+): InferenceConnectionStatus {
+  return isStrongSyncBlockStatus(status) ? status : quotaStatus;
+}
+
+function shouldPreserveSyncBarrier(
+  previousStatus: InferenceConnectionStatus,
+  nextStatus: InferenceConnectionStatus
+): boolean {
+  return isStrongSyncBlockStatus(previousStatus) || (previousStatus === 'unavailable' && nextStatus === 'unavailable');
+}
 
 /** Core management rejections surface their message; transport failures stay generic. */
 function asCoreManagementError(error: unknown, fallback: string): Error {

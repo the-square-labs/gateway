@@ -38,7 +38,7 @@ export const INFERENCE_CORE_TRANSITIONS: Readonly<Record<InferenceCoreState, rea
   pulling: ['installing', 'failed'],
   installing: ['starting', 'failed'],
   starting: ['ready', 'degraded', 'failed'],
-  ready: ['update_available', 'updating', 'degraded', 'starting', 'failed'],
+  ready: ['update_available', 'updating', 'rolling_back', 'degraded', 'starting', 'failed'],
   update_available: ['updating', 'ready', 'degraded'],
   updating: ['ready', 'rolling_back', 'degraded', 'failed'],
   rolling_back: ['ready', 'degraded', 'failed'],
@@ -161,6 +161,7 @@ export const inferenceCoreHealthIdentitySchema = z.object({
   stateSchemaVersion: z.number().int().positive(),
   instanceId: z.string().min(1),
   startedAt: isoDateTime,
+  requestLimitsVersion: z.literal(1).optional(),
 });
 export type InferenceCoreHealthIdentity = z.infer<typeof inferenceCoreHealthIdentitySchema>;
 
@@ -202,6 +203,21 @@ export const inferenceCoreRequestContextSchema = z
     issuedAt: z.number().int().positive(),
     expiresAt: z.number().int().positive(),
     nonce: z.string().min(16),
+    requestLimits: z
+      .object({
+        httpBodyMaxBytes: z
+          .number()
+          .int()
+          .min(1024 * 1024)
+          .max(2048 * 1024 * 1024),
+        webSocketMaxPayloadBytes: z
+          .number()
+          .int()
+          .min(1024 * 1024)
+          .max(512 * 1024 * 1024),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((claims) => claims.expiresAt > claims.issuedAt, { message: 'expiresAt must be after issuedAt' });

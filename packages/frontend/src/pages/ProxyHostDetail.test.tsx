@@ -500,6 +500,48 @@ describe("ProxyHostDetail", () => {
     expect(await screen.findByText(/Raw config tab server/)).toBeInTheDocument();
     expect(api.getRenderedProxyConfig).toHaveBeenCalledWith("host-1");
   });
+  it("does not let an older rendered-config refresh replace a newer response", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["proxy:raw:read:host-1"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getProxyHost").mockImplementation(async () => makeProxyHost());
+    let old!: (data: { rendered: string }) => void;
+    let latest!: (data: { rendered: string }) => void;
+    const get = vi
+      .spyOn(api, "getRenderedProxyConfig")
+      .mockResolvedValueOnce({ rendered: "initial" })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            old = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            latest = resolve;
+          })
+      );
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/raw",
+    });
+    await screen.findByText("Raw config tab initial");
+    await act(async () =>
+      realtimeHandlers.get("proxy.host.changed")?.({ id: "host-1", action: "updated" })
+    );
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await act(async () =>
+      realtimeHandlers.get("proxy.host.changed")?.({ id: "host-1", action: "updated" })
+    );
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
+    await act(async () => latest({ rendered: "latest" }));
+    await act(async () => old({ rendered: "stale" }));
+    expect(screen.getByText("Raw config tab latest")).toBeInTheDocument();
+    expect(screen.queryByText("Raw config tab stale")).not.toBeInTheDocument();
+  });
 
   it("vertically centers the shared back button in the detail header", async () => {
     vi.spyOn(api, "getProxyHost").mockResolvedValue(makeProxyHost());

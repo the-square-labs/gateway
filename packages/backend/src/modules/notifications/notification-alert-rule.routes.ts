@@ -19,6 +19,7 @@ import {
 } from './notification-alert-rule.schemas.js';
 import { NotificationAlertRuleService } from './notification-alert-rule.service.js';
 import { NotificationEvaluatorService } from './notification-evaluator.service.js';
+import { assertHostingAlertAccess } from './notification-hosting-access.js';
 
 export const alertRuleRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -118,6 +119,7 @@ alertRuleRoutes.openapi(
     const service = container.resolve(NotificationAlertRuleService);
     const body = CreateAlertRuleSchema.parse(await c.req.json());
     const user = c.get('user')!;
+    assertHostingAlertAccess(c.get('effectiveScopes') ?? user.scopes, body);
     const rule = await service.create(body, user.id);
     invalidateCache();
     triggerCertificateExpiryEvaluation(rule);
@@ -136,7 +138,13 @@ alertRuleRoutes.openapi(
     const service = container.resolve(NotificationAlertRuleService);
     const body = UpdateAlertRuleSchema.parse(await c.req.json());
     const user = c.get('user')!;
-    const rule = await service.update(c.req.param('id')!, body, user.id);
+    const previous = await service.getById(c.req.param('id')!);
+    assertHostingAlertAccess(c.get('effectiveScopes') ?? user.scopes, { ...previous, ...body });
+    const update = () => service.update(c.req.param('id')!, body, user.id);
+    const rule =
+      previous.category === 'hosting_account' || previous.category === 'hosting_vm'
+        ? await container.resolve(NotificationEvaluatorService).updateHostingRule(previous, update)
+        : await update();
     invalidateCache();
     triggerCertificateExpiryEvaluation(rule);
     triggerMaintenanceEvaluation(rule);

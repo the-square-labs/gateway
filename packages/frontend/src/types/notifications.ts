@@ -19,7 +19,9 @@ export interface AlertRule {
     | "pages"
     | "database_postgres"
     | "database_clickhouse"
-    | "database_redis";
+    | "database_redis"
+    | "hosting_vm"
+    | "hosting_account";
   severity: "info" | "warning" | "critical";
   metric: string | null;
   metricTarget: string | null;

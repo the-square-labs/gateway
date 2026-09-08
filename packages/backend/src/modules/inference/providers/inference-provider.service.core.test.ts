@@ -57,6 +57,9 @@ function createService(options: {
       inferenceProviderConnections: {
         findFirst: vi.fn().mockResolvedValue(CORE_CONNECTION),
       },
+      inferenceQuotaSnapshots: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
     },
   };
   const client = {
@@ -215,6 +218,46 @@ describe('inference provider service — core-managed delegation', () => {
     expect(setupEvents.publishCatalogChanged).toHaveBeenCalledOnce();
   });
 
+  it('uses the core catalog without live filtering only when discovery is not applicable', async () => {
+    const { service, db } = createService({
+      client: { coreProviderLiveModelIds: vi.fn().mockResolvedValue(null) },
+    });
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(persistModels).toHaveBeenCalledWith(
+      'conn-1',
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'gpt-5.5' }),
+        expect.objectContaining({ id: 'static-only' }),
+      ])
+    );
+  });
+
+  it('records a sync error when live discovery throws instead of saving stale catalog success', async () => {
+    const { service, db } = createService({
+      client: {
+        coreProviderLiveModelIds: vi.fn().mockRejectedValue(new InferenceCoreClientError('live discovery timed out')),
+      },
+    });
+    const chain = updateChain();
+    db.update.mockReturnValue(chain);
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(persistModels).not.toHaveBeenCalled();
+    expect(chain.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({ syncStatus: 'error', syncLastError: 'Provider synchronization failed' })
+    );
+  });
+
   it('includes newly discovered Astra metadata in the same sync and preserves live effort levels', async () => {
     let refreshed = false;
     const row = {
@@ -332,6 +375,128 @@ describe('inference provider service — core-managed delegation', () => {
     await service.syncConnection('conn-1', true);
 
     expect(chain.set).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'unavailable', syncStatus: 'error' }));
+  });
+
+  it.each([
+    { status: 'disabled' as const, healthReason: 'Disabled by administrator' },
+    { status: 'reauth_required' as const, healthReason: 'Reconnect required' },
+    { status: 'cooldown' as const, healthReason: 'Provider cooldown' },
+    { status: 'unavailable' as const, healthReason: 'Provider rejected the account' },
+  ])('preserves the $status barrier when synchronization fails', async ({ status, healthReason }) => {
+    const connection = {
+      ...CORE_CONNECTION,
+      status,
+      healthReason,
+      lastSyncedAt: new Date('2026-09-07T10:00:00.000Z'),
+    };
+    const { service, db } = createService({ client: { listCoreProviders: vi.fn().mockResolvedValue([]) } });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    const chain = updateChain();
+    db.update.mockReturnValue(chain);
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(chain.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status,
+        healthReason,
+        syncStatus: 'error',
+        nextSyncAt: expect.any(Date),
+      })
+    );
+  });
+
+  it('preserves current exhausted quota after a synchronization error', async () => {
+    const connection = {
+      ...CORE_CONNECTION,
+      status: 'unavailable' as const,
+      healthReason: null,
+      lastSyncedAt: new Date('2026-09-07T10:00:00.000Z'),
+      minimumRemainingPercent: 1,
+    };
+    const { service, db } = createService({ client: { listCoreProviders: vi.fn().mockResolvedValue([]) } });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.query.inferenceQuotaSnapshots.findMany.mockResolvedValue([
+      {
+        dimension: '5h',
+        modelBucket: null,
+        remainingFraction: '0',
+        fetchedAt: new Date('2026-09-07T11:30:00.000Z'),
+        validUntil: new Date('2099-09-07T12:30:00.000Z'),
+        resetAt: new Date('2099-09-07T13:00:00.000Z'),
+      },
+    ] as never);
+    const chain = updateChain();
+    db.update.mockReturnValue(chain);
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(chain.set).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'unavailable', healthReason: null }));
+  });
+
+  it.each([
+    { validUntil: new Date('2026-09-07T11:30:00.000Z'), resetAt: new Date('2026-09-07T13:00:00.000Z') },
+    { validUntil: new Date('2026-09-07T12:30:00.000Z'), resetAt: new Date('2026-09-07T11:30:00.000Z') },
+  ])('moves expired or reset-passed quota metadata to stale on sync error', async ({ validUntil, resetAt }) => {
+    const connection = {
+      ...CORE_CONNECTION,
+      status: 'unavailable' as const,
+      healthReason: null,
+      lastSyncedAt: new Date('2026-09-07T10:00:00.000Z'),
+      minimumRemainingPercent: 1,
+    };
+    const { service, db } = createService({ client: { listCoreProviders: vi.fn().mockResolvedValue([]) } });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.query.inferenceQuotaSnapshots.findMany.mockResolvedValue([
+      {
+        dimension: '5h',
+        modelBucket: null,
+        remainingFraction: '0',
+        fetchedAt: new Date('2026-09-07T11:00:00.000Z'),
+        validUntil,
+        resetAt,
+      },
+    ] as never);
+    const chain = updateChain();
+    db.update.mockReturnValue(chain);
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    const startedAt = Date.now();
+    await service.syncConnection('conn-1', true);
+
+    const update = chain.set.mock.calls.at(-1)?.[0] as { status: string; nextSyncAt: Date };
+    expect(update.status).toBe('stale');
+    expect(update.nextSyncAt.getTime()).toBeGreaterThanOrEqual(startedAt + 59_000);
+    expect(update.nextSyncAt.getTime()).toBeLessThanOrEqual(startedAt + 61_000);
+  });
+
+  it.each([
+    'disabled',
+    'reauth_required',
+    'cooldown',
+  ] as const)('does not clear a %s barrier after a successful sync', async (status) => {
+    const connection = {
+      ...CORE_CONNECTION,
+      status,
+      healthReason: `${status} reason`,
+    };
+    const { service, db } = createService({});
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.update.mockReturnValue(updateChain());
+    Object.assign(service, {
+      persistModels: vi.fn().mockResolvedValue(undefined),
+      persistQuota: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    const update = db.update.mock.results.at(-1)?.value as ReturnType<typeof updateChain>;
+    expect(update.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status, healthReason: `${status} reason`, syncStatus: 'success' })
+    );
   });
 
   it('mirrors enable/disable to the core provider entry before updating the row', async () => {

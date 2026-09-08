@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { NodesService } from './nodes.service.js';
 
 describe('NodesService enrollment token creation', () => {
@@ -454,6 +455,7 @@ describe('NodesService enrollment token creation', () => {
     const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
     const selections = [
       { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => []) },
       Promise.resolve([]),
       Promise.resolve([{ count: 0 }]),
       Promise.resolve([{ count: 0 }]),
@@ -487,17 +489,122 @@ describe('NodesService enrollment token creation', () => {
     expect(db.transaction).not.toHaveBeenCalled();
   });
 
-  it('cascades assigned proxy hosts when an offline Nginx node removal is explicitly confirmed', async () => {
-    const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
-    const assignedHosts = [{ id: 'proxy-1' }, { id: 'proxy-2' }];
+  it.each([
+    'create',
+    'install',
+    'delete',
+  ] as const)('rejects node deletion while a hosting %s operation is active', async (action) => {
+    const existing = { id: 'node-1', type: 'docker', hostname: 'worker.local' };
+    const active = { id: 'operation-1', action };
+    const selections = [{ limit: vi.fn(async () => [existing]) }, { limit: vi.fn(async () => [active]) }];
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+      })),
+      transaction: vi.fn(),
+    } as any;
+    const registry = { getNode: vi.fn(), deregister: vi.fn() };
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      registry as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.remove(existing.id, 'user-1')).rejects.toMatchObject({
+      code: 'NODE_HOSTING_OPERATION_ACTIVE',
+      statusCode: 409,
+      details: { hostingOperationId: active.id, action },
+    });
+    expect(registry.getNode).not.toHaveBeenCalled();
+    expect(registry.deregister).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'confirmed',
+    'binding_changed',
+    'other_operation',
+  ] as const)('permits only transaction-guarded cleanup by the owning destroy worker: %s', async (scenario) => {
+    const node = { id: 'node-1', type: 'docker', hostname: 'worker', status: 'offline' };
+    const active = { id: 'destroy-1', action: 'delete' };
     const selections = [
-      { limit: vi.fn(async () => [existing]) },
-      Promise.resolve(assignedHosts),
+      { limit: async () => [node] },
+      { limit: async () => [active] },
+      Promise.resolve([]),
       Promise.resolve([{ count: 0 }]),
       Promise.resolve([{ count: 0 }]),
       Promise.resolve([]),
     ];
-    const nodeDeleteWhere = vi.fn(async () => undefined);
+    const deleted = vi.fn(async () => {});
+    let guarded = false;
+    let selected = 0;
+    const tx = {
+      select: () => {
+        expect(guarded).toBe(true);
+        return {
+          from: () => ({
+            where: () => {
+              selected += 1;
+              if (selected === 1) return { for: async () => [node] };
+              if (selected === 2) return Promise.resolve([]);
+              return { limit: async () => [active] };
+            },
+          }),
+        };
+      },
+      delete: () => ({ where: deleted }),
+    };
+    const db = {
+      select: () => ({
+        from: () => ({ where: () => selections.shift(), leftJoin: () => ({ where: () => selections.shift() }) }),
+      }),
+      transaction: vi.fn(async (callback) => callback(tx)),
+    };
+    const guard = vi.fn(async () => {
+      guarded = true;
+      if (scenario === 'binding_changed') throw new AppError(409, 'HOSTING_NODE_BINDING_CHANGED', 'Binding changed');
+    });
+    const service = new NodesService(
+      db as never,
+      { log: vi.fn() } as never,
+      { getNode: vi.fn() } as never,
+      {} as never,
+      {} as never
+    );
+    const result = service.remove(node.id, 'user', {
+      hostingDelete: { operationId: scenario === 'other_operation' ? 'another' : active.id, guard },
+    });
+    if (scenario === 'confirmed') {
+      await result;
+      expect(guard).toHaveBeenCalledWith(tx);
+      expect(deleted).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toMatchObject({
+        code: scenario === 'binding_changed' ? 'HOSTING_NODE_BINDING_CHANGED' : 'NODE_HOSTING_OPERATION_ACTIVE',
+      });
+      expect(deleted).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    'online',
+    'pending',
+  ])('rechecks hosting work and node state under lock before removing an initially %s node', async (status) => {
+    const existing = { id: 'node-1', type: 'docker', hostname: 'worker.local', status };
+    const active = { id: 'operation-1', action: 'install' };
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => []) },
+      Promise.resolve([]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([]),
+    ];
+    const commandStream = { end: vi.fn() };
+    let transactionSelect = 0;
+    const deleteWhere = vi.fn();
     const db = {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
@@ -505,7 +612,77 @@ describe('NodesService enrollment token creation', () => {
           where: vi.fn(() => selections.shift()),
         })),
       })),
-      transaction: vi.fn(async (callback) => callback({ delete: vi.fn(() => ({ where: nodeDeleteWhere })) })),
+      transaction: vi.fn(async (callback) =>
+        callback({
+          select: vi.fn(() => ({
+            from: vi.fn(() => ({
+              where: vi.fn(() => {
+                transactionSelect += 1;
+                if (transactionSelect === 2) return Promise.resolve([]); // No hosting firewall binding.
+                return transactionSelect === 1
+                  ? { for: vi.fn(async () => [{ ...existing, status: 'online' }]) }
+                  : { limit: vi.fn(async () => [active]) };
+              }),
+            })),
+          })),
+          delete: vi.fn(() => ({ where: deleteWhere })),
+        })
+      ),
+    } as any;
+    const registry = { getNode: vi.fn(() => ({ commandStream })), deregister: vi.fn() };
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      registry as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.remove(existing.id, 'user-1')).rejects.toMatchObject({
+      code: 'NODE_HOSTING_OPERATION_ACTIVE',
+      details: { hostingOperationId: active.id, action: 'install' },
+    });
+    expect(commandStream.end).not.toHaveBeenCalled();
+    expect(registry.deregister).not.toHaveBeenCalled();
+    expect(deleteWhere).not.toHaveBeenCalled();
+  });
+
+  it('cascades assigned proxy hosts when an offline Nginx node removal is explicitly confirmed', async () => {
+    const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
+    const assignedHosts = [{ id: 'proxy-1' }, { id: 'proxy-2' }];
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => []) },
+      Promise.resolve(assignedHosts),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([]),
+    ];
+    const nodeDeleteWhere = vi.fn(async () => undefined);
+    let transactionSelect = 0;
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          leftJoin: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+          where: vi.fn(() => selections.shift()),
+        })),
+      })),
+      transaction: vi.fn(async (callback) =>
+        callback({
+          select: vi.fn(() => ({
+            from: vi.fn(() => ({
+              where: vi.fn(() => {
+                transactionSelect += 1;
+                if (transactionSelect === 2) return Promise.resolve([]); // No hosting firewall binding.
+                return transactionSelect === 1
+                  ? { for: vi.fn(async () => [existing]) }
+                  : { limit: vi.fn(async () => []) };
+              }),
+            })),
+          })),
+          delete: vi.fn(() => ({ where: nodeDeleteWhere })),
+        })
+      ),
     } as any;
     const auditService = { log: vi.fn(async () => undefined) };
     const registry = { getNode: vi.fn(() => undefined), deregister: vi.fn() };
@@ -539,7 +716,11 @@ describe('NodesService enrollment token creation', () => {
 
   it('does not cascade proxy hosts while the Nginx node is connected', async () => {
     const existing = { id: 'node-1', type: 'nginx', hostname: 'edge.local' };
-    const selections = [{ limit: vi.fn(async () => [existing]) }, Promise.resolve([{ id: 'proxy-1' }])];
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => []) },
+      Promise.resolve([{ id: 'proxy-1' }]),
+    ];
     const db = {
       select: vi.fn(() => ({
         from: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
@@ -577,6 +758,7 @@ describe('NodesService enrollment token creation', () => {
     };
     const selections = [
       { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => []) },
       { limit: vi.fn(async () => [relayInstance]) },
       Promise.resolve([]),
       Promise.resolve([]),
@@ -585,6 +767,7 @@ describe('NodesService enrollment token creation', () => {
       Promise.resolve([]),
     ];
     const deletedTables: unknown[] = [];
+    let transactionSelect = 0;
     const db = {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
@@ -595,10 +778,22 @@ describe('NodesService enrollment token creation', () => {
       })),
       transaction: vi.fn(async (callback) =>
         callback({
+          select: vi.fn(() => ({
+            from: vi.fn(() => ({
+              where: vi.fn(() => {
+                transactionSelect += 1;
+                if (transactionSelect === 2) return Promise.resolve([]); // No hosting firewall binding.
+                return transactionSelect === 1
+                  ? { for: vi.fn(async () => [existing]) }
+                  : { limit: vi.fn(async () => []) };
+              }),
+            })),
+          })),
           delete: vi.fn((table) => {
             deletedTables.push(table);
             return { where: vi.fn(async () => undefined) };
           }),
+          update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn(async () => []) })) })) })),
         })
       ),
     } as any;
@@ -615,6 +810,76 @@ describe('NodesService enrollment token creation', () => {
 
     expect(deletedTables).toHaveLength(4);
     expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'node.remove' }));
+  });
+
+  it.each(['create', 'install'])('removes a pending node and fences its active hosting %s worker', async (action) => {
+    const existing = { id: 'node-1', type: 'docker', hostname: 'pending', status: 'pending' };
+    const active = { id: 'operation-1', action };
+    const selections = [
+      { limit: vi.fn(async () => [existing]) },
+      { limit: vi.fn(async () => [active]) },
+      Promise.resolve([]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([{ count: 0 }]),
+      Promise.resolve([]),
+    ];
+    let transactionSelect = 0;
+    const set = vi.fn((_patch: Record<string, unknown>) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ connectorId: 'hosting-1' }]) })),
+    }));
+    const deleted = vi.fn(async () => undefined);
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => selections.shift()),
+          leftJoin: vi.fn(() => ({ where: vi.fn(() => selections.shift()) })),
+        })),
+      })),
+      transaction: vi.fn(async (callback) =>
+        callback({
+          select: vi.fn(() => ({
+            from: vi.fn(() => ({
+              where: vi.fn(() => {
+                ++transactionSelect;
+                if (transactionSelect === 2) return Promise.resolve([]); // No hosting firewall binding.
+                return transactionSelect === 1
+                  ? { for: vi.fn(async () => [existing]) }
+                  : { limit: vi.fn(async () => [active]) };
+              }),
+            })),
+          })),
+          update: vi.fn(() => ({ set })),
+          delete: vi.fn(() => ({ where: deleted })),
+        })
+      ),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn(), deregister: vi.fn() } as any,
+      {} as any,
+      {} as any
+    );
+    const publish = vi.fn();
+    service.setEventBus({ publish } as any);
+    await service.remove(existing.id, 'user-1');
+    expect(deleted).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: 'failed',
+        errorCode: 'HOSTING_NODE_REMOVED',
+        encryptedBootstrap: null,
+        bootstrapExpiresAt: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        generation: expect.anything(),
+        completedAt: expect.any(Date),
+      })
+    );
+    expect(set.mock.calls[0][0]).not.toHaveProperty('providerOperation');
+    expect(set.mock.calls[0][0]).not.toHaveProperty('dispatchStartedAt');
+    expect(publish).toHaveBeenCalledWith('node.changed', { id: existing.id, action: 'deleted' });
+    expect(publish).toHaveBeenCalledWith('integration.connector.changed', { id: 'hosting-1', provider: 'hosting' });
   });
 
   it('returns only the public enrollment target when local gRPC IP is not configured', async () => {

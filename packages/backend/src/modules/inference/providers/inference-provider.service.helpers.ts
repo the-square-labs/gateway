@@ -56,6 +56,21 @@ export function latestQuota(rows: Array<typeof inferenceQuotaSnapshots.$inferSel
   });
 }
 
+export function latestValidQuota(rows: Array<typeof inferenceQuotaSnapshots.$inferSelect>, now = Date.now()) {
+  const seen = new Set<string>();
+  return [...rows]
+    .sort((a, b) => b.fetchedAt.getTime() - a.fetchedAt.getTime())
+    .filter((row) => {
+      const key = `${row.dimension}:${row.modelBucket ?? ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return (
+        row.validUntil.getTime() > now &&
+        (row.resetAt === null || row.resetAt === undefined || row.resetAt.getTime() > now)
+      );
+    });
+}
+
 export function assertMinimumRemainingAllowed(
   provider: InferenceProviderDefinition,
   minimumRemainingPercent: number | undefined
@@ -168,6 +183,7 @@ export const __testOnly = {
   classifyStatus,
   validateBaseUrl,
   latestQuota,
+  latestValidQuota,
   redactedError,
   assertApiMonthlyLimitAllowed,
   assertMinimumRemainingAllowed,

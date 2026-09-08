@@ -63,10 +63,14 @@ export class InferenceCoreClient {
   }
 
   /** Square Labs-only extended status (drain state + identity). */
-  async wiolettStatus(): Promise<{ draining: boolean } | null> {
+  async wiolettStatus(): Promise<{ draining: boolean; drained?: boolean } | null> {
     const response = await this.request('GET', '/api/wiolett/status');
     if (!response || response.status !== 200) return null;
-    return { draining: (response.body as { draining?: unknown }).draining === true };
+    const body = response.body as { draining?: unknown; drained?: unknown };
+    return {
+      draining: body.draining === true,
+      ...(typeof body.drained === 'boolean' ? { drained: body.drained } : {}),
+    };
   }
 
   // ----------------------------------------------------- management surface
@@ -102,10 +106,31 @@ export class InferenceCoreClient {
 
   /** Exact model ids returned by one provider's live upstream discovery. */
   async coreProviderLiveModelIds(name: string): Promise<string[] | null> {
-    const response = await this.request('POST', `/api/providers/test?name=${encodeURIComponent(name)}`);
-    if (!response || response.status !== 200 || !response.body || typeof response.body !== 'object') return null;
-    const body = response.body as { ok?: unknown; modelIds?: unknown };
-    if (body.ok !== true || !Array.isArray(body.modelIds)) return null;
+    const response = await this.request(
+      'POST',
+      `/api/providers/test?name=${encodeURIComponent(name)}`,
+      undefined,
+      15_000
+    );
+    this.assertOk(response, 'discover provider models');
+    if (!response.body || typeof response.body !== 'object')
+      throw new InferenceCoreClientError('Core discovery returned an invalid response');
+    const body = response.body as {
+      ok?: unknown;
+      modelIds?: unknown;
+      applicable?: unknown;
+      reason?: unknown;
+      message?: unknown;
+    };
+    if (body.applicable === false && ['static_catalog', 'forward_auth'].includes(String(body.reason))) return null;
+    if (
+      body.ok === true &&
+      typeof body.message === 'string' &&
+      body.message.startsWith('Passthrough provider is configured')
+    )
+      return null;
+    if (body.ok !== true || !Array.isArray(body.modelIds))
+      throw new InferenceCoreClientError('Core live model discovery did not succeed');
     return body.modelIds.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
   }
 
@@ -327,7 +352,8 @@ export class InferenceCoreClient {
   private async request(
     method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     path: string,
-    payload?: unknown
+    payload?: unknown,
+    timeoutMs = REQUEST_TIMEOUT_MS
   ): Promise<{ status: number; body: unknown } | null> {
     let response: Response;
     try {
@@ -338,7 +364,7 @@ export class InferenceCoreClient {
           ...(payload !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       logger.debug('Core request failed', {

@@ -996,6 +996,7 @@ export function DockerContainers({
       <ResourceListForm<DockerFolderTreeNodeWithContainers, DockerContainerListItem>
         columns={columns}
         search={{
+          initialFiltersOpen: new URLSearchParams(location.search).get("filters") === "1",
           search: searchInput,
           onSearchChange: (value) => {
             setSearchInput(value);

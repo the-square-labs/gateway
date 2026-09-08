@@ -1,7 +1,11 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { makeUser } from "@/test/fixtures";
 import type { NodeDetail, NodeHealthReport } from "@/types";
+import type { HostingNodeProjection } from "@/types/hosting";
 import { NodeDetailsTab } from "./NodeDetailsTab";
 
 function createHealthReport(): NodeHealthReport {
@@ -65,6 +69,171 @@ function createNode(): NodeDetail {
 }
 
 describe("NodeDetailsTab", () => {
+  it.each([
+    "digitalocean",
+    "hetzner",
+    "hostkey",
+    "proxmox",
+  ] as const)("hides recovery and shows ownership only for Proxmox (%s)", (provider) => {
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={createNode()}
+          hosting={
+            {
+              provider,
+              kind: "vm",
+              resourceId: "vm",
+              origin: "created",
+              powerState: "stopped",
+              observedAt: "2026-09-08T00:00:00Z",
+            } as HostingNodeProjection
+          }
+          canManageSecureRuntime={false}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn()}
+          refreshDaemonUpdateStatus={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+    const panel = screen
+      .getByRole("heading", { name: "Hosting" })
+      .closest(".bg-card")! as HTMLElement;
+    expect(within(panel).queryByText("Recovery")).not.toBeInTheDocument();
+    if (provider === "proxmox") expect(within(panel).getByText("Ownership")).toBeInTheDocument();
+    else expect(within(panel).queryByText("Ownership")).not.toBeInTheDocument();
+    expect(within(panel).getByText("Provider")).toBeInTheDocument();
+    expect(within(panel).getByText("Resources")).toBeInTheDocument();
+  });
+  it("keeps the large container status summary alongside the new resource links without a second fetch", async () => {
+    const node = { ...createNode(), type: "docker" as const };
+    useAuthStore.setState({ user: makeUser({ scopes: ["docker:containers:view"] }) });
+    const list = vi
+      .spyOn(api, "listDockerContainerSnapshots")
+      .mockResolvedValue([
+        { state: "running" },
+        { state: "running" },
+        { state: "exited" },
+        { state: "stopped" },
+        { state: "paused" },
+      ] as never);
+    const legacyList = vi.spyOn(api, "listDockerContainers");
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          canManageSecureRuntime={false}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn()}
+          refreshDaemonUpdateStatus={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+    await screen.findByText("5 containers");
+    const summary = screen.getByRole("region", { name: "Container summary" });
+    for (const [label, value] of [
+      ["Running", "2"],
+      ["Stopped", "2"],
+      ["Paused", "1"],
+      ["Total", "5"],
+    ]) {
+      const cell = within(summary).getByText(label).parentElement!;
+      expect(within(cell).getByText(value)).toHaveClass("text-2xl", "font-bold");
+    }
+    expect(screen.getByRole("link", { name: "View containers" })).toBeInTheDocument();
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(legacyList).not.toHaveBeenCalled();
+  });
+  it.each([
+    false,
+    true,
+  ])("uses the shared Docker summary with five filtered links (hosting=%s)", async (withHosting) => {
+    const node = { ...createNode(), type: "docker" as const };
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["containers", "images", "volumes", "networks", "compose"].map(
+          (tab) => `docker:${tab}:view`
+        ),
+      }),
+    });
+    const containerList = vi
+      .spyOn(api, "listDockerContainerSnapshots")
+      .mockResolvedValue([{ _listTotal: 42 }] as never);
+    vi.spyOn(api, "listDockerImageSnapshots").mockResolvedValue([{}, {}] as never);
+    vi.spyOn(api, "listDockerVolumeSnapshots").mockResolvedValue([]);
+    vi.spyOn(api, "listDockerNetworkSnapshots").mockResolvedValue([{}] as never);
+    vi.spyOn(api, "listDockerComposeProjects").mockResolvedValue([{}, {}, {}] as never);
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          hosting={
+            withHosting
+              ? ({
+                  provider: "proxmox",
+                  kind: "vm",
+                  resourceId: "vm",
+                  observedAt: "2026-09-07T00:00:00Z",
+                } as HostingNodeProjection)
+              : null
+          }
+          canManageSecureRuntime={false}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn()}
+          refreshDaemonUpdateStatus={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+    await screen.findByText("42 containers");
+    expect(containerList).toHaveBeenCalledWith({ nodeId: node.id });
+    for (const label of ["2 images", "0 volumes", "1 networks", "3 compose projects"])
+      expect(screen.getByText(label)).toBeInTheDocument();
+    for (const tab of ["containers", "images", "volumes", "networks", "compose"]) {
+      const link = screen.getByRole("link", {
+        name: `View ${tab === "compose" ? "compose projects" : tab}`,
+      });
+      expect(link).toHaveAttribute("href", `/docker/${tab}?nodeId=${node.id}&filters=1`);
+      expect(link).toHaveAttribute("data-button");
+      expect(link.querySelector("svg")).toBeInTheDocument();
+    }
+    const panel = screen.getByRole("heading", { name: "Docker" }).closest(".bg-card")!;
+    expect(panel.parentElement).toHaveClass("grid", "grid-cols-1");
+    if (withHosting) {
+      expect(panel.parentElement).toHaveClass("min-[1044px]:grid-cols-2");
+      expect(panel.parentElement).toContainElement(
+        screen.getByRole("heading", { name: "Hosting" })
+      );
+    } else expect(panel.parentElement).not.toHaveClass("min-[1044px]:grid-cols-2");
+  });
+
+  it("does not fetch counts or expose links for unrelated node scopes", async () => {
+    const node = { ...createNode(), type: "docker" as const };
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: [
+          "docker:containers:view:another-node/container",
+          `docker:images:view:${node.id}/image`,
+        ],
+      }),
+    });
+    const containers = vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+    const images = vi.spyOn(api, "listDockerImageSnapshots").mockResolvedValue([]);
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          canManageSecureRuntime={false}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn()}
+          refreshDaemonUpdateStatus={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(images).toHaveBeenCalledWith({ nodeId: node.id }));
+    expect(containers).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: "View containers" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View images" })).toBeInTheDocument();
+  });
   it("keeps daemon update available across a Gateway version mismatch", () => {
     const node = {
       ...createNode(),

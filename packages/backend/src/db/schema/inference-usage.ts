@@ -124,6 +124,8 @@ export const inferenceRequestAttempts = pgTable(
     reservationId: text('reservation_id'),
     errorCode: varchar('error_code', { length: 128 }),
     emittedOutput: boolean('emitted_output').notNull().default(false),
+    // NULL preserves unknown identity for attempts settled before this field existed.
+    usageEstimated: boolean('usage_estimated'),
     latencyMs: integer('latency_ms'),
     ...usageColumns,
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),

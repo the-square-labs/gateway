@@ -1,4 +1,20 @@
 export const RESOURCE_SCOPABLE: readonly string[] = [
+  // Hosting qualifiers: connector ID for accounts/create/billing, resource ID for VM actions.
+  'integrations:hosting:view',
+  'integrations:hosting:manage',
+  'hosting:resources:view',
+  'hosting:resources:create',
+  'hosting:resources:power',
+  'hosting:resources:resize',
+  'hosting:snapshots:view',
+  'hosting:snapshots:create',
+  'hosting:snapshots:delete',
+  'hosting:snapshots:restore',
+  'hosting:snapshots:folders:manage',
+  'hosting:resources:delete',
+  'hosting:resources:recover',
+  'hosting:billing:view',
+  'hosting:billing:topup',
   // PKI
   'pki:ca:create:intermediate',
   'pki:cert:view',

@@ -19,6 +19,7 @@ import {
   parseProviderEvent,
   providerRequestBody,
 } from '../providers/inference-provider-wire.js';
+import type { CoreDataPlaneTarget } from './inference-core-bridge.service.js';
 import { coreRequestHeaders, newCoreRequestContext } from './inference-core-context.js';
 import { type InferenceCoreProxyService, shouldFailOverCoreResponse } from './inference-core-proxy.service.js';
 
@@ -108,6 +109,7 @@ export class InferenceCoreExecutor implements InferenceExecutor {
           ...(mapped.upstreamEffort ? { reasoningEffort: mapped.upstreamEffort } : {}),
         };
         const { claims } = newCoreRequestContext({
+          requestLimits: target.requestLimits,
           tenantUserId: user.id,
           rootRequestId: requestId,
           publicModelId: resolved.model.publicId,
@@ -174,7 +176,7 @@ export class InferenceCoreExecutor implements InferenceExecutor {
     };
   }
 
-  private async dataPlaneTarget(): Promise<{ baseUrl: string; credential: string }> {
+  private async dataPlaneTarget(): Promise<CoreDataPlaneTarget> {
     try {
       return await this.proxy.dataPlaneTarget();
     } catch {

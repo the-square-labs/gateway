@@ -41,7 +41,7 @@ const CORE_MEMORY_BYTES = 2 * 1024 * 1024 * 1024;
 const CORE_PIDS_LIMIT = 1024;
 const CORE_READY_TIMEOUT_MS = 120_000;
 const CORE_STABILITY_WINDOW_MS = 20_000;
-const CORE_DRAIN_TIMEOUT_MS = 30_000;
+const CORE_DRAIN_TIMEOUT_MS = 8_000;
 const CORE_BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const CORE_BACKUP_KEEP = 3;
 const HEALTH_PROBE_INTERVAL_MS = 60_000;
@@ -282,8 +282,6 @@ export class InferenceCoreRuntimeService {
     });
     void this.runGuarded(operation.id, async () => {
       const current = await this.requireStateRow();
-      await this.transition(current, 'updating', null);
-      await this.publishNow();
       const artifact = await this.resolveArtifact(targetVersion, operation.id);
       await this.updateCoreContainer(operation.id, current, artifact);
       await this.operations.succeed(operation.id);
@@ -351,7 +349,10 @@ export class InferenceCoreRuntimeService {
     );
 
     for (const helper of owned.filter(
-      (c) => c.Labels?.[LABEL_PROJECT] === layout.project && c.Labels?.[LABEL_ROLE] === ROLE_HELPER
+      (c) =>
+        c.Labels?.[LABEL_PROJECT] === layout.project &&
+        (c.Labels?.[LABEL_ROLE] === ROLE_HELPER ||
+          (c.State !== 'running' && c.Names.includes(`/${layout.containerName}-candidate`)))
     )) {
       logger.warn('Removing abandoned inference core helper container', { id: helper.Id.slice(0, 12) });
       if (helper.State === 'running') await this.docker.stopContainer(helper.Id).catch(() => {});
@@ -541,7 +542,8 @@ export class InferenceCoreRuntimeService {
   private async createCoreContainer(
     layout: CoreLayout,
     artifact: TrustedOpenCodexImageArtifact,
-    _credentials: InferenceCoreCredentials
+    _credentials: InferenceCoreCredentials,
+    recordState = true
   ): Promise<string> {
     await this.assertNoForeignContainer(layout.containerName);
     const id = await this.docker.createContainer(
@@ -580,13 +582,14 @@ export class InferenceCoreRuntimeService {
       },
       layout.containerName
     );
-    await this.upsertStateRow({
-      containerId: id,
-      containerName: layout.containerName,
-      stateVolumeName: layout.stateVolume,
-      secretVolumeName: layout.secretVolume,
-      networkName: layout.network,
-    });
+    if (recordState)
+      await this.upsertStateRow({
+        containerId: id,
+        containerName: layout.containerName,
+        stateVolumeName: layout.stateVolume,
+        secretVolumeName: layout.secretVolume,
+        networkName: layout.network,
+      });
     return id;
   }
 
@@ -647,7 +650,7 @@ export class InferenceCoreRuntimeService {
     }
   }
 
-  /** pull-first → drain → backup → replace → stability → accept/rollback. */
+  /** Prepare while serving, then stop the sole writer, snapshot and activate. */
   private async updateCoreContainer(
     operationId: string,
     row: InferenceCoreStateRow,
@@ -663,37 +666,58 @@ export class InferenceCoreRuntimeService {
     // Pull while the old core keeps serving.
     await this.pullImage(operationId, artifact);
     await this.operations.updatePhase(operationId, 'updating', { stage: STAGE.updating });
-
     const credentials = this.openCredentials(row);
     const client = new InferenceCoreClient(this.coreBaseUrl(), credentials.managementCredential);
-    await client.drain().catch(() => {});
-    await this.awaitDrain(client);
-
-    let replaced = false;
+    const initialStatus = await client.wiolettStatus();
+    if (!initialStatus) throw new Error('Cannot verify core shutdown capabilities; update cancelled');
+    const supportsDrainCompletion = typeof initialStatus.drained === 'boolean';
+    // Docker creation/preparation does not start a second core or change the
+    // active endpoint. Creation failures therefore leave the old core serving.
+    const candidateId = await this.createCoreContainer(
+      { ...layout, containerName: `${layout.containerName}-candidate` },
+      artifact,
+      credentials,
+      false
+    );
+    let stopped = false;
+    let accepted = false;
     let backupFile: string | null = null;
     try {
-      // Bounded state backup before any destructive step. This is inside the
-      // recovery guard because the old core has already entered drain mode.
+      await this.transition(await this.requireStateRow(), 'updating', null);
+      await this.publishNow();
+      if (supportsDrainCompletion) {
+        await client.drain();
+        await this.awaitDrain(client);
+      }
+      // Stop the sole writer before snapshotting. A live tar is not a rollback
+      // snapshot: streams and settlements may still mutate its files.
+      // Older cores cannot prove persistence completion. Keep their normal
+      // bounded SIGTERM path, without a temporary drain lease blocking shutdown.
+      if (row.containerId) await this.docker.stopContainer(row.containerId, supportsDrainCompletion ? 2 : 60);
+      stopped = true;
       await this.operations.updatePhase(operationId, 'updating', { stage: STAGE.preparingStorage });
       backupFile = await this.backupStateVolume(layout, row.installedImageRef!);
-      await this.replaceContainer(layout, row, artifact, credentials);
-      replaced = true;
+      if (row.containerId) await this.docker.removeContainer(row.containerId);
+      await this.docker.renameContainer(candidateId, layout.containerName);
+      await this.upsertStateRow({ containerId: candidateId, containerName: layout.containerName });
       await this.operations.updatePhase(operationId, 'starting', { stage: STAGE.checkingReadiness });
       await this.startAndAwaitReady(artifact);
-      await sleep(this.timings.stabilityWindowMs);
-      await this.awaitReadyIdentity(layout, artifact.version);
-
-      const current = await this.requireStateRow();
-      await this.transition(current, 'ready', null);
+      await this.transition(await this.requireStateRow(), 'ready', null);
+      accepted = true;
+      await this.publishNow();
+      // Readiness is the acceptance boundary. Subsequent health probes observe
+      // stability; never restore a pre-update snapshot after serving new work.
       await this.pruneOldCoreImages(artifact.imageRef, previous.imageRef);
       await this.pruneOldBackups();
     } catch (error) {
-      if (!replaced) {
-        // Backup/pre-replacement failures leave the old container intact. It
-        // must resume immediately or every later request sees a drained core.
-        await client.resume().catch((resumeError) => {
-          logger.warn('Core resume after aborted update failed', { error: redactedCoreError(resumeError) });
-        });
+      // Once new traffic is admitted, restoring the old snapshot would erase
+      // its continuation/accounting state. Later health is handled by probes.
+      if (accepted) throw error;
+      await this.docker.removeContainer(candidateId).catch(() => {});
+      if (!stopped) {
+        // A failed resume must leave this installation degraded, not routable.
+        if (supportsDrainCompletion) await client.resume();
+        await this.transition(await this.requireStateRow(), 'ready', null);
         throw error;
       }
       await this.operations.updatePhase(operationId, 'rolling_back', { stage: STAGE.rollingBack }).catch(() => {});
@@ -702,19 +726,6 @@ export class InferenceCoreRuntimeService {
       // the operation must close as failed so the UI never reports a success.
       throw error;
     }
-  }
-
-  private async replaceContainer(
-    layout: CoreLayout,
-    row: InferenceCoreStateRow,
-    artifact: TrustedOpenCodexImageArtifact,
-    credentials: InferenceCoreCredentials
-  ): Promise<void> {
-    if (row.containerId) {
-      await this.docker.stopContainer(row.containerId, 10).catch(() => {});
-      await this.docker.removeContainer(row.containerId);
-    }
-    await this.createCoreContainer(layout, artifact, credentials);
   }
 
   /** Restore the recorded previous version and its backed-up state volume. */
@@ -1076,8 +1087,10 @@ export class InferenceCoreRuntimeService {
     const deadline = Date.now() + this.timings.drainTimeoutMs;
     for (;;) {
       const status = await client.wiolettStatus();
-      if (status === null || status.draining) return; // unreachable is effectively drained
-      if (Date.now() > deadline) return; // bounded wait; replacement proceeds
+      if (status?.drained === true) return;
+      if (Date.now() > deadline) {
+        throw new Error('Core did not confirm persistence of interrupted requests; update cancelled');
+      }
       await sleep(this.timings.drainPollMs);
     }
   }
@@ -1120,7 +1133,7 @@ export class InferenceCoreRuntimeService {
     if (healthy && row.state === 'degraded') {
       await this.transition(row, 'ready', null);
       await this.publishNow();
-    } else if (!healthy && row.state === 'ready') {
+    } else if (!healthy && (row.state === 'ready' || row.state === 'update_available')) {
       await this.transition(row, 'degraded', 'The inference core is not answering health checks');
       await this.publishNow();
     }

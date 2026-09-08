@@ -1,0 +1,104 @@
+# Hosting integrations
+
+Hosting accounts let Gateway create a provider VM, run the existing role installer and wait for the node to enroll and become useful to Gateway. The provider account and its charges remain yours. Gateway does not resell hosting.
+
+## Providers and UI
+
+| Provider | Resources | Account finances |
+| --- | --- | --- |
+| HOSTKEY | VM orders and lifecycle management | Account balance and estimated monthly expenses |
+| DigitalOcean | Droplets and lifecycle management | Account balance when available and estimated monthly expenses |
+| Hetzner Cloud | Cloud servers; not Robot or bare metal | Estimated VM expenses; no account balance API |
+| Proxmox VE | Create QEMU VMs; inventory and manage eligible QEMU VMs and LXC containers | None; placement shows host/storage capacity |
+
+Connect accounts under **Settings → Integrations → Hosting**, also listed under **Nodes → Providers**. Account pages contain Overview and Virtual machines, with account settings in the action menu. Balance and monthly expenses appear as overview cards where available and permitted. There is no Finance tab, invoice browser or top-up action. Testing a connection does not order a VM or create an invoice.
+
+**Add connector** uses the existing step-based dialog composition. HOSTKEY, DigitalOcean and Hetzner use Connection → Settings. Proxmox uses Connection → Proxmox host → Infrastructure → Network → Review; inventory-only mode skips infrastructure and network. Back preserves the draft. Only the final action saves a connector; Continue/discovery never creates a VM. New connectors are enabled immediately; existing connectors retain their enabled state when edited.
+
+Hosting extends the existing node header and Overview tab. Eligible VMs also expose Firewall and Snapshots. Docker resources are linked from Overview to the filtered Docker pages. Provider power state remains distinct from Gateway daemon availability.
+
+## Create a node
+
+1. Choose **Create hosted node** from Nodes or **Create VM** from an account.
+2. Select the existing Gateway role, name, account, location and operating system. Choose CPU, memory and disk resources for this VM.
+3. Review the configuration and available provider price. Proxmox uses your own capacity. Selecting a profile does not create a resource.
+4. Confirm once. The persisted operation performs provider provisioning, installation, enrollment and role-readiness checks.
+
+With a complete single-host Proxmox profile, Gateway applies the connector's infrastructure/network settings and allocates VMID/IP on the server. OS and VM resources are chosen during node creation, not saved as connector defaults. Relay roles still require their advertised address. The final review precedes creation; a request cannot escape the connector's host or allocation pools.
+
+You can close the wizard and reopen the operation from the account. Closing the browser or restarting Gateway does not cancel or repeat an accepted order. A lost response reuses the saved request. Do not clear browser storage to work around an uncertain operation: reconcile the original operation first.
+
+An operation is not ready merely because its VM is running or its installer exited successfully. For example, a Docker node must connect and report a healthy Docker runtime. A dead or disconnected daemon means **Offline**, even when the provider reports Running.
+
+If installation fails on a known new VM, **Retry installation** keeps that VM and the pending node ID, rotates the enrollment token and does not order a replacement. An uncertain installer outcome is reconciled rather than blindly executed again. Expired installation credentials require the explicit retry path.
+
+Installing Gateway on a visible existing server is an explicit action, distinct from adoption. It requires a proven Guest Agent channel or an existing trusted SSH connection to that server's actual interface address. Gateway does not reinstall the operating system to gain access.
+
+## Proxmox prerequisites
+
+Neither inventory nor new VM creation requires a manually prepared template. Template-free provisioning uses the Proxmox API's `import` download/upload support and asynchronous `import-from` configuration (verified against Proxmox VE 9.1). Gateway's runtime needs `xorriso` to generate a small NoCloud ISO; it is included in the Gateway Docker image. To enable VM creation, configure:
+
+- The HTTPS API endpoint and one selected physical Proxmox host per connector. Gateway discovers cluster identity instead of requiring a user-invented identifier; VMIDs remain cluster-wide even with multiple host connectors.
+- An API token with narrowly scoped permissions for the intended host, VMIDs and storage. Gateway inspects effective per-resource permissions; a reachable Guest Agent is not automatically permission to execute commands.
+- A trusted CA or independently verified SHA-256 certificate pin when using a private certificate. Do not disable TLS validation.
+- Existing disk storage supporting `images`, image storage supporting `import`, and bootstrap storage supporting `iso`. One file-based storage may serve both image and bootstrap media; block storage such as ZFS may remain the VM disk target. Discovery lists actual content capabilities. Gateway never changes the hypervisor's storage configuration.
+- A bounded VMID pool, for example `250-260,271,273-280` (20 unique IDs). Ranges are inclusive and overlaps are deduplicated; a pool supports at most 1000 IDs. The optional inventory Resource scope is distinct from this creation pool.
+- DHCP, or a static IPv4 pool with subnet/gateway, for example `192.0.2.100-192.0.2.119,192.0.2.150`. Reserve it exclusively for Gateway, outside DHCP/manual assignment. The usable IP count must be at least the VMID count. Network/broadcast/gateway and out-of-subnet addresses are rejected.
+- An existing bridge, optional resource pool, VLAN (blank means untagged), DNS servers and optional search domain, MTU and interface firewall flag.
+- Optional aggregate CPU, memory and disk budgets for the connector. These include allocated VMs and in-flight creation/resize reservations; they are not per-VM defaults. Unknown inventory values prevent allocation against an enabled limit.
+
+The built-in catalog pins official Ubuntu LTS, Debian generic and Fedora Cloud images to a specific build and SHA-256/SHA-512 checksum. Gateway downloads the selected image on demand to an operation-owned file in the chosen Proxmox storage. It does not trust an existing shared file solely because its filename contains a checksum. Successful task receipts are persisted before the next step; lost responses are reconciled against exact provider task evidence without reissuing ambiguous imports. No OS image binaries are bundled in Gateway. Arch is excluded; Alpine is not advertised until a specific image/role combination passes installation and readiness checks, and is excluded from Build Worker roles. Creating an image entry is not proof of live role compatibility.
+
+Gateway creates a uniquely marked VM, imports the cloud disk, and supplies instance identity, network configuration and the role installer through an operation-specific NoCloud ISO. Cloud-init installs prerequisites and QEMU Guest Agent, then runs the installer. Gateway removes its bootstrap ISO and temporary source image after verified enrollment. The ISO contains short-lived enrollment material: restrict storage read access to trusted administrators. Failed or uncertain operations retain the VM for diagnosis and never silently order a replacement. Existing accepted template-based operations retain their legacy execution path; new connectors do not expose a template picker.
+
+Provider power-on can finish before cloud-init or Guest Agent starts. For canonical images, cloud-init owns initial installation; Gateway does not also dispatch the installer through Guest Agent. Existing-resource and legacy-template installation waits for cloud-init before touching its package manager. Pool reservations survive uncertain requests and retries. Confirmed deletion permits VMID/IP reuse for a new resource incarnation; old node identities, bindings and permissions never transfer to the replacement machine. A missing inventory entry alone does not free a reservation.
+
+Relevant Proxmox permissions include `VM.Audit`, `VM.PowerMgmt`, `VM.Allocate`, required `VM.Config.*` privileges, disk `Datastore.AllocateSpace`, image/ISO `Datastore.AllocateTemplate`, and bridge/pool access. Image download also needs `Sys.AccessNetwork` on the selected physical host in current PVE; do not substitute global administrator access. Storage inspection needs `Datastore.Audit`. Automatic temporary-file deletion requires `Datastore.Allocate` on **image and bootstrap storage**; prefer dedicated storage so this token cannot delete unrelated media. Guest identity reads and command execution are distinct: newer PVE versions use `VM.GuestAgent.FileRead` and `VM.GuestAgent.Unrestricted`; older versions use corresponding `VM.Monitor` checks. Existing VMID-only tokens must be extended explicitly before using image download/upload. Preflight rejects missing permissions before creating a VM.
+
+## OS admission policy
+
+New hosted VMs use a shared, fail-closed OS/version/architecture/role policy across all four providers. The installer/package compatibility matrix is independent of the pinned images Gateway downloads for Proxmox: Ubuntu 22.04/24.04/26.04, Debian 11/12/13, and Fedora 43/44 on x64 (reviewed 2026-09-05 against the existing installers and upstream Docker/Nginx package support). Proxmox still offers its three pinned canonical builds; cloud providers expose compatible images from their own catalogs. Gateway never invents an image absent from the provider. Ubuntu 20.04 is not currently admitted for new automatic hosting installation and is absent from DO's distribution catalog. This does not declare existing Ubuntu 20.04 daemons incompatible. This is admission policy, **not** a claim that each provider/image/role combination has completed live E2E verification. Unknown OS versions, unknown architectures and missing compatibility metadata are not implicitly supported.
+
+DigitalOcean plain distributions must have a recognized public slug and matching distribution metadata. Its documented Ubuntu 24.04 NVIDIA/AMD AI/ML images are also admitted by pinned public image ID, with compatible GPU vendor/count size restrictions; a changed mutable GPU alias requires a new review rather than silently upgrading the base OS. Hetzner requires a non-deprecated system image with the exact OS name and architecture. HOSTKEY requires an exact plain OS label including explicit x64 architecture; uncertain labels remain unavailable until their metadata is verified. Proxmox uses the canonical image identities, not arbitrary existing templates.
+
+The policy applies when catalog snapshots are built, when cached catalogs are served (including older Redis data), at request admission before node/intent creation, and again before provider order dispatch. The wizard requires explicit role support and honors image location, architecture and size restrictions. These filters do not hide provider inventory from automatic adoption or alter existing Gateway nodes.
+
+Relay uses the same admitted image policy as the other roles. Released installers prepare their own command-line prerequisites. Existing-resource installation and previously dispatched operations retain their own lifecycle and are not treated as new VM orders.
+
+## Automatic adoption
+
+An already registered Gateway node is linked automatically when complete, fresh and unambiguous provider evidence identifies the same host. Supported evidence includes a unique directly assigned public IP, scoped private IP plus matching interface/MAC evidence, or an independently read guest host identity. A private IP alone or a shared NAT egress IP is insufficient.
+
+Adoption preserves node ID, host identity, PKI, configuration and workloads. Multiple roles on the same proven host may share the provider resource. No manual match picker, approval or adoption endpoint exists. Ambiguous/stale/incomplete matches stay unbound with a diagnostic reason and are evaluated again on a later sync.
+
+Resource and node scopes constrain discovery; they are not manual matching choices. Newly provisioned VMs are admitted into a restricted resource scope by their exact returned provider ID. Reused provider IDs with a different incarnation do not inherit management authority from the old VM.
+
+## Management and destructive operations
+
+- Start, graceful shutdown, reboot and resize are exposed according to resource support and permissions. Proxmox resize/destruction requires a stopped guest; disk shrinking is not supported.
+- **Restart daemon** requires a verified independent channel and explicit confirmation. It does not hide a VM reboot or OS reinstall. Recovery completes only after fresh node health confirms readiness.
+- **Remove node**, **Destroy provider resource** and HOSTKEY rental cancellation are separate operations. VM destruction affects all roles/workloads on that host and does not silently remove Gateway node records.
+- Removing an integration disconnects provider management; it does not destroy VMs, cancel rentals or stop daemons.
+- An unavailable/partial provider inventory does not authorize mass deletion. A deleted resource's old IP is not released for reuse without confirmed deletion of that same incarnation.
+
+## Finances and permissions
+
+Billing permissions are separate from node visibility and VM management. Account totals are never presented as an individual node's bill. Amounts retain their currency, timestamp and actual/estimated meaning; unavailable values are not zero.
+
+For a confirmed HOSTKEY VM order, Gateway can apply available account credit to its associated invoice. The payment has a separate persisted dispatch boundary; an uncertain payment is reconciled, never blindly repeated. Gateway does not collect card details or provide a general-purpose top-up/payment page.
+
+## Firewall, snapshots and alerts
+
+Firewall management is opt-in for DigitalOcean and Proxmox. Rules share inbound/outbound direction, Allow/Deny, protocol, ports and source/destination addresses. Provider prerequisites and current token permissions are checked before applying. Gateway does not enable the Proxmox cluster firewall or overwrite unrelated provider policies.
+
+Snapshots use durable pending, ready, failed and deleting entities. Creation can run while the VM is online; application consistency still requires application-level coordination. Proxmox optionally includes RAM and can restore a running VM; other integrations require a stopped VM for restore. Storage prices are estimates where available; an unknown size or price is a dash, not zero. Snapshot folders use stable Gateway entity IDs independently of provider snapshot IDs.
+
+Creation, deletion and restore are mutually exclusive with other VM mutations. An uncertain delete is reconciled using complete inventory of the unchanged VM. An uncertain disk-resize dispatch is not repeated; Proxmox resize checkpoints allow safe continuation between CPU/RAM configuration and disk growth.
+
+Hosting alerts support VM power state, operation outcomes, firewall failures, account synchronization and monetary thresholds. Monetary rules require an explicit currency and separate billing access. Persisted provider observations and Redis read models feed the notification bus; stale or unavailable account data does not become a zero balance.
+
+High-risk hosting mutations, configuration secrets and account finances require an authenticated interactive session; these scopes are excluded from programmatic API/OAuth tokens. See [SCOPES.md](../SCOPES.md) for the canonical scopes.
+
+## Verification boundary
+
+Provider fixture/contract tests are not live provider acceptance. HOSTKEY, DigitalOcean and Hetzner require separately supplied test credentials and explicit spending/financial authority before real orders or invoices can be tested. Proxmox E2E should run only in a positively identified test pool with exact guest IDs, a resource limit and a cleanup/restore inventory. Never use a production VM as an implicitly disposable fixture.

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
+import { HostingNodeWizard } from "@/components/nodes/HostingNodeWizard";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,9 +25,12 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
+import { STEP_ANIMATION } from "@/pages/notifications/template-editor";
 import { api } from "@/services/api";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { Node, NodeType } from "@/types";
+import type { HostingOperation, HostingResource } from "@/types/hosting";
 
 type EnrollmentTargets = {
   public?: { label: string; gateway: string | null };
@@ -80,13 +84,6 @@ const INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   relay: "setup-relay-node.sh",
 };
 
-const RELAY_FIELD_ANIMATION = {
-  initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -8 },
-  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] },
-} as const;
-
 type EnrollmentResult = {
   nodeId: string;
   displayName: string;
@@ -97,21 +94,35 @@ type EnrollmentResult = {
   relayAddress?: string;
 };
 
+type HostingRequest = {
+  connectorId?: string;
+  existingResource?: HostingResource;
+};
+
 export function NodeEnrollmentDialog({
   open,
   onOpenChange,
   initialType = "nginx",
   lockType = false,
+  initialMode = "external",
+  lockMode = false,
+  hosting,
   onNodeCreated,
   onNodeEnrolled,
+  onHostingCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialType?: NodeType;
   lockType?: boolean;
+  initialMode?: "external" | "hosting";
+  lockMode?: boolean;
+  hosting?: HostingRequest;
   onNodeCreated?: (node: Node) => void;
   onNodeEnrolled?: (nodeId: string) => void;
+  onHostingCreated?: (operation: HostingOperation) => void;
 }) {
+  const [mode, setMode] = useState<"external" | "hosting">(initialMode);
   const [type, setType] = useState<NodeType>(initialType);
   const [displayName, setDisplayName] = useState("");
   const [relayAddress, setRelayAddress] = useState("");
@@ -126,13 +137,22 @@ export function NodeEnrollmentDialog({
   const [targetId, setTargetId] = useState("public");
   const [transport, setTransport] = useState<"curl" | "wget">("curl");
   const completedNodeRef = useRef<string | null>(null);
+  const retainedHosting = useRetainedDialogValue(hosting ?? null, open);
+  const [hostingModeLocked, setHostingModeLocked] = useState(false);
+  const fixedHosting = Boolean(retainedHosting?.connectorId || retainedHosting?.existingResource);
+  const effectiveMode = fixedHosting ? "hosting" : mode;
 
   useEffect(() => {
     if (!open) return;
+    setMode(initialMode);
     setType(initialType);
     setDisplayName("");
     setRelayAddress("");
-  }, [initialType, open]);
+  }, [initialMode, initialType, open]);
+
+  useEffect(() => {
+    if (!open) setHostingModeLocked(false);
+  }, [open]);
 
   useEffect(() => {
     if (!result) completedNodeRef.current = null;
@@ -181,6 +201,7 @@ export function NodeEnrollmentDialog({
     NODE_ENROLLMENT_TYPES[0]!;
   const canCreate =
     displayName.trim().length > 0 && (type !== "relay" || relayAddress.trim().length > 0);
+  const modeLocked = creating || hostingModeLocked;
 
   const createNode = async () => {
     if (!canCreate) return;
@@ -278,80 +299,116 @@ export function NodeEnrollmentDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add Node</DialogTitle>
-            <DialogDescription>
-              Create a pending node and run its one-time setup command on the target host.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Type</label>
-              <Select
-                value={type}
-                onValueChange={(value) => setType(value as NodeType)}
-                disabled={lockType}
-              >
-                <SelectTrigger aria-label="Node Type">
-                  <SelectValue>{selectedType.label}</SelectValue>
-                </SelectTrigger>
-                <SelectContent className="w-[min(28rem,calc(100vw-2rem))]">
-                  {NODE_ENROLLMENT_TYPES.map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      textValue={option.label}
-                      description={option.description}
-                      className="items-start py-2"
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">{selectedType.description}</p>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Name</label>
-              <Input
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                placeholder={type === "relay" ? "EU Relay" : "US-East Ingress"}
-              />
-            </div>
-            <AnimatedHeight>
-              <AnimatePresence initial={false}>
-                {type === "relay" && (
-                  <motion.div
-                    key="relay-address"
-                    {...RELAY_FIELD_ANIMATION}
-                    className="space-y-1.5 overflow-hidden"
-                  >
-                    <label className="text-sm font-medium">Relay Address</label>
-                    <Input
-                      value={relayAddress}
-                      onChange={(event) => setRelayAddress(event.target.value)}
-                      placeholder="relay.example.com"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Reachable IP or hostname advertised to participating nodes. TCP 9443 must be
-                      accessible.
-                    </p>
+        <HostingNodeWizard
+          open={open && effectiveMode === "hosting"}
+          onClose={() => onOpenChange(false)}
+          connectorId={retainedHosting?.connectorId}
+          existingResource={retainedHosting?.existingResource}
+          onCreated={onHostingCreated}
+          onModeLockChange={setHostingModeLocked}
+          render={({ body, footer }) => (
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Add Node</DialogTitle>
+                <DialogDescription>
+                  {effectiveMode === "external"
+                    ? "Create a pending node and run its one-time setup command on the target host."
+                    : retainedHosting?.existingResource
+                      ? "Install Gateway on the selected provider VM."
+                      : "Create and enroll a node using a connected hosting account. Nothing is ordered before your confirmation."}
+                </DialogDescription>
+              </DialogHeader>
+              {!fixedHosting && !lockMode && (
+                <Tabs value={mode} onValueChange={(value) => setMode(value as typeof mode)}>
+                  <TabsList>
+                    <TabsTrigger value="external" disabled={modeLocked}>
+                      External
+                    </TabsTrigger>
+                    <TabsTrigger value="hosting" disabled={modeLocked}>
+                      Hosting
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
+              <AnimatedHeight>
+                <AnimatePresence initial={false} mode="wait">
+                  <motion.div key={effectiveMode} {...STEP_ANIMATION}>
+                    {effectiveMode === "external" ? (
+                      <div className="space-y-4">
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Node Type</label>
+                          <Select
+                            value={type}
+                            onValueChange={(value) => setType(value as NodeType)}
+                            disabled={lockType}
+                          >
+                            <SelectTrigger aria-label="Node Type">
+                              <SelectValue>{selectedType.label}</SelectValue>
+                            </SelectTrigger>
+                            <SelectContent className="w-[min(28rem,calc(100vw-2rem))]">
+                              {NODE_ENROLLMENT_TYPES.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                  textValue={option.label}
+                                  description={option.description}
+                                  className="items-start py-2"
+                                >
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            {selectedType.description}
+                          </p>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Node Name</label>
+                          <Input
+                            value={displayName}
+                            onChange={(event) => setDisplayName(event.target.value)}
+                            placeholder={type === "relay" ? "EU Relay" : "US-East Ingress"}
+                          />
+                        </div>
+                        {type === "relay" && (
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium">Relay Address</label>
+                            <Input
+                              value={relayAddress}
+                              onChange={(event) => setRelayAddress(event.target.value)}
+                              placeholder="relay.example.com"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Reachable IP or hostname advertised to participating nodes. TCP 9443
+                              must be accessible.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      body
+                    )}
                   </motion.div>
+                </AnimatePresence>
+              </AnimatedHeight>
+              <DialogFooter>
+                {effectiveMode === "external" ? (
+                  <>
+                    <Button variant="outline" onClick={() => onOpenChange(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={() => void createNode()} disabled={creating || !canCreate}>
+                      {creating ? "Creating..." : "Create Node"}
+                    </Button>
+                  </>
+                ) : (
+                  footer
                 )}
-              </AnimatePresence>
-            </AnimatedHeight>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void createNode()} disabled={creating || !canCreate}>
-              {creating ? "Creating..." : "Create Node"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
+              </DialogFooter>
+            </DialogContent>
+          )}
+        />
       </Dialog>
 
       <Dialog open={resultOpen} onOpenChange={onResultOpenChange}>

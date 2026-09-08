@@ -8,6 +8,7 @@ import { inferenceProviderConnections, inferenceProviderSettings, inferenceQuota
 import type { InferenceConnectionStatus, InferenceRoutingStrategy } from '@/db/schema/inference-providers.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
+import { latestValidQuota } from './inference-provider.service.helpers.js';
 
 const AFFINITY_TTL_SECONDS = 24 * 60 * 60;
 const AFFINITY_REBALANCE_IDLE_MS = 60 * 60 * 1000;
@@ -479,21 +480,27 @@ export class InferenceRoutingService {
           orderBy: [desc(inferenceQuotaSnapshots.fetchedAt)],
         });
         const latestQuotas = latestQuotaWindows(quotas);
-        const remainingFractions = latestQuotas.flatMap((quota) =>
+        const now = Date.now();
+        const validQuotas = latestValidQuota(quotas, now);
+        const minimumRemainingFraction = connection.minimumRemainingPercent / 100;
+        const remainingFractions = validQuotas.flatMap((quota) =>
           quota.remainingFraction === null || quota.remainingFraction === undefined
             ? []
             : [Number(quota.remainingFraction)]
         );
+        const hasExhaustedQuota = remainingFractions.some((remaining) => remaining <= minimumRemainingFraction);
         return {
           id: connection.id,
           providerId: connection.providerId,
           order: connection.routingOrder,
-          status:
-            latestQuotas.length > 0 && latestQuotas.some((quota) => quota.validUntil.getTime() <= Date.now())
-              ? 'stale'
-              : connectionStatus,
+          status: routingStatus(connectionStatus, {
+            hasExpiredQuota: latestQuotas.some((quota) => quotaIsExpired(quota, now)),
+            hasExhaustedQuota,
+            hasQuotaHistory: quotas.length > 0,
+            healthReason: connection.healthReason,
+          }),
           remainingFraction: remainingFractions.length ? Math.min(...remainingFractions) : null,
-          minimumRemainingFraction: connection.minimumRemainingPercent / 100,
+          minimumRemainingFraction,
         };
       })
     );
@@ -514,7 +521,7 @@ export class InferenceRoutingService {
 }
 
 function isUsable(candidate: Candidate): boolean {
-  if (['disabled', 'unavailable', 'reauth_required', 'cooldown', 'stale'].includes(candidate.status)) return false;
+  if (['disabled', 'unavailable', 'reauth_required', 'cooldown'].includes(candidate.status)) return false;
   if (candidate.remainingFraction === null) return true;
   return candidate.remainingFraction > candidate.minimumRemainingFraction;
 }
@@ -551,6 +558,31 @@ function latestQuotaWindows(rows: Array<typeof inferenceQuotaSnapshots.$inferSel
     seen.add(key);
     return true;
   });
+}
+
+function quotaIsExpired(quota: typeof inferenceQuotaSnapshots.$inferSelect, now: number): boolean {
+  return (
+    quota.validUntil.getTime() <= now ||
+    (quota.resetAt !== null && quota.resetAt !== undefined && quota.resetAt.getTime() <= now)
+  );
+}
+
+function routingStatus(
+  status: string,
+  input: {
+    hasExpiredQuota: boolean;
+    hasExhaustedQuota: boolean;
+    hasQuotaHistory: boolean;
+    healthReason: string | null;
+  }
+): string {
+  if (['disabled', 'reauth_required', 'cooldown'].includes(status)) return status;
+  if (input.hasExhaustedQuota) return 'unavailable';
+  if (status === 'unavailable') {
+    return input.healthReason === null && input.hasQuotaHistory ? 'stale' : status;
+  }
+  if (input.hasExpiredQuota) return 'stale';
+  return status;
 }
 
 function statusAfterCooldown(status: InferenceConnectionStatus, cooldownActive: boolean): InferenceConnectionStatus {
@@ -688,4 +720,7 @@ export const __testOnly = {
   candidateDiagnostic,
   statusAfterCooldown,
   latestQuotaWindows,
+  latestValidQuotaWindows: latestValidQuota,
+  quotaIsExpired,
+  routingStatus,
 };

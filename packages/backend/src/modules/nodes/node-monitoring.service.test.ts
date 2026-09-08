@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { compactMonitoringHistorySnapshot, NodeMonitoringService } from './node-monitoring.service.js';
+import {
+  compactMonitoringHistorySnapshot,
+  NODE_MONITORING_IDLE_TTL_MS,
+  NODE_MONITORING_MAX_KEYS,
+  NodeMonitoringService,
+} from './node-monitoring.service.js';
 
 afterEach(() => {
   vi.clearAllTimers();
@@ -31,6 +36,48 @@ describe('NodeMonitoringService active polling', () => {
         stats: {},
       }).health.containerStats
     ).toEqual(containerStats);
+  });
+
+  it('bounds resource keys and expires idle history even without new snapshots', async () => {
+    vi.useFakeTimers();
+    const { service } = createService();
+    service.pushSnapshot('old', {}, {});
+    for (let i = 0; i < NODE_MONITORING_MAX_KEYS; i++) service.pushSnapshot(String(i), {}, {});
+    expect(await service.getHistory('old')).toEqual([]);
+    expect(await service.getHistory('0')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(NODE_MONITORING_IDLE_TTL_MS + 15_000);
+    expect((service as any).history.size).toBe(0);
+    expect((service as any).historyActivity.size).toBe(0);
+    service.destroy();
+  });
+
+  it('clears history and prevents delayed startup after destroy', async () => {
+    vi.useFakeTimers();
+    const { service } = createService();
+    service.pushSnapshot('node', {}, {});
+    service.destroy();
+    await vi.advanceTimersByTimeAsync(15_000);
+    service.pushSnapshot('late', {}, {});
+    expect((service as any).history.size).toBe(0);
+    expect((service as any).historyActivity.size).toBe(0);
+    expect(await service.getHistory('node')).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not repopulate history from a poll completing after destroy', async () => {
+    vi.useFakeTimers();
+    const { service, registry } = createService();
+    registry.getNode.mockReturnValue({
+      type: 'docker',
+      commandStream: { write: vi.fn() },
+      lastHealthReport: { cpuPercent: 1 },
+      lastStatsReport: {},
+    } as never);
+    service.registerClient('node');
+    service.destroy();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect((service as any).history.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('keeps non-focused stream consumers on the 5 second cadence', async () => {

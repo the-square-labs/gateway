@@ -536,6 +536,7 @@ export function DockerNetworks({
         resources={filteredNetworks as DockerNetworkListItem[]}
         columns={networkColumns}
         search={{
+          initialFiltersOpen: new URLSearchParams(location.search).get("filters") === "1",
           search,
           onSearchChange: setSearch,
           placeholder: "Search networks by name or driver...",

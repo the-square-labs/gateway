@@ -12,8 +12,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { toast } from "sonner";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -21,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type DockerViewNodeScope, loadVisibleDockerNodes } from "@/lib/docker-node-access";
-import { useAuthStore } from "@/stores/auth";
+import { authContextKey, useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { Node as GatewayNode } from "@/types";
@@ -57,6 +58,8 @@ const DOCKER_NODE_SCOPES_BY_TAB: Partial<
 export function Docker() {
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedNodeId = searchParams.get("nodeId");
   const { hasScope, hasScopedAccess, user } = useAuthStore();
   const setSelectedNode = useDockerStore((s) => s.setSelectedNode);
   const selectedNodeId = useDockerStore((s) => s.selectedNodeId);
@@ -123,25 +126,64 @@ export function Docker() {
               : activeTab === "tasks"
                 ? loading.tasks
                 : false;
-
-  useEffect(() => {
-    setSelectedNode(null);
-  }, [setSelectedNode]);
+  const nodeSelectionKey = `${authContextKey(user)}:${activeTab}:${requestedNodeId ?? ""}`;
+  const [resolvedNodeSelection, setResolvedNodeSelection] = useState("");
+  const [nodeSelectionError, setNodeSelectionError] = useState<string | null>(null);
+  const nodeSelectionReady = resolvedNodeSelection === nodeSelectionKey;
+  const appliedNodeQuery = useRef<string | undefined>(undefined);
 
   // Fetch docker nodes on mount, store in zustand for multi-node fetching
   useEffect(() => {
+    let cancelled = false;
     const scopeBases =
       DOCKER_NODE_SCOPES_BY_TAB[activeTab as keyof typeof DOCKER_NODE_SCOPES_BY_TAB];
-    if (!scopeBases) return;
+    if (!scopeBases) {
+      setResolvedNodeSelection(nodeSelectionKey);
+      setNodeSelectionError(null);
+      return;
+    }
     loadVisibleDockerNodes(user?.scopes ?? [], scopeBases, hasScopedAccess("nodes:details"))
-      .then(setDockerNodes)
-      .catch(() => toast.error("Failed to load Docker nodes"));
-  }, [activeTab, hasScopedAccess, setDockerNodes, user?.scopes]);
+      .then((nodes) => {
+        if (cancelled) return;
+        setDockerNodes(nodes);
+        if (requestedNodeId && !nodes.some((node) => node.id === requestedNodeId)) {
+          setSelectedNode(null);
+          setNodeSelectionError(
+            "The selected Docker node is unavailable or you do not have access to it."
+          );
+        } else {
+          if (appliedNodeQuery.current !== (requestedNodeId ?? "")) {
+            setSelectedNode(requestedNodeId);
+            if (requestedNodeId) useDockerStore.getState().resetFilters();
+            appliedNodeQuery.current = requestedNodeId ?? "";
+          }
+          setNodeSelectionError(null);
+        }
+        setResolvedNodeSelection(nodeSelectionKey);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNodeSelectionError("Failed to load Docker nodes.");
+        setResolvedNodeSelection(nodeSelectionKey);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeTab,
+    hasScopedAccess,
+    nodeSelectionKey,
+    requestedNodeId,
+    setDockerNodes,
+    setSelectedNode,
+    user?.scopes,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
 
     const preload = async () => {
+      if (!nodeSelectionReady || nodeSelectionError) return;
       for (const tab of visibleTabKey.split("|").filter(Boolean)) {
         if (tab === activeTab) continue;
         if (cancelled) return;
@@ -190,10 +232,15 @@ export function Docker() {
     hasScopedAccess,
     user?.scopes,
     visibleTabKey,
+    nodeSelectionReady,
+    nodeSelectionError,
   ]);
 
   const handleTabChange = (value: string) => {
-    navigate(`/docker/${value}`, { replace: true });
+    const query = new URLSearchParams(searchParams);
+    if (selectedNodeId) query.set("nodeId", selectedNodeId);
+    else query.delete("nodeId");
+    navigate(`/docker/${value}${query.size ? `?${query}` : ""}`, { replace: true });
   };
 
   const handleRefresh = async () => {
@@ -445,6 +492,15 @@ export function Docker() {
       : []),
   ];
 
+  if (!nodeSelectionReady) return <DetailPageSkeleton label="Loading Docker resources" tabs={5} />;
+  if (nodeSelectionError)
+    return (
+      <EmptyState
+        message={nodeSelectionError}
+        actionLabel="View all nodes"
+        onAction={() => navigate(`/docker/${activeTab}`, { replace: true })}
+      />
+    );
   return (
     <PageTransition>
       <div

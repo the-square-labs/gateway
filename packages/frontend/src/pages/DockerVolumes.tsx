@@ -483,6 +483,7 @@ export function DockerVolumes({
         resources={filteredVolumes as DockerVolumeListItem[]}
         columns={volumeColumns}
         search={{
+          initialFiltersOpen: new URLSearchParams(location.search).get("filters") === "1",
           search,
           onSearchChange: setSearch,
           placeholder: "Search volumes by name...",

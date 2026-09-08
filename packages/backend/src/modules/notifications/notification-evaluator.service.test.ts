@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { notificationAlertStates, sslCertificates } from '@/db/schema/index.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import { NotificationEvaluatorService } from './notification-evaluator.service.js';
 
 const BASE_RULE = {
@@ -16,7 +17,7 @@ const BASE_RULE = {
   fireThresholdPercent: 100,
   resolveAfterSeconds: 0,
   resolveThresholdPercent: 100,
-  resourceIds: [],
+  resourceIds: [] as string[],
   webhookIds: [],
 };
 
@@ -137,6 +138,184 @@ function createEvaluator(
 
   return { evaluator, states };
 }
+
+describe('NotificationEvaluatorService hosting evaluation', () => {
+  it.each([
+    { metricTarget: 'EUR' },
+    { resourceIds: ['other'] },
+    { metric: 'monthly_expenses' },
+  ])('resolves old hosting states when rule source changes %j', async (patch) => {
+    const previous = { ...BASE_RULE, category: 'hosting_account', metric: 'balance', metricTarget: 'USD' };
+    const { evaluator, states } = createEvaluator([], []);
+    states.push({
+      id: 'old',
+      ruleId: previous.id,
+      resourceType: 'hosting_account',
+      resourceId: 'account:USD',
+      status: 'firing',
+    });
+    await evaluator.reconcileHostingRuleUpdate(previous, { ...previous, ...patch });
+    expect(states[0].status).toBe('resolved');
+    expect(states[0].context.details.reason).toBe('rule_updated');
+  });
+  it('subscribes to the real event bus and serializes repeated observations before resolving', async () => {
+    const { evaluator, states } = createEvaluator(
+      [],
+      [],
+      [{ ...BASE_EVENT_RULE, category: 'hosting_vm', eventPattern: 'power.stopped' }]
+    );
+    const bus = new EventBusService();
+    evaluator.setEventBus(bus);
+    evaluator.start();
+    bus.publish('hosting.vm.observed', { resourceId: 'vm', powerState: 'stopped' });
+    bus.publish('hosting.vm.observed', { resourceId: 'vm', powerState: 'stopped' });
+    bus.publish('hosting.vm.observed', { resourceId: 'vm', powerState: 'running' });
+    await evaluator.stop();
+    expect(states).toHaveLength(1);
+    expect(states[0].status).toBe('resolved');
+  });
+  const accountRule = {
+    ...BASE_RULE,
+    category: 'hosting_account',
+    metric: 'balance',
+    metricTarget: 'USD',
+    operator: '<',
+    thresholdValue: 10,
+  };
+  const observation = (amount: string | null, currency = 'USD') => ({
+    connectorId: 'account-1',
+    name: 'Test account',
+    provider: 'digitalocean',
+    syncStatus: 'success',
+    observedAt: new Date().toISOString(),
+    summary: {
+      observedAt: new Date().toISOString(),
+      balance: amount === null ? null : { amount, currency, estimated: false },
+      monthlyExpenses: null,
+    },
+  });
+  it('delivers nested monetary context through the standard dispatcher and emits alert bus invalidations', async () => {
+    const { evaluator, states } = createEvaluator([], [
+      {
+        ...accountRule,
+        webhookIds: ['hook'],
+        messageTemplate: '{{resource.name}}: {{metric.value}} {{details.currency}}',
+      },
+    ] as any);
+    const dispatch = vi.fn(async (_webhook: unknown, _event: unknown) => {});
+    const bus = new EventBusService();
+    const fired = vi.fn();
+    const resolved = vi.fn();
+    bus.subscribe('alert.fired', fired);
+    bus.subscribe('alert.resolved', resolved);
+    evaluator.setEventBus(bus);
+    const internal = evaluator as any;
+    delete internal.fireAlert;
+    delete internal.resolveAlert;
+    internal.db.insert = () => ({
+      values: async (data: any) => {
+        states.push({ ...data, id: 'state', firedAt: new Date() });
+      },
+    });
+    internal.db.update = () => ({ set: (patch: any) => ({ where: async () => Object.assign(states[0], patch) }) });
+    internal.webhookService = { getRawByIds: async () => [{ id: 'hook', enabled: true }] };
+    internal.dispatcherService = { dispatch };
+    await evaluator.evaluateHostingAccount(observation('0'));
+    await evaluator.evaluateHostingAccount(observation('20'));
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+      type: 'alert.fired',
+      message: 'Test account: 0 USD',
+      resource: { type: 'hosting_account', id: 'account-1', key: 'account-1:USD' },
+      context: { details: { currency: 'USD', provider: 'digitalocean' } },
+    });
+    expect(dispatch.mock.calls[1]?.[1]).toMatchObject({ type: 'alert.resolved', message: 'Test account: 20 USD' });
+    expect(fired).toHaveBeenCalledOnce();
+    expect(resolved).toHaveBeenCalledOnce();
+  });
+  it('fires once at zero balance and resolves on recovery, retaining the account identity and currency', async () => {
+    const { evaluator, states } = createEvaluator([], [accountRule]);
+    await evaluator.evaluateHostingAccount(observation('0'));
+    await evaluator.evaluateHostingAccount(observation('0.00'));
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({
+      resourceId: 'account-1:USD',
+      status: 'firing',
+      context: { resourceId: 'account-1', details: { currency: 'USD' } },
+    });
+    await evaluator.evaluateHostingAccount(observation('20'));
+    expect(states[0].status).toBe('resolved');
+  });
+  it('ignores missing, non-finite, wrong-currency and failed-sync balances without falsely resolving', async () => {
+    const { evaluator, states } = createEvaluator([], [accountRule]);
+    await evaluator.evaluateHostingAccount(observation('1'));
+    for (const amount of [null, 'NaN', 'Infinity', '1e999'])
+      await evaluator.evaluateHostingAccount(observation(amount));
+    await evaluator.evaluateHostingAccount(observation('50', 'EUR'));
+    await evaluator.evaluateHostingAccount({ ...observation('50'), syncStatus: 'error' });
+    expect(states).toHaveLength(1);
+    expect(states[0].status).toBe('firing');
+  });
+  it('honors selected resources and does not bypass duration when Redis is unavailable', async () => {
+    const { evaluator, states } = createEvaluator(
+      [],
+      [
+        { ...accountRule, resourceIds: ['other'] },
+        { ...accountRule, id: 'duration', durationSeconds: 60 },
+      ]
+    );
+    await evaluator.evaluateHostingAccount(observation('1'));
+    expect(states).toHaveLength(0);
+  });
+  it('evaluates estimated monthly expenses separately from balance', async () => {
+    const { evaluator, states } = createEvaluator(
+      [],
+      [{ ...accountRule, metric: 'monthly_expenses', operator: '>', thresholdValue: 100 }]
+    );
+    const data = observation('200');
+    await evaluator.evaluateHostingAccount({
+      ...data,
+      summary: { ...data.summary, monthlyExpenses: { amount: '150', currency: 'USD', estimated: true } },
+    });
+    expect(states[0]).toMatchObject({ status: 'firing', context: { details: { estimated: true, currency: 'USD' } } });
+  });
+  it('evaluates VM power transitions and account sync recovery through the bus mapping', async () => {
+    const { evaluator, states } = createEvaluator(
+      [],
+      [],
+      [
+        { ...BASE_EVENT_RULE, category: 'hosting_vm', eventPattern: 'power.stopped' },
+        { ...BASE_EVENT_RULE, id: 'sync', category: 'hosting_account', eventPattern: 'sync.failed' },
+      ]
+    );
+    await (evaluator as any).handleBusEvent('hosting.vm.observed', {
+      resourceId: 'vm-1',
+      name: 'VM',
+      powerState: 'stopped',
+    });
+    await (evaluator as any).handleBusEvent('hosting.vm.observed', {
+      resourceId: 'vm-1',
+      name: 'VM',
+      powerState: 'stopped',
+    });
+    expect(states).toHaveLength(1);
+    await (evaluator as any).handleBusEvent('hosting.vm.observed', {
+      resourceId: 'vm-1',
+      name: 'VM',
+      powerState: 'running',
+    });
+    expect(states[0].status).toBe('resolved');
+    await (evaluator as any).handleBusEvent('hosting.account.observed', {
+      connectorId: 'account-1',
+      syncStatus: 'error',
+    });
+    await (evaluator as any).handleBusEvent('hosting.account.observed', {
+      connectorId: 'account-1',
+      syncStatus: 'success',
+    });
+    expect(states[1].status).toBe('resolved');
+  });
+});
 
 describe('NotificationEvaluatorService certificate expiry evaluation', () => {
   it('fires when an active SSL certificate is within the configured threshold', async () => {

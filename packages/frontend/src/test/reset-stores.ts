@@ -48,7 +48,7 @@ export function resetTestStores() {
     nodes: [],
     isLoading: false,
     error: null,
-    filters: { search: "", status: "all", type: "all" },
+    filters: { search: "", status: "all", type: "all", hosting: "all" },
     page: 1,
     limit: 50,
     total: 0,

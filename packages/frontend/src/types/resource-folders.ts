@@ -1,4 +1,5 @@
 export type ResourceFolderType =
+  | `hosting-snapshot:${string}`
   | "node"
   | "domain"
   | "ssl-certificate"

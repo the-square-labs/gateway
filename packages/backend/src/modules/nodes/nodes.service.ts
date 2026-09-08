@@ -1,10 +1,13 @@
 import { isIP } from 'node:net';
 import bcrypt from 'bcryptjs';
-import { and, asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
-import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
+import { and, asc, count, eq, ilike, inArray, isNotNull, notInArray, or, type SQL, sql } from 'drizzle-orm';
+import type { DrizzleClient, DrizzleExecutor, DrizzleTransaction } from '@/db/client.js';
 import {
   dockerDeployments,
   domains,
+  hostingNodeBindings,
+  hostingOperations,
+  hostingResources,
   managedDatabaseInstances,
   nodes,
   proxyHosts,
@@ -18,6 +21,7 @@ import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { lockHostingFirewalls } from '@/modules/hosting/hosting-firewall-lock.js';
 import { type LicenseQuotaService, requireConfiguredLicenseQuota } from '@/modules/license/license-quota.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -63,6 +67,19 @@ import type {
 } from './nodes.schemas.js';
 
 const logger = createChildLogger('NodesService');
+
+function activeHostingOperationForNode(id: string) {
+  return and(
+    notInArray(hostingOperations.phase, ['ready', 'failed']),
+    or(
+      and(inArray(hostingOperations.action, ['create', 'install']), eq(hostingOperations.nodeId, id)),
+      and(
+        eq(hostingOperations.action, 'delete'),
+        sql`coalesce(${hostingOperations.result}->'destroyNodeIds', '[]'::jsonb) ? ${id}::text`
+      )
+    )
+  );
+}
 
 export class NodesService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -142,6 +159,38 @@ export class NodesService {
     }
     if (query.status) {
       conditions.push(eq(nodes.status, query.status));
+    }
+    if (query.hosting === 'unmanaged') {
+      conditions.push(
+        notInArray(nodes.id, this.db.select({ id: hostingNodeBindings.nodeId }).from(hostingNodeBindings)),
+        notInArray(
+          nodes.id,
+          this.db
+            .select({ id: hostingOperations.nodeId })
+            .from(hostingOperations)
+            .where(and(isNotNull(hostingOperations.nodeId), isNotNull(hostingOperations.connectorId)))
+        )
+      );
+    } else if (query.hosting) {
+      conditions.push(
+        or(
+          inArray(
+            nodes.id,
+            this.db
+              .select({ id: hostingNodeBindings.nodeId })
+              .from(hostingNodeBindings)
+              .innerJoin(hostingResources, eq(hostingResources.id, hostingNodeBindings.resourceId))
+              .where(eq(hostingResources.connectorId, query.hosting))
+          ),
+          inArray(
+            nodes.id,
+            this.db
+              .select({ id: hostingOperations.nodeId })
+              .from(hostingOperations)
+              .where(and(isNotNull(hostingOperations.nodeId), eq(hostingOperations.connectorId, query.hosting)))
+          )
+        )!
+      );
     }
 
     const where = buildWhere(conditions);
@@ -276,7 +325,7 @@ export class NodesService {
     return node.healthHistory ?? [];
   }
 
-  async create(input: CreateNodeInput, userId: string) {
+  async create(input: CreateNodeInput, userId: string, transaction?: DrizzleTransaction) {
     // Generate enrollment token
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 10);
@@ -304,32 +353,37 @@ export class NodesService {
           return created;
         },
       });
-    const node = await requireConfiguredLicenseQuota(this.licenseQuota).run(
-      'managedNodes',
-      async (tx) => {
-        const [result] = await tx.select({ count: count() }).from(nodes);
-        return Number(result?.count ?? 0);
-      },
-      createNode
-    );
+    const quota = requireConfiguredLicenseQuota(this.licenseQuota);
+    const countNodes = async (tx: DrizzleTransaction) => {
+      const [result] = await tx.select({ count: count() }).from(nodes);
+      return Number(result?.count ?? 0);
+    };
+    const node = transaction
+      ? await quota.runInTransaction(transaction, 'managedNodes', countNodes, createNode)
+      : await quota.run('managedNodes', countNodes, createNode);
 
+    // Hosting emits/audits only after the enclosing operation transaction commits.
+    if (!transaction) await this.announceCreated(node, userId);
+
+    return {
+      node,
+      enrollmentToken: enrollmentToken.token,
+      gatewayCertSha256: await this.grpcIdentityService.getGatewayCertSha256(),
+      gatewayEnrollmentTargets: await this.getGatewayEnrollmentTargets(),
+    };
+  }
+
+  async announceCreated(node: { id: string; hostname: string; type: string }, userId: string) {
     await this.auditService.log({
       userId,
       action: 'node.create',
       resourceType: 'node',
       resourceId: node.id,
-      details: { hostname: input.hostname, type: input.type },
+      details: { hostname: node.hostname, type: node.type },
     });
 
-    logger.info('Node created', { nodeId: node.id, hostname: input.hostname });
+    logger.info('Node created', { nodeId: node.id, hostname: node.hostname });
     this.emitNode(node.id, 'created');
-
-    return {
-      node,
-      enrollmentToken: enrollmentToken.token, // Shown once only
-      gatewayCertSha256: await this.grpcIdentityService.getGatewayCertSha256(),
-      gatewayEnrollmentTargets: await this.getGatewayEnrollmentTargets(),
-    };
   }
 
   async update(id: string, input: UpdateNodeInput, userId: string) {
@@ -554,7 +608,15 @@ export class NodesService {
     return this.get(id);
   }
 
-  async remove(id: string, userId: string, options: { cascadeOfflineProxyHosts?: boolean } = {}) {
+  async remove(
+    id: string,
+    userId: string,
+    options: {
+      cascadeOfflineProxyHosts?: boolean;
+      /** Internal hosting worker only: validate identity, binding, permissions and lease under deletion locks. */
+      hostingDelete?: { operationId: string; guard: (tx: DrizzleTransaction) => Promise<void> };
+    } = {}
+  ) {
     if (this.daemonUpdateService && (await this.daemonUpdateService.isNodeUpdateInProgress(id))) {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is in progress');
     }
@@ -563,6 +625,22 @@ export class NodesService {
 
     if (!node) {
       throw new AppError(404, 'NOT_FOUND', 'Node not found');
+    }
+
+    const [activeHostingOperation] = await this.db
+      .select({ id: hostingOperations.id, action: hostingOperations.action })
+      .from(hostingOperations)
+      .where(activeHostingOperationForNode(id))
+      .limit(1);
+    const ownDelete = (operation: { id: string; action: string }) =>
+      operation.action === 'delete' && operation.id === options.hostingDelete?.operationId;
+    if (activeHostingOperation && node.status !== 'pending' && !ownDelete(activeHostingOperation)) {
+      throw new AppError(
+        409,
+        'NODE_HOSTING_OPERATION_ACTIVE',
+        `Cannot delete this node while hosting ${activeHostingOperation.action} is still in progress`,
+        { hostingOperationId: activeHostingOperation.id, action: activeHostingOperation.action }
+      );
     }
 
     let relayInstance: typeof relayInstances.$inferSelect | undefined;
@@ -675,16 +753,66 @@ export class NodesService {
       }
     }
 
-    // Close gRPC stream if connected
     const connectedNode = this.registry.getNode(id);
-    if (connectedNode) {
-      connectedNode.commandStream.end();
-      await this.registry.deregister(id);
-    }
+    let cancelledHostingConnectors: { connectorId: string | null }[] = [];
 
     // Retire certificates and delete their owner in one transaction: a failed
     // owner deletion cannot leave a still-active node with a revoked leaf.
     await this.db.transaction(async (tx) => {
+      await options.hostingDelete?.guard(tx);
+      const [lockedNode] = await tx
+        .select({ id: nodes.id, status: nodes.status })
+        .from(nodes)
+        .where(eq(nodes.id, id))
+        .for('update');
+      if (!lockedNode) throw new AppError(404, 'NOT_FOUND', 'Node not found');
+      const firewallBindings = await tx
+        .select({ resourceId: hostingNodeBindings.resourceId })
+        .from(hostingNodeBindings)
+        .where(eq(hostingNodeBindings.nodeId, id));
+      await lockHostingFirewalls(
+        tx,
+        firewallBindings.map((binding) => binding.resourceId)
+      );
+      const [racingHostingOperation] = await tx
+        .select({ id: hostingOperations.id, action: hostingOperations.action })
+        .from(hostingOperations)
+        .where(activeHostingOperationForNode(id))
+        .limit(1);
+      if (racingHostingOperation && lockedNode.status !== 'pending' && !ownDelete(racingHostingOperation)) {
+        throw new AppError(
+          409,
+          'NODE_HOSTING_OPERATION_ACTIVE',
+          `Cannot delete this node while hosting ${racingHostingOperation.action} is still in progress`,
+          { hostingOperationId: racingHostingOperation.id, action: racingHostingOperation.action }
+        );
+      }
+      if (lockedNode.status === 'pending') {
+        // Remove is local-only. Fence installation workers and keep the provider
+        // request identity for audit; do not cancel or destroy anything upstream.
+        cancelledHostingConnectors = await tx
+          .update(hostingOperations)
+          .set({
+            phase: 'failed',
+            errorCode: 'HOSTING_NODE_REMOVED',
+            errorMessage: 'Node removed from Gateway by the user; provider resources were not deleted.',
+            encryptedBootstrap: null,
+            bootstrapExpiresAt: null,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            generation: sql`${hostingOperations.generation} + 1`,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(hostingOperations.nodeId, id),
+              inArray(hostingOperations.action, ['create', 'install']),
+              notInArray(hostingOperations.phase, ['ready', 'failed'])
+            )
+          )
+          .returning({ connectorId: hostingOperations.connectorId });
+      }
       if (this.systemCertificateLifecycle) {
         await this.systemCertificateLifecycle.retireOwner({ type: 'node', id }, 'cessationOfOperation', tx);
         if (relayInstance) {
@@ -704,6 +832,13 @@ export class NodesService {
       }
       await tx.delete(nodes).where(eq(nodes.id, id));
     });
+    // A retry-install reservation locks the same node row, so it either commits
+    // before the final check above or sees the deleted node. End only after commit:
+    // a later certificate/delete failure must not disconnect a node that survived.
+    if (connectedNode) {
+      connectedNode.commandStream.end();
+      await this.registry.deregister(id);
+    }
     await this.systemCertificateLifecycle?.retryPendingCRLs();
 
     await this.auditService.log({
@@ -716,6 +851,10 @@ export class NodesService {
 
     logger.info('Node removed', { nodeId: id, hostname: node.hostname });
     this.emitNode(id, 'deleted');
+    for (const connectorId of new Set(cancelledHostingConnectors.map((operation) => operation.connectorId))) {
+      if (connectorId)
+        this.eventBus?.publish('integration.connector.changed', { id: connectorId, provider: 'hosting' });
+    }
   }
 
   async listFiles(nodeId: string, path: string) {
@@ -773,7 +912,7 @@ export class NodesService {
     await moveNodeFile(this.nodeFileOperationContext(), nodeId, fromPath, toPath, userId);
   }
 
-  private async getGatewayEnrollmentTargets() {
+  async getGatewayEnrollmentTargets() {
     const settings = await this.generalSettingsService?.getGatewayEndpointSettings();
     const publicTarget = this.formatGrpcTarget(settings?.gatewayGrpcPublicTarget ?? null);
     const localTarget = this.formatGrpcTarget(settings?.gatewayGrpcLocalIp ?? null);
@@ -781,6 +920,10 @@ export class NodesService {
       public: { label: 'Public node', gateway: publicTarget },
       ...(localTarget ? { local: { label: 'Local node', gateway: localTarget } } : {}),
     };
+  }
+
+  getGatewayEnrollmentCertificateFingerprint() {
+    return this.grpcIdentityService.getGatewayCertSha256();
   }
 
   private formatGrpcTarget(value: string | null): string | null {

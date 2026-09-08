@@ -138,7 +138,18 @@ function makeDocker() {
     },
     startContainer: async (id: string) => {
       calls.push('startContainer');
+      if (
+        [...containers.values()].some(
+          (c) => c.running && c.labels['com.wiolett.inference-core.role'] === 'runtime' && c.id !== id
+        )
+      ) {
+        throw new Error('two runtime cores would run concurrently');
+      }
       containers.get(id)!.running = true;
+    },
+    renameContainer: async (id: string, name: string) => {
+      calls.push('renameContainer');
+      containers.get(id)!.name = `/${name}`;
     },
     stopContainer: async (id: string) => {
       calls.push('stopContainer');
@@ -300,7 +311,7 @@ function stubCoreFetch(docker: ReturnType<typeof makeDocker>): void {
           startedAt: new Date().toISOString(),
         });
       }
-      if (url.endsWith('/api/wiolett/status')) return Response.json({ draining: true });
+      if (url.endsWith('/api/wiolett/status')) return Response.json({ draining: true, drained: true });
       if (url.endsWith('/api/wiolett/drain') || url.endsWith('/api/wiolett/resume')) {
         return Response.json({ success: true });
       }
@@ -510,7 +521,8 @@ describe('update', () => {
     // The state backup is streamed out before the old container is replaced.
     const backupAt = docker.calls.indexOf('backupArchive');
     expect(backupAt).toBeGreaterThan(pullAt);
-    expect(stopAt).toBeGreaterThan(backupAt);
+    expect(backupAt).toBeGreaterThan(stopAt);
+    expect(docker.calls.indexOf('createContainer')).toBeLessThan(stopAt);
     // Old image pruned only after acceptance.
     expect(docker.calls).toContain(`removeImage:${IMAGE}@${OLD_DIGEST}`);
     expect(docker.calls).toContain(`removeImage:sha256:${'33'.repeat(32)}`);
@@ -521,19 +533,110 @@ describe('update', () => {
     expect(cores[0].labels['com.wiolett.inference-core.digest']).toBe(NEW_DIGEST);
   });
 
-  it('resumes the old core when streaming backup fails before replacement', async () => {
+  it('keeps the old core available while image download is pending', async () => {
+    let finishPull!: () => void;
+    docker.pullImageRefStreaming = async () =>
+      new Promise<void>((resolve) => {
+        finishPull = resolve;
+      });
+    await service.update(NEW_VERSION);
+    await waitFor(() => Boolean(finishPull));
+    expect(store.row?.state).toBe('ready');
+    expect(docker.containers.get('core-old')?.running).toBe(true);
+    finishPull();
+    await waitFor(() => operations.ops[0]?.status === 'succeeded');
+  });
+
+  it('candidate creation failure does not stop the old core', async () => {
+    const original = docker.createContainer;
+    docker.createContainer = async (config, name) => {
+      if (name?.endsWith('-candidate')) throw new Error('candidate creation failed');
+      return original(config, name);
+    };
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+    expect(store.row?.state).toBe('ready');
+    expect(docker.containers.get('core-old')?.running).toBe(true);
+    expect(docker.calls).not.toContain('stopContainer');
+  });
+
+  it('rolls back if activation fails after removing the old container', async () => {
+    docker.renameContainer = async () => {
+      throw new Error('rename failed');
+    };
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+    expect(store.row?.state).toBe('ready');
+    expect(store.row?.installedVersion).toBe(OLD_VERSION);
+    expect([...docker.containers.values()].filter((c) => c.running)).toHaveLength(1);
+  });
+
+  it('does not replace a core that reports unfinished persistence at the drain deadline', async () => {
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (...args: Parameters<typeof fetch>) => {
+        if (String(args[0]).endsWith('/api/wiolett/status')) return Response.json({ draining: true, drained: false });
+        return original(...args);
+      })
+    );
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+    expect(store.row?.state).toBe('ready');
+    expect(docker.containers.get('core-old')?.running).toBe(true);
+    expect(docker.calls).not.toContain('stopContainer');
+  });
+
+  it.each(['unreachable', 'resume_failed'])('does not stop on unconfirmed drain: %s', async (failure) => {
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    let statusCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (...args: Parameters<typeof fetch>) => {
+        const url = String(args[0]);
+        if (url.endsWith('/api/wiolett/status') && ++statusCalls > 1)
+          return failure === 'unreachable'
+            ? new Response('', { status: 503 })
+            : Response.json({ draining: true, drained: false });
+        if (url.endsWith('/api/wiolett/resume') && failure === 'resume_failed')
+          return new Response('', { status: 503 });
+        return original(...args);
+      })
+    );
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+    expect(store.row?.state).toBe(failure === 'resume_failed' ? 'degraded' : 'ready');
+    expect(docker.calls).not.toContain('stopContainer');
+    expect(docker.calls).not.toContain('backupArchive');
+    expect(docker.containers.get('core-old')?.running).toBe(true);
+  });
+
+  it('uses bounded normal shutdown for legacy cores without fast drain capability', async () => {
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (...args: Parameters<typeof fetch>) => {
+        if (String(args[0]).endsWith('/api/wiolett/status')) return Response.json({ draining: false });
+        return original(...args);
+      })
+    );
+    const stop = vi.spyOn(docker, 'stopContainer');
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'succeeded');
+    expect(stop).toHaveBeenCalledWith('core-old', 60);
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/api/wiolett/drain'), expect.anything());
+    expect(store.row?.installedVersion).toBe(NEW_VERSION);
+  });
+
+  it('restores the old core when streaming backup fails after stopping the sole writer', async () => {
     docker.failBackup = true;
 
     await service.update(NEW_VERSION);
     await waitFor(() => operations.ops[0]?.status === 'failed');
 
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/wiolett/resume'),
-      expect.objectContaining({ method: 'POST' })
-    );
-    expect(docker.containers.get('core-old')?.running).toBe(true);
-    expect(docker.calls).not.toContain('stopContainer');
-    expect(store.row?.state).toBe('degraded');
+    expect(store.row?.state).toBe('ready');
+    expect([...docker.containers.values()].some((c) => c.running && c.image === `${IMAGE}@${OLD_DIGEST}`)).toBe(true);
+    expect(docker.calls).toContain('stopContainer');
   });
 
   it('rolls back to the previous digest and state when the new core never becomes ready', async () => {

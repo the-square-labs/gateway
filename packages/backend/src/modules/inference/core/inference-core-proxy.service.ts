@@ -11,6 +11,7 @@ import {
   inferencePricingSnapshots,
   inferenceProviderConnections,
 } from '@/db/schema/index.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { AppEnv, User } from '@/types.js';
 import { unitCharge } from '../accounting/inference-accounting.helpers.js';
 import type { InferenceAccountingService } from '../accounting/inference-accounting.service.js';
@@ -20,7 +21,7 @@ import { sourceSupportsModel } from '../models/inference-model.validation.js';
 import { mapReasoningEffort } from '../models/inference-reasoning.service.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { canFailOver, type InferenceRoutingService } from '../providers/inference-routing.service.js';
-import type { InferenceCoreBridgeService } from './inference-core-bridge.service.js';
+import type { CoreDataPlaneTarget, InferenceCoreBridgeService } from './inference-core-bridge.service.js';
 import { coreRequestHeaders, newCoreRequestContext } from './inference-core-context.js';
 import { CORE_ACCOUNT_METADATA_KEY } from './inference-core-provider-map.js';
 import { CoreResponsesSseObserver } from './inference-core-sse-observer.js';
@@ -89,9 +90,6 @@ const CORE_ADMITTED: ReadonlySet<CoreProxyOperation> = new Set([
 
 type ProxyRequestBody = string | ArrayBuffer | FormData;
 
-const MAX_DECOMPRESSED_JSON_BODY_BYTES = 256 * 1024 * 1024;
-const MAX_COMPRESSED_BODY_EXPANSION_RATIO = 32;
-const MIN_DECOMPRESSED_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_CORE_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_CORE_IMAGE_BODY_BYTES = 100 * 1024 * 1024;
 const MAX_CODEX_IMAGE_EDIT_IMAGES = 5;
@@ -230,7 +228,7 @@ export class InferenceCoreProxyService {
   }
 
   /** Core base URL + data credential as a stable Gateway error when unavailable. */
-  async dataPlaneTarget(): Promise<{ baseUrl: string; credential: string }> {
+  async dataPlaneTarget(): Promise<CoreDataPlaneTarget> {
     return this.coreTarget();
   }
 
@@ -298,16 +296,17 @@ export class InferenceCoreProxyService {
         })
       ).requestId;
     }
-    const releaseAffinityTurn = prepared.affinityKey
-      ? await this.routing.beginAffinityTurn(prepared.affinityKey)
-      : undefined;
+    // Finalization lives as long as the response stream. Do not capture the
+    // prepared body/rewrite closure (potentially hundreds of MB) just for a key.
+    const affinityKey = prepared.affinityKey;
+    const releaseAffinityTurn = affinityKey ? await this.routing.beginAffinityTurn(affinityKey) : undefined;
     let affinityTurnFinalized = false;
-    const finalizeAffinityTurn = prepared.affinityKey
+    const finalizeAffinityTurn = affinityKey
       ? async () => {
           if (affinityTurnFinalized) return;
           affinityTurnFinalized = true;
           try {
-            await this.routing.markAffinityActive(prepared.affinityKey!);
+            await this.routing.markAffinityActive(affinityKey!);
           } finally {
             await releaseAffinityTurn?.();
           }
@@ -320,10 +319,20 @@ export class InferenceCoreProxyService {
       await Promise.allSettled(finalizers);
     });
     const excludedConnectionIds: string[] = [];
+    let firstTransportError: InferenceProtocolError | undefined;
     try {
       for (;;) {
         if (excludedConnectionIds.length > 0) {
-          resolved = await resolveOperationTarget(excludedConnectionIds);
+          resolved = await resolveOperationTarget(excludedConnectionIds).catch((error: unknown) => {
+            if (
+              firstTransportError &&
+              error instanceof InferenceProtocolError &&
+              error.code === 'provider_capacity_unavailable'
+            ) {
+              throw firstTransportError;
+            }
+            throw error;
+          });
           if (coreAdmitted) {
             fixedApiMicrodollars = await this.fixedCharge(operation, resolved.selected.source, prepared.units);
             await this.coreAccounting.retargetCoreRequest(
@@ -340,6 +349,7 @@ export class InferenceCoreProxyService {
           resolved.selected.source
         );
         const { claims } = newCoreRequestContext({
+          requestLimits: target.requestLimits,
           tenantUserId: user.id,
           rootRequestId,
           publicModelId: resolved.model.publicId,
@@ -362,17 +372,23 @@ export class InferenceCoreProxyService {
           finalizeRequest
         );
         if (forwarded.kind === 'response') return forwarded.response;
+        firstTransportError ??= forwarded.transportError;
         excludedConnectionIds.push(resolved.selected.connection.id);
       }
     } catch (error) {
       const cancelled = c.req.raw.signal.aborted || (error instanceof InferenceProtocolError && error.status === 499);
       await finalizeRequest(cancelled ? 'cancelled' : 'failed', error);
       throw error;
+    } finally {
+      // Sibling closures can share the same V8 context. Explicitly sever the
+      // replay closure once HTTP failover ends, even if a stream finalizer
+      // still keeps scalar request metadata alive.
+      prepared.rewrite = () => '';
     }
   }
 
   /** Core base URL + data credential, mapped to a stable Gateway error when unavailable. */
-  private async coreTarget(): Promise<{ baseUrl: string; credential: string }> {
+  private async coreTarget(): Promise<CoreDataPlaneTarget> {
     try {
       return await this.bridge.dataPlaneTarget();
     } catch {
@@ -382,7 +398,7 @@ export class InferenceCoreProxyService {
 
   private async forward(
     c: Context<AppEnv>,
-    target: { baseUrl: string; credential: string },
+    target: CoreDataPlaneTarget,
     claims: Parameters<typeof coreRequestHeaders>[0],
     requestId: string,
     path: string,
@@ -391,20 +407,21 @@ export class InferenceCoreProxyService {
     nonRetryableDispatch = false,
     finalizeRequest: (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => Promise<void> = async () =>
       undefined
-  ): Promise<{ kind: 'response'; response: Response } | { kind: 'retry' }> {
+  ): Promise<{ kind: 'response'; response: Response } | { kind: 'retry'; transportError?: InferenceProtocolError }> {
     const controller = new AbortController();
     let clientGone = false;
-    if (c.req.raw.signal.aborted) controller.abort(c.req.raw.signal.reason);
-    else {
-      c.req.raw.signal.addEventListener(
-        'abort',
-        () => {
-          clientGone = true;
-          controller.abort(c.req.raw.signal.reason);
-        },
-        { once: true }
-      );
-    }
+    const signal = c.req.raw.signal;
+    const abort = () => {
+      clientGone = true;
+      controller.abort(signal.reason);
+    };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    const finishRequest: typeof finalizeRequest = (outcome, error) => {
+      cleanup();
+      return finalizeRequest(outcome, error);
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
     let upstream: Response;
     try {
       upstream = await fetch(`${target.baseUrl}${path}`, {
@@ -415,7 +432,16 @@ export class InferenceCoreProxyService {
         duplex: 'half',
       });
     } catch {
-      if (allowFailover && !clientGone) return { kind: 'retry' };
+      cleanup();
+      if (allowFailover && !clientGone)
+        return {
+          kind: 'retry',
+          transportError: new InferenceProtocolError(
+            503,
+            'inference_core_unavailable',
+            'The inference core is unavailable'
+          ),
+        };
       if (clientGone) throw new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
       if (nonRetryableDispatch) {
         throw new InferenceProtocolError(
@@ -428,13 +454,14 @@ export class InferenceCoreProxyService {
     }
     const status = upstream.status;
     if (allowFailover && (await shouldFailOverCoreResponse(upstream))) {
+      cleanup();
       await upstream.body?.cancel().catch(() => undefined);
       return { kind: 'retry' };
     }
     if (nonRetryableDispatch) {
       const headers = publicResponseHeaders(upstream.headers);
       if (!upstream.body) {
-        void finalizeRequest(status < 400 ? 'completed' : 'failed');
+        void finishRequest(status < 400 ? 'completed' : 'failed');
         if (status >= 500) return { kind: 'response', response: ambiguousImageResponse() };
         return { kind: 'response', response: new Response(null, { status, headers }) };
       }
@@ -444,16 +471,16 @@ export class InferenceCoreProxyService {
           MAX_CORE_IMAGE_BODY_BYTES,
           'Inference core image response exceeded the safe body limit'
         );
-        void finalizeRequest(status < 400 ? 'completed' : 'failed');
+        void finishRequest(status < 400 ? 'completed' : 'failed');
         if (status >= 500) return { kind: 'response', response: ambiguousImageResponse() };
         return { kind: 'response', response: new Response(body, { status, headers }) };
       } catch (error) {
         if (clientGone) {
           const mapped = new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
-          void finalizeRequest('cancelled', mapped);
+          void finishRequest('cancelled', mapped);
           throw mapped;
         }
-        void finalizeRequest('failed', error);
+        void finishRequest('failed', error);
         return { kind: 'response', response: ambiguousImageResponse() };
       }
     }
@@ -461,15 +488,15 @@ export class InferenceCoreProxyService {
       const headers = publicResponseHeaders(upstream.headers);
       try {
         const body = await readBoundedCoreErrorBody(upstream.body);
-        void finalizeRequest('failed');
+        void finishRequest('failed');
         return { kind: 'response', response: new Response(body, { status, headers }) };
       } catch (error) {
         if (clientGone) {
           const mapped = new InferenceProtocolError(499, 'client_cancelled', 'Client disconnected');
-          void finalizeRequest('cancelled', mapped);
+          void finishRequest('cancelled', mapped);
           throw mapped;
         }
-        void finalizeRequest('failed', error);
+        void finishRequest('failed', error);
         return {
           kind: 'response',
           response: Response.json(
@@ -486,7 +513,7 @@ export class InferenceCoreProxyService {
       }
     }
     if (!upstream.body) {
-      void finalizeRequest(status < 400 ? 'completed' : 'failed');
+      void finishRequest(status < 400 ? 'completed' : 'failed');
       return {
         kind: 'response',
         response: new Response(null, { status, headers: publicResponseHeaders(upstream.headers) }),
@@ -498,7 +525,7 @@ export class InferenceCoreProxyService {
       contentType: headers.get('content-type') ?? '',
       abortUpstream: (reason) => controller.abort(reason),
       clientGone: () => clientGone,
-      finalize: (outcome, error) => void finalizeRequest(outcome, error),
+      finalize: (outcome, error) => void finishRequest(outcome, error),
       upstreamStatus: status,
     });
     return {
@@ -534,6 +561,7 @@ export class InferenceCoreProxyService {
     });
     const target = await this.coreTarget();
     const { claims } = newCoreRequestContext({
+      requestLimits: target.requestLimits,
       tenantUserId: userId,
       rootRequestId: admission.requestId,
       publicModelId: model.publicId,
@@ -731,7 +759,9 @@ export class InferenceCoreProxyService {
 async function readJsonObject(c: Context<AppEnv>): Promise<Record<string, unknown>> {
   let decoded: Uint8Array;
   try {
-    const raw = new Uint8Array(await c.req.arrayBuffer());
+    // Hono's arrayBuffer() caches the entire compressed input on the request
+    // context. This one-shot data plane only needs the decoded object.
+    const raw = new Uint8Array(await c.req.raw.arrayBuffer());
     decoded = decodeRequestBody(raw, c.req.header('content-encoding'));
   } catch (error) {
     if (error instanceof InferenceProtocolError) throw error;
@@ -831,6 +861,9 @@ function decodeCodexImageDataUrl(
 }
 
 function decodeRequestBody(raw: Uint8Array, contentEncoding: string | undefined): Uint8Array {
+  const maxOutputLength = getEnvironmentSettingsSnapshot().requestLimits.inferenceHttpBodyMaxBytes;
+  if (raw.byteLength > maxOutputLength)
+    throw new InferenceProtocolError(413, 'request_too_large', 'Request body is too large');
   const encoding = (contentEncoding ?? '').trim().toLowerCase();
   if (!encoding || encoding === 'identity') return raw;
   if (encoding.includes(',')) {
@@ -838,10 +871,6 @@ function decodeRequestBody(raw: Uint8Array, contentEncoding: string | undefined)
   }
 
   const input = raw as Uint8Array<ArrayBuffer>;
-  const maxOutputLength = Math.min(
-    MAX_DECOMPRESSED_JSON_BODY_BYTES,
-    Math.max(MIN_DECOMPRESSED_JSON_BODY_BYTES, raw.byteLength * MAX_COMPRESSED_BODY_EXPANSION_RATIO)
-  );
   const options = { maxOutputLength };
   try {
     if (encoding === 'zstd') return zstdDecompressSync(input, options);

@@ -13,6 +13,12 @@ function parentResourceId(baseScope: string, resourceId: string | null): string 
   return separator > 0 ? resourceId.slice(0, separator) : null;
 }
 const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
+  "hosting:snapshots:view": [
+    "hosting:snapshots:create",
+    "hosting:snapshots:delete",
+    "hosting:snapshots:restore",
+    "hosting:snapshots:folders:manage",
+  ],
   "domains:view": ["domains:edit"],
   "pki:templates:view": ["pki:templates:edit"],
   "proxy:view": ["proxy:edit"],
@@ -63,6 +69,7 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   "logs:read": ["logs:manage"],
   "status-page:view": ["status-page:manage"],
   "integrations:cloudflare:view": ["integrations:cloudflare:manage"],
+  "integrations:hosting:view": ["integrations:hosting:manage"],
   "integrations:github:view": ["integrations:github:manage"],
   "integrations:git:view": ["integrations:git:manage"],
   "integrations:ssh:view": ["integrations:ssh:manage"],

@@ -171,6 +171,21 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `integrations:ssh:use` |  |
 | `integrations:cloudflare:view` |  |
 | `integrations:cloudflare:manage` |  |
+| `integrations:hosting:view` | View hosting accounts; restrictable to connector ID. |
+| `integrations:hosting:manage` | Configure and synchronize hosting accounts; restrictable to connector ID. |
+| `hosting:resources:view` | View provider inventory; restrictable to connector ID. |
+| `hosting:resources:create` | Create hosted nodes; restrictable to connector ID. Also requires `nodes:create`. |
+| `hosting:resources:power` | Start, shut down or reboot a hosted VM; restrictable to resource ID. |
+| `hosting:resources:resize` | Resize a hosted VM; restrictable to resource ID. |
+| `hosting:snapshots:view` | View VM snapshots and folders; restrictable to resource ID. Snapshot mutation permissions imply view only for the same resource. Also requires VM inventory and bound-node details access. |
+| `hosting:snapshots:create` | Create a VM snapshot without requiring shutdown; restrictable to resource ID. Also requires configuration access to bound nodes. Optional `includeRam` is supported only for running Proxmox VMs and defaults to disk-only snapshots. |
+| `hosting:snapshots:delete` | Delete a VM snapshot; restrictable to resource ID. |
+| `hosting:snapshots:restore` | Restore a VM snapshot, replacing disk data; restrictable to resource ID. Proxmox handles stopping a running VM during rollback; Gateway requests restart if it was running immediately before dispatch. Other providers currently require a stopped VM. |
+| `hosting:snapshots:folders:manage` | Create folders and organize VM snapshots; restrictable to resource ID. |
+| `hosting:resources:delete` | Destroy a hosted VM or cancel a HOSTKEY rental; restrictable to resource ID. |
+| `hosting:resources:recover` | Restart a hosted daemon through an available independent channel; restrictable to resource ID. |
+| `hosting:billing:view` | Read account finances; restrictable to connector ID. Never implied by node access. |
+| `hosting:billing:topup` | Create a HOSTKEY deposit invoice; restrictable to connector ID. |
 | `housekeeping:view` |  |
 | `housekeeping:run` |  |
 | `housekeeping:configure` |  |
@@ -305,6 +320,18 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `integrations:git:system` | Generic Git connector system credentials are session-only. |
 | `integrations:ssh:manage` | External SSH connector administration is session-only. |
 | `integrations:cloudflare:manage` | Cloudflare connector administration is session-only. |
+| `integrations:hosting:manage` | Hosting connector administration is session-only. |
+| `hosting:resources:create` | Paid VM creation and node installation require a browser session. |
+| `hosting:resources:power` | VM power actions require a browser session. |
+| `hosting:resources:resize` | VM resize requires a browser session and explicit configuration or quote. |
+| `hosting:snapshots:create` | VM snapshot creation requires a browser session. |
+| `hosting:snapshots:delete` | VM snapshot deletion requires a browser session. |
+| `hosting:snapshots:restore` | Destructive VM snapshot restore requires a browser session. |
+| `hosting:snapshots:folders:manage` | Snapshot folder management requires a browser session. |
+| `hosting:resources:delete` | VM destruction or rental cancellation requires a browser session. |
+| `hosting:resources:recover` | Hosted daemon recovery requires a browser session. |
+| `hosting:billing:view` | Account finances require a browser session. |
+| `hosting:billing:topup` | HOSTKEY deposit invoices require a browser session. |
 | `proxy:raw:read` | Raw nginx config is session-only. |
 | `proxy:raw:write` | Raw nginx config is session-only. |
 | `proxy:raw:toggle` | Raw nginx mode is session-only. |

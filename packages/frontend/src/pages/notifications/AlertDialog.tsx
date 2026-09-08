@@ -179,6 +179,31 @@ export function AlertDialog({
     setAvailableResources([]);
 
     try {
+      if (category === "hosting_account" || category === "hosting_vm") {
+        const accounts = (await api.listHostingConnectors()).filter((account) => account.enabled);
+        const resources =
+          category === "hosting_account"
+            ? accounts.map((account) => ({
+                id: account.id,
+                label: `${account.name} · ${account.provider}`,
+              }))
+            : (
+                await Promise.all(
+                  accounts.map(async (account) => {
+                    try {
+                      return (await api.listHostingResources(account.id)).map((resource) => ({
+                        id: resource.id,
+                        label: `${resource.name} · ${account.name}`,
+                      }));
+                    } catch {
+                      return [];
+                    }
+                  })
+                )
+              ).flat();
+        if (resourceLoadTokenRef.current === loadToken) setAvailableResources(resources);
+        return;
+      }
       if (category === "node") {
         const response = await api.listNodes({ limit: 100 });
         if (resourceLoadTokenRef.current !== loadToken) return;
@@ -443,6 +468,12 @@ export function AlertDialog({
     resourceIds.length === 1;
   const isNodeGpuThreshold =
     type === "threshold" && category === "node" && GPU_NODE_METRICS.has(metric);
+  const isHostingAccountThreshold = type === "threshold" && category === "hosting_account";
+  const [currency, setCurrency] = useState("USD");
+  useEffect(() => {
+    if (open)
+      setCurrency(rule?.category === "hosting_account" ? (rule.metricTarget ?? "USD") : "USD");
+  }, [open, rule]);
 
   const selectedScopedNode = useMemo(
     () => availableResources.find((resource) => resource.id === resourceIds[0]),
@@ -529,6 +560,10 @@ export function AlertDialog({
     }
     setSaving(true);
     try {
+      if (isHostingAccountThreshold && !/^[A-Z]{3}$/.test(currency)) {
+        toast.error("Enter a three-letter currency code, such as USD or EUR");
+        return;
+      }
       const data: any = {
         name: name.trim(),
         category,
@@ -542,7 +577,11 @@ export function AlertDialog({
       };
       if (type === "threshold") {
         data.metric = metric;
-        data.metricTarget = canSelectNodeDiskTarget || canSelectNodeGpuTarget ? metricTarget : null;
+        data.metricTarget = isHostingAccountThreshold
+          ? currency
+          : canSelectNodeDiskTarget || canSelectNodeGpuTarget
+            ? metricTarget
+            : null;
         data.operator = operator;
         data.thresholdValue = Number(thresholdValue);
         data.durationSeconds = isCertificateExpiryThreshold ? 0 : Number(durationMinutes) * 60;
@@ -742,6 +781,24 @@ export function AlertDialog({
                         onChange={(e) => setThresholdValue(e.target.value)}
                       />
                     </div>
+                  </div>
+                )}
+                {isHostingAccountThreshold && (
+                  <div className="space-y-1.5">
+                    <label htmlFor="hosting-alert-currency" className="text-sm font-medium">
+                      Currency
+                    </label>
+                    <Input
+                      id="hosting-alert-currency"
+                      value={currency}
+                      maxLength={3}
+                      placeholder="USD"
+                      onChange={(event) => setCurrency(event.target.value.toUpperCase())}
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Only accounts reporting this currency are evaluated. Unavailable or stale
+                      balances are ignored; currencies are not converted.
+                    </p>
                   </div>
                 )}
                 {type === "threshold" && !isCertificateExpiryThreshold && (

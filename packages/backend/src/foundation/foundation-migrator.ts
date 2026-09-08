@@ -277,14 +277,21 @@ function patchAppHealthcheck(lines: string[]): string[] {
   const healthcheck = findNestedBlock(lines, app, 'healthcheck');
   if (!healthcheck) return lines;
 
-  const next = [...lines];
-  for (let index = healthcheck.start + 1; index < healthcheck.end; index += 1) {
-    if (!/^\s*test\s*:/.test(next[index]) || !next[index].includes('/health')) continue;
-    const indent = next[index].match(/^\s*/)?.[0] ?? '';
-    next[index] =
-      `${indent}test: ["CMD-SHELL", ` +
-      `"wget --no-check-certificate -qO- https://127.0.0.1:3000/health || wget -qO- http://127.0.0.1:3000/health"]`;
-    break;
+  // Drop only our legacy override so the new image owns the probe. Images
+  // predating the Node probe still inherit their own healthcheck on rollback.
+  // Operator-defined checks must not be rewritten.
+  const legacy =
+    /^\s*test:\s*\["CMD-SHELL",\s*"wget (?:--no-check-certificate -qO- https:\/\/127\.0\.0\.1:3000\/health \|\| wget )?-qO- http:\/\/127\.0\.0\.1:3000\/health"\]\s*$/;
+  const next = lines.filter(
+    (line, index) => index <= healthcheck.start || index >= healthcheck.end || !legacy.test(line)
+  );
+  const updatedApp = findServiceBlock(next, 'app');
+  const updatedHealthcheck = updatedApp ? findNestedBlock(next, updatedApp, 'healthcheck') : null;
+  if (
+    updatedHealthcheck &&
+    !next.slice(updatedHealthcheck.start + 1, updatedHealthcheck.end).some((line) => line.trim())
+  ) {
+    next.splice(updatedHealthcheck.start, 1);
   }
   return next;
 }

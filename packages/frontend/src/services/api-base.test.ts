@@ -39,6 +39,21 @@ class TestApiClient extends ApiClientBase {
 }
 
 describe("ApiClientBase", () => {
+  it("names the invalid field instead of displaying a bare Invalid", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json(
+        {
+          code: "VALIDATION_ERROR",
+          message: "Request validation failed",
+          details: [{ path: "confirmedPrice.amount", message: "Invalid" }],
+        },
+        { status: 400 }
+      )
+    );
+    await expect(new TestApiClient().getThing()).rejects.toMatchObject({
+      message: "Invalid value for confirmedPrice.amount",
+    });
+  });
   it("blocks demo mutations before CSRF or network work", async () => {
     const client = new TestApiClient();
     const fetchSpy = vi.spyOn(globalThis, "fetch");

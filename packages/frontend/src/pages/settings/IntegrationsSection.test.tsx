@@ -1,11 +1,13 @@
-import { render, waitFor } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth";
+import { renderWithRouter as render } from "@/test/render";
 import { IntegrationsSection } from "./IntegrationsSection";
 
 const mocks = vi.hoisted(() => ({
   cache: new Map<string, unknown>(),
   listGitLabConnectors: vi.fn(),
+  listHostingConnectors: vi.fn(async () => []),
 }));
 
 vi.mock("@/services/api", () => ({
@@ -13,6 +15,7 @@ vi.mock("@/services/api", () => ({
     getCached: (key: string) => mocks.cache.get(key),
     setCache: (key: string, value: unknown) => mocks.cache.set(key, value),
     listGitLabConnectors: mocks.listGitLabConnectors,
+    listHostingConnectors: mocks.listHostingConnectors,
   },
 }));
 
@@ -60,5 +63,11 @@ describe("IntegrationsSection", () => {
     render(<IntegrationsSection />);
 
     await waitFor(() => expect(mocks.listGitLabConnectors).toHaveBeenCalledOnce());
+  });
+  it("loads only hosting accounts for a hosting-only viewer", async () => {
+    setScopes(["integrations:hosting:view"]);
+    render(<IntegrationsSection />);
+    await waitFor(() => expect(mocks.listHostingConnectors).toHaveBeenCalledOnce());
+    expect(mocks.listGitLabConnectors).not.toHaveBeenCalled();
   });
 });

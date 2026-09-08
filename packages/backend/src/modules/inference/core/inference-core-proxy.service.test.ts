@@ -3,6 +3,12 @@ import { get } from 'node:http';
 import { zstdCompressSync } from 'node:zlib';
 import { serve } from '@hono/node-server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import {
+  DEFAULT_ENVIRONMENT_SETTINGS,
+  EnvironmentSettingsService,
+} from '@/modules/settings/environment-settings.service.js';
+import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import { InferenceCoreProxyService } from './inference-core-proxy.service.js';
 import { MAX_CORE_SSE_FRAME_BYTES } from './inference-core-sse-observer.js';
 
@@ -174,12 +180,63 @@ function createService(
 }
 
 afterEach(() => {
+  container.reset();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe('inference core proxy', () => {
+  it('keeps the HTTP transport cause when failover has no usable capacity', async () => {
+    const { service, routing, coreAccounting } = createService({
+      fetchError: new Error('connection reset'),
+      sources: [
+        { source: SOURCE, connection: CONNECTION },
+        { source: SOURCE_2, connection: CONNECTION_2 },
+      ],
+    });
+    routing.select
+      .mockResolvedValueOnce({ connectionId: 'conn-1', providerId: 'openai-apikey' })
+      .mockRejectedValueOnce(new InferenceProtocolError(503, 'provider_capacity_unavailable', 'No capacity'));
+    await expect(
+      service.proxy(createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' })), 'responses')
+    ).rejects.toMatchObject({ code: 'inference_core_unavailable' });
+    expect(coreAccounting.finalizeCoreRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      'failed',
+      expect.objectContaining({ code: 'inference_core_unavailable' })
+    );
+  });
+
+  it.each(['terminal', 'cancel', 'failure'])('detaches client abort listeners after %s', async (ending) => {
+    const upstream =
+      ending === 'cancel'
+        ? new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } })
+        : undefined;
+    const { service } = createService({
+      ...(upstream ? { coreResponse: upstream } : {}),
+      ...(ending === 'failure' ? { fetchError: new Error('offline') } : {}),
+    });
+    const context = createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }));
+    const raw = (context as { req: { raw: Request } }).req.raw;
+    const remove = vi.spyOn(raw.signal, 'removeEventListener');
+    if (ending === 'failure') await expect(service.proxy(context, 'responses')).rejects.toThrow();
+    else {
+      const response = await service.proxy(context, 'responses');
+      if (ending === 'cancel') await response.body!.cancel();
+      else await response.text();
+    }
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
+  it('does not keep the raw JSON buffer in the Hono body cache', async () => {
+    const { service } = createService();
+    const context = createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi' }));
+    const cachedRead = vi.spyOn((context as { req: { arrayBuffer: () => Promise<ArrayBuffer> } }).req, 'arrayBuffer');
+    await (await service.proxy(context, 'responses')).text();
+    expect(cachedRead).not.toHaveBeenCalled();
+  });
+
   it.each(['max', 'ultra'])('records the requested %s effort before provider mapping over HTTP', async (effort) => {
     const model = { ...MODEL, reasoningEfforts: ['max', 'ultra'] };
     const source = { ...SOURCE, reasoningEffortMap: { max: 'max', ultra: 'max' } };
@@ -280,7 +337,10 @@ describe('inference core proxy', () => {
     });
   });
 
-  it('rejects compressed request bodies with excessive expansion before JSON parsing', async () => {
+  it('rejects compressed request bodies above the configured decoded limit before JSON parsing', async () => {
+    const settings = structuredClone(DEFAULT_ENVIRONMENT_SETTINGS);
+    settings.requestLimits.inferenceHttpBodyMaxBytes = 1024 * 1024;
+    container.registerInstance(EnvironmentSettingsService, { getSnapshot: () => settings } as never);
     const { service, fetchStub } = createService();
     const compressed = zstdCompressSync(
       Buffer.from(JSON.stringify({ model: 'gpt-5.5', input: 'a'.repeat(2 * 1024 * 1024) }))

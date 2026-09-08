@@ -564,6 +564,8 @@ interface CodeEditorProps {
   showLineNumbers?: boolean;
   showGutterBorder?: boolean;
   bordered?: boolean;
+  /** Keep viewport position when refreshing a read-only generated document. */
+  preserveScrollOnChange?: boolean;
 }
 
 export function CodeEditor({
@@ -580,6 +582,7 @@ export function CodeEditor({
   showLineNumbers = true,
   showGutterBorder = false,
   bordered = true,
+  preserveScrollOnChange = false,
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -653,11 +656,21 @@ export function CodeEditor({
     if (!view) return;
     const currentValue = view.state.doc.toString();
     if (currentValue !== value) {
+      const scrollTop = view.scrollDOM.scrollTop;
+      const scrollLeft = view.scrollDOM.scrollLeft;
       view.dispatch({
         changes: { from: 0, to: currentValue.length, insert: value },
       });
+      if (preserveScrollOnChange)
+        view.requestMeasure({
+          read: () => ({ scrollTop, scrollLeft }),
+          write: (position) => {
+            view.scrollDOM.scrollTop = position.scrollTop;
+            view.scrollDOM.scrollLeft = position.scrollLeft;
+          },
+        });
     }
-  }, [value]);
+  }, [value, preserveScrollOnChange]);
 
   // Sync error lines via compartment
   useEffect(() => {

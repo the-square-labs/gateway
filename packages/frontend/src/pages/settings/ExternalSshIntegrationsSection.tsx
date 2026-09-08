@@ -142,7 +142,7 @@ export function ExternalSshIntegrationsSection() {
           canManage ? (
             <Button onClick={() => setOpen(true)}>
               <Plus className="h-4 w-4" />
-              Add Connector
+              Add connector
             </Button>
           ) : null
         }

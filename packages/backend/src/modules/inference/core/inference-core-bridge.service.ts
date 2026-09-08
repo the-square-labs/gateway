@@ -1,6 +1,7 @@
 import { injectable } from 'tsyringe';
 import type { InferenceCoreStateRow } from '@/db/schema/inference-core.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { InferenceCredentialVault } from '../inference-credential-vault.js';
 import { InferenceCoreClient } from './inference-core.client.js';
 import { INFERENCE_CORE_PROTOCOL_MAJOR, WIOLETT_CORE_CONTRACT_ID } from './inference-core.contract.js';
@@ -10,6 +11,12 @@ import type { InferenceCoreStore } from './inference-core-store.js';
 const CORE_CONTAINER_ALIAS = 'inference-core';
 const CORE_PORT = 10100;
 
+export interface CoreDataPlaneTarget {
+  baseUrl: string;
+  credential: string;
+  requestLimits?: { httpBodyMaxBytes: number; webSocketMaxPayloadBytes: number };
+}
+
 /**
  * Gateway ↔ managed-core management bridge. Owns the deterministic mapping
  * between Gateway records and core resources, and builds authenticated clients
@@ -18,6 +25,7 @@ const CORE_PORT = 10100;
  */
 @injectable()
 export class InferenceCoreBridgeService {
+  private limitsCapability: { digest: string | null; supported: boolean; expiresAt: number } | null = null;
   constructor(
     private readonly store: InferenceCoreStore,
     private readonly vault: InferenceCredentialVault
@@ -30,7 +38,7 @@ export class InferenceCoreBridgeService {
    */
   async coreReady(): Promise<boolean> {
     const row = await this.store.loadState();
-    return row?.state === 'ready';
+    return row?.state === 'ready' || row?.state === 'update_available';
   }
 
   /** Core state row, or null when the core was never installed. */
@@ -45,7 +53,7 @@ export class InferenceCoreBridgeService {
    */
   async requireClient(): Promise<InferenceCoreClient> {
     const row = await this.store.loadState();
-    if (!row || row.state !== 'ready') {
+    if (!row || !['ready', 'update_available'].includes(row.state)) {
       throw new AppError(409, 'CORE_NOT_READY', 'The inference core is not ready');
     }
     if (!row.credentialsPayload || !row.credentialsDek) {
@@ -77,12 +85,37 @@ export class InferenceCoreBridgeService {
    * unless the core is installed and ready — a degraded core must never
    * receive traffic it cannot settle.
    */
-  async dataPlaneTarget(): Promise<{ baseUrl: string; credential: string }> {
+  async dataPlaneTarget(): Promise<CoreDataPlaneTarget> {
     const row = await this.store.loadState();
-    if (!row || row.state !== 'ready') {
+    if (!row || !['ready', 'update_available'].includes(row.state)) {
       throw new AppError(409, 'CORE_NOT_READY', 'The inference core is not ready');
     }
-    return { baseUrl: `http://${CORE_CONTAINER_ALIAS}:${CORE_PORT}`, credential: await this.dataPlaneCredential() };
+    const baseUrl = `http://${CORE_CONTAINER_ALIAS}:${CORE_PORT}`;
+    if (
+      !this.limitsCapability ||
+      this.limitsCapability.digest !== row.installedDigest ||
+      this.limitsCapability.expiresAt <= Date.now()
+    ) {
+      const identity = await (await this.requireClient()).health();
+      this.limitsCapability = {
+        digest: row.installedDigest,
+        supported: identity?.requestLimitsVersion === 1,
+        expiresAt: Date.now() + 5_000,
+      };
+    }
+    const limits = getEnvironmentSettingsSnapshot().requestLimits;
+    return {
+      baseUrl,
+      credential: await this.dataPlaneCredential(),
+      ...(this.limitsCapability.supported
+        ? {
+            requestLimits: {
+              httpBodyMaxBytes: limits.inferenceHttpBodyMaxBytes,
+              webSocketMaxPayloadBytes: limits.inferenceWebSocketMaxPayloadBytes,
+            },
+          }
+        : {}),
+    };
   }
 
   /** Callback credential used to verify core → Gateway internal callbacks (T5). */

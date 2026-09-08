@@ -1,6 +1,6 @@
-import { ArrowUpCircle, Loader2, ShieldCheck } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { ArrowRight, ArrowUpCircle, Loader2, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -10,14 +10,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ProgressBar } from "@/components/ui/progress-bar";
+import { useRealtime } from "@/hooks/use-realtime";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { nodeTypeLabel } from "@/lib/node-appearance";
-import { proxyHostRoute } from "@/lib/resource-routes";
-import { formatBytes, formatUptime } from "@/lib/utils";
+import { dockerNodeListRoute, proxyHostRoute } from "@/lib/resource-routes";
+import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils";
+import { cn, formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
+import { authContextKey, useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
-  type DockerContainer,
   type DockerRuntimeStatus,
   getNodeUpdateTargetVersion,
   isNodeUpdating,
@@ -25,8 +27,39 @@ import {
   type NodeHealthReport,
   type ProxyHost,
 } from "@/types";
+import { HOSTING_PROVIDER_LABELS, type HostingNodeProjection } from "@/types/hosting";
+
+const DOCKER_RESOURCES = [
+  {
+    tab: "containers",
+    label: "containers",
+    load: (nodeId: string) => api.listDockerContainerSnapshots({ nodeId }),
+  },
+  {
+    tab: "images",
+    label: "images",
+    load: (nodeId: string) => api.listDockerImageSnapshots({ nodeId }),
+  },
+  {
+    tab: "volumes",
+    label: "volumes",
+    load: (nodeId: string) => api.listDockerVolumeSnapshots({ nodeId }),
+  },
+  {
+    tab: "networks",
+    label: "networks",
+    load: (nodeId: string) => api.listDockerNetworkSnapshots({ nodeId }),
+  },
+  {
+    tab: "compose",
+    label: "compose projects",
+    load: (nodeId: string) => api.listDockerComposeProjects(nodeId),
+  },
+] as const;
+type DockerResourceTab = (typeof DOCKER_RESOURCES)[number]["tab"];
 
 interface NodeDetailsTabProps {
+  hosting?: HostingNodeProjection | null;
   node: NodeDetail;
   canManageSecureRuntime: boolean;
   daemonUpdate: {
@@ -58,6 +91,7 @@ function IPAddressPanel({ title, addresses }: { title: string; addresses: string
 }
 
 export function NodeDetailsTab({
+  hosting,
   node,
   canManageSecureRuntime,
   daemonUpdate,
@@ -66,8 +100,99 @@ export function NodeDetailsTab({
 }: NodeDetailsTabProps) {
   const navigate = useNavigate();
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
-  const [dockerContainers, setDockerContainers] = useState<DockerContainer[]>([]);
-  const [dockerContainersLoading, setDockerContainersLoading] = useState(false);
+  const user = useAuthStore((state) => state.user);
+  const authKey = authContextKey(user);
+  const dockerResources = useMemo(() => {
+    const scopes = user?.scopes ?? [];
+    const allowed = deriveAllowedResourceIdsByScope(scopes);
+    return DOCKER_RESOURCES.map((resource) => {
+      const scope = `docker:${resource.tab}:view`;
+      return {
+        ...resource,
+        canView:
+          scopeMatches(scopes, `${scope}:${node.id}`) ||
+          (allowed[scope] ?? []).some((id) => id.startsWith(`${node.id}/`)),
+      };
+    });
+  }, [node.id, user?.scopes]);
+  const [dockerCounts, setDockerCounts] = useState<Partial<Record<DockerResourceTab, number>>>({});
+  const [containerStates, setContainerStates] = useState<{
+    running: number;
+    stopped: number;
+    paused: number;
+  } | null>(null);
+  const dockerReadGeneration = useRef(0);
+  const dockerCountRequests = useRef<Partial<Record<DockerResourceTab, number>>>({});
+  const dockerCountIdentity = useRef({ nodeId: node.id, authKey });
+  dockerCountIdentity.current = { nodeId: node.id, authKey };
+  const refreshDockerCounts = useCallback(
+    async (kind?: string) => {
+      if (node.type !== "docker") return;
+      const generation = dockerReadGeneration.current;
+      await Promise.all(
+        dockerResources
+          .filter((resource) => resource.canView && (!kind || resource.tab === kind))
+          .map(async (resource) => {
+            const request = (dockerCountRequests.current[resource.tab] ?? 0) + 1;
+            dockerCountRequests.current[resource.tab] = request;
+            try {
+              const rows = await resource.load(node.id);
+              if (
+                generation !== dockerReadGeneration.current ||
+                request !== dockerCountRequests.current[resource.tab] ||
+                dockerCountIdentity.current.nodeId !== node.id ||
+                authKey !== authContextKey(useAuthStore.getState().user)
+              )
+                return;
+              const total =
+                (rows[0] as { _listTotal?: number } | undefined)?._listTotal ?? rows.length;
+              setDockerCounts((current) => ({ ...current, [resource.tab]: total }));
+              if (resource.tab === "containers") {
+                const containers = rows as Array<{ state?: string; _listTruncated?: boolean }>;
+                setContainerStates(
+                  containers.some((container) => container._listTruncated)
+                    ? null
+                    : {
+                        running: containers.filter((container) => container.state === "running")
+                          .length,
+                        stopped: containers.filter(
+                          (container) =>
+                            container.state === "exited" || container.state === "stopped"
+                        ).length,
+                        paused: containers.filter((container) => container.state === "paused")
+                          .length,
+                      }
+                );
+              }
+            } catch {
+              // Keep the last known count on transient refresh failures; never turn an error into zero.
+            }
+          })
+      );
+    },
+    [authKey, dockerResources, node.id, node.type]
+  );
+  useEffect(() => {
+    dockerReadGeneration.current++;
+    setDockerCounts({});
+    setContainerStates(null);
+    void refreshDockerCounts();
+    return () => {
+      dockerReadGeneration.current++;
+    };
+  }, [refreshDockerCounts]);
+  useRealtime(
+    node.type === "docker" ? "docker.snapshot.changed" : null,
+    (payload) => {
+      const event = payload as { nodeId?: string; kind?: string };
+      if (event.nodeId === node.id) void refreshDockerCounts(event.kind);
+    },
+    { onReconnect: () => void refreshDockerCounts() }
+  );
+  useRealtime(node.type === "docker" ? "docker.compose.changed" : null, (payload) => {
+    const event = payload as { nodeId?: string };
+    if (event.nodeId === node.id) void refreshDockerCounts("compose");
+  });
   const [isUpdating, setIsUpdating] = useState(false);
   const [pendingUpdateTarget, setPendingUpdateTarget] = useState<string | null>(null);
   const [ipAddressesOpen, setIpAddressesOpen] = useState(false);
@@ -124,8 +249,6 @@ export function NodeDetailsTab({
     let cancelled = false;
     const load = async () => {
       if (node.type === "nginx") {
-        setDockerContainers([]);
-        setDockerContainersLoading(false);
         if (node.status !== "online" || !node.isConnected) {
           setProxyHosts([]);
           return;
@@ -135,23 +258,6 @@ export function NodeDetailsTab({
           if (!cancelled) setProxyHosts(resp.data ?? []);
         } catch {
           if (!cancelled) setProxyHosts([]);
-        }
-      }
-      if (node.type === "docker") {
-        setProxyHosts([]);
-        if (node.status !== "online" || !node.isConnected) {
-          setDockerContainers([]);
-          setDockerContainersLoading(false);
-          return;
-        }
-        setDockerContainersLoading(true);
-        try {
-          const data = await api.listDockerContainers(node.id);
-          if (!cancelled) setDockerContainers(data ?? []);
-        } catch {
-          if (!cancelled) setDockerContainers([]);
-        } finally {
-          if (!cancelled) setDockerContainersLoading(false);
         }
       }
     };
@@ -206,33 +312,94 @@ export function NodeDetailsTab({
 
   return (
     <div className="space-y-4">
-      {/* Docker Container Overview — docker nodes only */}
-      {node.type === "docker" && (
-        <div className="border border-border bg-card">
-          <div className="grid grid-cols-4 divide-x divide-border">
-            {[
-              {
-                label: "Running",
-                count: dockerContainers.filter((c) => c.state === "running").length,
-              },
-              {
-                label: "Stopped",
-                count: dockerContainers.filter((c) => c.state === "exited" || c.state === "stopped")
-                  .length,
-              },
-              {
-                label: "Paused",
-                count: dockerContainers.filter((c) => c.state === "paused").length,
-              },
-              { label: "Total", count: dockerContainers.length },
-            ].map((s) => (
-              <div key={s.label} className="p-4 text-center">
-                <p className="text-2xl font-bold">{dockerContainersLoading ? "..." : s.count}</p>
-                <p className="text-xs text-muted-foreground mt-1">{s.label}</p>
-              </div>
-            ))}
-          </div>
+      {(hosting || node.type === "docker") && (
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-4",
+            hosting && node.type === "docker" && "min-[1044px]:grid-cols-2"
+          )}
+        >
+          {node.type === "docker" && (
+            <PanelShell title="Docker" bodyClassName="divide-y divide-border">
+              {dockerResources.map((resource) => (
+                <DetailRow
+                  key={resource.tab}
+                  label={`${resource.canView ? (dockerCounts[resource.tab] ?? "—") : "—"} ${resource.label}`}
+                  value={
+                    resource.canView ? (
+                      <Button asChild variant="link" className="h-auto p-0">
+                        <Link to={dockerNodeListRoute(node.id, resource.tab)}>
+                          View {resource.label}
+                          <ArrowRight data-icon="inline-end" />
+                        </Link>
+                      </Button>
+                    ) : (
+                      "No access"
+                    )
+                  }
+                />
+              ))}
+            </PanelShell>
+          )}
+          {hosting && (
+            <PanelShell title="Hosting" bodyClassName="divide-y divide-border">
+              <DetailRow
+                label="Provider"
+                value={`${HOSTING_PROVIDER_LABELS[hosting.provider]} · ${hosting.connectorName ?? "Disconnected account"}`}
+              />
+              <DetailRow
+                label="Resource"
+                value={
+                  hosting.resourceId
+                    ? `${hosting.kind.toUpperCase()} ${hosting.remoteId} · ${hosting.location}`
+                    : "Waiting for provider VM"
+                }
+              />
+              <DetailRow
+                label="Resources"
+                value={`${hosting.cpu ?? "—"} vCPU · ${hosting.memoryMb ?? "—"} MiB RAM · ${hosting.diskGb ?? "—"} GiB disk`}
+              />
+              {hosting.provider === "proxmox" && (
+                <DetailRow label="Ownership" value={hosting.origin} />
+              )}
+              <DetailRow label="Updated" value={new Date(hosting.observedAt).toLocaleString()} />
+              {hosting.price && (
+                <DetailRow
+                  label={hosting.price.estimated ? "Estimated cost" : "Cost"}
+                  value={`${hosting.price.amount} ${hosting.price.currency} / ${hosting.price.period ?? "billing period"}`}
+                />
+              )}
+              {hosting.identityConflict && (
+                <DetailRow
+                  label="Management"
+                  value="Provider resource identity changed. Remote actions are disabled."
+                />
+              )}
+            </PanelShell>
+          )}
         </div>
+      )}
+
+      {node.type === "docker" && (
+        <PanelShell
+          role="region"
+          aria-label="Container summary"
+          bodyClassName="grid grid-cols-4 divide-x divide-border"
+        >
+          {[
+            { label: "Running", count: containerStates?.running },
+            { label: "Stopped", count: containerStates?.stopped },
+            { label: "Paused", count: containerStates?.paused },
+            { label: "Total", count: dockerCounts.containers },
+          ].map((item) => (
+            <div key={item.label} className="p-4 text-center">
+              <p className="text-2xl font-bold">
+                {dockerResources[0].canView ? (item.count ?? "—") : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">{item.label}</p>
+            </div>
+          ))}
+        </PanelShell>
       )}
 
       {!nodeUpdating && daemonUpdate.available && !pendingUpdateTarget && (

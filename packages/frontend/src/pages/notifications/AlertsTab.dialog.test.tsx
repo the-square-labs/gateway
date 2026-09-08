@@ -114,6 +114,57 @@ describe("AlertDialog", () => {
     api.resetSessionState();
   });
 
+  it("edits a hosting balance threshold with explicit currency and shared account scope", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getAlertCategories).mockResolvedValue([
+      {
+        id: "hosting_account",
+        label: "Hosting account",
+        metrics: [
+          {
+            id: "balance",
+            label: "Account balance",
+            unit: "currency",
+            defaultOperator: "<",
+            defaultValue: 10,
+          },
+        ],
+        events: [],
+        variables: [],
+      },
+    ]);
+    vi.spyOn(api, "listHostingConnectors").mockResolvedValue([
+      { id: "account-1", name: "Test hosting", provider: "digitalocean", enabled: true },
+    ] as any);
+    const rule: AlertRule = {
+      ...makeRule(),
+      category: "hosting_account",
+      metric: "balance",
+      metricTarget: "EUR",
+      operator: "<",
+      thresholdValue: 10,
+      resourceIds: ["account-1"],
+    };
+    const update = vi.spyOn(api, "updateAlertRule").mockResolvedValue(rule);
+    renderWithRouter(<AlertDialog open onOpenChange={vi.fn()} rule={rule} onSaved={vi.fn()} />, {
+      path: "/notifications",
+      route: "/notifications",
+    });
+    expect(await screen.findByLabelText("Currency")).toHaveValue("EUR");
+    await user.clear(screen.getByLabelText("Currency"));
+    await user.type(screen.getByLabelText("Currency"), "usd");
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    expect(await screen.findByText("Test hosting · digitalocean")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    await user.click(screen.getByRole("button", { name: /update/i }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        "alert-1",
+        expect.objectContaining({ metricTarget: "USD", resourceIds: ["account-1"] })
+      )
+    );
+  });
+
   it("keeps edit defaults and submits the alert update payload", async () => {
     const user = userEvent.setup();
     const updateAlertRule = vi.spyOn(api, "updateAlertRule").mockResolvedValue(makeRule());

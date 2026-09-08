@@ -2,6 +2,21 @@
 export const AI_SCOPE = "ai:workspace:use" as const;
 
 export const RESOURCE_SCOPABLE_SCOPES = [
+  "integrations:hosting:view",
+  "integrations:hosting:manage",
+  "hosting:resources:view",
+  "hosting:resources:create",
+  "hosting:resources:power",
+  "hosting:resources:resize",
+  "hosting:snapshots:view",
+  "hosting:snapshots:create",
+  "hosting:snapshots:delete",
+  "hosting:snapshots:restore",
+  "hosting:snapshots:folders:manage",
+  "hosting:resources:delete",
+  "hosting:resources:recover",
+  "hosting:billing:view",
+  "hosting:billing:topup",
   "pki:ca:create:intermediate",
   "pki:cert:view",
   "pki:cert:issue",

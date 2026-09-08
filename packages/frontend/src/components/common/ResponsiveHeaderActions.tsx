@@ -144,10 +144,12 @@ export function HeaderOverflowMenu({
   actions,
   disabled = false,
   ariaLabel = "More page actions",
+  menuClassName,
 }: {
   actions: ResponsiveHeaderAction[];
   disabled?: boolean;
   ariaLabel?: string;
+  menuClassName?: string;
 }) {
   if (actions.length === 0) return null;
 
@@ -158,7 +160,7 @@ export function HeaderOverflowMenu({
           <EllipsisVertical className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className={menuClassName}>
         {actions.map((action, index) => (
           <ResponsiveHeaderActionItem
             key={action.id ?? `${action.label}:${index}`}
@@ -176,11 +178,13 @@ export function ResponsiveHeaderActions({
   actions,
   className = "",
   reservedContentWidth = MIN_HEADER_CONTENT_WIDTH_PX,
+  menuClassName,
 }: {
   children: ReactNode;
   actions: ResponsiveHeaderAction[];
   className?: string;
   reservedContentWidth?: number;
+  menuClassName?: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -293,7 +297,11 @@ export function ResponsiveHeaderActions({
           );
         })}
         {effectiveOverflowIndices.size > 0 ? (
-          <HeaderOverflowMenu actions={overflowActions} ariaLabel="Page actions" />
+          <HeaderOverflowMenu
+            actions={overflowActions}
+            ariaLabel="Page actions"
+            menuClassName={menuClassName}
+          />
         ) : null}
       </div>
       <div

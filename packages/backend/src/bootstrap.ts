@@ -1,7 +1,9 @@
 import 'reflect-metadata';
+import { eq } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createDrizzleClient } from '@/db/client.js';
+import { hostingResources } from '@/db/schema/index.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
 import { logger } from '@/lib/logger.js';
@@ -87,6 +89,14 @@ import { DomainsService } from '@/modules/domains/domain.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
+import { HostingConnectorsService } from '@/modules/hosting/hosting-connectors.service.js';
+import { HostingFinanceService } from '@/modules/hosting/hosting-finance.service.js';
+import { HostingFirewallService } from '@/modules/hosting/hosting-firewall.service.js';
+import { HostingInventoryService } from '@/modules/hosting/hosting-inventory.service.js';
+import { HostingManagementService } from '@/modules/hosting/hosting-management.service.js';
+import { HostingOperationsService } from '@/modules/hosting/hosting-operations.service.js';
+import { createHostingAdapter } from '@/modules/hosting/hosting-provider.js';
+import { HostingProvisioningService } from '@/modules/hosting/hosting-provisioning.service.js';
 import { InferenceAccountingService } from '@/modules/inference/accounting/inference-accounting.service.js';
 import { InferenceBudgetLockService } from '@/modules/inference/accounting/inference-budget-lock.service.js';
 import { InferenceBudgetPolicyService } from '@/modules/inference/accounting/inference-budget-policy.js';
@@ -476,7 +486,8 @@ export async function initializeContainer(): Promise<void> {
     inferenceBudgetPolicyService,
     inferenceBudgetReservationService,
     inferenceBudgetLockService,
-    eventBus
+    eventBus,
+    redis
   );
   container.registerInstance(InferenceCoreAccountingService, inferenceCoreAccountingService);
   const inferenceCoreProxyService = new InferenceCoreProxyService(
@@ -674,6 +685,94 @@ export async function initializeContainer(): Promise<void> {
   nodesService.setGeneralSettingsService(generalSettingsService, env.GRPC_PORT);
   nodesService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(NodesService, nodesService);
+  const hostingConnectors = new HostingConnectorsService(
+    db,
+    cryptoService,
+    auditService,
+    eventBus,
+    authService,
+    createHostingAdapter
+  );
+  const hostingOperations = new HostingOperationsService(db, eventBus);
+  const hostingInventory = new HostingInventoryService(
+    db,
+    hostingConnectors,
+    nodesService,
+    nodeDispatch,
+    auditService,
+    resourceSnapshotStore
+  );
+  hostingConnectors.setInventoryLifecycle(
+    (id) => hostingInventory.initialize(id),
+    async (id, resourceIds) => {
+      const ids =
+        resourceIds ??
+        (
+          await db
+            .select({ id: hostingResources.id })
+            .from(hostingResources)
+            .where(eq(hostingResources.connectorId, id))
+        ).map((resource) => resource.id);
+      await Promise.all([
+        resourceSnapshotStore.remove('hosting-resources', id),
+        resourceSnapshotStore.remove('hosting-catalog', id),
+        resourceSnapshotStore.remove('hosting-account-summary', id),
+        ...ids.flatMap((resourceId) => [
+          resourceSnapshotStore.remove('hosting-firewall', resourceId),
+          resourceSnapshotStore.remove('hosting-vm-snapshots', resourceId),
+        ]),
+      ]);
+    }
+  );
+  eventBus.subscribe('integration.connector.changed', (payload) => {
+    const event = payload as { id?: string; provider?: string };
+    if (event.provider === 'hosting' && event.id) void hostingInventory.refreshSnapshot(event.id).catch(() => {});
+  });
+  eventBus.subscribe('node.changed', (payload) => {
+    const event = payload as { status?: string };
+    if (event.status === 'online') void hostingInventory.reconcileAdoption().catch(() => {});
+  });
+  const hostingProvisioning = new HostingProvisioningService(
+    db,
+    hostingConnectors,
+    hostingOperations,
+    nodesService,
+    cryptoService,
+    authService,
+    nodeDispatch,
+    auditService,
+    externalSshService,
+    resourceSnapshotStore
+  );
+  const hostingManagement = new HostingManagementService(
+    db,
+    hostingConnectors,
+    hostingOperations,
+    authService,
+    nodeDispatch,
+    auditService,
+    nodesService,
+    resourceSnapshotStore,
+    eventBus
+  );
+  const hostingFinance = new HostingFinanceService(db, hostingConnectors, hostingOperations, authService, auditService);
+  eventBus.subscribe('hosting.operation.changed', (payload) => {
+    const event = payload as { resourceId?: string; phase?: string };
+    // Snapshot worker publishes persistent entity changes itself. Other VM operations
+    // can change inventory too, but must never erase the last-known list.
+    if (event.resourceId && !(payload as { action?: string }).action?.startsWith('snapshot_'))
+      void hostingManagement.snapshots.readModel.refreshAfterOperation(event.resourceId).catch(() => {});
+  });
+  container.registerInstance(HostingConnectorsService, hostingConnectors);
+  container.registerInstance(HostingOperationsService, hostingOperations);
+  container.registerInstance(HostingInventoryService, hostingInventory);
+  container.registerInstance(
+    HostingFirewallService,
+    new HostingFirewallService(db, hostingConnectors, resourceSnapshotStore, authService, auditService)
+  );
+  container.registerInstance(HostingProvisioningService, hostingProvisioning);
+  container.registerInstance(HostingManagementService, hostingManagement);
+  container.registerInstance(HostingFinanceService, hostingFinance);
 
   const nodeFolderService = new NodeFolderService(db, auditService);
   container.registerInstance(NodeFolderService, nodeFolderService);

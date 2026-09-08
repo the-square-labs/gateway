@@ -476,6 +476,7 @@ export function DockerComposeProjects({
         resources={filtered}
         columns={columns}
         search={{
+          initialFiltersOpen: new URLSearchParams(location.search).get("filters") === "1",
           search,
           onSearchChange: setSearch,
           placeholder: "Search Compose projects...",

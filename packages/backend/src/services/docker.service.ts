@@ -707,6 +707,14 @@ export class DockerService {
     }
   }
 
+  async renameContainer(id: string, name: string): Promise<void> {
+    const response = await this.request(
+      'POST',
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/rename?name=${encodeURIComponent(name)}`
+    );
+    if (response.statusCode !== 204) throw new Error(`Docker container rename failed (${response.statusCode})`);
+  }
+
   async stopContainer(id: string, timeoutSeconds = 5): Promise<void> {
     const res = await this.request(
       'POST',

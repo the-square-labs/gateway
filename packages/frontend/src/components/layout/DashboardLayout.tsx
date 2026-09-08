@@ -29,7 +29,7 @@ import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { useAIStore } from "@/stores/ai";
-import { useAuthStore } from "@/stores/auth";
+import { authContextKey, useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
@@ -56,6 +56,7 @@ export function DashboardLayout() {
   const loginRedirectUrl = useRef(getLoginRedirectUrl()).current;
   const { isAuthenticated, isLoading, setUser, setLoading, logout } = useAuthStore();
   const currentUser = useAuthStore((state) => state.user);
+  const contentAccessKey = authContextKey(currentUser);
   const authAccessKey = currentUser
     ? `${currentUser.id}\u0000${[...currentUser.scopes].sort().join("\u0000")}`
     : null;
@@ -626,7 +627,7 @@ export function DashboardLayout() {
       <TooltipProvider>
         <div className="fixed inset-0 flex flex-col overflow-hidden bg-background">
           <PageTransition>
-            <AILitePanel onOpenMobileMenu={() => setMobileMenuOpen(true)} />
+            <AILitePanel key={contentAccessKey} onOpenMobileMenu={() => setMobileMenuOpen(true)} />
           </PageTransition>
           <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
             <SheetContent side="left" className="w-full p-0" hideCloseButton>
@@ -670,7 +671,7 @@ export function DashboardLayout() {
           </header>
 
           <div className="flex-1 overflow-hidden">
-            <Outlet />
+            <Outlet key={contentAccessKey} />
           </div>
 
           <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
@@ -712,10 +713,10 @@ export function DashboardLayout() {
           <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
             {isAIHome ? (
               <PageTransition>
-                <AILitePanel />
+                <AILitePanel key={contentAccessKey} />
               </PageTransition>
             ) : (
-              <Outlet />
+              <Outlet key={contentAccessKey} />
             )}
           </main>
           <Toaster position="bottom-right" />
@@ -739,7 +740,7 @@ export function DashboardLayout() {
           hasNginxNodes={hasNginxNodes}
         />
         <main className="h-full flex-1 overflow-hidden">
-          <Outlet />
+          <Outlet key={contentAccessKey} />
         </main>
         <AISidePanel />
         <Toaster position="bottom-right" />

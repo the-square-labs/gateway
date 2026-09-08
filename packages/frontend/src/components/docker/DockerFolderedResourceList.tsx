@@ -35,6 +35,7 @@ interface DockerFolderedResourceListProps<TItem extends DockerFolderedResourceIt
     hasActiveFilters: boolean;
     onReset: () => void;
     filters?: React.ReactNode;
+    initialFiltersOpen?: boolean;
   };
   loading: boolean;
   loadingLabel: string;

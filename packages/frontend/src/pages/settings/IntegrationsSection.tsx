@@ -54,6 +54,7 @@ import type {
 import { CloudflareIntegrationsSection } from "./CloudflareIntegrationsSection";
 import { ExternalSshIntegrationsSection } from "./ExternalSshIntegrationsSection";
 import { GitIntegrationsSection } from "./GitIntegrationsSection";
+import { HostingIntegrationsSection } from "./HostingIntegrationsSection";
 
 const DEFAULT_SETTINGS: GitLabConnectorSettings = {
   autoSyncEnabled: true,
@@ -164,6 +165,7 @@ export function IntegrationsSection() {
       <GitLabIntegrationsSection />
       <GitIntegrationsSection />
       <ExternalSshIntegrationsSection />
+      <HostingIntegrationsSection />
     </div>
   );
 }
@@ -575,7 +577,7 @@ function GitLabIntegrationsSection() {
           canManage ? (
             <Button onClick={openCreateDialog}>
               <Plus className="h-4 w-4" />
-              Add Connector
+              Add connector
             </Button>
           ) : null
         }

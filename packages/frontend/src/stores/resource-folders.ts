@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/services/api";
+import { authContextKey, useAuthStore } from "@/stores/auth";
 import type { ResourceFolder, ResourceFolderTreeNode, ResourceFolderType } from "@/types";
 
 type FolderResourceMap<T> = Record<ResourceFolderType, T>;
@@ -100,6 +101,7 @@ function applyFolderOrder(
 }
 
 const fetchRequestIds = resourceMap(() => 0);
+const folderAuthKeys: Partial<Record<ResourceFolderType, string>> = {};
 
 export const useResourceFolderStore = create<ResourceFolderState>()((set, get) => {
   const initialExpanded = resourceMap((type) => new Set(loadExpandedFolderIds(type)));
@@ -112,23 +114,34 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
     savedExpandedFolderIdsByType: initialExpanded,
 
     fetchFolders: async (type) => {
-      const requestId = ++fetchRequestIds[type];
+      const authKey = authContextKey(useAuthStore.getState().user);
+      if (folderAuthKeys[type] !== authKey) {
+        folderAuthKeys[type] = authKey;
+        set((state) => ({ foldersByType: { ...state.foldersByType, [type]: [] } }));
+      }
+      const requestId = (fetchRequestIds[type] = (fetchRequestIds[type] ?? 0) + 1);
       set((state) => ({
         loadingByType: {
           ...state.loadingByType,
-          [type]: state.foldersByType[type].length === 0,
+          [type]: !state.foldersByType[type]?.length,
         },
         errorByType: { ...state.errorByType, [type]: null },
       }));
       try {
         const folders = await listFolders(type);
-        if (requestId !== fetchRequestIds[type]) return;
+        if (
+          requestId !== fetchRequestIds[type] ||
+          authKey !== authContextKey(useAuthStore.getState().user)
+        )
+          return;
         set((state) => ({
           foldersByType: { ...state.foldersByType, [type]: folders },
           loadingByType: { ...state.loadingByType, [type]: false },
           expandedFolderIdsByType: {
             ...state.expandedFolderIdsByType,
-            [type]: new Set(state.savedExpandedFolderIdsByType[type]),
+            [type]: new Set(
+              state.savedExpandedFolderIdsByType[type] ?? loadExpandedFolderIds(type)
+            ),
           },
         }));
       } catch (err) {
@@ -180,7 +193,7 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
     },
 
     reorderFolders: async (type, items) => {
-      const previous = get().foldersByType[type];
+      const previous = get().foldersByType[type] ?? [];
       set((state) => ({
         foldersByType: { ...state.foldersByType, [type]: applyFolderOrder(previous, items) },
       }));
@@ -218,6 +231,7 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
 });
 
 function listFolders(type: ResourceFolderType): Promise<ResourceFolderTreeNode[]> {
+  if (isSnapshotType(type)) return api.getHostingSnapshotFolders(type.slice(17));
   switch (type) {
     case "node":
       return api.listNodeFolders();
@@ -244,6 +258,8 @@ function createFolderByType(
   type: ResourceFolderType,
   data: { name: string; parentId?: string }
 ): Promise<ResourceFolder> {
+  if (isSnapshotType(type))
+    return api.hostingSnapshotFolderAction<ResourceFolder>(type.slice(17), "create", data);
   switch (type) {
     case "node":
       return api.createNodeFolder(data);
@@ -271,6 +287,8 @@ function updateFolderByType(
   id: string,
   data: { name: string }
 ): Promise<ResourceFolder> {
+  if (isSnapshotType(type))
+    return api.hostingSnapshotFolderAction<ResourceFolder>(type.slice(17), "rename", data, id);
   switch (type) {
     case "node":
       return api.updateNodeFolder(id, data);
@@ -294,6 +312,8 @@ function updateFolderByType(
 }
 
 function deleteFolderByType(type: ResourceFolderType, id: string): Promise<void> {
+  if (isSnapshotType(type))
+    return api.hostingSnapshotFolderAction(type.slice(17), "delete", {}, id);
   switch (type) {
     case "node":
       return api.deleteNodeFolder(id);
@@ -320,6 +340,8 @@ function reorderFoldersByType(
   type: ResourceFolderType,
   items: { id: string; sortOrder: number }[]
 ): Promise<void> {
+  if (isSnapshotType(type))
+    return api.hostingSnapshotFolderAction(type.slice(17), "reorder-folders", { items });
   switch (type) {
     case "node":
       return api.reorderNodeFolders(items);
@@ -347,6 +369,8 @@ function moveResourcesToFolderByType(
   ids: string[],
   folderId: string | null
 ): Promise<void> {
+  if (isSnapshotType(type))
+    return api.hostingSnapshotFolderAction(type.slice(17), "move-resources", { ids, folderId });
   switch (type) {
     case "node":
       return api.moveNodesToFolder(ids, folderId);
@@ -373,6 +397,8 @@ function reorderResourcesByType(
   type: ResourceFolderType,
   items: { id: string; sortOrder: number }[]
 ): Promise<void> {
+  if (isSnapshotType(type))
+    return api.hostingSnapshotFolderAction(type.slice(17), "reorder-resources", { items });
   switch (type) {
     case "node":
       return api.reorderNodes(items);
@@ -393,4 +419,7 @@ function reorderResourcesByType(
     case "pages-project":
       return api.reorderPageProjects(items);
   }
+}
+function isSnapshotType(type: ResourceFolderType): type is `hosting-snapshot:${string}` {
+  return type.startsWith("hosting-snapshot:");
 }

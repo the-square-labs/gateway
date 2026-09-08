@@ -3,6 +3,7 @@ import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from '@/modules/ai/ai-tool-sto
 import { MFA_REQUIRED_CHANNEL_PREFIX } from '@/modules/auth/mfa-events.js';
 import { userResourceChannelUserId } from '@/modules/auth/user-resource-events.js';
 import { hasAnyDockerNodeRouteAccess } from '@/modules/docker/docker-route-resolvers.js';
+import { canViewHostingFinance } from '@/modules/hosting/hosting-permissions.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from '@/modules/inference/accounting/inference-usage-events.js';
 import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
 
@@ -24,6 +25,8 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) return null;
   if (userResourceChannelUserId(channel)) return null;
   if (channel === 'read-model.refreshed') return null;
+  if (channel === 'hosting.snapshot.changed' || channel === 'hosting.snapshot.folder.changed')
+    return 'hosting:snapshots:view';
   if (channel === 'domain.changed') return 'domains:view';
   if (channel === 'logging.logs.ingested') return 'logs:read';
   if (channel === 'logging.health.changed') return 'housekeeping:view';
@@ -83,6 +86,13 @@ export function requiredScopeFor(channel: string): string | null {
 }
 
 export function hasChannelAccess(scopes: string[], channel: string): boolean {
+  if (channel === 'hosting.snapshot.changed' || channel === 'hosting.snapshot.folder.changed')
+    return (
+      hasScopeBase(scopes, 'hosting:snapshots:view') &&
+      hasScopeBase(scopes, 'hosting:resources:view') &&
+      hasScopeBase(scopes, 'nodes:details') &&
+      hasScopeBase(scopes, 'integrations:hosting:view')
+    );
   if (channel.startsWith('permissions.changed.')) return true;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return true;
   if (channel.startsWith(TOOL_STORE_INVALIDATION_CHANNEL_PREFIX)) return true;
@@ -257,4 +267,32 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
 
   return hasScopeBase(scopes, required);
+}
+
+/** Snapshot metadata is scoped to the VM and every daemon bound to that VM. */
+export function hasHostingSnapshotEventAccess(scopes: string[], payload: unknown): boolean {
+  const event = payload as { resourceId?: unknown; connectorId?: unknown; nodeIds?: unknown } | null;
+  if (
+    !event ||
+    typeof event.resourceId !== 'string' ||
+    typeof event.connectorId !== 'string' ||
+    !Array.isArray(event.nodeIds) ||
+    !event.nodeIds.length
+  )
+    return false;
+  return (
+    hasScope(scopes, `hosting:resources:view:${event.resourceId}`) &&
+    hasScope(scopes, `integrations:hosting:view:${event.connectorId}`) &&
+    hasScope(scopes, `hosting:snapshots:view:${event.resourceId}`) &&
+    event.nodeIds.every((id) => typeof id === 'string' && hasScope(scopes, `nodes:details:${id}`))
+  );
+}
+
+/** Apply finance visibility at delivery time, never mutate the shared EventBus payload. */
+export function projectHostingSnapshotEvent(scopes: string[], payload: unknown): unknown {
+  const event = payload as { connectorId?: unknown; snapshot?: unknown } | null;
+  if (!event?.snapshot || typeof event.snapshot !== 'object') return payload;
+  if (typeof event.connectorId === 'string' && canViewHostingFinance(scopes, event.connectorId)) return payload;
+  const { monthlyCost: _cost, storageRate: _rate, ...snapshot } = event.snapshot as Record<string, unknown>;
+  return { ...event, snapshot };
 }

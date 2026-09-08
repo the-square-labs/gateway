@@ -1,6 +1,7 @@
 import { api } from "@/services/api";
 import { useAccessListsStore } from "@/stores/access-lists";
 import { resetAIStateForAuthChange } from "@/stores/ai";
+import type { AuthContextResetOptions } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -18,12 +19,12 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 
-export function resetClientSessionState() {
+export function resetClientSessionState({ preserveShell = false }: AuthContextResetOptions = {}) {
   api.resetSessionState();
   resetAIStateForAuthChange();
   useDashboardBootstrapStore.getState().clear();
   useUIBootstrapStore.getState().clear();
-  useUIStore.getState().beginInterfacePreferenceLoad();
+  if (!preserveShell) useUIStore.getState().beginInterfacePreferenceLoad();
   useUIStore.setState({ aiPanelOpen: false });
 
   useCAStore.setState({ cas: [], selectedCA: null, isLoading: true, error: null });
@@ -109,7 +110,7 @@ export function resetClientSessionState() {
     nodes: [],
     isLoading: true,
     error: null,
-    filters: { search: "", status: "all", type: "all" },
+    filters: { search: "", status: "all", type: "all", hosting: "all" },
     page: 1,
     total: 0,
     totalPages: 0,
@@ -127,5 +128,6 @@ export function resetClientSessionState() {
     sidebarContainerIds: [],
     containerMeta: {},
   });
-  useSystemConfigStore.getState().reset();
+  // System feature flags/upload limits are gateway-wide, not user-private data.
+  if (!preserveShell) useSystemConfigStore.getState().reset();
 }

@@ -15,6 +15,64 @@ export interface EventMapping {
 }
 
 export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
+  'hosting.vm.observed': [
+    {
+      category: 'hosting_vm',
+      eventId: 'power.stopped',
+      match: (p) => typeof p.resourceId === 'string' && typeof p.powerState === 'string',
+      extractResource: (p) => ({ type: 'hosting_vm', id: p.resourceId, name: p.name }),
+      extractData: (p) => ({ provider: p.provider, connector_id: p.connectorId, remote_id: p.remoteId }),
+      stateful: {
+        currentState: (p) => `power.${p.powerState}`,
+        observedPatterns: ['running', 'stopped', 'starting', 'stopping', 'unknown', 'missing'].map((s) => `power.${s}`),
+      },
+    },
+  ],
+  'hosting.account.observed': [
+    {
+      category: 'hosting_account',
+      eventId: 'sync.failed',
+      match: (p) => typeof p.connectorId === 'string' && ['success', 'error'].includes(p.syncStatus),
+      extractResource: (p) => ({ type: 'hosting_account', id: p.connectorId, name: p.name }),
+      extractData: (p) => ({ provider: p.provider }),
+      stateful: {
+        currentState: (p) => (p.syncStatus === 'error' ? 'sync.failed' : 'sync.healthy'),
+        observedPatterns: ['sync.failed'],
+      },
+    },
+  ],
+  'hosting.operation.changed': ['failed', 'ready', 'unknown'].map((phase) => ({
+    category: 'hosting_vm' as const,
+    eventId: `operation.${phase}`,
+    match: (p: any) => p.phase === phase && p.action !== 'topup',
+    extractResource: (p: any) => ({
+      type: 'hosting_vm',
+      id: p.resourceId ?? p.nodeId ?? p.id,
+      name: p.name ?? p.resourceId ?? p.nodeId ?? p.id,
+    }),
+    extractData: (p: any) => ({
+      provider: p.provider,
+      connector_id: p.connectorId,
+      operation_id: p.id,
+      operation_kind: p.action,
+      operation_phase: p.phase,
+      failure_code: p.errorCode ?? null,
+      failure_message: p.errorMessage ?? null,
+    }),
+  })),
+  'hosting.firewall.observed': [
+    {
+      category: 'hosting_vm',
+      eventId: 'firewall.failed',
+      match: (p) => typeof p.resourceId === 'string' && ['ready', 'failed'].includes(p.status),
+      extractResource: (p) => ({ type: 'hosting_vm', id: p.resourceId, name: p.name }),
+      extractData: (p) => ({ provider: p.provider, connector_id: p.connectorId, failure_message: p.error ?? null }),
+      stateful: {
+        currentState: (p) => (p.status === 'failed' ? 'firewall.failed' : 'firewall.healthy'),
+        observedPatterns: ['firewall.failed'],
+      },
+    },
+  ],
   'docker.build.changed': [
     ...(['succeeded', 'failed', 'cancelled', 'superseded'] as const).map((status) => ({
       category: 'build' as const,

@@ -76,6 +76,8 @@ export function Settings() {
   const canViewStatusPage = hasScope("status-page:view");
   const canViewPagesSettings = hasScope("pages:settings:view") || hasScope("pages:settings:edit");
   const canViewIntegrations =
+    hasScope("integrations:hosting:view") ||
+    hasScope("integrations:hosting:manage") ||
     hasScope("integrations:gitlab:view") ||
     hasScope("integrations:gitlab:manage") ||
     hasScope("integrations:cloudflare:view") ||
